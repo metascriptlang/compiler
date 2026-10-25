@@ -8,7 +8,7 @@
 //   keeps the same partition, so no reference collector shares a root set.
 //
 // WHAT IT CATCHES: any of the ORC state variables in runtime/drc.{c,h} losing
-//   _Thread_local. A worker's msOrcEndTeardown then collects over the MAIN
+//   _Thread_local. A worker's msRegisterCycle then collects over the MAIN
 //   thread's msRoots — freeing objects main is still using, and hitting the
 //   re-entrancy guard (drc.c: threshold=INT32_MAX, roots.len=0) which drops
 //   main's registered roots so its cycles are never reclaimed.
@@ -21,12 +21,9 @@
 //   isolates "ORC collects at all" from "ORC collects per-thread": Solo red too
 //   means the collector itself broke; only Link red means thread-locality did.
 //
-// DRC is NOT asserted: ARC/DRC does not collect cycles by design (same as Nim
-//   ARC) — both types leak under drc forever and that is correct.
-//
 // MEASURED on the pre-fix runtime (globals): 10/10 red, every one of them an
 //   abort (SIGABRT/SIGTRAP) that fires before the ledger can dump — the freed-
-//   live-object half reaches the guard first at this size. The GUARD-BALANCE-ORC
+//   live-object half reaches the guard first at this size. The GUARD-BALANCE
 //   assertions are the backstop for a regression that corrupts the root set
 //   without crashing: they were observed to catch exactly that at 1/3 the churn,
 //   where the crash rate fell to 5/6. Post-fix: 10/10 green, Link 2400000
@@ -34,9 +31,9 @@
 //   buy.
 //
 // RED MEANS: ORC collector state stopped being per-thread. Run /trace-nim on
-//   msOrcEndTeardown / msRegisterCycle (runtime/drc.{c,h}) against orc.nim.
-// GUARD-BALANCE-ORC Link
-// GUARD-BALANCE-ORC Solo
+//   msRegisterCycle (runtime/drc.{c,h}) against orc.nim.
+// GUARD-BALANCE Link
+// GUARD-BALANCE Solo
 
 class Link { next: Link | null = null }
 class Solo { next: Solo | null = null }

@@ -5,13 +5,13 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedPtrElement, createPromise } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
-import { canFormAcycle } from "../transform/cycles";
+import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
 
@@ -69,15 +69,19 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 	};
 }
 
-function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean): RcInfo {
+function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean, requireOps: boolean): RcInfo {
 	return {
 		rcKind: kind, typeName, needsCleanup: true, seqLike,
-		destroyFn: requireOpByKey(t, AttachedOp.AttachedDestructor),
-		copyFn: requireOpByKey(t, AttachedOp.AttachedAsgn),
-		wasMovedFn: requireOpByKey(t, AttachedOp.AttachedWasMoved),
-		sinkFn: requireOpByKey(t, AttachedOp.AttachedSink),
+		destroyFn: lookupOp(t, AttachedOp.AttachedDestructor, requireOps),
+		copyFn: lookupOp(t, AttachedOp.AttachedAsgn, requireOps),
+		wasMovedFn: lookupOp(t, AttachedOp.AttachedWasMoved, requireOps),
+		sinkFn: lookupOp(t, AttachedOp.AttachedSink, requireOps),
 		dupFn: userDupOf(t),
 	};
+}
+
+function lookupOp(t: Type, op: AttachedOp, requireOps: boolean): Symbol | null {
+	return requireOps ? requireOpByKey(t, op) : getOpByKey(t, op);
 }
 
 function userDupOf(t: Type): Symbol | null {
@@ -88,12 +92,12 @@ function userDupOf(t: Type): Symbol | null {
 // ===== Array Subclassification =====
 // Reference parity: use hasAsgnFlag (propagated at type creation) instead of runtime element inspection.
 
-function classifyArray(t: Type, ctx: TransformContext): RcInfo {
+function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcInfo {
 	const elem = t.typeReturn;
 	const elemBody = distinctBody(elem);
-	if (elemBody != null) return classifyArray(createArray(elemBody), ctx);
+	if (elemBody != null) return classifyArray(createArray(elemBody), ctx, requireOps);
 	const elemInst = elem != null ? peelTransparentInstance(elem) : null;
-	if (elemInst != null && elemInst != elem) return classifyArray(createArray(elemInst), ctx);
+	if (elemInst != null && elemInst != elem) return classifyArray(createArray(elemInst), ctx, requireOps);
 	if (elem != null && elem.kind == TypeKind.Uint8) {
 		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
@@ -103,12 +107,12 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem.kind == TypeKind.String) {
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
-	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
+	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
 	if (elem.kind == TypeKind.Tuple) {
-		if (!classifyType(elem, ctx).needsCleanup) {
+		if (!classifyType(elem, ctx, requireOps).needsCleanup) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 		}
-		return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
+		return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
 	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
@@ -130,7 +134,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Without this, arrays of a mono'd generic struct (Entry__string[]) misclassify as non-RC
 		// → no per-element destroy → leak on field-reassign/scope-exit.
 		const bodyAsgn = elem.kind == TypeKind.GenericInstance && elem.typeReturn != null && hasAsgnFlag(elem.typeReturn);
-		if (hasAsgnFlag(structElem) || bodyAsgn) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
+		if (hasAsgnFlag(structElem) || bodyAsgn) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
 		// POD elements: no per-element hooks, but the seq payload is still owned —
 		// Nim lifts =destroy/=copy for every tySequence regardless of element
 		// triviality (liftdestructors fillSeqOp). The generic macros size the
@@ -139,11 +143,14 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	if (elem.kind == TypeKind.Union && elem.typeName == "" && unwrapRefNullUnion(elem) == null
 			&& !isAllStringLiteralUnion(elem)) {
-		if (anonUnionOwnsRc(elem, ctx)) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
+		if (anonUnionOwnsRc(elem, ctx, requireOps)) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	if (isUncountedPtrElement(elem)) {
+	if (isUncountedElement(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
+	if (isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache)) {
+		return makeRcInfo(RcKind.Named, "", "msArrayAcyclicRefDestroy", "msArrayAcyclicRefCopy", "msArrayRefWasMoved", "msArrayAcyclicRefSink", true);
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	// Actor elements are exempt from DRC (managed by actor runtime).
@@ -154,7 +161,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Ref-array elements keep their per-type struct (codegen elemIsRefArray, types.ms:1270)
 		// instead of collapsing to msRefArray, so the hooks must match that name.
 		if (elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array) {
-			return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
+			return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
 		}
 		if (isAtomicRef(elem)) {
 			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);
@@ -174,7 +181,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	// `distinct int32` → primitive path → msArrayDestroy (4B stride correct).
 	if (elem.kind == TypeKind.Distinct && elem.typeReturn != null) {
 		const unwrapped = createArray(elem.typeReturn);
-		return classifyArray(unwrapped, ctx);
+		return classifyArray(unwrapped, ctx, requireOps);
 	}
 	// Catch-all assumes void*-stride layout. Correct ONLY when the element
 	// is pointer-indirected (which the Ref/Ptr branch above already covers).
@@ -208,7 +215,7 @@ function isDuVariantHashName(name: string): boolean {
 	return nameSetContains(_duHashes, name);
 }
 
-function classifyObject(t: Type, ctx: TransformContext): RcInfo {
+function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
 	// INLINE union-variant payloads (DuVariant, stamped at createUnion): C storage is
 	// the DU machinery's <Union>_vN carrier — msAnon hooks would name a type that
@@ -226,7 +233,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	if (resolvedName != "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
-			return makeOpsInfo(RcKind.Named, resolvedName, t, false);
+			return makeOpsInfo(RcKind.Named, resolvedName, t, false, requireOps);
 		}
 	}
 	return noRcInfo();
@@ -234,7 +241,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 
 // ===== Main Classification Entry Point =====
 
-export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
+export function classifyType(t: Type | null, ctx: TransformContext, requireOps: boolean = true): RcInfo {
 	if (t == null) return noRcInfo();
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
 
@@ -243,7 +250,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		// msBigInt is an msAllocTyped heap value that cannot reference anything,
 		// so it rides the plain acyclic Ref path — msDecref reaches its destroyFn.
 		TypeKind.BigInt => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
-		TypeKind.Array => classifyArray(t, ctx),
+		TypeKind.Array => classifyArray(t, ctx, requireOps),
 		TypeKind.Ref => {
 			// Actors are exempt from DRC — their lifecycle is managed by the actor
 			// runtime (mailbox processing, supervision, ORCA-style collection).
@@ -269,9 +276,9 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// decref to eliminate the concurrent-decref race without atomic rc).
 			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			const distinctInner = distinctBody(t);
-			if (distinctInner != null) return classifyType(distinctInner, ctx);
+			if (distinctInner != null) return classifyType(distinctInner, ctx, requireOps);
 			const transparentInner = peelTransparentInstance(t);
-			if (transparentInner != t) return classifyType(transparentInner, ctx);
+			if (transparentInner != t) return classifyType(transparentInner, ctx, requireOps);
 			// Result is a boolean-discriminated match-type Union post-migration —
 			// flow through the standard mangled hook generation below.
 			// Monomorphized struct instance: build hook names via `monoInstanceName` so they match
@@ -287,7 +294,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				const bodyHasAsgn = t.typeReturn != null && hasAsgnFlag(t.typeReturn);
 				if (hasAsgnFlag(t) || bodyHasAsgn) {
 					const mangled = monoInstanceName(t);
-					return makeOpsInfo(RcKind.Named, mangled, t, false);
+					return makeOpsInfo(RcKind.Named, mangled, t, false, requireOps);
 				}
 			}
 			return noRcInfo();
@@ -297,21 +304,14 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
 		},
-		// Closures own a heap env when they capture. needsCleanup=true so a fresh closure value in a
-		// Normal (non-consumed) position is captured + destroyed (msClosureDestroy decrefs the env).
-		// Two co-requisites make this safe: (1) lambdaLifting sets the closure-pair's nodeType (else
-		// the analyzer bails on null), and processObjectLiteral keeps NF_CLOSURE pairs isRefConstr so
-		// the env field stays a COPY (the pair owns a counted ref → destroy is balanced, not a
-		// double-free with the env-var lifecycle); (2) msClosureDestroy is null-env-safe (core/system.h)
-		// so bare-fn closures (env=NULL) no-op, and bare-fn-ref identifiers are skipped in processIdentifier.
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
-		TypeKind.Struct => classifyObject(t, ctx),
+		TypeKind.Struct => classifyObject(t, ctx, requireOps),
 		TypeKind.TypeReference => noRcInfo(),
 		TypeKind.Distinct => {
-			if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.typeName, t, false);
-			return t.typeReturn != null ? classifyType(t.typeReturn, ctx) : noRcInfo();
+			if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
+			return t.typeReturn != null ? classifyType(t.typeReturn, ctx, requireOps) : noRcInfo();
 		},
-		TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
+		TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx, requireOps); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
 			// codegen lowers this to a bare T* (see types.ms unwrapRefNullUnion +
@@ -324,7 +324,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
 				// C-library allocation with no ms header) corrupts memory.
-				if (refInner.kind == TypeKind.Ptr) return noRcInfo();
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
@@ -339,18 +339,18 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
 			if (t.typeName != "" && hasAsgnFlag(t)) {
-				return makeOpsInfo(RcKind.Named, t.typeName, t, false);
+				return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
 			}
-			if (t.typeName == "" && anonUnionOwnsRc(t, ctx)) {
+			if (t.typeName == "" && anonUnionOwnsRc(t, ctx, requireOps)) {
 				const an = anonUnionCName(t);
-				return makeOpsInfo(RcKind.Named, an, t, false);
+				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {
-			if (!classifyType(t.typeReturn, ctx).needsCleanup) return noRcInfo();
+			if (!classifyType(t.typeReturn, ctx, requireOps).needsCleanup) return noRcInfo();
 			const sn = sizedArrayHookName(t);
-			return makeOpsInfo(RcKind.Named, sn, t, false);
+			return makeOpsInfo(RcKind.Named, sn, t, false, requireOps);
 		},
 		TypeKind.Tuple => {
 			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
@@ -358,10 +358,10 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// moveOrCopy's msTuple_<hash>{Copy,Destroy} calls resolve.
 			let hasRc = false;
 			for (const child of t.typeChildren) {
-				if (classifyType(child, ctx).needsCleanup) { hasRc = true; }
+				if (classifyType(child, ctx, requireOps).needsCleanup) { hasRc = true; }
 			}
 			if (!hasRc) return noRcInfo();
-			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false);
+			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false, requireOps);
 		},
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
@@ -372,12 +372,12 @@ export function sizedArrayHookName(t: Type): string {
 	return "msSized_" + hashToBase36(typeKey(t));
 }
 
-export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {
+export function anonUnionOwnsRc(t: Type, ctx: TransformContext, requireOps: boolean = true): boolean {
 	if (t.typeChildren == null || t.typeChildren.length < 2) return false;
 	let owns = false;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return false;
-		if (classifyType(c, ctx).needsCleanup) owns = true;
+		if (classifyType(c, ctx, requireOps).needsCleanup) owns = true;
 	}
 	return owns;
 }

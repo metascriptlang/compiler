@@ -14,7 +14,7 @@
 // pool.
 //
 // This runs all three crossed in a massive loop on the real native runtime,
-// under both --gc=drc and --gc=orc, asserting: correct results (exit 0) AND
+// asserting: correct results (exit 0) AND
 // flat RSS (no per-iteration leak as futures/messages/closures churn). It is
 // the standing answer to "did my change break PARALOCK seamlessly?".
 //

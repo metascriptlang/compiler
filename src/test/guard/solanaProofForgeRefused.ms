@@ -32,16 +32,16 @@ function allowed(payer: WritableSigner, pet: Owned<Pet>): uint64 {
 }
 
 function forged(raw: Account, signed: Signer, pet: Owned<Pet>): void {
-	const a = raw as Signer;
-	const b: WritableSigner = { account: raw };
-	const c = signed as WritableSigner;
-	const d = raw as Owned<Pet>;
-	const e: Mutable<Pet> = { account: raw };
-	const f = pet as Mutable<Pet>;
-	const g = pet.asAccount() as Mutable<Pet>;
+	const a = raw as Signer; // GUARD-REFUSED
+	const b: WritableSigner = { account: raw }; // GUARD-REFUSED
+	const c = signed as WritableSigner; // GUARD-REFUSED
+	const d = raw as Owned<Pet>; // GUARD-REFUSED
+	const e: Mutable<Pet> = { account: raw }; // GUARD-REFUSED
+	const f = pet as Mutable<Pet>; // GUARD-REFUSED
+	const g = pet.asAccount() as Mutable<Pet>; // GUARD-REFUSED
 	const accounts: Account[] = [raw];
-	const h = accounts as Signer[];
-	const i = unchecked(0) as Result<Signer, ProgramError>;
+	const h = accounts as Signer[]; // GUARD-REFUSED
+	const i = unchecked(0) as Result<Signer, ProgramError>; // GUARD-REFUSED
 }
 
 function main(): void {

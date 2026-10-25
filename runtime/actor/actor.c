@@ -20,6 +20,10 @@
 MS_THREAD_LOCAL msActor* msCurrentActor = NULL;
 MS_TLS_PUBLISH(msCurrentActor)
 
+_Atomic(bool) msActorEntered = false;
+
+msActor* msActorCurrentNoHoist(void) { return msCurrentActor; }
+
 /* Per-thread scheduler ID — main thread = 0, pool worker N = N (1..workerCount).
  * Default -1 means "this thread is not a registered actor poller" so
  * msActorPollLocal early-returns instead of polling msSchedulers[-1]. */
@@ -30,6 +34,9 @@ MS_TLS_PUBLISH(msMySchedulerID)
  * `pool.workerCount + 1` on first actor registration, then immutable. */
 msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
 int msSchedulerCount = 0;
+
+pthread_once_t msActorSystemOnce = PTHREAD_ONCE_INIT;
+_Atomic(bool) msActorSystemLive = false;
 
 /* Round-robin counter for actor → scheduler assignment. */
 _Atomic(int) msNextActorRR = 0;
@@ -67,10 +74,120 @@ msActor* msCycleDetectorActor = NULL;
 MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
 MS_TLS_PUBLISH(msMsgPools)
 
+static msMessage* msMsgOrphans[MS_MSG_POOL_CLASSES];
+static pthread_mutex_t msMsgOrphansLock = PTHREAD_MUTEX_INITIALIZER;
+int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
+
+static void msMsgOrphansAcquire(void) {
+    pthread_mutex_lock(&msMsgOrphansLock);
+}
+
+static void msMsgOrphansRelease(void) {
+    pthread_mutex_unlock(&msMsgOrphansLock);
+}
+
+__attribute__((noinline)) msMessage* msMsgOrphansTake(uint8_t cls) {
+    msMsgOrphansAcquire();
+    msMessage* spilled = msMsgOrphans[cls];
+    msMsgOrphans[cls] = NULL;
+    __atomic_store_n(&msMsgOrphansPending[cls], 0, __ATOMIC_RELAXED);
+    msMsgOrphansRelease();
+    return spilled;
+}
+
+void msMsgPoolsThreadTeardown(void) {
+    msMessage* last[MS_MSG_POOL_CLASSES];
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        last[cls] = msMsgPools[cls].free_list;
+        if (last[cls] == NULL) continue;
+        msMessage* next;
+        while ((next = atomic_load_explicit(&last[cls]->next, memory_order_relaxed)) != NULL) last[cls] = next;
+    }
+    msMsgOrphansAcquire();
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        if (last[cls] == NULL) continue;
+        atomic_store_explicit(&last[cls]->next, msMsgOrphans[cls], memory_order_relaxed);
+        msMsgOrphans[cls] = msMsgPools[cls].free_list;
+        __atomic_store_n(&msMsgOrphansPending[cls], 1, __ATOMIC_RELAXED);
+    }
+    msMsgOrphansRelease();
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        msMsgPools[cls].free_list = NULL;
+        msMsgPools[cls].count = 0;
+    }
+}
+
 /* Selector per-thread poll result buffer (selector.h). Single TU-shared
  * TLS slot so msSelectorWait/EventFd/EventFlags called across TUs on the
  * same thread share the same event data. */
 MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
 MS_TLS_PUBLISH(_msEvtBuf)
+
+
+static msActorJob* msActorJobNew(msClosure cb, void (*drop)(void*), void* chain) {
+    msActor* a = msCurrentActor;
+    msActorJobs* j = msActorJobsEnsure(a);
+    msActorJob* r = (msActorJob*)msMemAlloc0(sizeof(msActorJob));
+    atomic_store_explicit(&r->refs, 2, memory_order_relaxed);
+    r->pid = a->pid;
+    r->cb = cb;
+    r->drop = drop;
+    r->chain = chain;
+    r->liveNext = j->live;
+    if (j->live != NULL) j->live->livePrev = r;
+    j->live = r;
+    return r;
+}
+
+msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
+    return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };
+}
+
+static void msActorTimerEnvDrop(void* env) {
+    const msTypeInfo* t = msHeader(env)->type;
+    if (msDecRefIsLast(env)) {
+        MS_DESTROY_DISPATCH(t, env);
+        msDestroyAndDispose(env);
+    }
+}
+
+void* msActorStampTimer(msClosure cb, int64_t id, bool periodic) {
+    msActorJob* r = msActorJobNew(cb, msActorTimerEnvDrop, NULL);
+    r->timerId = id;
+    r->periodic = periodic;
+    r->dropAfterRun = true;
+    return r;
+}
+
+void msActorJobFire(void* r) {
+    msActorJobPost((msActorJob*)r);
+    msActorJobUnref((msActorJob*)r);
+}
+
+void msActorJobTick(void* r) {
+    msActorJobPost((msActorJob*)r);
+}
+
+void msActorJobCancelMark(void* r) {
+    atomic_store_explicit(&((msActorJob*)r)->cancelled, true, memory_order_release);
+}
+
+void msActorJobAbandon(void* raw) {
+    msActorJob* r = (msActorJob*)raw;
+    atomic_store_explicit(&r->cancelled, true, memory_order_release);
+    msActorPostJob(r->pid, r);
+    msActorJobUnref(r);
+}
+
+void msActorClearTimerJob(int64_t id) {
+    msActor* a = msCurrentActor;
+    if (a != NULL && a->jobs != NULL) msActorJobsCancelTimer(a->jobs, id);
+}
+
+extern void* msAsyncCurrentChain(void);  /* dispatchFull.c */
+
+void msActorLendNote(void* fut) {
+    msActorLendNoteIn(msCurrentActor, fut, msAsyncCurrentChain());
+}
 
 #endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */

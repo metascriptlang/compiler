@@ -18,7 +18,7 @@
 import { TypeKind } from "../../ast/node";
 import { createPrimitive, unknownType, isUnknownType, isPointerShapedForUnknown } from "../../checker/types";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
-import { createCGen } from "../../codegen/c/context";
+import { CEmissionFacts, createAliveSet, createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
 import { checkSource } from "./helpers";
 import { compileToC } from "../helpers";
@@ -120,7 +120,9 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 	const ctx = checkSource("function main(): void { }");
 	assert ctx != null;
 	assert !hasErrors(ctx);
-	const g = createCGen(ctx, "gate.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(ctx, "gate.ms", alive, facts);
 	assert g.errors.length == 0;
 	getTypeDesc(g, createPrimitive(TypeKind.Pending));
 	assert g.errors.length == 1, "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
@@ -130,7 +132,9 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 test "emission gate control: user unknown emits void* with no error" {
 	const ctx = checkSource("function main(): void { }");
 	assert ctx != null;
-	const g = createCGen(ctx, "gate.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(ctx, "gate.ms", alive, facts);
 	assert getTypeDesc(g, unknownType()) == "void*";
 	assert g.errors.length == 0;
 }

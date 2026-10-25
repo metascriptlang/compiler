@@ -63,7 +63,7 @@ git push -u origin release/$V
 Run the local gates inside the release worktree:
 
 ```bash
-msc build src/index.ms --gc=drc --danger --output=msc
+msc build src/index.ms --danger --output=msc
 msc test src/index.ms
 msc run src/test/corpus/run.ms
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
@@ -73,9 +73,9 @@ msc run --target=raiser src/test/guard/run.ms
 Then check the self-host fixpoint on emitted C. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:
 
 ```bash
-./msc build src/index.ms --gc=drc --danger --cc=clang --output=/tmp/fx/gen1
+./msc build src/index.ms --danger --cc=clang --output=/tmp/fx/gen1
 cp out/release/.cache/*.c /tmp/fx/A/
-/tmp/fx/gen1 build src/index.ms --gc=drc --danger --cc=clang --output=/tmp/fx/gen2
+/tmp/fx/gen1 build src/index.ms --danger --cc=clang --output=/tmp/fx/gen2
 cp out/release/.cache/*.c /tmp/fx/B/
 ```
 

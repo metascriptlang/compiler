@@ -307,6 +307,12 @@ msBigInt* msBigIntMod(const msBigInt* a, const msBigInt* b) {
 	return r;
 }
 
+msBigInt* msBigIntClone(const msBigInt* a) {
+	msBigInt* r = newBig();
+	CHK(mbedtls_mpi_copy(&r->v, &a->v));
+	return r;
+}
+
 msBigInt* msBigIntNeg(const msBigInt* a) {
 	msBigInt* r = newBig();
 	mbedtls_mpi zero;

@@ -13,7 +13,7 @@ import {
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName } from "../c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -152,7 +152,7 @@ function enumOfMember(sym: Symbol): Type | null {
 }
 
 export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumName: string, member: string): string {
-	if (gen.bundleMode && enumSym != null && enumSym.modulePath != "" && !hasFlag(enumSym, SymbolFlag.ImportC)) return `${mangledGlobalName(enumSym, enumName)}_${member}`;
+	if (gen.bundleMode && enumSym != null && enumSym.modulePath != "" && !hasFlag(enumSym, SymbolFlag.ImportC)) return `${mangledGlobalName(buildModuleNameRoots(), enumSym, enumName)}_${member}`;
 	return enumMemberName(enumSym, safeJsName(enumName), member);
 }
 
@@ -172,12 +172,12 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 	}
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
-		return mangledFunctionName(sym, declared, sym.overloadIdx);
+		return mangledFunctionName(buildModuleNameRoots(), sym, declared, sym.overloadIdx);
 	}
 	if ((sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor) && sym.modulePath != null && sym.modulePath != "") {
-		return mangledGlobalName(sym, declared);
+		return mangledGlobalName(buildModuleNameRoots(), sym, declared);
 	}
-	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, declared);
+	if (isModuleGlobalVar(sym)) return mangledGlobalName(buildModuleNameRoots(), sym, declared);
 	return safeJsName(name);
 }
 
@@ -258,7 +258,7 @@ export function jsExportedFunctionName(gen: JSGenerator, sym: Symbol, name: stri
 
 export function ownBindingName(gen: JSGenerator, sym: Symbol, emitted: string): string {
 	if (sym.symbolKind != SymbolKind.Function || !gen.innerLocals.has(emitted)) return emitted;
-	return mangleQualified(emitted, mangleModuleName(gen.currentModulePath));
+	return mangleQualified(emitted, mangleModuleName(buildModuleNameRoots(), gen.currentModulePath));
 }
 
 // The binding name the symbol's home module declares, or "" for a symbol no module
@@ -286,14 +286,14 @@ function multiFileHomeName(gen: JSGenerator, sym: Symbol, name: string, declared
 			}
 			return suffixed ? `${safeJsName(baseName)}_u${slot}` : exportedBindingName(baseName);
 		}
-		return hasModule ? mangledFunctionName(sym, declared, sym.overloadIdx) : "";
+		return hasModule ? mangledFunctionName(buildModuleNameRoots(), sym, declared, sym.overloadIdx) : "";
 	}
 	if (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor) {
 		if (moduleExportsName(gen, effPath, baseName)) return exportedBindingName(baseName);
-		return hasModule ? mangledGlobalName(sym, declared) : "";
+		return hasModule ? mangledGlobalName(buildModuleNameRoots(), sym, declared) : "";
 	}
 	if (isModuleGlobalVar(sym)) {
-		return moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, declared);
+		return moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(buildModuleNameRoots(), sym, declared);
 	}
 	return "";
 }
@@ -561,8 +561,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const viaNamespace = qualified != null && qualified.object.resolvedSym != null && qualified.object.resolvedSym.symbolKind == SymbolKind.Module;
 	if ((d.callee.kind == NodeKind.Identifier || viaNamespace) && sym != null
 			&& sym.overloads != null && sym.overloads.length > 0) {
-		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
-		const ws = w.winnerSym;
+		const ws = overloadAt(sym, resolveOverloadWinner(sym, d.resolvedOverloadIdx));
 		const written = viaNamespace ? qualified!.property : (d.callee.data as IdentifierData).name;
 		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);

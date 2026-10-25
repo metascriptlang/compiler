@@ -28,6 +28,7 @@ typedef struct msTypeInfo {
 	uint32_t depth;
 	const struct msTypeInfo* const* display;
 	const char* displayName; /* Source spelling for diagnostics (NULL: same as name) */
+	msTraceProc custodyFn;   /* msOrcDisown's walk: traceFn, or one that also enters acyclic cells reaching a cycle */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

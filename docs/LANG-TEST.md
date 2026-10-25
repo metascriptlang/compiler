@@ -135,9 +135,6 @@ msc test src/index.ms
 
 # Run a specific file's tests (+ its transitive deps)
 msc test src/lexer/scanner.ms
-
-# Under the ORC cycle collector (drc is the default)
-msc test src/index.ms --gc=orc
 ```
 
 `msc test` does not support `--filter` or `--jobs`.

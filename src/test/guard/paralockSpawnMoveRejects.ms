@@ -42,26 +42,26 @@ function useAfterMove(): int32 {
 	const c: Counter = { n: 0 };
 	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
 	const v = await f;
-	return v + c.n;
+	return v + c.n; // GUARD-REFUSED
 }
 
 // 2 — a field is not a binding.
 function moveField(): int32 {
 	const b: Box = { c: { n: 0 } };
-	const f = spawn(() => { return 0; }, { move: [b.c] });
+	const f = spawn(() => { return 0; }, { move: [b.c] }); // GUARD-REFUSED
 	return await f;
 }
 
 // 3 — unknown option key.
 function unknownOption(): int32 {
-	const f = spawn(() => { return 1; }, { moove: 1 });
+	const f = spawn(() => { return 1; }, { moove: 1 }); // GUARD-REFUSED
 	return await f;
 }
 
 // 4 — `move` inside the thunk is still a write to the parent's slot.
 function moveInsideThunk(): int32 {
 	const b: Box = { c: { n: 0 } };
-	const f = spawn(() => { const t = move b.c; return t.n; });
+	const f = spawn(() => { const t = move b.c; return t.n; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -74,7 +74,7 @@ const moduleCounter: Counter = { n: 0 };
 function aliasLocal(): int32 {
 	const c: Counter = { n: 0 };
 	const a = c;
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f + a.n;
 }
 
@@ -82,7 +82,7 @@ function aliasLocal(): int32 {
 function boundFromField(): int32 {
 	const reg: Reg = { cur: { n: 0 } };
 	const c = reg.cur;
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f + reg.cur.n;
 }
 
@@ -90,7 +90,7 @@ function boundFromField(): int32 {
 function closureAlias(): int32 {
 	const c: Counter = { n: 0 };
 	const peek = (): int32 => c.n;
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f + peek();
 }
 
@@ -99,13 +99,13 @@ function callArgEscape(): int32 {
 	const reg: Reg = { cur: { n: 0 } };
 	const c: Counter = { n: 0 };
 	register(reg, c);
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f + reg.cur.n;
 }
 
 // 9 — a parameter: the caller still owns it.
 function moveParam(c: Counter): int32 {
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -115,7 +115,7 @@ function loopRebind(): int32 {
 	let c: Counter = { n: 0 };
 	let total = 0;
 	for (let i = 0; i < 2; i += 1) {
-		const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+		const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 		total += await f;
 		c = reg.cur;
 	}
@@ -126,7 +126,7 @@ function loopRebind(): int32 {
 function deferAlias(): int32 {
 	const c: Counter = { n: 0 };
 	defer console.log("n=" + c.n);
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -134,7 +134,7 @@ function deferAlias(): int32 {
 function forOfElement(list: Counter[]): int32 {
 	let total = 0;
 	for (const c of list) {
-		const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+		const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 		total += await f;
 	}
 	return total;
@@ -142,7 +142,7 @@ function forOfElement(list: Counter[]): int32 {
 
 // 13 — a module-level binding is reachable from every function.
 function moveModuleLevel(): int32 {
-	const f = spawn(() => { moduleCounter.n = 1; return moduleCounter.n; }, { move: [moduleCounter] });
+	const f = spawn(() => { moduleCounter.n = 1; return moduleCounter.n; }, { move: [moduleCounter] }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -150,7 +150,7 @@ function moveModuleLevel(): int32 {
 function objectLiteralStore(): int32 {
 	const c: Counter = { n: 0 };
 	const box: Box = { c: c };
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
 	return await f + box.c.n;
 }
 
@@ -159,6 +159,6 @@ function pushSharedIntoOwner(): int32 {
 	const shared: Counter = { n: 0 };
 	const bag: Bag = { items: [] };
 	bag.items.push(shared);
-	const f = spawn(() => { bag.items[0].n = 1; return bag.items.length; }, { move: [bag] });
+	const f = spawn(() => { bag.items[0].n = 1; return bag.items.length; }, { move: [bag] }); // GUARD-REFUSED
 	return await f + shared.n;
 }

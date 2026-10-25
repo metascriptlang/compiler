@@ -7,8 +7,7 @@
 // `armBody = makeBlock([setMatched, armBody])` shape). The analyzer cleared the pending wasMoved
 // yet still ran save-assign-destroy → double-free / use-after-free. Only the native binary runs
 // DRC. Fixed in inject.ms processAssignment (consumedInRhs + the movedBeforeRhs gate)
-// + scope.ms varMovedInContext/clearMoveInContext. Must run clean (exit 0, flat RSS) under
-// both --gc=drc and --gc=orc.
+// + scope.ms varMovedInContext/clearMoveInContext. Must run clean (exit 0, flat RSS).
 
 interface Item { tag: number; }
 

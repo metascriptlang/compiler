@@ -12,7 +12,7 @@ struct KeyArray { value: Pubkey[2]; }
 struct BytesScalar { value: Bytes; }
 struct BytesArray { value: Bytes[2]; }
 enum Op { Read }
-const keyScalar = anchorIdl<Op>({ name: "key_scalar", Read: [KeyScalar, KeyScalar], accounts: [], events: [], errors: "" });
-const keyArray = anchorIdl<Op>({ name: "key_array", Read: [KeyArray, KeyArray], accounts: [], events: [], errors: "" });
-const bytesScalar = anchorIdl<Op>({ name: "bytes_scalar", Read: [BytesScalar, BytesScalar], accounts: [], events: [], errors: "" });
-const bytesArray = anchorIdl<Op>({ name: "bytes_array", Read: [BytesArray, BytesArray], accounts: [], events: [], errors: "" });
+const keyScalar = anchorIdl<Op>({ name: "key_scalar", Read: [KeyScalar, KeyScalar], accounts: [], events: [], errors: "" }); // GUARD-REFUSED
+const keyArray = anchorIdl<Op>({ name: "key_array", Read: [KeyArray, KeyArray], accounts: [], events: [], errors: "" }); // GUARD-REFUSED
+const bytesScalar = anchorIdl<Op>({ name: "bytes_scalar", Read: [BytesScalar, BytesScalar], accounts: [], events: [], errors: "" }); // GUARD-REFUSED
+const bytesArray = anchorIdl<Op>({ name: "bytes_array", Read: [BytesArray, BytesArray], accounts: [], events: [], errors: "" }); // GUARD-REFUSED

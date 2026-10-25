@@ -226,7 +226,7 @@ function laneLine(line: string, name: string): LaneResult | null {
 	return { lane: lane, pass: pass, detail: detail };
 }
 
-const LANE_ORDER: string[] = ["c", "drc", "orc", "danger", "js", "esm", "raiser"];
+const LANE_ORDER: string[] = ["c", "danger", "js", "esm", "raiser"];
 
 function laneRank(lane: string): int32 {
 	for (let i = 0; i < LANE_ORDER.length; i++) { if (LANE_ORDER[i] == lane) { return i; } }
@@ -1025,7 +1025,7 @@ test "an absent lane reports the first cause the runner log and the programs est
 	assert laneLines(["c", "js"], one, [["js"]], "")[0] == "  lanes: c; unavailable: js (every program carries @skip-js)";
 	assert laneLines(["c", "js"], one, [[]], "  !! node not found - the js lane is DISABLED on this host;")[0] == "  lanes: c; unavailable: js (node not found)";
 	assert laneLines(["c", "raiser"], one, [[]], "  !! MSCORPUS_LANES — only c cells are built")[0] == "  lanes: c; unavailable: raiser (narrowed by MSCORPUS_LANES)";
-	assert laneLines(["c", "orc"], one, [[]], "")[0] == "  lanes: c; unavailable: orc (no cell reported)";
+	assert laneLines(["c", "danger"], one, [[]], "")[0] == "  lanes: c; unavailable: danger (no cell reported)";
 	assert laneLines(["c"], one, [[]], "")[0] == "  lanes: c; unavailable: none";
 	assert laneLines(["san"], [[]], [[]], "")[0] == "  lanes: none; unavailable: san (no cell reported)";
 }

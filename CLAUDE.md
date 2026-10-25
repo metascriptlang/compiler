@@ -33,16 +33,16 @@ MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; rec
 MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms
 
 msc run src/index.ms                              # build + run natively
-msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
+msc build examples/actorSpawnBasic.ms --target=c
 
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
-msc build src/index.ms --gc=drc --danger --output=msc
+msc build src/index.ms --danger --output=msc
 
 # Dev loop (edit → rebuild → test): drop thin-LTO. The link then takes ~0.2s
 # instead of ~15s — thin-LTO produces machine code only at link, so every
 # rebuild re-pays it even when clang hits the object cache. Same -O3.
 # Numbers + method: docs/BUILD-PERF.md "Measured 2026-09-26".
-msc build src/index.ms --gc=drc --danger --lto=off --output=msc
+msc build src/index.ms --danger --lto=off --output=msc
 
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
 ./msc run --target=raiser tools/syncLocalBinary.ms            # full sync
@@ -62,7 +62,7 @@ Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`): def
 `--lto` is capability-resolved after the compiler is known (`resolveLto`): `--danger` takes thin LTO where the resolved compiler can link it, drops it with a stderr notice where it cannot, and an explicit `--lto=` against a proven-broken pair fails loud.
 
 ```bash
-msc build src/index.ms --gc=drc --danger --cc=clang --output=msc   # macOS
+msc build src/index.ms --danger --cc=clang --output=msc   # macOS
 ```
 
 **Do not re-litigate**: macOS/zig and Windows/zig cannot LTO (verified 2026-07-30 and 2026-08-31, target-scoped, no flag fixes it from our side); GNU gcc never gets LTO by default and spells it `-flto=auto`. The gain is **LTO, not clang** — clang and zig are equivalent code generators. Capability table: `src/compiler/cc.ms` (`ltoBroken`). Evidence + measurement method: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
@@ -89,14 +89,16 @@ Architecture detail: [`docs/PIPELINE.md`](docs/PIPELINE.md). File tree + pattern
 
 ## Writing MetaScript
 
-Before writing or reviewing `.ms`, follow the canonical
-[`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md). Use [`docs/LANG.md`](docs/LANG.md) for
-language behavior the style guide does not cover.
+When writing or reviewing `.ms`, read the relevant sections of
+[`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md), this repository's official authoring
+standard, so one source decides style, ownership idioms and boundary practice. It supersedes
+older workspace authoring guidance for this repository; an unrelated task does not require a
+whole-file reread. Use [`docs/LANG.md`](docs/LANG.md) for detailed language contracts.
 
 ## Entry points
 
 - Nothing auto-calls `main`; the program is the entry module's top-level code. CLI and
-  test-target call sites follow [`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md) §9.
+  test-target call sites follow [`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md#program-entry-tests-and-shutdown).
 - Exit means the event loop is empty. `msDrainUntilIdle()` finishes pending work and
   `msReportOrphanFailures()` turns unhandled rejections into exit 1; `process.exit()` skips both.
 - For `--app=lib` hosts, call the entry module's init functions rather than the program-wide

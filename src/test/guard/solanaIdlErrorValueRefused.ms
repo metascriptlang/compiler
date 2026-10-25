@@ -14,5 +14,5 @@ struct ReadAccounts { owner: Signer; }
 enum SignedFailure { Below = -1, Zero = 0 }
 enum TwinFailure { Open = 1, Shut = 1 }
 
-console.log(anchorIdl<Op>({ name: "signed", address: "", Read: [ReadAccounts], accounts: [], events: [], errors: SignedFailure }));
-console.log(anchorIdl<Op>({ name: "twin", address: "", Read: [ReadAccounts], accounts: [], events: [], errors: TwinFailure }));
+console.log(anchorIdl<Op>({ name: "signed", address: "", Read: [ReadAccounts], accounts: [], events: [], errors: SignedFailure })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "twin", address: "", Read: [ReadAccounts], accounts: [], events: [], errors: TwinFailure })); // GUARD-REFUSED

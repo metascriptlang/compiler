@@ -1117,14 +1117,59 @@ function stepCrash(): void {
 	}
 	const want = [
 		"STEP start 2",
-		"STEP rolled back logic fatal then 2",
-		"STEP rolled back logic fault then 2",
-		"STEP rolled back logic exception then 2",
+		"STEP rolled back logic fatal then 2 frame=0",
+		"STEP rolled back logic fault then 2 frame=0",
+		"STEP rolled back logic exception then 2 frame=0",
+		"STEP rolled back logic fatal then 2 frame=0",
+		"STEP rolled back logic fatal then 2 frame=0",
 		"STEP reloaded 3",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function stepJoinCrash(): void {
+	const tag = "hcrStepJoinCrash";
+	const dir = freshDir(`${TMP}/stepJoinCrash`);
+	for (const f of ["hold.h", "logic.ms", "fixed.txt"]) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
+	for (const f of readDir(`${FIXTURES}/stepJoin`)) copy(`${FIXTURES}/stepJoin/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("STEP ")) seen.push(line);
+	}
+	const want = [
+		"STEP start 2",
+		"STEP rolled back fatal then 2 frame=0",
+		"STEP join rejected fatal",
+		"STEP rolled back fatal then 2 frame=0",
+		"STEP all rejected fatal",
+		"STEP reloaded 3",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a task that crashed under step() and that the program awaits again did not reject with the crash");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function stepSpareCrash(): void {
+	const tag = "hcrStepSpareCrash";
+	const dir = freshDir(`${TMP}/stepSpareCrash`);
+	for (const f of ["hold.h", "logic.ms", "fixed.txt"]) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
+	for (const f of readDir(`${FIXTURES}/stepSpare`)) copy(`${FIXTURES}/stepSpare/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("STEP ")) seen.push(line);
+	}
+	const want = ["STEP start 2 extra=0", "STEP rolled back then 2 queued ran 2 extra=0", "STEP reloaded 3"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a crash under step() inside a wait that started a spare left the spare wanted");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1167,21 +1212,19 @@ function genericCtor(): void {
 
 function genericOps(): void {
 	const tag = "hcrGenericOps";
-	for (const gc of ["drc", "orc"]) {
-		const dir = freshDir(`${TMP}/genericOps-${gc}`);
-		for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
-		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--gc=${gc}`], `${gc}: foreign generic lifecycle references did not build`);
-		const ran = msc(dir, ["run", "--hcr", `--gc=${gc}`, "app.ms"]);
-		let drops: int32 = 0;
-		let values = false;
-		for (const line of lines(both(ran))) {
-			if (line == "DROP") drops += 1;
-			if (line == "OPS 9 10 kept") values = true;
-		}
-		if (!succeeded(ran) || !values || drops != 3) {
-			console.log(both(ran));
-			failWith(tag, `${gc}: captured generic state must survive calls and destroy its three cells exactly once`);
-		}
+	const dir = freshDir(`${TMP}/genericOps`);
+	for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "foreign generic lifecycle references did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	let drops: int32 = 0;
+	let values = false;
+	for (const line of lines(both(ran))) {
+		if (line == "DROP") drops += 1;
+		if (line == "OPS 9 10 kept") values = true;
+	}
+	if (!succeeded(ran) || !values || drops != 3) {
+		console.log(both(ran));
+		failWith(tag, "captured generic state must survive calls and destroy its three cells exactly once");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1319,6 +1362,38 @@ function sharedVariable(): void {
 		"HCR-SHARED after title type rejection: 9 two 45 45",
 		"HCR-SHARED g5: reloaded logic",
 		"HCR-SHARED edited constants again: 11 three 56 56",
+	]);
+}
+
+function namespaceVariable(): void {
+	const tag = "hcrNamespaceVariable";
+	const dir = buildLogicGenerations(tag, "namespaceVariable", ["logic.ms", "logicEdit.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-NS", [
+		"HCR-NS start: 3 3 2 x",
+		"HCR-NS g2: reloaded logic",
+		"HCR-NS edited: 4 10 12 x",
+	]);
+}
+
+function namespaceShift(): void {
+	const tag = "hcrNamespaceShift";
+	const fixture = `${FIXTURES}/namespaceShift`;
+	const dir = freshDir(`${TMP}/namespaceShift`);
+	copy(`${fixture}/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const generations = [["reader.ms", "state.ms"], ["readerEdit.ms", "state.ms"], ["readerEdit.ms", "stateEdit.ms"]];
+	for (let i = 0; i < generations.length; i += 1) {
+		copy(`${fixture}/${generations[i][0]}`, `${dir}/reader.ms`);
+		copy(`${fixture}/${generations[i][1]}`, `${dir}/state.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["state", "reader", "support"], "HCR-SHIFT", [
+		"HCR-SHIFT start: 2 2",
+		"HCR-SHIFT g2: reloaded reader",
+		"HCR-SHIFT reader: 3 3 n3",
+		"HCR-SHIFT g3: reloaded state",
+		"HCR-SHIFT state: 4 4 n4",
 	]);
 }
 
@@ -1792,6 +1867,24 @@ function globalCell(): void {
 	]);
 }
 
+function borrowAcrossReload(): void {
+	const tag = "hcrBorrowAcrossReload";
+	const dir = freshDir(`${TMP}/borrowAcrossReload`);
+	for (const f of ["app.ms", "state.ms"]) copy(`${FIXTURES}/borrowAcrossReload/${f}`, `${dir}/${f}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicEdit.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/borrowAcrossReload/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "state", "support"], "HCR-BORROW", [
+		"HCR-BORROW start: [label-1] [field-1]",
+		"HCR-BORROW g2: logic",
+		"HCR-BORROW after: [label-1]4 [field-2]4",
+	]);
+}
+
 function watchWarmDependency(): void {
 	const tag = "hcrWatchWarmDependency";
 	const root = freshDir(`${TMP}/watchWarmDependency`);
@@ -1853,8 +1946,8 @@ function typeInfoLocality(): void {
 	let logic = "";
 	for (const f of cFilesIn(`${debug}/watch0`)) {
 		if (f.startsWith("_")) continue;
-		if (f.endsWith("ZappOms.c")) app = f;
-		if (f.endsWith("ZlogicOms.c")) logic = f;
+		if (f.endsWith("appOms.c")) app = f;
+		if (f.endsWith("logicOms.c")) logic = f;
 	}
 	need(tag, app != "" && logic != "", "the watch replay emitted no C for app.ms or logic.ms");
 	const appFirst = read(`${debug}/watch0/${app}`);
@@ -2207,6 +2300,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreLinkClang", run: coreLinkClang },
 	{ name: "hcrIndirect", run: indirect },
 	{ name: "hcrSharedVariable", run: sharedVariable },
+	{ name: "hcrNamespaceVariable", run: namespaceVariable },
+	{ name: "hcrNamespaceShift", run: namespaceShift },
 	{ name: "hcrEngine", run: engine },
 	{ name: "hcrAsyncLoop", run: asyncLoop },
 	{ name: "hcrLiftNames", run: liftNames },
@@ -2218,6 +2313,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrSpanParamForward", run: spanParamForward },
 	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrStepJoinCrash", run: stepJoinCrash },
+	{ name: "hcrStepSpareCrash", run: stepSpareCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrGenericCtor", run: genericCtor },
 	{ name: "hcrGenericOps", run: genericOps },
@@ -2242,6 +2339,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreConstant", run: coreConstant },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
+	{ name: "hcrBorrowAcrossReload", run: borrowAcrossReload },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrWatchLink", run: watchLink },

@@ -9,7 +9,7 @@ import "../parser/statements/core";
 import { resetBuildState } from "../compiler/buildSession";
 import { checkModuleGraph, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { hasExtraGlobalImports } from "../checker/prelude";
-import { TargetInfo, hostTargetInfo } from "../checker/types";
+import { TargetInfo, hostTargetInfo, duVariantMark, instantiatedBodyCount, setConcurrentTypeQueries } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
 import { hasErrors, CheckerError, CheckerContext, GcMode, Severity, ExportRegistry } from "../checker/context";
@@ -24,6 +24,8 @@ import { transformForNative } from "../transform/native/index";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
+import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
+import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
@@ -140,7 +142,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	}
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
 	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
@@ -173,7 +175,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const loadErr = loadFailure(mod);
 	if (loadErr != "") return Result.err(loadErr);
 
-	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Orc, config);
+	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Drc, config);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -192,7 +194,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
 	const aliveSet = createAliveSet();
@@ -371,6 +373,13 @@ function loadProjectGraph(entryPath: string, provider: SourceProvider, config: R
 	return graph;
 }
 
+let _emissionCreated: int32[] = [0, 0];
+
+// What the emission of the last compileProjectToC created: [union variants registered, generic bodies instantiated].
+export function lastEmissionCreated(): int32[] {
+	return _emissionCreated;
+}
+
 // Compile project to C — same pipeline as compile.ms:
 // checkModuleGraph (2-phase) → per-module transform → computeAliveSet (post-transform DCE) → codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
@@ -429,6 +438,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -441,7 +451,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const transformed = transformProgram(monoed, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
@@ -449,15 +459,24 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
+	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}
-	for (let i = 0; i < emissionPrograms.length; i += 1) {
-		const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
-		combined = combined + output.code;
-		output.code = "";
-		moduleOutputs.push(output);
+	const variantsBefore = duVariantMark();
+	const bodiesBefore = instantiatedBodyCount();
+	setConcurrentTypeQueries(true);
+	try {
+		for (let i = 0; i < emissionPrograms.length; i += 1) {
+			const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
+			combined = combined + output.code;
+			output.code = "";
+			moduleOutputs.push(output);
+		}
+	} finally {
+		setConcurrentTypeQueries(false);
 	}
+	_emissionCreated = [duVariantMark() - variantsBefore, instantiatedBodyCount() - bodiesBefore];
 
 	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false, moduleOutputs);
 	return `${combined}\n${dispatcher}`;
@@ -577,6 +596,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -589,7 +609,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		const transformed = transformProgram(macroExpanded, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
@@ -597,6 +617,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
+	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}

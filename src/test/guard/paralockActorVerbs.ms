@@ -66,32 +66,32 @@ actor Verbs {
 function sendClassPlainRef(): void {
 	const p: Plain = { n: 1 };
 	const v = new Verbs();
-	v.absorb(p);
+	v.absorb(p); // GUARD-REFUSED
 }
 
 // 2 — reply-bearing but discarded: the borrow has no park behind it.
 function discardedCallBorrow(): void {
 	const p: Plain = { n: 2 };
 	const v = new Verbs();
-	v.weigh(p);
+	v.weigh(p); // GUARD-REFUSED
 }
 
 // 3 — SHARE pointee holding a reference.
 function arcPointeeNotImmutable(): void {
 	const p: Plain = { n: 3 };
-	const bad: Arc<Holder> = new Arc({ inner: p });
+	const bad: Arc<Holder> = new Arc({ inner: p }); // GUARD-REFUSED
 	console.log(bad.inner.n);
 }
 
 // 4 — write reaching through a SHARE handle.
 function writeThroughShare(): void {
 	const a: Arc<Pod> = new Arc({ n: 4 });
-	a.n = 5;
+	a.n = 5; // GUARD-REFUSED
 }
 
 // 5 — Locked payload that owns memory (raw store, no destroy-on-store).
 function lockedPayloadOwnsMemory(): void {
-	const c: Locked<Owner> = new Locked({ s: "leaks-one-per-update" });
+	const c: Locked<Owner> = new Locked({ s: "leaks-one-per-update" }); // GUARD-REFUSED
 	console.log(c);
 }
 

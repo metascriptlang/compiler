@@ -453,7 +453,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 			// One source of truth for the ref family (atomic cells, Actor handles,
 			// `unknown` and nested ref-arrays included): nativeLower, which makes the
 			// same choice for `setLength` and `splice`.
-			const refFn = evictHelperName("msGenericArraySetLen", elemType);
+			const refFn = evictHelperName("msGenericArraySetLen", elemType, ctx);
 			if (refFn != "") fn = refFn;
 		}
 	}

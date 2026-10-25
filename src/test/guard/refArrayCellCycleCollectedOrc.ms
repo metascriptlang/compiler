@@ -14,12 +14,12 @@
 // lifting the cell trace for a cyclic element; run /trace-nim on the named type.
 //
 // GUARD-BALANCE Leaf
-// GUARD-BALANCE-ORC TNode
-// GUARD-BALANCE-ORC Peer
-// GUARD-BALANCE-ORC Opt
-// GUARD-BALANCE-ORC Grid
-// GUARD-BALANCE-ORC Hub
-// GUARD-BALANCE-ORC Named
+// GUARD-BALANCE TNode
+// GUARD-BALANCE Peer
+// GUARD-BALANCE Opt
+// GUARD-BALANCE Grid
+// GUARD-BALANCE Hub
+// GUARD-BALANCE Named
 
 class TNode {
 	parent: TNode | null = null;

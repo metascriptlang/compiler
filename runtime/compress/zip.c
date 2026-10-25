@@ -41,8 +41,7 @@ static inline struct msZipWriterCtx* wHandleToCtx(int64_t h) { return (struct ms
 int64_t msZipReaderOpen(msString data) {
     if (data.len <= 0 || !data.p) return 0;
 
-    struct msZipReaderCtx* c = (struct msZipReaderCtx*)calloc(1, sizeof(*c));
-    if (!c) return 0;
+    struct msZipReaderCtx* c = (struct msZipReaderCtx*)msMemAlloc0(sizeof(*c));
 
     /* Copy the input buffer — miniz's reader holds the pointer for the
      * archive's entire lifetime and dereferences it lazily during extract
@@ -52,8 +51,7 @@ int64_t msZipReaderOpen(msString data) {
      * Peak memory cost: ~2× the input size during extraction. For the
      * typical ~1 MB package tarball this is fine; callers handling very
      * large archives can stream entry-by-entry to keep peaks down. */
-    c->dataCopy = (char*)malloc((size_t)data.len);
-    if (!c->dataCopy) { free(c); return 0; }
+    c->dataCopy = (char*)msMemAlloc((size_t)data.len);
     memcpy(c->dataCopy, data.p->data, (size_t)data.len);
     c->dataLen = (size_t)data.len;
 
@@ -131,8 +129,7 @@ void msZipReaderClose(int64_t handle) {
 /* ===== Writer ===== */
 
 int64_t msZipWriterNew(void) {
-    struct msZipWriterCtx* c = (struct msZipWriterCtx*)calloc(1, sizeof(*c));
-    if (!c) return 0;
+    struct msZipWriterCtx* c = (struct msZipWriterCtx*)msMemAlloc0(sizeof(*c));
     if (!mz_zip_writer_init_heap(&c->zip, 0, 0)) {
         free(c);
         return 0;

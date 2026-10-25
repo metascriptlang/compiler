@@ -14,7 +14,7 @@ function importErrors(main: string, targetOs: string = "macos", appMode: string 
 		{ entryPath: "/src/main.ms", entrySource: main },
 	];
 	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
-	checkModuleGraph(graph, "", ".cms", targetOs, hostTargetInfo(), GcMode.Orc, null, null, false, appMode);
+	checkModuleGraph(graph, "", ".cms", targetOs, hostTargetInfo(), GcMode.Drc, null, null, false, appMode);
 	const mod = findModule(graph, "/src/main.ms");
 	const out: string[] = [];
 	if (mod == null) return ["no module"];

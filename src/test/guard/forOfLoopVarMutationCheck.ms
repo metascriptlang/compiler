@@ -27,22 +27,22 @@ struct FPt { x: int32; y: int32; }
 
 function mVecStruct(): void {
 	const v: Vec<FPt> = [{ x: 1, y: 2 }];
-	for (const p of v) { p.x = 9; }
+	for (const p of v) { p.x = 9; } // GUARD-REFUSED
 }
 
 function mRefArrStruct(): void {
 	const v: FPt[] = [{ x: 1, y: 2 }];
-	for (const q of v) { q.x = 9; }
+	for (const q of v) { q.x = 9; } // GUARD-REFUSED
 }
 
 function mNestedVec(): void {
 	const v: Vec<Vec<int32>> = [[1]];
-	for (const n of v) { n[0] = 9; }
+	for (const n of v) { n[0] = 9; } // GUARD-REFUSED
 }
 
 function mTupleElem(): void {
 	const v: Vec<[int32, int32]> = [[1, 2]];
-	for (const t of v) { t[0] = 9; }
+	for (const t of v) { t[0] = 9; } // GUARD-REFUSED
 }
 
 mVecStruct();

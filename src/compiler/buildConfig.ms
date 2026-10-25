@@ -48,11 +48,17 @@ export function defaultFmtSection(): FmtSection {
 
 export interface LspSection {
 	os: string;            // "" = host platform
-	gc: string;            // "" = infer from os (bare/solana -> manual, else orc)
+	mm: string;            // "" = what the target implies, see targetMemoryMode
 }
 
 export function defaultLspSection(): LspSection {
-	return { os: "", gc: "" };
+	return { os: "", mm: "" };
+}
+
+export function targetMemoryMode(os: string, requested: string): string {
+	if (os == "solana") return requested == "none" ? "none" : "manual";
+	if (requested != "") return requested;
+	return os == "bare" ? "manual" : "drc";
 }
 
 export interface CcTargetSection {
@@ -295,8 +301,8 @@ function extractLsp(lspNode: Node): LspSection {
 	if (lspNode == null || lspNode.kind != NodeKind.ObjectLiteral) return lsp;
 	const os = nodeString(findObjField(lspNode, "os"));
 	if (os.length > 0) lsp.os = os;
-	const gc = nodeString(findObjField(lspNode, "gc"));
-	if (gc.length > 0) lsp.gc = gc;
+	const mm = nodeString(findObjField(lspNode, "mm"));
+	if (mm.length > 0) lsp.mm = mm;
 	return lsp;
 }
 
@@ -565,9 +571,13 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 		}
 		const gcNode = findObjField(lspNode, "gc");
 		if (gcNode != null) {
-			const gcVal = nodeString(gcNode);
-			if (gcVal != "none" && gcVal != "manual" && gcVal != "drc" && gcVal != "orc") {
-				warnings.push({ message: `lsp.gc: unknown mode '${gcVal}' — valid: none, manual, drc, orc`, line: gcNode.location.line });
+			warnings.push({ message: "lsp.gc is gone: write lsp.mm (drc, manual or none)", line: gcNode.location.line });
+		}
+		const mmNode = findObjField(lspNode, "mm");
+		if (mmNode != null) {
+			const mmVal = nodeString(mmNode);
+			if (mmVal != "none" && mmVal != "manual" && mmVal != "drc") {
+				warnings.push({ message: `lsp.mm: unknown mode '${mmVal}' — valid: drc, manual, none`, line: mmNode.location.line });
 			}
 		}
 	}
@@ -712,34 +722,46 @@ test "extractGlobalImports absent yields empty" {
 	assert cfg.globalImports.length == 0;
 }
 
-test "extractLsp reads os and gc" {
-	const cfg = testExtractFromSource("const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;");
+test "extractLsp reads os and mm" {
+	const cfg = testExtractFromSource("const config = { lsp: { os: \"bare\", mm: \"manual\" } }; export default config;");
 	assert cfg.lsp.os == "bare";
-	assert cfg.lsp.gc == "manual";
+	assert cfg.lsp.mm == "manual";
 }
 
 test "extractLsp absent yields defaults" {
 	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
 	assert cfg.lsp.os == "";
-	assert cfg.lsp.gc == "";
+	assert cfg.lsp.mm == "";
 }
 
 test "extractLsp partial fields" {
 	const cfg = testExtractFromSource("const config = { lsp: { os: \"solana\" } }; export default config;");
 	assert cfg.lsp.os == "solana";
-	assert cfg.lsp.gc == "";
+	assert cfg.lsp.mm == "";
 }
 
-test "validateBuildConfig flags bad lsp.os and lsp.gc" {
-	const src = "const config = { lsp: { os: \"bar\", gc: \"arc\" } }; export default config;";
-	const warnings = validateBuildConfig(".", src);
-	assert warnings.length == 2;
+test "validateBuildConfig flags bad lsp.os and lsp.mm, and lsp.gc as gone" {
+	const src = "const config = { lsp: { os: \"bar\", mm: \"orc\" } }; export default config;";
+	assert validateBuildConfig(".", src).length == 2;
+	const old = validateBuildConfig(".", "const config = { lsp: { gc: \"manual\" } }; export default config;");
+	assert old.length == 1;
+	assert old[0].message == "lsp.gc is gone: write lsp.mm (drc, manual or none)";
 }
 
 test "validateBuildConfig accepts valid lsp values" {
-	const src = "const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;";
+	const src = "const config = { lsp: { os: \"bare\", mm: \"manual\" } }; export default config;";
 	const warnings = validateBuildConfig(".", src);
 	assert warnings.length == 0;
+}
+
+test "targetMemoryMode: solana is manual, bare is manual unless asked, the rest drc unless asked" {
+	assert targetMemoryMode("solana", "") == "manual";
+	assert targetMemoryMode("solana", "drc") == "manual";
+	assert targetMemoryMode("solana", "none") == "none";
+	assert targetMemoryMode("bare", "") == "manual";
+	assert targetMemoryMode("bare", "drc") == "drc";
+	assert targetMemoryMode("linux", "") == "drc";
+	assert targetMemoryMode("macos", "manual") == "manual";
 }
 
 test "extractDeps empty block" {

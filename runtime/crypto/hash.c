@@ -55,8 +55,7 @@ static msString encode_to_hex(const uint8_t* data, size_t len) {
 	if (len == 0) return MS_EMPTY_STRING;
 
 	int64_t hexLen = (int64_t)(len * 2);
-	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + hexLen + 1);
-	if (!p) return MS_EMPTY_STRING;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + hexLen + 1);
 
 	p->cap = hexLen;
 	for (size_t i = 0; i < len; i++) {
@@ -77,8 +76,7 @@ static msString encode_to_base64(const uint8_t* data, size_t len) {
 	if (len == 0) return MS_EMPTY_STRING;
 
 	size_t outLen = ((len + 2) / 3) * 4;
-	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + outLen + 1);
-	if (!p) return MS_EMPTY_STRING;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + outLen + 1);
 
 	p->cap = (int64_t)outLen;
 	size_t i = 0, j = 0;
@@ -119,8 +117,7 @@ static msString encode_hash(const uint8_t* data, size_t len, msString encoding) 
 static msString raw_to_buffer(const uint8_t* data, size_t len) {
 	if (len == 0) return MS_EMPTY_STRING;
 
-	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + len + 1);
-	if (!p) return MS_EMPTY_STRING;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + len + 1);
 
 	p->cap = (int64_t)len;
 	memcpy(p->data, data, len);
@@ -264,8 +261,7 @@ msString msCryptoRandomBytes(int64_t size) {
 	if (size <= 0) return MS_EMPTY_STRING;
 	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
-	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + size + 1);
-	if (!p) return MS_EMPTY_STRING;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + size + 1);
 
 	p->cap = size;
 	if (fill_random((uint8_t*)p->data, (size_t)size) != 0) {
@@ -343,8 +339,7 @@ msCryptoHashCtx* msCryptoHashInit(msString algorithm) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return NULL;
 
-	msCryptoHashCtx* ctx = (msCryptoHashCtx*)calloc(1, sizeof(msCryptoHashCtx));
-	if (!ctx) return NULL;
+	msCryptoHashCtx* ctx = (msCryptoHashCtx*)msMemAlloc0(sizeof(msCryptoHashCtx));
 
 	mbedtls_md_init(&ctx->ctx);
 	if (mbedtls_md_setup(&ctx->ctx, md_info, 0) != 0) {
@@ -421,8 +416,7 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return NULL;
 
-	msCryptoHmacCtx* ctx = (msCryptoHmacCtx*)calloc(1, sizeof(msCryptoHmacCtx));
-	if (!ctx) return NULL;
+	msCryptoHmacCtx* ctx = (msCryptoHmacCtx*)msMemAlloc0(sizeof(msCryptoHmacCtx));
 
 	mbedtls_md_init(&ctx->ctx);
 	if (mbedtls_md_setup(&ctx->ctx, md_info, 1) != 0) { /* 1 = HMAC mode */
@@ -508,8 +502,7 @@ static int hex_digit(char c) {
 static msString decode_from_hex(const char* hex, int64_t len) {
 	if (len == 0 || (len % 2) != 0) return MS_EMPTY_STRING;
 	int64_t out_len = len / 2;
-	char* buf = (char*)malloc((size_t)out_len);
-	if (!buf) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc((size_t)out_len);
 	for (int64_t i = 0; i < out_len; i++) {
 		int hi = hex_digit(hex[i * 2]);
 		int lo = hex_digit(hex[i * 2 + 1]);
@@ -535,8 +528,7 @@ static msString decode_from_base64(const char* b64, int64_t len) {
 	int64_t out_len = (len / 4) * 3;
 	if (len >= 1 && b64[len - 1] == '=') out_len--;
 	if (len >= 2 && b64[len - 2] == '=') out_len--;
-	char* buf = (char*)malloc((size_t)out_len);
-	if (!buf) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc((size_t)out_len);
 	int64_t j = 0;
 	for (int64_t i = 0; i < len; i += 4) {
 		int a = base64_val(b64[i]);
@@ -582,10 +574,9 @@ static void pbkdf2_hmac(
 	uint8_t* output, size_t output_len
 ) {
 	size_t hash_len = mbedtls_md_get_size(md_info);
-	uint8_t* U = (uint8_t*)malloc(hash_len);
-	uint8_t* T = (uint8_t*)malloc(hash_len);
-	uint8_t* salt_block = (uint8_t*)malloc(salt_len + 4);
-	if (!U || !T || !salt_block) { free(U); free(T); free(salt_block); return; }
+	uint8_t* U = (uint8_t*)msMemAlloc(hash_len);
+	uint8_t* T = (uint8_t*)msMemAlloc(hash_len);
+	uint8_t* salt_block = (uint8_t*)msMemAlloc(salt_len + 4);
 	memcpy(salt_block, salt, salt_len);
 	size_t output_pos = 0;
 	uint32_t block_num = 1;
@@ -613,8 +604,7 @@ msString msCryptoPbkdf2(msString password, msString salt,
                         int32_t iterations, int32_t keyLength, msString digest) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(digest), digest.len);
 	if (md_info == NULL || keyLength <= 0) return MS_EMPTY_STRING;
-	uint8_t* output = (uint8_t*)malloc((size_t)keyLength);
-	if (!output) return MS_EMPTY_STRING;
+	uint8_t* output = (uint8_t*)msMemAlloc((size_t)keyLength);
 	pbkdf2_hmac(md_info,
 		(const uint8_t*)msStringToCString(password), (size_t)password.len,
 		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
@@ -642,16 +632,14 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 	const uint8_t* prk, size_t prk_len, const uint8_t* info, size_t info_len, size_t length) {
 	size_t hash_size = mbedtls_md_get_size(md_info);
 	if (length > 255 * hash_size) return MS_EMPTY_STRING;
-	uint8_t* okm = (uint8_t*)malloc(length);
-	if (!okm) return MS_EMPTY_STRING;
+	uint8_t* okm = (uint8_t*)msMemAlloc(length);
 	uint8_t T[64] = {0};
 	size_t T_len = 0;
 	size_t okm_offset = 0;
 	uint8_t counter = 1;
 	while (okm_offset < length) {
 		size_t input_len = T_len + info_len + 1;
-		uint8_t* input = (uint8_t*)malloc(input_len);
-		if (!input) { free(okm); return MS_EMPTY_STRING; }
+		uint8_t* input = (uint8_t*)msMemAlloc(input_len);
 		size_t pos = 0;
 		if (T_len > 0) { memcpy(input + pos, T, T_len); pos += T_len; }
 		if (info_len > 0) { memcpy(input + pos, info, info_len); pos += info_len; }

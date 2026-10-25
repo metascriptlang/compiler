@@ -14,9 +14,9 @@ class Pet { hp: uint32 = 0; }
 struct Held { pet: Pet; }
 
 function place(): Result<uint64, ProgramError> {
-	const named = scratch<Named>(2);
-	const listed = scratch<Listed>(2);
-	const held = scratch<Held>(2);
+	const named = scratch<Named>(2); // GUARD-REFUSED
+	const listed = scratch<Listed>(2); // GUARD-REFUSED
+	const held = scratch<Held>(2); // GUARD-REFUSED
 	return Result.ok((named.length + listed.length + held.length) as uint64);
 }
 

@@ -63,7 +63,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 		memset(r, 0, sizeof(msIoRequest));
 		return r;
 	}
-	return (msIoRequest*)calloc(1, sizeof(msIoRequest));
+	return (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
@@ -82,7 +82,7 @@ static msIocpOv* allocOv(msIoEngine* e, msIoRequest* req) {
 		e->ovFreeCount--;
 		memset(iov, 0, sizeof(msIocpOv));
 	} else {
-		iov = (msIocpOv*)calloc(1, sizeof(msIocpOv));
+		iov = (msIocpOv*)msMemAlloc0(sizeof(msIocpOv));
 	}
 	iov->req = req;
 	return iov;
@@ -118,17 +118,17 @@ static void ensureWsa(void) {
 
 msIoEngine* msIoEngineCreate(void) {
 	ensureWsa();
-	msIoEngine* e = (msIoEngine*)calloc(1, sizeof(msIoEngine));
+	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	e->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	if (e->iocp == NULL) { free(e); return NULL; }
 	/* Pre-allocate request + OVERLAPPED pools */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
-		msIoRequest* r = (msIoRequest*)calloc(1, sizeof(msIoRequest));
+		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 		r->next = e->freeList;
 		e->freeList = r;
 		e->freeCount++;
 
-		msIocpOv* iov = (msIocpOv*)calloc(1, sizeof(msIocpOv));
+		msIocpOv* iov = (msIocpOv*)msMemAlloc0(sizeof(msIocpOv));
 		*(msIocpOv**)iov = e->ovFreeList;
 		e->ovFreeList = iov;
 		e->ovFreeCount++;
@@ -153,9 +153,15 @@ void msIoEngineDestroy(msIoEngine* e) {
 
 static _Thread_local msIoEngine* _tlEngine = NULL;
 
+static void msIoEngineThreadDestroy(void) {
+	msIoEngineDestroy(_tlEngine);
+	_tlEngine = NULL;
+}
+
 msIoEngine* msGetIoEngine(void) {
 	if (_tlEngine == NULL) {
 		_tlEngine = msIoEngineCreate();
+		if (_tlEngine != NULL) msOnThreadDestruction(msIoEngineThreadDestroy);
 	}
 	return _tlEngine;
 }
@@ -224,7 +230,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_RECV;
 	req->fd = fd;
-	req->buf = (char*)malloc((size_t)maxBytes + 1);
+	req->buf = (char*)msMemAlloc((size_t)maxBytes + 1);
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
@@ -317,7 +323,7 @@ int32_t msFsWatchLastError(void) {
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	_msFsWatchLastError = 0;
 	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
-	WCHAR* wide = (WCHAR*)malloc(((size_t)wideLen + 1) * sizeof(WCHAR));
+	WCHAR* wide = (WCHAR*)msMemAlloc(((size_t)wideLen + 1) * sizeof(WCHAR));
 	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
 	wide[wideLen] = 0;
 	HANDLE dir = CreateFileW(wide, FILE_LIST_DIRECTORY,
@@ -340,7 +346,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_WATCH;
 	req->fd = handle;
-	req->buf = (char*)malloc(MS_FS_WATCH_BUFFER);
+	req->buf = (char*)msMemAlloc(MS_FS_WATCH_BUFFER);
 	req->len = MS_FS_WATCH_BUFFER;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
@@ -366,7 +372,7 @@ void msFsWatchClose(int32_t handle) {
 
 int32_t msFsWriteSettled(msString path) {
 	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
-	WCHAR* wide = (WCHAR*)malloc(((size_t)wideLen + 1) * sizeof(WCHAR));
+	WCHAR* wide = (WCHAR*)msMemAlloc(((size_t)wideLen + 1) * sizeof(WCHAR));
 	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
 	wide[wideLen] = 0;
 	HANDLE file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -380,15 +386,16 @@ static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
 	if (status == MS_FS_WATCH_STATUS_OVERFLOW || (status == 0 && bytes == 0)) return msStringNew("*", 1);
 	if (status != 0) return MS_EMPTY_STRING;
 	size_t cap = 256, used = 0;
-	char* out = (char*)malloc(cap);
+	char* out = (char*)msMemAlloc(cap);
 	DWORD offset = 0;
 	for (;;) {
 		const FILE_NOTIFY_INFORMATION* info = (const FILE_NOTIFY_INFORMATION*)(buf + offset);
 		int wideLen = (int)(info->FileNameLength / sizeof(WCHAR));
 		int utf8Len = WideCharToMultiByte(CP_UTF8, 0, info->FileName, wideLen, NULL, 0, NULL, NULL);
 		if (used + (size_t)utf8Len + 3 > cap) {
+			size_t oldCap = cap;
 			while (used + (size_t)utf8Len + 3 > cap) cap *= 2;
-			out = (char*)realloc(out, cap);
+			out = (char*)msRealloc(out, oldCap, cap);
 		}
 		if (used > 0) out[used++] = '\n';
 		out[used++] = info->Action == FILE_ACTION_RENAMED_NEW_NAME ? 'w' : 'c';

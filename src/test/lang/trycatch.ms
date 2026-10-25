@@ -303,3 +303,50 @@ test "a method call raising past an inner finally reaches the outer catch" {
 	assert openThroughFinally(g, "abcd", 2) == 4;
 	assert g.closes == 2;
 }
+
+function oneSigRaise(x: int32): int32;
+function oneSigRaise(x: int32): int32 {
+	if (x == 0) throw "zero";
+	return x;
+}
+
+function twoSigRaise(x: int32): int32;
+function twoSigRaise(x: string): int32;
+function twoSigRaise(x: int32 | string): int32 {
+	if (x == 0 || x == "") throw "empty";
+	return 1;
+}
+
+function callsThroughSignatures(trail: string[], n: int32, s: string): int32 {
+	const a = oneSigRaise(n);
+	trail.push("one");
+	twoSigRaise(s);
+	trail.push("two");
+	return a;
+}
+
+function messageAfterCatch(n: int32): string {
+	let message = "";
+	try { raiseAbove(n, 1); } catch (e) { message = e.message; }
+	return message;
+}
+
+function errorAfterCatch(n: int32): string {
+	let kept: Error | null = null;
+	try { raiseAbove(n, 1); } catch (e) { kept = e; }
+	return kept != null ? kept.message : "";
+}
+
+test "a value read from the catch binding outlives the handler" {
+	assert messageAfterCatch(2) == "above";
+	assert errorAfterCatch(2) == "above";
+}
+
+test "a raise from a function called through an overload signature stops its caller" {
+	const trail: string[] = [];
+	let caught = 0;
+	try { callsThroughSignatures(trail, 0, "s"); } catch (e) { caught += 1; }
+	try { callsThroughSignatures(trail, 1, ""); } catch (e) { caught += 1; }
+	assert caught == 2;
+	assert trail.length == 1 && trail[0] == "one";
+}

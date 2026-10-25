@@ -1,5 +1,5 @@
-// The Raiser tier of std/process keeps the processChild* guards' contracts: each one listed prints
-// GUARD-OK under `msc run --target=raiser`, through the host bridges over the same runtime the C
+// The Raiser tier of std/process keeps the processChild* guards' contracts: each one listed
+// prints GUARD-OK under `msc run --target=raiser`, through the host bridges over the same runtime the C
 // tier links. Not listed: processChildDroppedHandle, because Raiser runs no onDestroy, so a dropped
 // handle's child lives until the run ends (raiserChildVmEnd covers that end); and
 // processChildSiblingSpawn, because Raiser has no msPromiseAll bridge.

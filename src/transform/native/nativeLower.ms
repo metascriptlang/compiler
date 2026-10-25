@@ -14,9 +14,10 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
+import { isAcyclicRefElement } from "../cycles";
 import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, generatedRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
@@ -89,7 +90,7 @@ function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.ObjectLiteral) return rewriteAtomicLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node));
+	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node, ctx));
 	return node;
 }
 
@@ -133,7 +134,7 @@ function declaresArrayReturn(sym: Symbol): boolean {
 function rewriteNewExpr(node: Node): Node {
 	const refType = node.nodeType;
 	// new Locked(value): the argument is the cell's PAYLOAD, not the pointee —
-	// the pointee is the generated `{ lockNext, lockServing, value }` cell. Checked
+	// the pointee is the generated `{ lockNext, lockServing, lockHolder, value }` cell. Checked
 	// before the Arc path, whose predicate (isAtomicRef) also matches a Locked
 	// handle and would box the payload as the whole pointee.
 	if (isLockedRef(refType)) {
@@ -236,7 +237,7 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 	if (isNumeric(elemType)) return value;
 	if (elemType.kind == TypeKind.String) return value;
 	// Pointer element types (classes, refs) use msRefArray — void* indirection
-	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) return ref;
+	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr || elemType.kind == TypeKind.Cursor) return ref;
 	// Union(Ref<T>, Null) collapses to T* in C — same representation as Ref<T>.
 	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return ref;
 	// Value-type struct elements use per-type array typedefs
@@ -252,23 +253,18 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // atomic cell is born at MS_RC_INCREMENT, so it needs the atomic twin on top.
 // The counted-element test mirrors classify.ms classifyArray — Actor handles
 // and nested ref-arrays keep their own families.
-export function evictHelperName(nativeName: string, elemType: Type | null): string {
-	if (elemType == null) return "";
-	elemType = peelTransparentInstance(elemType);
-	if (isUncountedPtrElement(elemType)) return "";
-	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
+export function evictHelperName(nativeName: string, elemType: Type | null, ctx: TransformContext): string {
+	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
-	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return "";
-	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return "";
-	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return "";
 	const atomic = isAtomicRef(bare);
-	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : "msRefArraySetLen";
+	const acyclic = isAcyclicRefElement(elemType, ctx.cyclicCache, ctx.acyclicCache);
+	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : acyclic ? "msAcyclicRefArraySetLen" : "msRefArraySetLen";
 	if (nativeName == "msRefArraySplice") return atomic ? "msAtomicRefArraySplice" : "";
-	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : "";
+	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : acyclic ? "msAcyclicRefArraySplice3" : "";
 	return "";
 }
 
-function rewriteArrayEvictCall(node: Node): Node {
+function rewriteArrayEvictCall(node: Node, ctx: TransformContext): Node {
 	const d = node.data as CallExprData;
 	if (d.arguments.length == 0) return node;
 	let sym = node.resolvedSym;
@@ -282,7 +278,7 @@ function rewriteArrayEvictCall(node: Node): Node {
 		? recvT.typeReturn
 		: recvT;
 	if (arrT.kind != TypeKind.Array) return node;
-	const helper = evictHelperName(native, arrT.typeReturn);
+	const helper = evictHelperName(native, arrT.typeReturn, ctx);
 	if (helper == "") return node;
 	const call = makeCall(runtimeRef(helper, node.location), d.arguments, node.location);
 	call.nodeType = node.nodeType;

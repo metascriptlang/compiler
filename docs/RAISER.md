@@ -25,7 +25,7 @@ Two regimes, chosen per VM by `gcMode`:
 | long-lived (2, 4) and every `msc run --target=raiser` (`cmdRunRaiser` sets it) | `"orc"` | refcount on store and overwrite, plus a trial-deletion cycle collector once the live count passes `gcThreshold` (256) |
 
 - **Why not an arena for the long-lived roles** — nothing bounds their scope; a growing arena leaks and a per-tick reset corrupts state held across ticks.
-- **Why not a tracing GC** — the C backend destroys deterministically (`--gc=drc` / `--gc=orc`); a tracing Raiser would run `defer` and destructors at other times, so one source would behave differently per target. RC plus a cycle collector is also what AngelScript, Squirrel and GDScript use, and it has no stop-the-world pause.
+- **Why not a tracing GC** — the C backend destroys deterministically (RC plus the cycle collector, `--mm=drc`); a tracing Raiser would run `defer` and destructors at other times, so one source would behave differently per target. RC plus a cycle collector is also what AngelScript, Squirrel and GDScript use, and it has no stop-the-world pause.
 - **Why it is simpler than on C** — VM objects describe themselves (`fields: RaiserObjectField[]`), so one generic trace and one generic destroy cover every type; C needs per-type type info and generated trace / destroy procs.
 - **What is built** — `rc` and `color` on each heap entry and a free list that reuses slots (`value.ms`), `rcIncref` / `rcDecref`, the collector in `orc.ms`. RC placement is VM-intrinsic (the VM counts at stores), not the Phase 4 analyzer: Raiser runs `transformForRaiser` and skips the analyzer.
 

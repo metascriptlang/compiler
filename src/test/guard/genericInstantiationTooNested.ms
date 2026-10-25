@@ -25,11 +25,11 @@
 function nest<T>(x: T, n: int32): int32 {
     if (n == 0) return 0;
     const arr: T[] = [x];
-    return 1 + nest(arr, n - 1);
+    return 1 + nest(arr, n - 1); // GUARD-REFUSED
 }
 
 function f0<T>(x: T): int32 { return 0; }
-function f1<T>(x: T): int32 { const a: T[] = [x]; return 1 + f0(a); }
+function f1<T>(x: T): int32 { const a: T[] = [x]; return 1 + f0(a); } // GUARD-REFUSED
 function f2<T>(x: T): int32 { const a: T[] = [x]; return 1 + f1(a); }
 function f3<T>(x: T): int32 { const a: T[] = [x]; return 1 + f2(a); }
 function f4<T>(x: T): int32 { const a: T[] = [x]; return 1 + f3(a); }

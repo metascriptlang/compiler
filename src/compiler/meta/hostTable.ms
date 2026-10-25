@@ -842,6 +842,10 @@ function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start as int32));
 }
 
+function _bridgeMsStringEquals(args: RaiserValue[]): RaiserValue {
+	return boxBool(unboxString(args[0]) == unboxString(args[1]));
+}
+
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1]) as int32));
 }
@@ -1134,7 +1138,7 @@ function _bridgeMsStringByteAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteAt(unboxInt(args[1]) as int32));
 }
 
-function _bridgeMsStringHashFarm(args: RaiserValue[]): RaiserValue {
+function _bridgeStdHashFarm(args: RaiserValue[]): RaiserValue {
 	return raiserInt(hashFarm(unboxString(args[0])));
 }
 
@@ -1341,6 +1345,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart, HostCapability.Pure);
 	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd, HostCapability.Pure);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
+	registerHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
 	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
 	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
@@ -1404,7 +1409,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
 	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
 	registerHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
-	registerHostFn("msStringHashFarm",      _bridgeMsStringHashFarm, HostCapability.Pure);
+	registerHostFn("std/core/struct.hashFarm", _bridgeStdHashFarm, HostCapability.Pure);
 	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
 	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
 	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);

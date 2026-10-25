@@ -31,6 +31,7 @@ import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { createTransformContextWithChecker, TransformContext } from "./context";
+import { WriteSummaries } from "../analyzer/writeEffects";
 import { bindCompilerFuncs } from "./util";
 import { flowLap, flowMark } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
@@ -74,7 +75,7 @@ import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerSpawn } from "./lowering/spawnLower";
 import { lowerSpawnGroup } from "./lowering/spawnGroupLower";
-import { lowerAwait } from "./lowering/awaitLower";
+import { lowerAwait, lowerHeldSpawns } from "./lowering/awaitLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCallHoist } from "./lowering/callHoist";
@@ -106,7 +107,7 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerAssert } from "./native/assertLower";
 import { lowerRestParams } from "./lowering/restParamLower";
-import { lowerActorPre, lowerActor } from "./lowering/actorLower";
+import { lowerActorPre, lowerActor, lowerActorHandles } from "./lowering/actorLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
 // An instance field initializer is evaluated by the constructor, so its `?.`, `??` and
@@ -119,14 +120,16 @@ function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	ctx.liftTables = liftTables;
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
 	let result = eraseBrandTypes(program);
 	flowLap("pass.eraseBrandTypes");
+	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
 	result = lowerBorrow(result, ctx);
 	flowLap("pass.lowerBorrow");
@@ -183,6 +186,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerNamespaceValues(result); flowLap("pass.lowerNamespaceValues"); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); flowLap("pass.lowerActorPre"); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); flowLap("pass.lowerSpawnGroup"); }
+	if (!jsBackend) { result = lowerHeldSpawns(result, ctx); flowLap("pass.lowerHeldSpawns"); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
 	flowLap("pass.lowerPointerAddresses");
 	if (!jsBackend) { result = lowerAsync(result, ctx); flowLap("pass.lowerAsync"); }

@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr, writeStdout, readLine, stdinHasData, stdinDisableBuffering } from "std/io";
@@ -15,6 +15,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -25,14 +26,15 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
+import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { computeAliveSet } from "../checker/reachability";
-import { inferRaises, resetRaises } from "../checker/raises";
+import { inferRaises, markEveryBodyMayRaise } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
@@ -48,7 +50,7 @@ import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrIndirectModule, HcrTypeLayout, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrIndirectModule, HcrTypeLayout, HcrStorageTable, hcrFunctions, lowerHcrIndirection, createHcrStorageTable, buildHcrStorage } from "../transform/native/hcrIndirect";
 import { hcrTypeCounts } from "./hcrCount";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
@@ -67,14 +69,14 @@ import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, DirectiveHit, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeLayouts, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
+import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -374,37 +376,27 @@ function resetCompiledOFiles(): void {
 	_compiledOFiles = new HashSet<string>();
 }
 
-// Resolve the gc mode the build will actually run with, BEFORE the graph is
+// Resolve the memory mode the build will actually run with, BEFORE the graph is
 // checked — the checker needs it (freestanding async gate) and it must agree
-// with what codegen/cc see later. Freestanding targets carry no allocator of
-// their own, so they imply --gc=manual; an explicit --gc= always wins for
-// bare (the user asked for it), while solana keeps its older unconditional
-// force because its SBF runtime cannot host DRC/ORC at all.
+// with what codegen/cc see later.
 // Mutates opts so every later consumer reads one resolved value.
 export function resolveTargetGcMode(opts: CliOptions): void {
-	if (opts.targetOs == "solana") {
-		if (opts.gcMode == "" || opts.gcMode == "drc" || opts.gcMode == "orc") opts.gcMode = "manual";
-		return;
-	}
-	if (opts.targetOs == "bare" && !opts.gcExplicit) opts.gcMode = "manual";
+	opts.gcMode = targetMemoryMode(opts.targetOs, opts.gcExplicit ? opts.gcMode : "");
 }
 
-// String gc mode → checker enum. Single spelling of the mapping that
+// String memory mode → checker enum. Single spelling of the mapping that
 // applyGcMode and the per-module stamping in cmdBuildC/cmdTest repeat.
 export function gcModeOf(gc: string): GcMode {
 	if (gc == "none") return GcMode.None;
 	if (gc == "manual") return GcMode.Manual;
-	if (gc == "drc") return GcMode.Drc;
-	return GcMode.Orc;
+	return GcMode.Drc;
 }
 
-// Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
+// Apply --mm flag: set GcMode on the shared prelude context so all modules inherit it.
 // analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
 export function applyGcMode(opts: CliOptions): void {
 	if (graphPreludeCtx == null) return;
-	if (opts.gcMode == "none") graphPreludeCtx.gcMode = GcMode.None;
-	else if (opts.gcMode == "manual") graphPreludeCtx.gcMode = GcMode.Manual;
-	else if (opts.gcMode == "orc") graphPreludeCtx.gcMode = GcMode.Orc;
+	graphPreludeCtx.gcMode = gcModeOf(opts.gcMode);
 	graphPreludeCtx.targetOs = opts.targetOs;
 	graphPreludeCtx.targetInfo = opts.targetInfo;
 }
@@ -425,13 +417,14 @@ function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
 	return dirname(entry);
 }
 
-function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const packages = cacheRoot();
 	setModuleNameRoots({
 		compiler: config.stdPath != "" ? dirname(config.stdPath) : "",
 		packages: packages != "" ? `${packages}/extracted` : "",
 		project: moduleNameProjectRoot(entryPath, opts.projectRoot),
+		uniqueNames: new HashMap<string, string>(),
 	});
 	const provider = createFileSystemProvider();
 
@@ -451,6 +444,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
+	registerModuleNames(buildModuleNameRoots(), graph.loadOrder);
 	if (graphLoadTiming) {
 		const ht = takeHeaderTimings();
 		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} headers=${ht.ms}ms/${ht.n} hits=${ht.hits}`);
@@ -641,6 +635,8 @@ interface A2Job {
 	ran: boolean;
 	claims: LowerClaims;
 	asyncModuleBody: boolean;
+	writeTables: WriteSummaries;
+	liftTables: WriteSummaries;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -725,7 +721,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _fx0 = flowStart();
 	const reloadable: string[] = [];
 	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
-	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody);
+	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody, job.liftTables);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	flowStop("a2.xform", _fx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
@@ -740,15 +736,13 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	flowStop("a2.native", _fn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
-	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
-		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
-		else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
+	ctx.gcMode = gcModeOf(opts.gcMode);
 	ctx.targetOs = opts.targetOs;
 	ctx.targetInfo = opts.targetInfo;
 	const _ta0 = performance.now();
 	const _fa0 = flowStart();
 	const preAnErrors = ctx.errors.length;
-	const analyzed = analyzeProgram(hcrLifted, ctx);
+	const analyzed = analyzeProgram(hcrLifted, ctx, job.writeTables);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 			const e = ctx.errors[ei];
@@ -764,7 +758,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	flowStop("a2.lower", _fl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { ops: opsFrom(keyedOpMark) };
+	job.claims = { ops: opsFrom(keyedOpMark), contracts: contractClaims(job.writeTables) };
 	return nativeLowered;
 }
 
@@ -786,7 +780,7 @@ class ModuleEmissionResult {
 	finished: float64 = 0;
 }
 
-type ModuleEmitter = (job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean) => ModuleEmissionResult;
+type ModuleEmitter = Sendable<(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean) => ModuleEmissionResult>;
 
 function emitModuleJob(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
 	const result = new ModuleEmissionResult();
@@ -908,7 +902,8 @@ test "bounded module emission preserves slots and joins before stopping" {
 			assert complete[slot].output.modulePath == slot.toString();
 		}
 		if (workers > 1) assert emissionOverlapped(complete);
-		for (const emitter of [probeFailedModuleEmission, probeDiagnosticModuleEmission]) {
+		const emitters: ModuleEmitter[] = [probeFailedModuleEmission, probeDiagnosticModuleEmission];
+		for (const emitter of emitters) {
 			const failed = emitModulesBounded(jobs, aliveSet, facts, workers, false, "", emitter);
 			let completed = 0;
 			for (let slot = 0; slot < failed.length; slot += 1) {
@@ -1233,14 +1228,21 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	const startedSeconds = Date.now() / 1000;
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
+		if (!parts.ok) {
+			futures.push(spawn(() => unresolvedCompile(parts.error)));
+			continue;
+		}
+		const args = parts.value;
+		const plan = NO_PLAN;
 		futures.push(spawn(() => {
-			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
 				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
 				// One retry absorbs it; a real compile error has a nonzero exitCode
 				// and is not retried.
-				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
+				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
 			}
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
@@ -1346,20 +1348,29 @@ function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, cc
 	}
 }
 
+function unresolvedCompile(e: Readonly<ProcessError>): number {
+	printDiag(`${e.command}: ${e.message}`);
+	return e.exitCode != 0 ? e.exitCode : -1;
+}
+
 function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
-	// Warm lazy cc detection globals on the main thread so workers only read.
-	getCompilerName(ccOption, ccBinary);
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.cFile), mode, j.flags);
+		if (!parts.ok) {
+			futures.push(spawn(() => unresolvedCompile(parts.error)));
+			continue;
+		}
+		const args = parts.value;
 		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
 		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -1479,7 +1490,7 @@ function bundleExportList(names: string[], locals: string[], extra: BundleExport
 			continue;
 		}
 		if (r.sym.declNode == null || r.sym.declNode.kind != NodeKind.EnumDecl) throw new Error(`internal: exported enum '${r.name}' has no declaration`);
-		const local = mangledGlobalName(r.sym, r.sym.name);
+		const local = mangledGlobalName(buildModuleNameRoots(), r.sym, r.sym.name);
 		if (!madeObjects.has(local)) {
 			madeObjects.add(local);
 			enumObjects = enumObjects + jsEnumObject(local, r.sym.declNode.data as EnumDeclData);
@@ -1856,7 +1867,7 @@ function hcrFunctionSymbol(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
-	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
+	return mangleProcName(fn.name, mangleModuleName(buildModuleNameRoots(), fn.modulePath), fn.disamb);
 }
 function hcrFunctionSlot(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
@@ -2273,7 +2284,7 @@ function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[]
 	}
 }
 
-function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts, counted: boolean): void {
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts, counted: boolean, storage: HcrStorageTable): void {
 	const imagePaths: string[] = [];
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
@@ -2308,7 +2319,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	for (const module of modules) {
 		for (const unit of processed) {
 			if (unit.modPath != module.modulePath) continue;
-			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts);
+			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts, storage);
 		}
 	}
 }
@@ -2698,10 +2709,10 @@ function relayHostStream(child: ChildProcess, stream: ChildStream, timeoutMs: in
 	return 0;
 }
 
-function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>): int32 {
+function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string): int32 {
 	const started = spawnChild(host, [dir, stem]);
 	if (!started.ok) {
-		printDiag(`${error("error")}: cannot start the HCR host ${host}: ${started.error.message}`);
+		printDiag(`${errorLabel}: cannot start the HCR host ${host}: ${started.error.message}`);
 		return finishHost(ctl, 1);
 	}
 	const child = started.value;
@@ -2722,7 +2733,7 @@ function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>):
 			break;
 		}
 		if (waited.error.kind != ProcessErrorKind.Timeout) {
-			printDiag(`${error("error")}: waiting for the HCR host failed: ${waited.error.message}`);
+			printDiag(`${errorLabel}: waiting for the HCR host failed: ${waited.error.message}`);
 			child.kill();
 			break;
 		}
@@ -2764,7 +2775,8 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 	stdinDisableBuffering();
 	const ctl: Locked<HostCtl> = new Locked({ stop: false, done: false, code: 0 });
-	let running = spawn((): int32 => runHost(host, dir, stem, ctl));
+	const errorLabel = error("error");
+	let running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
 	warmHcrSession(opts);
 	const keys: string[] = [""];
 	const idle = (): boolean => {
@@ -2798,7 +2810,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 			await running;
 			sayFlushed("watch: restarting the program on the last build");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: false, done: false, code: 0 }; });
-			running = spawn((): int32 => runHost(host, dir, stem, ctl));
+			running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
 		} else {
 			if (keys[0] == "q") sayFlushed("watch: quit");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
@@ -2840,7 +2852,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	flowStop("phase.setup", fSetup);
 	const t0 = performance.now();
 	const fGraph = flowStart();
-	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
+	// Before ANY phase reads it: freestanding targets imply --mm=manual, and the
 	// checker needs the resolved mode (freestanding async gate) — applyGcMode
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
@@ -2968,6 +2980,8 @@ resetLiftedOps();
 		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
+	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
+	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths);
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -3118,11 +3132,15 @@ resetLiftedOps();
 
 			cloneInput: session.keep,
 			ran: false,
-			claims: { ops: [] },
+			claims: { ops: [], contracts: [] },
 			asyncModuleBody: asyncBodies.has(modPath),
+			writeTables,
+			liftTables,
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
+			const earlier = session.lowerClaims.get(modPath);
+			if (earlier != null) reuseClones(writeTables, earlier.contracts);
 			nativeLowered = dbLower(session.check.db!, modPath, lowerModuleA2, job);
 			if (job.ran) {
 				session.loweredCount = session.loweredCount + 1;
@@ -3138,6 +3156,7 @@ resetLiftedOps();
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
 					replayOps(claims.ops);
+					restoreContracts(writeTables, claims.contracts);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
@@ -3213,8 +3232,11 @@ resetLiftedOps();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	if (opts.isHcr) resetRaises();
+	const fRaises = flowStart();
+	if (opts.isHcr) markEveryBodyMayRaise(transformedPrograms);
 	else inferRaises(transformedPrograms);
+	flowStop("b.raises", fRaises);
+	const fAlive = flowStart();
 	const exportRootModules: string[] = [];
 	for (const path of hcrModulePaths) exportRootModules.push(path);
 	if (opts.isHcr) {
@@ -3222,6 +3244,7 @@ resetLiftedOps();
 	}
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, exportRootModules, hcrRootFunctions(hcrModulePaths), hcrModulePaths,
 		false, false, compileTimeModules(transformedPaths, config.stdPath));
+	flowStop("b.alive", fAlive);
 	refuseRuntimeCompileTimeReach(aliveSet);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
@@ -3286,26 +3309,40 @@ resetLiftedOps();
 	}
 
 	// Phase C: Codegen + compile each module
-	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
 	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
-	for (const p of processed) {
-		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
-		const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
-		if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
-			replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
-		} else {
-			const before = emissionFacts.trace;
-			emissionFacts.writes = [];
-			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-			const recorded = emissionFacts.writes;
-			const writes: string[] = recorded != null ? recorded : [];
-			emissionFacts.writes = null;
-			if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+	const hcrStorage = createHcrStorageTable();
+	if (opts.isHcr) {
+		for (const module of hcrModules) {
+			for (const p of processed) {
+				if (p.modPath == module.modulePath) buildHcrStorage(hcrStorage, p.program, module, hcrModules);
+			}
 		}
-		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 	}
-	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc || gcModeOf(opts.gcMode) == GcMode.Orc);
+	for (const p of processed) factInlineDecls(emissionFacts, p.program);
+	setConcurrentTypeQueries(true);
+	try {
+		for (const p of processed) {
+			if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
+			const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
+			if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
+				replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
+			} else {
+				const before = emissionFacts.trace;
+				emissionFacts.writes = [];
+				prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+				const recorded = emissionFacts.writes;
+				const writes: string[] = recorded != null ? recorded : [];
+				emissionFacts.writes = null;
+				if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+			}
+			if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
+		}
+		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc, hcrStorage);
+	} catch (e) {
+		setConcurrentTypeQueries(false);
+		throw e;
+	}
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
@@ -3329,7 +3366,12 @@ resetLiftedOps();
 		freshSlots.push(freshJobs.length as int32);
 		freshJobs.push({ slot: freshJobs.length as int32, program: job.program, ctx: job.ctx, modPath: job.modPath, weight: job.weight });
 	}
-	const freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	let freshResults: ModuleEmissionResult[] = [];
+	try {
+		freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	} finally {
+		setConcurrentTypeQueries(false);
+	}
 	const emissionResults: ModuleEmissionResult[] = [];
 	for (let ei = 0; ei < emissionJobs.length; ei += 1) {
 		const job = emissionJobs[ei];
@@ -3433,7 +3475,7 @@ resetLiftedOps();
 			// filename is free to be flat.
 			const emitDir = emitDirOf(opts);
 			ensureDir(emitDir);
-			const emitPath = `${emitDir}/${mangleModuleName(p.modPath)}.c`;
+			const emitPath = `${emitDir}/${mangleModuleName(buildModuleNameRoots(), p.modPath)}.c`;
 			writeOutput(emitPath, cCode);
 			printDiag(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
@@ -3511,7 +3553,7 @@ resetLiftedOps();
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
-			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
+			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}.c`;
 			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)));
 			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
@@ -3565,7 +3607,7 @@ resetLiftedOps();
 				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
 				throw new Error(BUILD_STOPPED);
 			}
-			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
+			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
 			hcrImageSlots.push(oSlots.length - 1);
 		}
 	} else {
@@ -3801,6 +3843,8 @@ resetLiftedOps();
 	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
@@ -3814,7 +3858,7 @@ resetLiftedOps();
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : []);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : [], false, liftTables);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
@@ -3823,14 +3867,12 @@ resetLiftedOps();
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
-		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
-			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
-			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
+		ctx.gcMode = gcModeOf(opts.gcMode);
 		ctx.targetOs = opts.targetOs;
 		ctx.targetInfo = opts.targetInfo;
 
 		const preAnErrors = ctx.errors.length;
-		const analyzed = analyzeProgram(hcrResult, ctx);
+		const analyzed = analyzeProgram(hcrResult, ctx, writeTables);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 				const e = ctx.errors[ei];
@@ -3866,15 +3908,21 @@ resetLiftedOps();
 	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
-	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
-	for (const p of processed) {
-		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-	}
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
+	let emissionResults: ModuleEmissionResult[] = [];
+	for (const p of processed) factInlineDecls(emissionFacts, p.program);
+	setConcurrentTypeQueries(true);
+	try {
+		for (const p of processed) {
+			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+		}
+		emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
+	} finally {
+		setConcurrentTypeQueries(false);
+	}
 	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
 	let emissionFailed = false;
 	for (let eri = 0; eri < emissionResults.length; eri += 1) {
@@ -4023,7 +4071,7 @@ function outRelForModule(modPath: string, projectRoot: string, stdRoot: string):
 	if (modPath.startsWith(rootPrefix)) {
 		return replaceExt(modPath.slice(rootPrefix.length, modPath.length), ".js");
 	}
-	return `_ext/${mangleModuleName(modPath)}.js`;
+	return `_ext/${mangleModuleName(buildModuleNameRoots(), modPath)}.js`;
 }
 
 interface JsInstanceFile {
@@ -4036,9 +4084,9 @@ function jsInstanceBindingName(node: Node): string {
 	const sym = node.resolvedSym;
 	if (sym == null || sym.instantiatedFrom == null || sym.modulePath == "") return "";
 	if (node.kind == NodeKind.FunctionDecl) {
-		return mangledFunctionName(sym, (node.data as FunctionDeclData).fnName, sym.overloadIdx);
+		return mangledFunctionName(buildModuleNameRoots(), sym, (node.data as FunctionDeclData).fnName, sym.overloadIdx);
 	}
-	if (node.kind == NodeKind.ClassDecl) return mangledGlobalName(sym, (node.data as ClassDeclData).className);
+	if (node.kind == NodeKind.ClassDecl) return mangledGlobalName(buildModuleNameRoots(), sym, (node.data as ClassDeclData).className);
 	return "";
 }
 
@@ -4565,7 +4613,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
-	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
+	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);

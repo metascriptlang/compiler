@@ -3,7 +3,6 @@
 
 
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
-import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
@@ -28,7 +27,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction,
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -381,11 +380,11 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 function instanceTypeParamSeeds(sym: Symbol): Symbol[] {
 	const seeds: Symbol[] = [];
 	const generic = sym.instantiatedFrom;
-	if (generic == null || generic.symbolType == null || sym.symbolType == null) return seeds;
-	const bindings = createUnifyBindings();
-	unifyType(generic.symbolType, sym.symbolType, bindings);
-	for (let i = 0; i < bindings.names.length && i < bindings.types.length; i += 1) {
-		seeds.push(makeSymbolState(bindings.names[i], SymbolKind.TypeAlias, bindings.types[i], false, SymbolState.Shaped));
+	if (generic == null) return seeds;
+	const params = instanceParamsOf(sym);
+	const args = instanceArgsOf(sym);
+	for (let i = 0; i < params.length; i += 1) {
+		seeds.push(makeSymbolState(params[i].typeName, SymbolKind.TypeAlias, args[i], false, SymbolState.Shaped));
 	}
 	return seeds;
 }
@@ -1257,6 +1256,31 @@ test "engine: the hash builtins give the bits of the native 128-bit mix and floa
 	assert ctx.error == "";
 	assert ctx.output == "3562955285811542818 2302960717771869484 18446744073709551615"
 		+ " 4609434218613702656 13830554455654793216\n";
+}
+
+test "engine: the little-endian load builtins read 8 and 4 bytes of a byte view at an offset" {
+	const ctx = evalOrcVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " @builtin(\"LoadLE32\") extern function load32(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " const b = 'abcdefghé'.asBytes();"
+		+ " console.log(`${load64(b, 0)} ${load64(b, 2)} ${load32(b, 0)} ${load32(b, 6)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "7523094288207667809 12232735806177240163 1684234849 2848155751\n";
+}
+
+test "engine: a little-endian load past the end of the view is an index error" {
+	const ctx = evalOrcVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " const b = 'abcdefghé'.asBytes();"
+		+ " console.log(`${load64(b, 3)}`);");
+	assert ctx.error != "";
+}
+
+test "engine: hashFarm runs on the host bridge, not as a VM body" {
+	const h = compiledFunc("function h(s: string): int64 { return hashFarm(s); } console.log(`${h('abc')}`);", "h");
+	assert disasmFunc(h).includes("CallHost"), disasmFunc(h);
+	const long = "é0123456789abcdefghijklmnopqrstuvwxyzé0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZé";
+	const ctx = evalOrcVM(`console.log(\`\${hashFarm('abc')} \${hashFarm('${long}')}\`);`);
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == `${hashFarm("abc")} ${hashFarm(long)}\n`, ctx.output;
 }
 
 test "orc: correct result + no error on object program" {

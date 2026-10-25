@@ -8,8 +8,8 @@
 //   const $ag = msAwaitGroupInit(N);
 //   msSpawnTaskSubmit($ag, 0, closure0); ... msSpawnTaskSubmit($ag, N-1, closureN);
 //   msAwaitGroupBlocking($ag);
+//   let __agr0: T0 = default; if (msAwaitGroupResult($ag, 0) != null) __agr0 = unbox(...); ...
 //   msAwaitGroupCheckFailed($ag);  // a failed child: free the group, re-raise its error
-//   const $r0 = msAwaitGroupResult($ag, 0); ... const $rN = msAwaitGroupResult($ag, N-1);
 //   msAwaitGroupFree($ag);
 //   [$r0, ..., $rN]  // replacement array
 //
@@ -17,7 +17,10 @@
 //   msAwaitGroupSetDoneFut($ag, msFutureCreate()) before the first submit,
 //   then instead of msAwaitGroupBlocking:
 //   await msAwaitGroupGetDoneFut($ag);  // asyncDesugar → yield → cooperative
-//   ... read results + free ...
+//   ... read results, check, free ...
+//
+// Every result is read into an owned local before the check can raise, so the
+// results of a failed group's other children are destroyed with the scope.
 
 import {
 	Node, NodeKind, NodeFlag, SourceLocation, NodeData, createNodeAt,
@@ -31,9 +34,9 @@ import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
-import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
+import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { boxReturns, boxForType } from "./spawnLower";
+import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -107,6 +110,8 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	let si = 0;
 	while (si < n) {
 		const slot = slots[si];
+		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && mayHoldCycleRoot(slot.innerType, ctx)) slot.closure = callingThunk(slot.closure, slot.innerType);
+		const thunk = spawnThunk(slot.closure);
 		// Use first non-null timeout found
 		if (slot.timeout != null && groupTimeout == null) {
 			groupTimeout = slot.timeout;
@@ -114,24 +119,25 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		// Inject safe-points into closure body when timeout
 		if (groupTimeout != null) {
 			let closureBody: Node | null = null;
-			if (slot.closure.kind == NodeKind.FunctionExpr) {
-				closureBody = (slot.closure.data as FunctionExprData).funcExprBody;
-			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
-				closureBody = (slot.closure.data as ArrowFunctionData).arrowBody;
+			if (thunk.kind == NodeKind.FunctionExpr) {
+				closureBody = (thunk.data as FunctionExprData).funcExprBody;
+			} else if (thunk.kind == NodeKind.ArrowFunction) {
+				closureBody = (thunk.data as ArrowFunctionData).arrowBody;
 			}
 			if (closureBody != null) {
 				injectCancelSafePoints(closureBody, ag.ident, loc);
 			}
 		}
+		disownResult(thunk, slot.innerType, ctx);
 		// Box return values in closure body (spawnGroupLower runs before spawnLower,
 		// so closures extracted here bypass spawnLower's boxing pass).
 		// Also update closure return type to void* so codegen emits correct signature.
 		if (slot.innerType != null) {
-			if (slot.closure.kind == NodeKind.FunctionExpr) {
-				const fd = slot.closure.data as FunctionExprData;
+			if (thunk.kind == NodeKind.FunctionExpr) {
+				const fd = thunk.data as FunctionExprData;
 				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType); }
-			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
-				const ad = slot.closure.data as ArrowFunctionData;
+			} else if (thunk.kind == NodeKind.ArrowFunction) {
+				const ad = thunk.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
 						boxReturns(ad.arrowBody, slot.innerType);
@@ -140,10 +146,14 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 					}
 				}
 			}
+			if (thunk != slot.closure && thunk.nodeType != null && thunk.nodeType.kind == TypeKind.Function) {
+				thunk.nodeType.typeReturn = createPtr(voidType());
+			}
 			if (slot.closure.nodeType != null && slot.closure.nodeType.kind == TypeKind.Function) {
 				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
+		disownMovedCaptures(slot.closure, ctx);
 		// Wrap bare function reference as msClosure {fn, env: null}
 		let closure = slot.closure;
 		if (closure.kind == NodeKind.Identifier) {
@@ -158,46 +168,38 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		si = si + 1;
 	}
 
-	// 3. Wait
-	if (doneFut != null) {
-		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
-		const awaitData: NodeData = { awaitArg: doneFut.ident };
-		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);
-		stmts.push(makeExprStmt(awaitNode, loc));
-	} else {
-		// Sync: blocking wait (with optional timeout)
-		const waitStmts = emitAwaitGroupWait(ag.ident, groupTimeout, loc, ctx);
-		for (const ws of waitStmts) stmts.push(ws);
-	}
-	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
-
-	// 4. Check if all slots return void (skip result reading)
+	// 3. Results, read once the wait returns (skipped when every slot returns void)
 	let allVoid = true;
 	for (const slot of slots) {
 		const it = slot.innerType;
 		if (it == null || it.kind != TypeKind.Void) { allVoid = false; }
 	}
-
+	const reads: Node[] = [];
 	let resultExpr: Node | null = null;
 	if (!allVoid) {
-		// Read results + unbox
-		const resultIdents: Node[] = [];
-		let ri = 0;
-		while (ri < n) {
-			const res = makeTempDecl(ctx, "agr",
-				makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(ri, loc)], loc),
-				VOID_PTR_TYPE, loc);
-			stmts.push(res.decl);
-			let rExpr = res.ident;
-			if (slots[ri].innerType != null) {
-				rExpr = makeUnboxCall(rExpr, slots[ri].innerType, loc);
-			}
-			resultIdents.push(rExpr);
-			ri = ri + 1;
+		const values: Node[] = [];
+		for (let ri = 0; ri < n; ri += 1) {
+			const read = readGroupSlot(ctx, ag.ident, ri, slots[ri].innerType, loc);
+			for (const r of read.stmts) reads.push(r);
+			values.push(read.value);
 		}
-		resultExpr = createNodeAt(NodeKind.ArrayLiteral, { elements: resultIdents }, loc);
+		resultExpr = createNodeAt(NodeKind.ArrayLiteral, { elements: values }, loc);
 	}
+
+	// 4. Wait
+	if (doneFut != null) {
+		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
+		const awaitData: NodeData = { awaitArg: doneFut.ident };
+		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);
+		stmts.push(makeExprStmt(awaitNode, loc));
+		for (const r of reads) stmts.push(r);
+	} else {
+		// Sync: blocking wait (with optional timeout)
+		const waitStmts = emitAwaitGroupWait(ag.ident, groupTimeout, loc, ctx, reads);
+		for (const ws of waitStmts) stmts.push(ws);
+	}
+	stmts.push(makeExprStmt(
+		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
 
 	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(

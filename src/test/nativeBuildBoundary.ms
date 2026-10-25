@@ -442,7 +442,7 @@ function runRecordSkip(): void {
 	waitForNextSecond();
 	need(build(dir, "record-settled") == 0, "record settled build");
 	record("a define absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-define", ["-d:recordProbe"]));
-	record("a gc mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-gc", ["--gc=drc"]));
+	record("a memory mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-mm", ["--mm=manual"]));
 }
 
 function runAudit(): void {
@@ -703,7 +703,7 @@ function runSpawnDrain(): void {
 	ensureDir(dir);
 	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
 	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
-	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
+	need(build(dir, "spawn-drain", "probe.exe") == 0, "spawn-drain build");
 	let complete = 0;
 	let last = "";
 	for (let i = 0; i < 10; i++) {

@@ -60,27 +60,21 @@ typedef struct msSpawnCtx {
 	                               On 64-bit, always == sizeof(msFutureBase). On 32-bit WASM,
 	                               may differ due to alignment padding (e.g., double needs 8-byte
 	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
+	void* ownerQueue;           /* the submitting loop's completion queue: the env release runs there */
+	bool claimed;               /* queue slot only, under the pool lock: a waiter took it to run */
+	const struct msTaskFrame* parent;  /* queue slot only: the running task that joins this one, or NULL */
 } msSpawnCtx;
 
 
-/* Forward declarations — implemented in dispatch.c */
-extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 /* Amendment G: worker-side push that does NOT incref — the owner thread already
  * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
-extern void msCompletionQueuePushEnvRelease(void* env);
+extern void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue);
 
-static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
-	void* result = NULL;
-	if (ctx->env != NULL) {
-		result = ((void*(*)(void*))ctx->fn)(ctx->env);
-	} else {
-		result = ((void*(*)(void))ctx->fn)();
-	}
-
+/* Publishes the task's result, or with msErr set its msCurrException, to its target. */
+static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 	if (ctx->slotGroup != NULL) {
-		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe.
-		 * Waiter spins via msPoolHelpOne + sched_yield (Malebolgia parity). */
+		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe. */
 		if (msErr) {
 			msAwaitSlotFail(ctx->slotGroup, (void*)msCurrException);
 			msErr = false;
@@ -99,7 +93,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		} else {
 			msAwaitGroupCompleteSlot(ctx->group, ctx->slot, result);
 		}
-	} else if (ctx->fut != NULL) {
+	} else {
 		/* Future path: split completion (Pony MPSC parity).
 		 * Step 1: Store value + mark finished directly from worker thread.
 		 *         Blocking waiters (msWaitForReady) see finished immediately.
@@ -135,9 +129,6 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			msNotifyFutureComplete();
 			msCompletionQueuePushOwned(ctx->fut, false, NULL);
 		}
-	} else {
-		/* Defensive: no completion target — clear errors to prevent stale state. */
-		if (msErr) { msErr = false; msCurrException = NULL; }
 	}
 
 	/* Release worker's ownership of the env via deferred MPSC push.
@@ -148,7 +139,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	 * avoiding cross-thread rc races on the env's non-atomic rc field. */
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
 #if MS_FUTURE_SUBMIT_REF
-		msCompletionQueuePushEnvRelease(ctx->env);
+		msCompletionQueuePushEnvRelease(ctx->env, ctx->ownerQueue);
 #elif defined(_WIN32)
 		/* Amendment H parity: MS_FUTURE_SUBMIT_REF is 0 on Windows, but an
 		 * inline worker-thread msDecref still races the owning thread on the
@@ -163,15 +154,33 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
 }
 
+static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
+	void* result = NULL;
+	bool cancelledBeforeStart = ctx->cancelFlag != NULL
+		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
+	if (!cancelledBeforeStart) {
+#if MS_ACTOR_JOBS
+		msActor* actor = msActorCurrentForJobs();
+		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
+#endif
+		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
+#if MS_ACTOR_JOBS
+		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
+#endif
+	}
+	msSpawnWorkerSettle(ctx, result);
+}
+
 /* Forward declaration — pool submit defined in pool.c */
 void msPoolSubmit(msSpawnCtx* ctx);
 
 /* Spawn a closure on a worker pool thread. Returns void* (msFuture_ptr internally).
  * Reference parity: spawn result compatible with any Future[T] pointer.
  * Takes ownership of the closure env by incrementing its refcount. */
-static inline void* msSpawn(msClosure fn) {
+static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
-	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut };
+	fut->base.spawned = true;
+	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue() };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
@@ -182,12 +191,12 @@ static inline void* msSpawn(msClosure fn) {
 	 * Amendment H: mark the future crossThreadPublished so msFutureDeferredRelease
 	 * defers its decref to serialize with the drain. */
 	msIncRef(fut);
-	((msFutureBase*)fut)->crossThreadPublished = true;
+	msFuturePublishCrossThread(fut);
 #endif
 #ifdef _WIN32
 	/* Channel-exists-before-visible, Windows twin of the submit-time
 	 * discipline above: ensure the scheduler-0 loop's IOCP exists before the
-	 * worker can complete, so msPostCompletion routes to the loop instead of
+	 * worker can complete, so its completion post routes to the loop instead of
 	 * the I15-violating inline fallback. See msEnsureLoopChannel
 	 * (dispatchFull.c). */
 	{
@@ -204,15 +213,16 @@ static inline void* msSpawn(msClosure fn) {
  * Worker runs the closure (still returns boxed void*), then memcpys inlineCopySize
  * bytes from the box into the fut's inline value slot and frees the box.
  * Downstream readers use msWaitForStruct (typed inline read). */
-static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset) {
+static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset, _Atomic(bool)* cancelFlag) {
 	msSpawnCtx ctx = {
-		.fn = (void*)fn.fn, .env = fn.env, .fut = fut,
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue(),
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
-	if (fn.env != NULL) msAtomicIncRef(fn.env);
+	((msFutureBase*)fut)->spawned = true;
+	if (fn.env != NULL) msIncRef(fn.env);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
-	((msFutureBase*)fut)->crossThreadPublished = true;  /* Amendment H */
+	msFuturePublishCrossThread(fut);  /* Amendment H */
 #endif
 #ifdef _WIN32
 	{
@@ -222,6 +232,14 @@ static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint
 #endif
 	msPoolSubmit(&ctx);
 	return fut;
+}
+
+static inline void* msSpawn(msClosure fn) {
+	return msSpawnCancellable(fn, NULL);
+}
+
+static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset) {
+	return msSpawnIntoCancellable(fut, fn, copySize, valueOffset, NULL);
 }
 
 /* Submit a spawn task whose completion targets a group slot instead of a future.
@@ -244,7 +262,8 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.fut = NULL,
 		.group = group,
 		.slot = slot,
-		.cancelFlag = group ? &group->cancelled : NULL,
+		.cancelFlag = &group->cancelled,
+		.ownerQueue = msLoopCompletionQueue(),
 	};
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
@@ -261,10 +280,101 @@ static inline void msSpawnSlotSubmit(void* s, int32_t slot, msClosure fn) {
 		.env = fn.env,
 		.slotGroup = s,
 		.slot = slot,
+		.cancelFlag = &((msAwaitSlot*)s)->cancelled,
 	};
 	/* No msIncRef — fused path guarantees env alive through msAwaitSlotWait.
 	 * Worker skips msDecref for slotGroup path (see msSpawnWorkerRun). */
 	msPoolSubmit(&ctx);
+}
+
+/* msPoolRunEdge runs queued tasks on this thread and msSpawnWorkerRun reads msErr as
+ * the task's own: keep the caller's in-flight exception out of the wait. */
+static inline void msAwaitSlotSettle(void* sp) {
+	bool err = msErr;
+	msException* exc = msCurrException;
+	msErr = false;
+	msCurrException = NULL;
+	msAwaitSlot* s = (msAwaitSlot*)sp;
+	atomic_store_explicit(&s->cancelled, true, memory_order_release);
+	msAwaitSlotWait(sp);
+	if (atomic_load_explicit(&s->failed, memory_order_acquire)) msNoteOrphanError(s->error);
+	msAwaitSlotRelease(sp);
+	msErr = err;
+	msCurrException = exc;
+}
+
+/* The futures of the spawns a routine keeps in a value (an array, a combinator
+ * argument), each held by one reference until the routine exits. */
+typedef struct msSpawnHeld {
+	void** futs;
+	int64_t len;
+	int64_t cap;
+	_Atomic(bool) cancelled;
+} msSpawnHeld;
+
+static inline void* msSpawnHeldCreate(void) {
+	return msMemAlloc0(sizeof(msSpawnHeld));
+}
+
+static inline void msSpawnHeldKeep(void* hp, void* fut) {
+	msSpawnHeld* h = (msSpawnHeld*)hp;
+	if (h->len == h->cap) {
+		int64_t live = 0;
+		for (int64_t i = 0; i < h->len; i += 1) {
+			void* f = h->futs[i];
+			if (atomic_load_explicit(&((msFutureBase*)f)->finished, memory_order_acquire)) msDecref(f);
+			else h->futs[live++] = f;
+		}
+		h->len = live;
+		if (h->len == h->cap) {
+			int64_t oldCap = h->cap;
+			h->cap = oldCap > 0 ? oldCap * 2 : 4;
+			h->futs = (void**)msRealloc(h->futs, (size_t)oldCap * sizeof(void*), (size_t)h->cap * sizeof(void*));
+		}
+	}
+	msIncRef(fut);
+	h->futs[h->len] = fut;
+	h->len += 1;
+}
+
+/* The held spawns submit with the list's cancel flag, so the exit can skip the
+ * tasks no worker has admitted yet. */
+static inline void* msSpawnHeldSubmit(void* hp, msClosure fn) {
+	void* fut = msSpawnCancellable(fn, &((msSpawnHeld*)hp)->cancelled);
+	msSpawnHeldKeep(hp, fut);
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) msActorLendNote(fut);
+#endif
+	return fut;
+}
+
+static inline void* msSpawnIntoHeldSubmit(void* fut, msClosure fn, void* hp, uint32_t copySize, uint32_t valueOffset) {
+	msSpawnIntoCancellable(fut, fn, copySize, valueOffset, &((msSpawnHeld*)hp)->cancelled);
+	msSpawnHeldKeep(hp, fut);
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) msActorLendNote(fut);
+#endif
+	return fut;
+}
+
+/* Runs at every exit of the routine: cancel what is not admitted, then join
+ * every held task, with the same in-flight exception discipline as
+ * msAwaitSlotSettle. */
+static inline void msSpawnHeldSettle(void* hp) {
+	bool err = msErr;
+	msException* exc = msCurrException;
+	msErr = false;
+	msCurrException = NULL;
+	msSpawnHeld* h = (msSpawnHeld*)hp;
+	atomic_store_explicit(&h->cancelled, true, memory_order_release);
+	for (int64_t i = 0; i < h->len; i += 1) {
+		msWaitForReady(h->futs[i]);
+		msDecref(h->futs[i]);
+	}
+	free(h->futs);
+	free(h);
+	msErr = err;
+	msCurrException = exc;
 }
 
 #endif /* MS_THREAD_H */

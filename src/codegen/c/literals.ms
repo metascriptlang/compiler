@@ -71,7 +71,7 @@ export function cStringLiteral(s: string): string {
 // `.0` suffix so C picks the float overload of operators. Without this, `0.0 / 0.0` in
 // MS would emit as `(0 / 0)` and trap as integer divide-by-zero instead of producing
 // IEEE 754 NaN.
-export function formatCNumber(value: number, type: Type | null = null): string {
+export function formatCNumber(value: number, type: Readonly<Type | null> = null): string {
 	if (type != null && type.kind == TypeKind.Float32) return formatCFloat32(value);
 	return spellCNumber(value, type != null && (type.kind == TypeKind.Number || type.kind == TypeKind.Float64));
 }
@@ -111,7 +111,7 @@ function spellCNumber(value: number, isFloat: boolean): string {
 
 // Literal emission for a NumberLiteral node: integers take the exact int64,
 // floats (and integer literals in float position) keep the double formatter.
-export function formatCNumberLit(d: Readonly<NumberLiteralData>, ty: Type | null = null): string {
+export function formatCNumberLit(d: Readonly<NumberLiteralData>, ty: Readonly<Type | null> = null): string {
 	const wantsFloat = ty != null
 		&& (ty.kind == TypeKind.Number || ty.kind == TypeKind.Float32 || ty.kind == TypeKind.Float64);
 	const wantsUint64 = ty != null && ty.kind == TypeKind.Uint64;

@@ -44,7 +44,7 @@ import {
 	defineVar, defineLocalRoutines, defineParams, isModuleLevelVar, isDirectParentVar,
 } from "./lambdaLiftingScope";
 import {
-	isCaptureLastUse, computeLastUseCaptures, detectCaptures, refsRoutine, findCapturedIdent,
+	isCaptureLastUse, computeLastUseCaptures, detectCaptures, findCapturedIdent,
 } from "./lambdaLiftingCaptures";
 import {
 	UP_FIELD, freshEnvParamSym, freshEnvVarSym, envVarRef, envVarDeref, PendingEnvRewrite, LoopEnv, LiftState,
@@ -52,7 +52,7 @@ import {
 	createLiftState, inEnclosingFnBody, hasEnclosingFnEnv, currentEnvAccessSym, preRegisterVarTypes,
 	makeEnvStruct, envHasField, envFieldName, envFieldType, rewriteNode, applyActiveRewrites, isRoutineSym,
 	routineInfoOf, withoutRoutines, wrapFnAsClosure, makeEnvVarAndClosurePair, PreCreatedEnv,
-	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly,
+	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly, requireUp,
 } from "./lambdaLiftingEnv";
 import {
 	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, splitLoopCaptures, loopsHoldAll,
@@ -128,28 +128,11 @@ function rewriteRoutineSelfRefs(node: Node, routine: Symbol, closureOf: (ref: No
 	return node;
 }
 
-function ownEnvClosure(liftedSym: Symbol, selfEnvSym: Symbol, envStructType: Type, ref: Node): Node {
-	const loc = ref.location;
-	const pair = makeObjectLiteral(["fn", "env"], [makeTypedIdentResolved(liftedSym, null, loc), envVarRef(selfEnvSym, envStructType, loc)], loc);
-	pair.flags = pair.flags.incl(NodeFlag.Closure);
-	pair.nodeType = ref.nodeType;
-	return pair;
-}
-
-function ownEnvDecl(selfEnvSym: Symbol, envParamSym: Symbol, envName: string, envStructType: Type, loc: SourceLocation): Node {
-	const typedEnv = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParamSym, null, loc), asType: envName }, syntheticToken(loc));
-	typedEnv.nodeType = createRef(envStructType);
-	const decl = makeVarDecl(selfEnvSym.name, typedEnv, DeclKind.Const, loc);
-	decl.resolvedSym = selfEnvSym;
-	decl.nodeType = createRef(envStructType);
-	return decl;
-}
-
 function collectRoutines(program: Node, state: LiftState): void {
 	state.routines = routineSyms(program, 0, state.splitLoopLocals);
 }
 
-function envPointerTo(target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
+function envPointerTo(state: LiftState, target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
 	const own = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParamSym, null, loc), asType: envName }, syntheticToken(loc));
 	if (envType == target) {
 		own.nodeType = createRef(envType);
@@ -159,6 +142,7 @@ function envPointerTo(target: Type, envName: string, envType: Type, chainNames: 
 	let access: Node = makeHiddenDeref(own, loc);
 	access.nodeType = envType;
 	for (let k = 0; k < chainTypes.length; k += 1) {
+		requireUp(state, access.nodeType!, target.typeName, loc);
 		const up = makeMember(access, UP_FIELD, loc);
 		up.nodeType = createPtr(voidType());
 		const next = createNode(NodeKind.TypeAssertion, { asExpr: up, asType: chainNames[k] }, syntheticToken(loc));
@@ -287,40 +271,19 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		rwChainNames = chain.names;
 		rwChainTypes = chain.types;
 	}
-	let selfEnvDecl: Node | null = null;
-	if (routine != null && refsRoutine(body, routine)) {
-		const selfEnvSym = freshEnvVarSym(state.ctx, `_self${counter}_`, envStructType);
-		const selfEnvType = envStructType;
-		selfEnvDecl = ownEnvDecl(selfEnvSym, envParamSym, envName, envStructType, loc);
-		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => ownEnvClosure(liftedSym, selfEnvSym, selfEnvType, ref));
+	if (routine != null) {
+		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => routineClosure(liftedSym, envPointerTo(state, envStructType, envName, envStructType, [], [], envParamSym, ref.location)!, ref));
 	}
-	const reachDecls: Node[] = [];
 	if (state.routines.items.length > 0) {
-		const reachTypes: Type[] = [];
-		const reachSyms: Symbol[] = [];
 		body = rewriteRoutineRefs(body, state, routine, (ref: Node, info: RoutineInfo): Node => {
 			const target = info.envStructType;
 			if (target == null) return routineClosure(info.liftedSym, makeNull(ref.location), ref);
-			let idx = -1;
-			for (let k = 0; k < reachTypes.length; k += 1) {
-				if (reachTypes[k] == target) idx = k;
+			const pointer = envPointerTo(state, target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, ref.location);
+			if (pointer == null) {
+				reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
+				return ref;
 			}
-			if (idx < 0) {
-				const pointer = envPointerTo(target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, loc);
-				if (pointer == null) {
-					reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
-					return ref;
-				}
-				const reachSym = freshEnvVarSym(state.ctx, `_reach${counter}_${reachTypes.length}_`, target);
-				const decl = makeVarDecl(reachSym.name, pointer, DeclKind.Const, loc);
-				decl.resolvedSym = reachSym;
-				decl.nodeType = createRef(target);
-				reachDecls.push(decl);
-				reachTypes.push(target);
-				reachSyms.push(reachSym);
-				idx = reachTypes.length - 1;
-			}
-			return routineClosure(info.liftedSym, envVarRef(reachSyms[idx], target, ref.location), ref);
+			return routineClosure(info.liftedSym, pointer, ref);
 		});
 	}
 	let rewrittenBody = rewriteNode(state, body, rewriteCaptures, envName, envStructType, rwChainNames, rwChainTypes, envParamSym);
@@ -328,14 +291,6 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		rewrittenBody = makeBlock([], loc);
 	} else if (rewrittenBody.kind != NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
-	}
-	if (reachDecls.length > 0) {
-		const bd = rewrittenBody.data as BlockStmtData;
-		bd.statements = prependHoistedEnvDecls(reachDecls, bd.statements);
-	}
-	if (selfEnvDecl != null) {
-		const bd = rewrittenBody.data as BlockStmtData;
-		bd.statements = prependHoistedEnvDecls([selfEnvDecl], bd.statements);
 	}
 
 	// Create lifted function
@@ -539,7 +494,9 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 					envAccess.nodeType = state.sharedEnvStructType;
 				}
 				const lhs = makeMember(envAccess, envFieldName(state, state.sharedEnvStructType, declSym), stmtLoc);
-				if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
+				const held = envFieldType(state, state.sharedEnvStructType, declSym);
+				if (held != null && held.kind == TypeKind.Cursor) lhs.nodeType = held;
+				else if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
 				const init = (vd.initializer != null) ? vd.initializer : makeDefaultValue(declSym.symbolType, stmtLoc);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
@@ -647,7 +604,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const fnLoopSyms = frameLoopSyms(d.fnBody, state);
 			walkLiftBody(d.fnBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null, fnLoopSyms);
+					setupSharedEnv(state, d.fnBody, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null, fnLoopSyms);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -813,7 +770,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const testLoopSyms = frameLoopSyms(d.testBody, state);
 			walkLiftBody(d.testBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null, testLoopSyms);
+					setupSharedEnv(state, d.testBody, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null, testLoopSyms);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1246,7 +1203,7 @@ function liftCapturingClosureBody(
 	const bodyLoopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
+			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
 		}
 	});
 	state.capturedIdents = [];
@@ -1441,11 +1398,89 @@ function envFieldsOf(stmts: Node[]): string[] {
 	return [];
 }
 
+function envFieldsNamed(stmts: Node[], part: string): string[] {
+	for (const s of stmts) {
+		if (s.kind == NodeKind.InterfaceDecl && s.nodeType != null && s.nodeType.typeName.contains(part)) return s.nodeType.typeNames;
+	}
+	return ["<no env named " + part + ">"];
+}
+
 test "two captured bindings of one spelling get a field each" {
 	const fields = envFieldsOf(checkedLifted("function f(): void { let n: int32 = 0; { const x: int32 = 1; const g = (): int32 => x + n; n = g(); } { const x: int32 = 2; const h = (): int32 => x + n; n = h(); } }"));
-	assert fields.length == 4;
-	assert fields[0] == "$up";
-	assert fields[1] != fields[2] && fields[2] != fields[3] && fields[1] != fields[3];
+	assert fields.length == 3;
+	assert !fields.includes("$up");
+	assert fields[0] != fields[1] && fields[1] != fields[2] && fields[0] != fields[2];
+}
+
+test "a closure env whose nested closures read only its own frame has no $up" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const t = (): int32 => { const b: int32 = a; const ok = (): int32 => b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 1 && fields[0] != "$up", fields.join(",");
+}
+
+test "a closure env whose nested closure reads an ancestor binding walks $up to it" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const t = (): int32 => { const b: int32 = a; const ok = (): int32 => a + b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 2 && fields[0] == "$up", fields.join(",");
+}
+
+test "a closure env whose nested closure calls an ancestor routine with an env walks $up to it" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const get = (): int32 => a; const t = (): int32 => { const b: int32 = 2; const ok = (): int32 => get() + b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 2 && fields[0] == "$up", fields.join(",");
+}
+
+function envFieldKind(stmts: Node[], part: string, field: string): TypeKind | null {
+	for (const s of stmts) {
+		if (s.kind != NodeKind.InterfaceDecl || s.nodeType == null || !s.nodeType.typeName.contains(part)) continue;
+		for (let k = 0; k < s.nodeType.typeNames.length; k += 1) {
+			if (s.nodeType.typeNames[k].startsWith(field)) return s.nodeType.typeChildren[k].kind;
+		}
+		return null;
+	}
+	return null;
+}
+
+const LENT = "class Item { v: int32 = 0; next: Item | null = null; }\n";
+
+function envDump(stmts: Node[]): string {
+	let out = "";
+	for (const s of stmts) {
+		if (s.kind != NodeKind.InterfaceDecl || s.nodeType == null) continue;
+		out = out + s.nodeType.typeName + "{";
+		for (let k = 0; k < s.nodeType.typeNames.length; k += 1) out = out + s.nodeType.typeNames[k] + ":" + `${s.nodeType.typeChildren[k].kind}` + " ";
+		out = out + "} ";
+	}
+	return out;
+}
+
+test "a shared env holds a lent local its called closure reads uncounted" {
+	const stmts = checkedLifted(LENT + "function f(a: Readonly<Item[]>): int32 { const best = a[0]; const ok = (x: Readonly<Item>): boolean => x.v >= best.v; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a shared env holds a borrowed parameter its called closure reads uncounted" {
+	const stmts = checkedLifted(LENT + "function f(a: Readonly<Item[]>, best: Readonly<Item>): int32 { const ok = (x: Readonly<Item>): boolean => x.v >= best.v; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a shared env keeps a borrowed array parameter its called closure pushes into as a counted field" {
+	const stmts = checkedLifted(LENT + "function walk(n: int32, f: (x: int32) => void): void { f(n); }\nfunction f(out: Item[]): void { walk(1, (x: int32): void => { out.push(new Item()); }); }");
+	assert envFieldKind(stmts, "Env_f_shared", "out") == TypeKind.Ref, envDump(stmts);
+}
+
+test "a shared env holds a lent local counted when its closure is returned" {
+	const stmts = checkedLifted(LENT + "function f(a: Item[]): () => int32 { const best = a[0]; const get = (): int32 => best.v; return get; }");
+	const k = envFieldKind(stmts, "Env_f_shared", "best");
+	assert k != null && k != TypeKind.Cursor, envDump(stmts);
+}
+
+test "a closure env whose closures stay in its routine reaches the enclosing env through an uncounted $up" {
+	const stmts = checkedLifted(LENT + "function outer(a: Readonly<Item[]>): int32 { const t = (): int32 => { const best = a[0]; const ok = (x: Readonly<Item>): boolean => x.v >= best.v && a.length > 0; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }; return t(); }");
+	assert envFieldKind(stmts, "arrow", "$up") == TypeKind.Cursor, envDump(stmts);
+	assert envFieldKind(stmts, "arrow", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a closure env whose closure escapes reaches the enclosing env through a counted $up" {
+	const stmts = checkedLifted(LENT + "const kept: (() => int32)[] = [];\nfunction outer(a: Readonly<Item[]>): int32 { const t = (): int32 => { const best = a[0]; const get = (): int32 => best.v + a.length; kept.push(get); return 0; }; return t(); }");
+	assert envFieldKind(stmts, "arrow", "$up") == TypeKind.Ref, envDump(stmts);
 }
 
 test "a lifted closure is a routine symbol that its closure pair refers to" {

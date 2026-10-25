@@ -7,7 +7,7 @@ import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef } from "../../checker/types";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
-function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
+function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
 	if (base != null) return copyPlan(s, base);
 	if (valueType != null && valueType.kind == TypeKind.Alias) {
@@ -45,8 +45,8 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	return index;
 }
 
-function armDiscriminant(union: Type, key: string): int64 {
-	const discriminant = union.typeExtra as Type;
+function armDiscriminant(union: Readonly<Type>, key: string): int64 {
+	const discriminant = union.typeExtra as Readonly<Type>;
 	if (discriminant.kind == TypeKind.Boolean) return key == "true" ? 1 : 0;
 	const member = key.slice(key.lastIndexOf(".") + 1);
 	const at = discriminant.typeNames.indexOf(member);
@@ -57,7 +57,7 @@ function armDiscriminant(union: Type, key: string): int64 {
 export function emitValueCopy(
 	s: RaiserCompState,
 	source: int32,
-	valueType: Type | null,
+	valueType: Readonly<Type | null>,
 ): int32 {
 	const index = copyPlan(s, valueType);
 	if (index < 0 || s.copyPlans[index].kind == RaiserCopyKind.Preserve) return source;

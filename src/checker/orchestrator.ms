@@ -129,11 +129,11 @@ export function setGraphCheckTiming(on: boolean): void {
 // for the @platform("...") block-form directive filter to evaluate against
 // the correct target during collectDirectives (which runs as part of this
 // check pass, BEFORE cmdBuildC's applyGcMode propagates targetOs elsewhere).
-// gcMode: memory-management mode of the build, resolved from --gc + the target
+// gcMode: memory-management mode of the build, resolved from --mm + the target
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
@@ -146,6 +146,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.gcMode = gcMode;
 	baseCtx.strictNullChecks = strictNullChecks;
 	baseCtx.appMode = appMode;
+	baseCtx.stdRoot = resolverConfig.stdPath;
 	lastPreludeCtx = baseCtx;
 
 	const _tb0 = performance.now();

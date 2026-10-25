@@ -12,8 +12,9 @@
 //   1 / 0            — division by zero (runtime)
 //   "a" + 1          — mixed types
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, MemberExprData, StringLiteralData } from "../../ast/node";
+import { Node, NodeKind, Type, BinaryExprData, UnaryExprData, MemberExprData, StringLiteralData } from "../../ast/node";
 import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral, foldConstInitializer } from "../../checker/constFold";
+import { declaresUserHook } from "../../checker/instantiate";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { forEachChild } from "../../ast/visitor";
@@ -23,12 +24,14 @@ import { firstExprKindAfter } from "../testUtil";
 // ===== Main Entry Point =====
 
 export function lowerConstFold(program: Node, ctx: TransformContext): Node {
+	const cc = ctx.checkerCtx;
+	const declaresHook = (owner: Type): boolean => cc != null && declaresUserHook(owner, cc);
 	const reloadable = ctx.reloadableModules;
-	walkNode(program, reloadable.length == 0 ? foldNode : (n: Node): Node => foldReloadableNode(n, reloadable));
+	walkNode(program, reloadable.length == 0 ? (node: Node): Node => foldNode(node, declaresHook) : (n: Node): Node => foldReloadableNode(n, reloadable));
 	return program;
 }
 
-function foldNode(node: Node): Node {
+function foldNode(node: Node, declaresHook: (owner: Type) => boolean): Node {
 	return match (node.kind) {
 		NodeKind.BinaryExpr => foldBinary(node),
 		NodeKind.UnaryExpr => foldUnary(node),
@@ -36,13 +39,13 @@ function foldNode(node: Node): Node {
 		NodeKind.Identifier => foldConstantExpression(node),
 		NodeKind.TypeAssertion => foldConstantExpression(node),
 		NodeKind.HiddenStdConv => foldConstantExpression(node),
-		NodeKind.VariableDecl => foldConstDecl(node),
+		NodeKind.VariableDecl => foldConstDecl(node, declaresHook),
 		_ => node,
 	};
 }
 
-function foldConstDecl(node: Node): Node {
-	foldConstInitializer(node);
+function foldConstDecl(node: Node, declaresHook: (owner: Type) => boolean): Node {
+	foldConstInitializer(node, declaresHook);
 	return node;
 }
 
@@ -60,9 +63,9 @@ function foldReloadableNode(node: Node, reloadable: string[]): Node {
 	match (node.kind) {
 		NodeKind.VariableDecl => { return node; },
 		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv | NodeKind.MemberExpr => {
-			return readsReloadable(node, reloadable) ? node : foldNode(node);
+			return readsReloadable(node, reloadable) ? node : foldNode(node, (owner: Type): boolean => false);
 		},
-		_ => { return foldNode(node); },
+		_ => { return foldNode(node, (owner: Type): boolean => false); },
 	};
 }
 

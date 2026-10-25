@@ -35,29 +35,29 @@
 // RED MEANS: an author writes `{ address: 0x400000010 }` or `{ key: 0x400000010, .. }` and the runtime reads
 // that number as an input record when it reads the account or builds a CPI (an access violation, or a mid-record
 // address accepted and the CPI started).
-import { Account, InstructionAccount, CpiAccount, CpiInstruction, accountAt, invokeCpi } from "std/solana";
+import { Account, InstructionAccount, CpiAccount, CpiInstruction, accountAt, invokeCpi } from "std/solana"; // GUARD-REFUSED
 import { Account as Direct, InstructionAccount as DirectMeta } from "std/solana/core";
 
 function build<T>(): T {
-	return { address: 0x400000010 } as T;
+	return { address: 0x400000010 } as T; // GUARD-REFUSED
 }
 
 function forged(held: Account): void {
-	const a: Account = { address: 0x400000010 };
-	const b = { address: 0x400000010 } as Account;
-	const c = {} as Account;
+	const a: Account = { address: 0x400000010 }; // GUARD-REFUSED
+	const b = { address: 0x400000010 } as Account; // GUARD-REFUSED
+	const c = {} as Account; // GUARD-REFUSED
 	let d: Account;
-	const e = d.key();
-	const f: Direct = { address: 0x400000010 };
+	const e = d.key(); // GUARD-REFUSED
+	const f: Direct = { address: 0x400000010 }; // GUARD-REFUSED
 	const g = build<Account>();
-	const h: Account[2] = [];
-	const j = (0x400000010 as uint64) as Account;
-	const k = held.address;
-	const m: InstructionAccount = { key: 0x400000010, writable: 1, signer: 0 };
-	const n: DirectMeta = { key: 0x400000010, writable: 1, signer: 0 };
-	const o = { key: 0x400000010, writable: 1, signer: 0 } as InstructionAccount;
-	const p: InstructionAccount[2] = [];
+	const h: Account[2] = []; // GUARD-REFUSED
+	const j = (0x400000010 as uint64) as Account; // GUARD-REFUSED
+	const k = held.address; // GUARD-REFUSED
+	const m: InstructionAccount = { key: 0x400000010, writable: 1, signer: 0 }; // GUARD-REFUSED
+	const n: DirectMeta = { key: 0x400000010, writable: 1, signer: 0 }; // GUARD-REFUSED
+	const o = { key: 0x400000010, writable: 1, signer: 0 } as InstructionAccount; // GUARD-REFUSED
+	const p: InstructionAccount[2] = []; // GUARD-REFUSED
 	let q: InstructionAccount;
-	const r = q.pubkey();
-	const s = InstructionAccount.writable(held).key;
+	const r = q.pubkey(); // GUARD-REFUSED
+	const s = InstructionAccount.writable(held).key; // GUARD-REFUSED
 }

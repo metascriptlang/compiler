@@ -38,7 +38,7 @@ struct KeptBase { owner: Pubkey; }
 
 struct KeptAccounts {
 	owner: Signer;
-	@hasOne(owner) vault: Owned<KeptChild>;
+	@hasOne(owner) vault: Owned<KeptChild>; // GUARD-REFUSED
 }
 
 struct NearBase { @address(Pubkey.zero()) authority: Signer; }
@@ -50,7 +50,7 @@ struct Unpinned { authority: Signer; }
 
 function aliased(): Result<uint64, ProgramError> {
 	type AliasBase = Unpinned;
-	const x = try accounts<AliasChild>();
+	const x = try accounts<AliasChild>(); // GUARD-REFUSED
 	return Result.ok(x.authority.lamports());
 }
 
@@ -61,12 +61,12 @@ function near(): Result<uint64, ProgramError> {
 }
 
 function run(): Result<uint64, ProgramError> {
-	const early = try accounts<EarlyChild>();
-	const late = try accounts<LateChild>();
-	const open = try accounts<OpenChild>();
-	const leaf = try accounts<PinnedLeaf>();
-	const named = try accounts<NamedChild>();
-	const borrowed = try accounts<Borrowed>();
+	const early = try accounts<EarlyChild>(); // GUARD-REFUSED
+	const late = try accounts<LateChild>(); // GUARD-REFUSED
+	const open = try accounts<OpenChild>(); // GUARD-REFUSED
+	const leaf = try accounts<PinnedLeaf>(); // GUARD-REFUSED
+	const named = try accounts<NamedChild>(); // GUARD-REFUSED
+	const borrowed = try accounts<Borrowed>(); // GUARD-REFUSED
 	const kept = try accounts<KeptAccounts>();
 	return Result.ok(early.authority.lamports() + late.authority.lamports() + open.authority.lamports() +
 		leaf.authority.lamports() + named.authority.lamports() + borrowed.owner.lamports() + kept.vault.data().limit);

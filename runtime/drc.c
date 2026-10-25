@@ -88,6 +88,13 @@ static const char* msLedgerRowName(const msTypeInfo* type) {
 /* TOTAL prints even at zero counts: the SAN corpus runner treats "no LEDGER
  * line at all" as instrumentation loss, and a program whose only allocations
  * were baked into static const cells makes no ledger entries. */
+static long gLedgerCounter[MS_LEDGER_COUNTERS];
+void msLedgerCount(int counter) {
+	__atomic_fetch_add(&gLedgerCounter[counter], 1, __ATOMIC_RELAXED);
+}
+static long msLedgerCounterRead(int counter) {
+	return __atomic_load_n(&gLedgerCounter[counter], __ATOMIC_RELAXED);
+}
 static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
@@ -97,6 +104,10 @@ static void msLedgerDump(void) {
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
+	fprintf(stderr, "LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld thread_start=%ld\n",
+		msLedgerCounterRead(MS_LEDGER_RC_INC), msLedgerCounterRead(MS_LEDGER_RC_DEC),
+		msLedgerCounterRead(MS_LEDGER_SHARE_INC), msLedgerCounterRead(MS_LEDGER_SHARE_DEC),
+		msLedgerCounterRead(MS_LEDGER_ROOT_REG), msLedgerCounterRead(MS_LEDGER_THREAD_START));
 	fprintf(stderr, "LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);
@@ -404,11 +415,7 @@ void msDropRestore(const msDropState* saved) {
 	d->len = saved->len;
 	d->base = saved->base;
 }
-#endif
 
-#ifdef MSGC_ORC
-
-#include "runtime/drc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -421,16 +428,10 @@ void msCellSeqInit(msCellSeq* s) {
 	s->cap = 0;
 }
 
-static void msCellSeqGrow(msCellSeq* s) {
+void msCellSeqGrow(msCellSeq* s) {
 	int32_t newCap = s->cap <= 0 ? 16 : s->cap * 2;
 	s->data = (msCell*)msRealloc(s->data, (size_t)s->cap * sizeof(msCell), (size_t)newCap * sizeof(msCell));
 	s->cap = newCap;
-}
-
-void msCellSeqPush(msCellSeq* s, msCell cell) {
-	if (s->len >= s->cap) msCellSeqGrow(s);
-	s->data[s->len] = cell;
-	s->len++;
 }
 
 void msCellSeqClear(msCellSeq* s) {
@@ -462,29 +463,43 @@ _Thread_local msCellSeq msRoots;
 MS_TLS_PUBLISH(msRoots)
 _Thread_local int32_t msRootsThreshold = 128;
 MS_TLS_PUBLISH(msRootsThreshold)
-_Thread_local int32_t msOrcTeardownDepth = 0;
-MS_TLS_PUBLISH(msOrcTeardownDepth)
 
 /* ===== ORC Diagnostics ===== */
 #ifdef MSGC_ORC_STATS
 _Thread_local int32_t msFreedCyclicObjects = 0;
 MS_TLS_PUBLISH(msFreedCyclicObjects)
+_Thread_local int32_t msOrcCollections = 0;
+MS_TLS_PUBLISH(msOrcCollections)
+#endif
+
+#if defined(MS_DRC_LEDGER) || defined(MS_ROOT_OWNER_AT_FREE)
+static void msRootOwnerCheck(void* p, const char* site) {
+	int32_t idx = msHeader(p)->rootIdx;
+	if (idx < 0 || (idx < msRoots.len && msRoots.data[idx].ptr == p)) return;
+	fprintf(stderr, "msc: M1 owner violation at %s: cell %p has root entry %d outside the running executor's root set (len %d)\n",
+		site, p, idx, msRoots.len);
+	abort();
+}
+#endif
+
+#ifdef MS_DRC_LEDGER
+#define MS_ROOT_OWNER_CHECK(p, site) msRootOwnerCheck((p), (site))
+#else
+#define MS_ROOT_OWNER_CHECK(p, site) ((void)0)
 #endif
 
 void msRegisterCycle(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
+	MS_ROOT_OWNER_CHECK(p, "register");
 	/* Already registered? */
 	if (h->rootIdx >= 0) return;
+	MS_LEDGER_COUNT(MS_LEDGER_ROOT_REG);
 	h->rootIdx = msRoots.len;
 	MS_DRC_STAT_CYCLE(type);
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
-
-	/* Auto-trigger collection when threshold exceeded (Standard reference implementation parity).
-	 * Skip while a =destroy is unwinding — a re-entrant collect there traces half-torn-down,
-	 * not-yet-nulled slots (UAF). msOrcEndTeardown runs the deferred collect once it is safe. */
-	if (msOrcTeardownDepth == 0 && msRoots.len - 128 >= msRootsThreshold) {
+	if (msRoots.len - 128 >= msRootsThreshold) {
 		msOrcCollect();
 	}
 }
@@ -493,8 +508,64 @@ void msUnregisterCycle(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (h->rootIdx < 0) return;
+#if defined(MS_DRC_LEDGER) || defined(MS_ROOT_OWNER_AT_FREE)
+	msRootOwnerCheck(p, "free");
+#endif
 	msCellSeqRemoveAt(&msRoots, h->rootIdx);
 	h->rootIdx = -1;
+}
+
+void msRootsSwap(msCellSeq* other) {
+	msCellSeq running = msRoots;
+	msRoots = *other;
+	*other = running;
+}
+
+void msRootsAdopt(msCellSeq* orphan) {
+	for (int32_t i = 0; i < orphan->len; i++) {
+		msHeader(orphan->data[i].ptr)->rootIdx = msRoots.len;
+		msCellSeqPush(&msRoots, orphan->data[i]);
+	}
+	msCellSeqFree(orphan);
+}
+
+static msCellSeq msOrphanRoots;
+static int32_t msOrphanRootsPending;
+
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+#include <pthread.h>
+static pthread_mutex_t msOrphanRootsLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void msOrphanRootsAcquire(void) {
+	pthread_mutex_lock(&msOrphanRootsLock);
+}
+
+static void msOrphanRootsRelease(void) {
+	pthread_mutex_unlock(&msOrphanRootsLock);
+}
+#else
+static void msOrphanRootsAcquire(void) {}
+
+static void msOrphanRootsRelease(void) {}
+#endif
+
+static __attribute__((noinline)) void msAdoptOrphanRoots(void) {
+	msOrphanRootsAcquire();
+	msCellSeq spilled = msOrphanRoots;
+	msCellSeqInit(&msOrphanRoots);
+	__atomic_store_n(&msOrphanRootsPending, 0, __ATOMIC_RELAXED);
+	msOrphanRootsRelease();
+	msRootsAdopt(&spilled);
+}
+
+void msRootsThreadTeardown(void) {
+	if (msRoots.len > 0) {
+		msOrphanRootsAcquire();
+		for (int32_t i = 0; i < msRoots.len; i++) msCellSeqPush(&msOrphanRoots, msRoots.data[i]);
+		__atomic_store_n(&msOrphanRootsPending, 1, __ATOMIC_RELAXED);
+		msOrphanRootsRelease();
+	}
+	msCellSeqFree(&msRoots);
 }
 
 /* ===== Color Helpers ===== */
@@ -523,20 +594,6 @@ static inline void setLastRefCount(msRefHeader* h) {
 	h->rc &= MS_RC_MASK;
 }
 
-/* ===== Trace Ref (reference ORC parity) ===== */
-/* Called by generated trace hooks. Receives ADDRESS of pointer slot, not the value.
- * This enables collectColor to null out slots (entry[] = nil) so destructors
- * don't follow dangling pointers to moribund objects. */
-
-void msOrcTraceRef(void* slotAddr, void* env) {
-	if (slotAddr == NULL || env == NULL) return;
-	void* child = *(void**)slotAddr;
-	if (child == NULL) return;
-	msGcEnv* j = (msGcEnv*)env;
-	msCell cell = { slotAddr, msHeader(child)->type };
-	msCellSeqPush(&j->traceStack, cell);
-}
-
 /* ===== Helper: call type's trace hook ===== */
 
 static inline void msTrace(void* p, const msTypeInfo* type, msGcEnv* j) {
@@ -563,6 +620,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
 		void* child = *(void**)entry.ptr;  /* dereference slot address */
 		if (child == NULL) continue;
+		MS_ROOT_OWNER_CHECK(child, "collect");
 		msRefHeader* ch = msHeader(child);
 		decCount(ch);
 		j->edges++;
@@ -659,6 +717,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 
 	/* Phase 1: Mark all roots gray, tentatively decrement children */
 	for (int32_t i = last; i >= lowMark; i--) {
+		MS_ROOT_OWNER_CHECK(msRoots.data[i].ptr, "collect");
 		markGray(j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
@@ -708,6 +767,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 /* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
+	if (__atomic_load_n(&msOrphanRootsPending, __ATOMIC_RELAXED) != 0) msAdoptOrphanRoots();
 	if (msRoots.len == 0) return;
 
 	msGcEnv j;
@@ -728,6 +788,7 @@ void msOrcCollect(void) {
 
 #ifdef MSGC_ORC_STATS
 	msFreedCyclicObjects += j.freed;
+	msOrcCollections += 1;
 #endif
 
 	/* Adaptive threshold:
@@ -738,33 +799,69 @@ void msOrcCollect(void) {
 		if (j.freed * 2 >= j.touched) {
 			msRootsThreshold = msRootsThreshold * 2 / 3;
 			if (msRootsThreshold < 16) msRootsThreshold = 16;
-		} else if (msRootsThreshold < 16384) {
+		} else if (msRootsThreshold < INT32_MAX / 4) {
 			if (msRootsThreshold <= 0) msRootsThreshold = 128;
 			msRootsThreshold = msRootsThreshold / 2 + msRootsThreshold;  /* * 3/2 growth */
 		}
 	}
 }
 
-void msOrcPartialCollect(int32_t lowMark) {
-	if (msRoots.len <= lowMark) return;
-
-	msGcEnv j;
-	msCellSeqInit(&j.traceStack);
-	msCellSeqInit(&j.toFree);
-	j.freed = 0;
-	j.touched = 0;
-	j.edges = 0;
-	j.rcSum = 0;
-	j.keepThreshold = false;
-
-	collectCyclesBacon(&j, lowMark);
-	msRoots.len = lowMark;
-
-	msCellSeqFree(&j.traceStack);
-
-#ifdef MSGC_ORC_STATS
-	msFreedCyclicObjects += j.freed;
-#endif
+static inline void msCustody(void* p, const msTypeInfo* type, msGcEnv* j) {
+	if (type != NULL && type->custodyFn != NULL) {
+		type->custodyFn(p, j);
+	}
 }
 
-#endif /* MSGC_ORC */
+static void msDisownGray(msGcEnv* j) {
+	while (j->traceStack.len > 0 && msRoots.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) == MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_GRAY);
+		if (ch->rootIdx >= 0) msUnregisterCycle(child);
+		msCustody(child, entry.type, j);
+	}
+	j->traceStack.len = 0;
+}
+
+static void msDisownBlack(msGcEnv* j) {
+	while (j->traceStack.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) != MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_BLACK);
+		msCustody(child, entry.type, j);
+	}
+}
+
+void msOrcDisown(void* p) {
+	if (p == NULL || msRoots.len == 0) return;
+	msRefHeader* h = msHeader(p);
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	setColor(h, MS_COL_GRAY);
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	msCustody(p, h->type, &j);
+	msDisownGray(&j);
+	setColor(h, MS_COL_BLACK);
+	msCustody(p, h->type, &j);
+	msDisownBlack(&j);
+	msCellSeqFree(&j.traceStack);
+}
+
+void msOrcDisownValue(void* p, msTraceProc custody) {
+	if (p == NULL || custody == NULL || msRoots.len == 0) return;
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	custody(p, &j);
+	msDisownGray(&j);
+	custody(p, &j);
+	msDisownBlack(&j);
+	msCellSeqFree(&j.traceStack);
+}
+
+#endif /* MSGC_MANUAL */

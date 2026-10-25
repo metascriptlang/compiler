@@ -7,7 +7,7 @@ import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForO
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
-import { mangleModuleName } from "../c/names";
+import { mangleModuleName, buildModuleNameRoots } from "../c/names";
 import { DynamicModulePlan } from "../../module/graph";
 import { dirname, relative } from "std/fs/path";
 
@@ -113,7 +113,7 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 			if (gen.neededNames[i][j] == name) return gen.neededLocals[i][j];
 		}
 	}
-	const local = importBindingTaken(gen, name) ? `${name}__${mangleModuleName(modulePath)}` : name;
+	const local = importBindingTaken(gen, name) ? `${name}__${mangleModuleName(buildModuleNameRoots(), modulePath)}` : name;
 	if (at < 0) {
 		gen.neededModules.push(modulePath);
 		gen.neededNames.push([]);

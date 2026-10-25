@@ -4,7 +4,7 @@
 // Promise.all over spawns (sync and async), a nested spawn and a failing spawn all match native C.
 // RED MEANS the emcc build does not link spawn (pool.c / awaitGroup.c missing there), or an inline
 // completion overwrote the stored result (async await of a spawn read 0).
-// GUARD-SKIP without emcc or node on PATH.
+// It prints GUARD-SKIP without emcc or node on PATH.
 
 import { execFileResult, cmdExists, cwd, env, exit } from "std/process";
 

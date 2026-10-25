@@ -143,33 +143,6 @@ static inline int32_t msNetBind(int32_t fd, msString addr, int32_t port) {
 }
 
 /**
- * Bind with SO_REUSEPORT — allows multiple threads to bind to the same port.
- * Kernel load-balances incoming connections across all threads.
- * Used by serveConcurrent() for httpbeast-style thread-per-core architecture.
- */
-static inline int32_t msNetBindShared(int32_t fd, msString addr, int32_t port) {
-	int opt = 1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, MS_SOCKOPT_CAST &opt, sizeof(opt));
-#ifdef SO_REUSEPORT
-	setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, MS_SOCKOPT_CAST &opt, sizeof(opt));
-#endif
-
-	struct sockaddr_in sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons((uint16_t)port);
-
-	const char* addr_str = msStringToCString(addr);
-	if (strcmp(addr_str, "0.0.0.0") == 0) {
-		sa.sin_addr.s_addr = INADDR_ANY;
-	} else {
-		if (inet_pton(AF_INET, addr_str, &sa.sin_addr) != 1) return -1;
-	}
-
-	return (int32_t)bind(fd, (struct sockaddr*)&sa, sizeof(sa));
-}
-
-/**
  * Listen for connections. Returns 0 on success, -1 on error.
  */
 static inline int32_t msNetListen(int32_t fd, int32_t backlog) {
@@ -249,8 +222,7 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
 	if (maxBytes > 16777216) maxBytes = 16777216; /* 16 MiB cap */
 
-	char* buf = (char*)malloc((size_t)maxBytes + 1);
-	if (!buf) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc((size_t)maxBytes + 1);
 
 	ms_ssize_t received;
 	do {
@@ -593,7 +565,7 @@ static inline msString msHttpDateLine(void) {
  *     the full response, then msStaticCachePut stores a fresh copy.
  *
  * Why per-thread (not shared):
- *   - serveConcurrent spawns N event loops; each owns its own client fds.
+ *   - serveConcurrent runs N event loops; each owns the client fds it accepted.
  *   - Sharing would require atomics or a CAS pointer swap for safety.
  *   - Thread-local removes the race entirely at the cost of N copies of
  *     ~100 bytes each (negligible).
@@ -700,7 +672,7 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 	if (hlen < 0 || hlen >= 512) hlen = 511;
 	int32_t total = hlen + bodyLen;
 	/* Allocate string: payload header + data */
-	msStrPayload* pp = (msStrPayload*)malloc(sizeof(msStrPayload) + total + 1);
+	msStrPayload* pp = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + total + 1);
 	pp->cap = total;
 	memcpy(pp->data, header, hlen);
 	if (body.p && bodyLen > 0)

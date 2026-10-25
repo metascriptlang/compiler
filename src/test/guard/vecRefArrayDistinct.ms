@@ -31,19 +31,19 @@ function takeVec(v: Vec<int32>): int32 { return v.length; }
 
 function vecToRefAssign(): void {
 	const v: Vec<int32> = [1, 2];
-	const r: int32[] = v;
+	const r: int32[] = v; // GUARD-REFUSED
 	console.log("" + r.length);
 }
 
 function refToVecAssign(): void {
 	const r: int32[] = [1, 2];
-	const v: Vec<int32> = r;
+	const v: Vec<int32> = r; // GUARD-REFUSED
 	console.log("" + v.length);
 }
 
 function refToVecParam(): void {
 	const r: int32[] = [1, 2, 3];
-	console.log("" + takeVec(r));
+	console.log("" + takeVec(r)); // GUARD-REFUSED
 }
 
 vecToRefAssign();

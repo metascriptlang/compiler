@@ -8,7 +8,7 @@
 //
 // RED MEANS: a runtime element op decrefs with plain msDecref again.
 //   Run /trace-nim on msRefArrayDestroy / msRefArraySplice3 (runtime/core/array.c).
-// GUARD-BALANCE-ORC Node
+// GUARD-BALANCE Node
 
 class Node {
 	next: Node | null = null;

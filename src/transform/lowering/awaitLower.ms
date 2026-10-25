@@ -28,28 +28,34 @@
 // REPROMISE T3 Stage A. See docs/PARALOCK.md §6.3 for the AwaitGroup lifecycle.
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation,
+	BlockStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData, TestDeclData,
+} from "../../ast/node";
+import {
+	Node, NodeKind, NodeFlag, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
-	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
+	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn } from "../util";
-import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
-import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
+import { lowerDefer } from "./deferLower";
+import { createPtr, createPrimitive, awaitedType, booleanType, closureStorageType } from "../../checker/types";
+import { TypeKind, AttachedOp, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { RoutineFlag, routineFlagSet, setFlag, SymbolFlag } from "../../checker/symbol";
 import { Symbol } from "../../ast/node";
 
 // ===== Scoped Deferred → msAwaitSlot (Change 1) =====
 // Tracks `const h = spawn(fn);` declarations. When `await h` is later found
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
-struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; }
+struct SpawnSlotEntry { slotIdent: Node; task: Symbol | null; innerType: Type | null; joined: Symbol | null; }
 let _spawnSlotMap: HashMap<Symbol, SpawnSlotEntry> = new HashMap<Symbol, SpawnSlotEntry>();
 let _awaitOnlyHandles: SymSet = createSymSet();
+let _moduleLevelHandles: SymSet = createSymSet();
+let _settleDeferred = false;
 interface SpawnSlotFrame { slots: HashMap<Symbol, SpawnSlotEntry>; handles: SymSet; }
 let _spawnSlotFrames: SpawnSlotFrame[] = [];
 
@@ -99,6 +105,38 @@ function exitSpawnSlotFrame(_fn: Node): void {
 	const frame = _spawnSlotFrames.pop();
 	_spawnSlotMap = frame.slots;
 	_awaitOnlyHandles = frame.handles;
+}
+
+function bindTask(ctx: TransformContext, closure: Node, loc: SourceLocation): { decl: Node, ident: Node, sym: Symbol } | null {
+	if (closure.kind != NodeKind.CallExpr || closure.nodeType == null || closure.nodeType!.kind != TypeKind.Function) return null;
+	const t = closureStorageType(closure.nodeType!);
+	const sym = freshOwnedSym(ctx, "task", t);
+	const decl = makeVarDecl(sym.name, closure, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return { decl, ident: makeIdentResolved(sym, loc), sym };
+}
+
+function dropTask(task: Symbol | null, loc: SourceLocation): Node[] {
+	if (task == null) return [];
+	return [ makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("msClosureDestroy", AttachedOp.AttachedDestructor), null, loc), [makeIdentResolved(task!, loc)], loc), loc)];
+}
+
+function settleOnExit(slot: Symbol, joined: Symbol, task: Symbol | null, loc: SourceLocation): Node {
+	const notJoined = makeUnary("!", makeIdentResolved(joined, loc), loc);
+	notJoined.nodeType = booleanType();
+	const settle = makeExprStmt(makeCall(runtimeRef("msAwaitSlotSettle", loc), [makeIdentResolved(slot, loc)], loc), loc);
+	const deferData: NodeData = { deferExpr: makeBlock([makeIf(notJoined, makeBlock([settle], loc), null, loc)].concat(dropTask(task, loc)), loc) };
+	_settleDeferred = true;
+	return createNodeAt(NodeKind.DeferStmt, deferData, loc);
+}
+
+function moduleLevelHandles(program: Node): SymSet {
+	const out = createSymSet();
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null) symSetAdd(out, stmt.resolvedSym!);
+	}
+	return out;
 }
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
@@ -159,15 +197,38 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 
 // ===== Timeout Helper =====
 
-// Emits timeout handling stmts for AwaitGroup: compute deadline, timed wait,
-// check timedOut → free + throw. Returns the blocking call stmts (replaces
-// the single msAwaitGroupBlocking call). If no timeout, returns single blocking call.
-export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext): Node[] {
+// A joined slot's result, read into an owned local of its type before the group can
+// raise, so a sibling's failure or a timeout destroys it with the scope. A failed or
+// skipped slot holds null, which reads as the type's default.
+export function readGroupSlot(ctx: TransformContext, agIdent: Node, slot: int32, innerType: Type | null, loc: SourceLocation): { stmts: Node[], value: Node } {
+	const raw = (): Node => {
+		const c = makeCall(runtimeRef("msAwaitGroupResult", loc), [agIdent, makeNumber(slot, loc)], loc);
+		c.nodeType = VOID_PTR_TYPE;
+		return c;
+	};
+	if (innerType == null || innerType.kind == TypeKind.Void) {
+		const t = makeTempDecl(ctx, "agr", raw(), VOID_PTR_TYPE, loc);
+		return { stmts: [t.decl], value: t.ident };
+	}
+	const sym = freshOwnedSym(ctx, "agr", innerType);
+	const decl = makeVarDecl(sym.name, makeDefaultValue(innerType, loc), DeclKind.Let, loc);
+	decl.nodeType = innerType;
+	decl.resolvedSym = sym;
+	const value = makeUnboxCall(raw(), innerType, loc);
+	value.nodeType = innerType;
+	const take = makeExprStmt(makeAssign(makeIdentResolved(sym, loc), value, loc), loc);
+	const present = makeBinary(raw(), "!=", makeDefaultValue(VOID_PTR_TYPE, loc), loc);
+	return { stmts: [decl, makeIf(present, makeBlock([take], loc), null, loc)], value: makeIdentResolved(sym, loc) };
+}
+
+// Waits for the group, then runs `reads` while every slot is still held: a timed
+// wait that expires joins the children first and throws only after the reads.
+export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext, reads: Node[]): Node[] {
 	const stmts: Node[] = [];
 	if (timeoutExpr == null) {
-		// No timeout — simple blocking wait
 		stmts.push(makeExprStmt(
 			makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
+		for (const r of reads) stmts.push(r);
 		return stmts;
 	}
 	// Phase 3: timed wait — const $deadline = msMonoTimeMs() + timeoutExpr;
@@ -183,28 +244,30 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 			agIdent, dl.ident,
 		], loc), loc));
 
-	// if (msAwaitGroupTimedOut($ag)) {
-	//   msAwaitGroupCancel($ag); msAwaitGroupBlocking($ag); msAwaitGroupFree($ag); throw "await timeout"; }
-	// Cancel first (safe-points injected into the children see the flag and
-	// unwind), then JOIN the children before freeing: msAwaitGroupFree's
+	// if (msAwaitGroupTimedOut($ag)) msAwaitGroupBlocking($ag);  reads;
+	// if (msAwaitGroupTimedOut($ag)) { msAwaitGroupFree($ag); throw "await timeout"; }
+	// The timed wait has already set the cancel flag (safe-points injected into
+	// the children see it and unwind); JOIN the children before freeing: msAwaitGroupFree's
 	// contract (awaitGroup.h) forbids freeing during an outstanding submission
 	// - it spins on finishDone, which only the last finishSlot sets, so a
 	// free-while-in-flight hangs forever when a child is still blocked. The
 	// join is safe on the loop thread: the blocking wait pumps the event loop
 	// while waiting, which is exactly what unblocks a timer-parked child.
-	const timedOutCall = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
-	timedOutCall.nodeType = booleanType();
-	const cancelCall = makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupCancel", loc), [agIdent], loc), loc);
+	// msAwaitGroupFree reports a child failure only that join observed.
+	const timedOut = (): Node => {
+		const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
+		c.nodeType = booleanType();
+		return c;
+	};
 	const joinCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
+	stmts.push(makeIf(timedOut(), makeBlock([joinCall], loc), null, loc));
+	for (const r of reads) stmts.push(r);
 	const freeCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [agIdent], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
-	const ifBody = makeBlock([cancelCall, joinCall, freeCall, throwNode], loc);
-	const ifNode = makeIf(timedOutCall, ifBody, null, loc);
-	stmts.push(ifNode);
+	stmts.push(makeIf(timedOut(), makeBlock([freeCall, throwNode], loc), null, loc));
 
 	return stmts;
 }
@@ -215,12 +278,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 // Emits: $as = msAwaitSlotCreate(1); msSpawnSlotSubmit($as, 0, closure);
 //        msAwaitSlotWait($as); result = msAwaitSlotResult($as); msAwaitSlotRelease();
 // Slow path (timeout): heap-allocated msAwaitGroup with mutex/condvar for timed wait.
-function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
-	// Timeout requires mutex+condvar → fall back to heap AwaitGroup
-	if (timeoutExpr != null) {
-		return expandFusedAwaitHeap(closureArg, loc, ctx, timeoutExpr);
-	}
-
+function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], resultIdent: Node } {
 	// Fast path: stack-allocated msAwaitSlot (Malebolgia parity)
 	const stmts: Node[] = [];
 
@@ -229,12 +287,15 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 	stmts.push(as.decl);
 
 	// 2. msSpawnSlotSubmit($as, 0, closure);
+	const task = bindTask(ctx, closureArg, loc);
+	if (task != null) stmts.push(task!.decl);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), task != null ? task!.ident : closureArg], loc), loc));
 
-	// 3. msAwaitSlotWait($as);
+	// 3. msAwaitSlotWait($as); the joined task's closure and its moved captures drop here.
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitSlotWait", loc), [as.ident], loc), loc));
+	for (const d of dropTask(task != null ? task!.sym : null, loc)) stmts.push(d);
 
 	// 4. const $agr = msAwaitSlotResult($as);
 	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
@@ -248,7 +309,8 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 }
 
 // Heap-allocated AwaitGroup path — used when timeout is needed (mutex+condvar for timed wait).
-function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
+// The result comes back typed.
+function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node, innerType: Type | null): { stmts: Node[], resultIdent: Node } {
 	const stmts: Node[] = [];
 
 	// 1. const $ag = msAwaitGroupInit(1);
@@ -270,21 +332,18 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
 
-	// 4. Blocking wait with deadline
-	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
+	// 4. Blocking wait with deadline, the result read before any raise
+	const read = readGroupSlot(ctx, ag.ident, 0, innerType, loc);
+	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx, read.stmts);
 	for (const ws of waitStmts) stmts.push(ws);
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
 
-	// 5. const $agr = msAwaitGroupResult($ag, 0);
-	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);
-	stmts.push(agr.decl);
-
-	// 6. msAwaitGroupFree($ag);
+	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
 
-	return { stmts, resultIdent: agr.ident };
+	return { stmts, resultIdent: read.value };
 }
 
 // ===== Deferred Path: await handle → msFutureReadT(handle) or msWaitFor(handle) =====
@@ -374,8 +433,9 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	const spawnInfo = getSpawnInfo(awaitArg);
 	const innerType = getAwaitInnerType(awaitArg);
 	if (spawnInfo.closure != null) {
+		if (spawnInfo.timeout != null) return expandFusedAwaitHeap(spawnInfo.closure, loc, ctx, spawnInfo.timeout!, innerType);
 		// Fused path: AwaitGroup → void* results, needs unboxing
-		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx, spawnInfo.timeout);
+		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx);
 		if (innerType != null) {
 			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
 		}
@@ -392,6 +452,10 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
 				makeCall(runtimeRef("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+			for (const d of dropTask(slotEntry.task, loc)) stmts.push(d);
+			if (slotEntry.joined != null) {
+				stmts.push(makeExprStmt(makeAssign(makeIdentResolved(slotEntry.joined!, loc), makeBool(true, loc), loc), loc));
+			}
 			// const $agr = msAwaitSlotResult($slot);
 			const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
 			stmts.push(agr.decl);
@@ -451,6 +515,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				if (si.closure != null && isBuiltinSpawnCall(d.initializer)
 					&& stmt.resolvedSym != null
 					&& symSetContains(_awaitOnlyHandles, stmt.resolvedSym)
+					&& !symSetContains(_moduleLevelHandles, stmt.resolvedSym)
 					&& !_spawnSlotMap.has(stmt.resolvedSym)) {
 					const innerType = getAwaitInnerType(d.initializer);
 					const stmts: Node[] = [];
@@ -458,11 +523,18 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					// const $slot = msAwaitSlotCreate(1);
 					const slot = makeTempDecl(ctx, "sl", makeCall(runtimeRef("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 					stmts.push(slot.decl);
+					const flag = makeTempDecl(ctx, "joined", makeBool(false, loc), booleanType(), loc);
+					(flag.decl.data as VariableDeclData).declKind = DeclKind.Let;
+					stmts.push(flag.decl);
 					// msSpawnSlotSubmit($slot, 0, closure);
+					const task = bindTask(ctx, si.closure!, loc);
+					const taskSym = task != null ? task!.sym : null;
+					if (task != null) stmts.push(task!.decl);
 					stmts.push(makeExprStmt(
-						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
+						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), task != null ? task!.ident : si.closure!], loc), loc));
+					stmts.push(settleOnExit(slot.sym, flag.sym, taskSym, loc));
 					// Register for later `await h` lookup
-					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, closureArg: si.closure, innerType });
+					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, task: taskSym, innerType, joined: flag.sym });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)
 				}
 			}
@@ -560,7 +632,141 @@ export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	blockifyAwaitingArrows(program);
 	_spawnSlotMap = new HashMap<Symbol, SpawnSlotEntry>();
 	_awaitOnlyHandles = awaitOnlyHandles(program);
+	_moduleLevelHandles = moduleLevelHandles(program);
+	_settleDeferred = false;
 	_spawnSlotFrames = [];
 	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);
+	if (_settleDeferred) lowerDefer(program, ctx);
+	return program;
+}
+
+// ===== Held spawns: joined when their routine exits =====
+// A spawn whose handle the routine keeps in a value (an array, a combinator
+// argument, a binding that is not only awaited) is not joined by the slot path.
+// Each such spawn receives the routine's held list as a second argument, so the
+// runtime submits it under the list's cancel flag and keeps one reference; a
+// scope-exit defer cancels what no worker has admitted and waits for the rest,
+// on every exit. Runs before asyncDesugar, so the defer of an async routine runs
+// when the routine ends, not at each suspension.
+
+interface HeldFrame { held: Symbol | null; awaitOnly: SymSet | null; }
+
+let _heldFrame: HeldFrame = { held: null, awaitOnly: null };
+let _heldUsed = false;
+
+function isSpawnNode(n: Node): boolean {
+	if (n.kind != NodeKind.CallExpr) return false;
+	const sym = n.resolvedSym != null ? n.resolvedSym : (n.data as CallExprData).callee.resolvedSym;
+	return sym != null && sym.builtinKind == "PromiseSpawn";
+}
+
+function isRoutineNode(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr
+		|| n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
+}
+
+function routineFlags(n: Node): string {
+	return match (n.kind) {
+		NodeKind.FunctionDecl => (n.data as FunctionDeclData).fnFlags,
+		NodeKind.MethodDecl => (n.data as MethodDeclData).methodFlags,
+		NodeKind.ArrowFunction => (n.data as ArrowFunctionData).arrowFlags,
+		NodeKind.FunctionExpr => (n.data as FunctionExprData).funcExprFlags,
+		_ => "",
+	};
+}
+
+function isSlotJoined(n: Node): boolean {
+	const awaitOnly = _heldFrame.awaitOnly;
+	if (n.kind == NodeKind.VariableDecl) {
+		const init = (n.data as VariableDeclData).initializer;
+		return init != null && isSpawnNode(init) && n.resolvedSym != null && awaitOnly != null && symSetContains(awaitOnly, n.resolvedSym);
+	}
+	if (n.kind == NodeKind.AwaitExpr) {
+		const arg = (n.data as AwaitExprData).awaitArg;
+		return arg != null && isSpawnNode(arg);
+	}
+	return false;
+}
+
+function holdSpawns(n: Node | null, ctx: TransformContext): void {
+	if (n == null) return;
+	if (isRoutineNode(n)) {
+		joinHeldInRoutine(n, ctx);
+		return;
+	}
+	if (_heldFrame.held != null && isSlotJoined(n)) {
+		const sp = n.kind == NodeKind.VariableDecl ? (n.data as VariableDeclData).initializer! : (n.data as AwaitExprData).awaitArg!;
+		forEachChild(sp, (c: Node): void => { holdSpawns(c, ctx); });
+		return;
+	}
+	forEachChild(n, (c: Node): void => { holdSpawns(c, ctx); });
+	if (_heldFrame.held != null && isSpawnNode(n) && !n.flags.has(NodeFlag.Isolated)) {
+		const list = makeIdentResolved(_heldFrame.held!, n.location);
+		list.nodeType = VOID_PTR_TYPE;
+		(n.data as CallExprData).arguments.push(list);
+		_heldUsed = true;
+	}
+}
+
+function hasOwnSpawn(n: Node | null): boolean {
+	if (n == null || isRoutineNode(n)) return false;
+	if (isSpawnNode(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && hasOwnSpawn(c)) found = true; });
+	return found;
+}
+
+function routineBodyBlock(n: Node): Node | null {
+	if (n.kind == NodeKind.ArrowFunction) {
+		const d = n.data as ArrowFunctionData;
+		if (d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt && hasOwnSpawn(d.arrowBody)) {
+			d.arrowBody = makeBlock([makeReturn(d.arrowBody, d.arrowBody.location)], d.arrowBody.location);
+		}
+		return d.arrowBody;
+	}
+	return match (n.kind) {
+		NodeKind.FunctionDecl => (n.data as FunctionDeclData).fnBody,
+		NodeKind.MethodDecl => (n.data as MethodDeclData).methodBody,
+		NodeKind.ConstructorDecl => (n.data as ConstructorDeclData).ctorBody,
+		NodeKind.TestDecl => (n.data as TestDeclData).testBody,
+		NodeKind.FunctionExpr => (n.data as FunctionExprData).funcExprBody,
+		_ => null,
+	};
+}
+
+function joinHeldInRoutine(fn: Node, ctx: TransformContext): void {
+	const body = routineBodyBlock(fn);
+	if (body == null || body.kind != NodeKind.BlockStmt) {
+		forEachChild(fn, (c: Node): void => { holdSpawns(c, ctx); });
+		return;
+	}
+	const saved = _heldFrame;
+	const savedUsed = _heldUsed;
+	const loc = body.location;
+	const isAsync = routineFlagSet(routineFlags(fn)).has(RoutineFlag.Async);
+	const held = freshTempSym(ctx, "held", VOID_PTR_TYPE);
+	_heldFrame = { held, awaitOnly: isAsync ? null : awaitOnlyHandles(fn) };
+	_heldUsed = false;
+	holdSpawns(body, ctx);
+	if (_heldUsed) {
+		const decl = makeVarDecl(held.name, makeCall(runtimeRef("msSpawnHeldCreate", loc), [], loc), DeclKind.Const, loc);
+		decl.resolvedSym = held;
+		decl.nodeType = VOID_PTR_TYPE;
+		const settle = makeExprStmt(makeCall(runtimeRef("msSpawnHeldSettle", loc), [makeIdentResolved(held, loc)], loc), loc);
+		const deferData: NodeData = { deferExpr: makeBlock([settle], loc) };
+		const bd = body.data as BlockStmtData;
+		const stmts: Node[] = [decl, createNodeAt(NodeKind.DeferStmt, deferData, loc)];
+		for (const s of bd.statements) stmts.push(s);
+		bd.statements = stmts;
+	}
+	_heldFrame = saved;
+	_heldUsed = savedUsed;
+}
+
+export function lowerHeldSpawns(program: Node, ctx: TransformContext): Node {
+	_heldFrame = { held: null, awaitOnly: null };
+	_heldUsed = false;
+	holdSpawns(program, ctx);
+	lowerDefer(program, ctx);
 	return program;
 }

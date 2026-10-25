@@ -7,7 +7,7 @@ import { literalBase, createFunction, createStruct, createArray, createPtr, numb
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
-import { mangleQualified, mangleModuleName } from "../codegen/c/names";
+import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
 export { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -78,6 +78,12 @@ export function isSoleFutureRead(e: Node | null): boolean {
 	const callee = (e.data as CallExprData).callee;
 	const sym = e.resolvedSym != null ? e.resolvedSym : callee.resolvedSym;
 	if (sym != null && (hasFlag(sym, SymbolFlag.Async) || (sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync)))) return true;
+	return isActorCall(e);
+}
+
+export function isActorCall(e: Node): boolean {
+	if (e.kind != NodeKind.CallExpr) return false;
+	const callee = (e.data as CallExprData).callee;
 	if (callee.kind != NodeKind.MemberExpr) return false;
 	let recv = (callee.data as MemberExprData).object.nodeType;
 	if (recv != null && recv.kind == TypeKind.Ref && recv.typeReturn != null) recv = recv.typeReturn;
@@ -316,7 +322,7 @@ export function receiverKind(t: Type | null): TypeKind {
 // without a declaring symbol (synthetic, test-only) keeps the bare name.
 export function typeHelperName(t: Type, bare: string): string {
 	if (t != null && t.sym != null && t.sym.modulePath != "") {
-		return mangleQualified(bare, mangleModuleName(t.sym.modulePath));
+		return mangleQualified(bare, mangleModuleName(buildModuleNameRoots(), t.sym.modulePath));
 	}
 	return bare;
 }
@@ -399,6 +405,7 @@ export function generatedProcSym(procName: string): Symbol {
 	if (_runtimeProcsSealed) throw new Error(`internal: generated proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
+	setFlag(sym, SymbolFlag.CompilerProc);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
@@ -426,11 +433,9 @@ export function compilerFuncSym(procName: string): Symbol | null {
 	return _compilerFuncs.get(procName);
 }
 
-export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
-	if (sym == null) return false;
-	const declared = _compilerFuncs.get(procName);
-	if (declared != null) return sym == declared;
-	return sym == _runtimeSyms.get(procName);
+// Reads only the symbol, so emission on any thread may ask it.
+export function isRuntimeProcSym(sym: Readonly<Symbol | null>, procName: string): boolean {
+	return sym != null && hasFlag(sym, SymbolFlag.CompilerProc) && (sym.nativeName != "" ? sym.nativeName : sym.name) == procName;
 }
 
 export function isRuntimeProcCall(node: Node, procName: string): boolean {
@@ -467,6 +472,17 @@ export function makeNull(loc: SourceLocation): Node {
 	const n = createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, syntheticToken(loc));
 	n.nodeType = nullType();
 	return n;
+}
+
+export function isActorHandle(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Int64 && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
+export function makeAbsent(t: Type | null, loc: SourceLocation): Node {
+	if (!isActorHandle(t)) return makeNull(loc);
+	const zero = makeNumber(0, loc);
+	zero.nodeType = t;
+	return zero;
 }
 
 // Reference parity (resetLoc): produce type-appropriate default/zero value.
@@ -900,6 +916,7 @@ test "a runtime proc is the declared symbol and an undeclared name is refused" {
 	const savedCache = _runtimeIdentCache;
 	const declared = new HashMap<string, Symbol>();
 	const probe = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	setFlag(probe, SymbolFlag.CompilerProc);
 	declared.set("msProbeAccess", probe);
 	bindCompilerFuncs(declared, createIdentCache());
 	const other = makeSymbol("msOther", SymbolKind.Function, null, false);

@@ -10,8 +10,8 @@
 // RED MEANS an `unknown` field lost its cyclic hooks or its trace; run /trace-nim
 // on the named type.
 //
-// GUARD-BALANCE-ORC Parent
-// GUARD-BALANCE-ORC Child
+// GUARD-BALANCE Parent
+// GUARD-BALANCE Child
 
 class Parent {
 	child: unknown | null = null;

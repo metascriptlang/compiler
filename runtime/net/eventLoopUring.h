@@ -36,6 +36,7 @@ static inline int32_t msHasUringEventLoop(void) {
 #include <netinet/tcp.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include "runtime/promise/pool.h"
 
 /* ===== Ring management ===== */
 
@@ -58,6 +59,8 @@ static int __uring_enter(int fd, unsigned toSubmit, unsigned minComplete, unsign
 #define URING_OP_ACCEPT 0
 #define URING_OP_RECV   1
 #define URING_OP_SEND   2
+#define URING_OP_TIMEOUT 3
+#define URING_OP_CANCEL  4
 
 /* Per-thread io_uring ring for event loop */
 typedef struct {
@@ -74,6 +77,9 @@ typedef struct {
 	struct io_uring_cqe* cqes;
 	unsigned cqEntries;
 	int pending;  /* pending submissions */
+	void* sqRing; size_t sqRingSz;
+	size_t sqesSz;
+	void* cqRing; size_t cqRingSz;
 } msUringEvt;
 
 /* Event result — returned to MetaScript */
@@ -86,6 +92,15 @@ typedef struct {
 static _Thread_local msUringEvt _uringEvt;
 static _Thread_local int _uringEvtInit = 0;
 static _Thread_local msUringEvent _uringEvtBuf[URING_EVT_MAX];
+
+/* This thread's ring and buffers are freed when it is destroyed; registered once, at the first of them. */
+static _Thread_local int _uringReleaseRegistered = 0;
+static void __uringThreadRelease(void);
+static inline void __uringRegisterRelease(void) {
+	if (_uringReleaseRegistered) return;
+	_uringReleaseRegistered = 1;
+	msOnThreadDestruction(__uringThreadRelease);
+}
 
 static int32_t msUringEvtInit(void) {
 	if (_uringEvtInit) return 0;
@@ -102,6 +117,7 @@ static int32_t msUringEvtInit(void) {
 	void* sqPtr = mmap(NULL, sqRingSz, PROT_READ | PROT_WRITE,
 	                    MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQ_RING);
 	if (sqPtr == MAP_FAILED) { close(fd); return -1; }
+	_uringEvt.sqRing = sqPtr; _uringEvt.sqRingSz = sqRingSz;
 	_uringEvt.sqHead  = (unsigned*)((char*)sqPtr + params.sq_off.head);
 	_uringEvt.sqTail  = (unsigned*)((char*)sqPtr + params.sq_off.tail);
 	_uringEvt.sqMask  = (unsigned*)((char*)sqPtr + params.sq_off.ring_mask);
@@ -111,17 +127,20 @@ static int32_t msUringEvtInit(void) {
 	_uringEvt.sqes = (struct io_uring_sqe*)mmap(NULL, sqesSz, PROT_READ | PROT_WRITE,
 	                  MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
 	if (_uringEvt.sqes == MAP_FAILED) { close(fd); return -1; }
+	_uringEvt.sqesSz = sqesSz;
 
 	size_t cqRingSz = params.cq_off.cqes + params.cq_entries * sizeof(struct io_uring_cqe);
 	void* cqPtr = mmap(NULL, cqRingSz, PROT_READ | PROT_WRITE,
 	                    MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_CQ_RING);
 	if (cqPtr == MAP_FAILED) { close(fd); return -1; }
+	_uringEvt.cqRing = cqPtr; _uringEvt.cqRingSz = cqRingSz;
 	_uringEvt.cqHead = (unsigned*)((char*)cqPtr + params.cq_off.head);
 	_uringEvt.cqTail = (unsigned*)((char*)cqPtr + params.cq_off.tail);
 	_uringEvt.cqMask = (unsigned*)((char*)cqPtr + params.cq_off.ring_mask);
 	_uringEvt.cqes   = (struct io_uring_cqe*)((char*)cqPtr + params.cq_off.cqes);
 
 	_uringEvtInit = 1;
+	__uringRegisterRelease();
 	return 0;
 }
 
@@ -152,12 +171,39 @@ static _Thread_local char (*_uringRecvBufs)[4096] = NULL;
  * msBuildResponseReuse writes header+body into these msStrings. */
 static _Thread_local msString* _uringRespBufs = NULL;
 
+/* Recv and send ops in flight: the kernel reads or writes the buffers above until they complete. */
+static _Thread_local int _uringBufOps = 0;
+
+/* Thread destruction: free this thread's ring and buffers, unless the kernel may still use them. */
+static void __uringThreadRelease(void) {
+	if (_uringBufOps != 0) return;
+	if (_uringEvtInit) {
+		close(_uringEvt.ringFd);
+		munmap(_uringEvt.sqes, _uringEvt.sqesSz);
+		munmap(_uringEvt.sqRing, _uringEvt.sqRingSz);
+		munmap(_uringEvt.cqRing, _uringEvt.cqRingSz);
+		_uringEvtInit = 0;
+	}
+	free(_uringRecvBufs);
+	_uringRecvBufs = NULL;
+	if (_uringRespBufs != NULL) {
+		for (int i = 0; i < URING_MAX_FDS; i++) {
+			if (_uringRespBufs[i].p) msStringDecref(_uringRespBufs[i]);
+		}
+		free(_uringRespBufs);
+		_uringRespBufs = NULL;
+	}
+	_uringReleaseRegistered = 0;
+}
+
 static inline void __ensureRecvBufs(void) {
 	if (_uringRecvBufs == NULL) {
-		_uringRecvBufs = (char(*)[4096])calloc(URING_MAX_FDS, 4096);
+		_uringRecvBufs = (char(*)[4096])msMemAllocN0((size_t)URING_MAX_FDS, 4096);
+		__uringRegisterRelease();
 	}
 	if (_uringRespBufs == NULL) {
-		_uringRespBufs = (msString*)calloc(URING_MAX_FDS, sizeof(msString));
+		_uringRespBufs = (msString*)msMemAllocN0(URING_MAX_FDS, sizeof(msString));
+		__uringRegisterRelease();
 	}
 }
 
@@ -185,6 +231,7 @@ static inline void msUringSubmitRecv(int32_t fd, msString str, int32_t len) {
 	sqe->len = (uint32_t)(len > 4096 ? 4096 : len);
 	sqe->user_data = URING_TAG(fd, URING_OP_RECV);
 	__uringSubmitSqe();
+	_uringBufOps++;
 }
 
 /* Submit send — uses msString's internal data pointer */
@@ -197,11 +244,38 @@ static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
 	sqe->len = (uint32_t)len;
 	sqe->user_data = URING_TAG(fd, URING_OP_SEND);
 	__uringSubmitSqe();
+	_uringBufOps++;
 }
 
-/* Submit all pending + wait for completions. Returns number of events. */
+/* Cancel the in-flight op of `op` kind on fd; the op completes with -ECANCELED. */
+static inline void msUringSubmitCancel(int32_t fd, int32_t op) {
+	struct io_uring_sqe* sqe = __uringGetSqe();
+	if (!sqe) return;
+	sqe->opcode = IORING_OP_ASYNC_CANCEL;
+	sqe->fd = -1;
+	sqe->addr = URING_TAG(fd, op);
+	sqe->user_data = URING_TAG(fd, URING_OP_CANCEL);
+	__uringSubmitSqe();
+}
+
+/* Submit all pending + wait for completions, at most timeoutMs when it is >= 0.
+ * Returns number of events; timer and cancel completions are not events. */
 static inline int32_t msUringWait(int32_t timeoutMs) {
 	msUringEvt* r = &_uringEvt;
+	struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
+	if (timeoutMs >= 0
+		&& atomic_load_explicit((_Atomic unsigned*)r->cqHead, memory_order_acquire)
+		== atomic_load_explicit((_Atomic unsigned*)r->cqTail, memory_order_acquire)) {
+		struct io_uring_sqe* timer = __uringGetSqe();
+		if (timer) {
+			timer->opcode = IORING_OP_TIMEOUT;
+			timer->fd = -1;
+			timer->addr = (uint64_t)(uintptr_t)&wait;
+			timer->len = 1;
+			timer->user_data = URING_TAG(-1, URING_OP_TIMEOUT);
+			__uringSubmitSqe();
+		}
+	}
 	int pending = r->pending;
 	r->pending = 0;
 
@@ -210,7 +284,6 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 		pending > 0 ? (unsigned)pending : 0,
 		1, IORING_ENTER_GETEVENTS);
 	if (ret < 0) return 0;
-	(void)timeoutMs;
 
 	unsigned cqHead = atomic_load_explicit((_Atomic unsigned*)r->cqHead, memory_order_acquire);
 	unsigned cqTail = atomic_load_explicit((_Atomic unsigned*)r->cqTail, memory_order_acquire);
@@ -218,9 +291,12 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 	int32_t count = 0;
 	while (cqHead != cqTail && count < URING_EVT_MAX) {
 		struct io_uring_cqe* cqe = &r->cqes[cqHead & *r->cqMask];
+		int32_t op = URING_TAG_OP(cqe->user_data);
+		if (op == URING_OP_TIMEOUT || op == URING_OP_CANCEL) { cqHead++; continue; }
 		_uringEvtBuf[count].fd = URING_TAG_FD(cqe->user_data);
 		_uringEvtBuf[count].op = URING_TAG_OP(cqe->user_data);
 		_uringEvtBuf[count].res = (int32_t)cqe->res;
+		if (_uringEvtBuf[count].op == URING_OP_RECV || _uringEvtBuf[count].op == URING_OP_SEND) _uringBufOps--;
 		count++;
 		cqHead++;
 	}
@@ -279,6 +355,7 @@ static inline msString msUringBuildResponse(int32_t fd, int32_t st, msString stT
 }
 static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t n) { (void)fd; (void)n; return -1; }
 static inline int32_t msUringWait(int32_t t) { (void)t; return 0; }
+static inline void msUringSubmitCancel(int32_t fd, int32_t op) { (void)fd; (void)op; }
 static inline int32_t msUringEventFd(int32_t i) { (void)i; return -1; }
 static inline int32_t msUringEventOp(int32_t i) { (void)i; return -1; }
 static inline int32_t msUringEventRes(int32_t i) { (void)i; return -1; }

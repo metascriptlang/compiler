@@ -9,8 +9,10 @@
 
 @builtin("Promise")
 export extern class Promise<T> {
+	@builtin("PromiseAll")
 	static extern all<T>(promises: Promise<T>[]): Promise<T[]>;
 	static extern race<T>(promises: Promise<T>[]): Promise<T>;
+	@builtin("PromiseAllSettled")
 	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]>;
 	static extern any<T>(promises: Promise<T>[]): Promise<T>;
 	static extern resolve(value: T): Promise<T>;
@@ -68,3 +70,25 @@ export extern function spawn<T>(fn: () => T): Promise<T> from "Promise.resolve()
 // setTimeout keeps node alive, so a dropped `sleep-then-print` still runs its
 // continuation with the same exit semantics as C.
 export extern function sleepAsync(ms: number): Promise<void> from "new Promise((r) => setTimeout(r, #))";
+
+@emit("globalThis.Locked = class Locked { constructor(value) { this.value = value; this.held = false; } };");
+
+extern function msLockedHeldHere<T>(cell: Locked<T>): boolean from "#.held";
+extern function msLockedAcquire<T>(cell: Locked<T>): void from "(#.held = true)";
+extern function msLockedRelease<T>(cell: Locked<T>): void from "(#.held = false)";
+extern function msLockedLoad<T>(cell: Locked<T>): T from "#.value";
+extern function msLockedStore<T>(cell: Locked<T>, value: T): void from "(#.value = #)";
+
+export function lockedUpdate<T>(cell: Locked<T>, fn: (value: T) => T): void {
+	if (msLockedHeldHere(cell)) throw new Error("lockedUpdate re-entered a Locked cell that this thread already holds");
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	msLockedStore(cell, fn(msLockedLoad(cell)));
+}
+
+export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
+	if (msLockedHeldHere(cell)) throw new Error("lockedRead re-entered a Locked cell that this thread already holds");
+	msLockedAcquire(cell);
+	defer msLockedRelease(cell);
+	return fn(msLockedLoad(cell));
+}

@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprDa
 import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName, literalBase } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn } from "../util";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn, ownedInFuture, makeFutureDropClosure } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -182,19 +182,41 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformCont
 //   heap-box pointer — matching boxedInFuture readers (msUnboxStruct).
 // Each call's nodeType is its true result type (Promise<T>). Codegen extracts T via
 // awaitedType — no more abuse of nodeType as a sizeof-hint.
+// A spawn that lowerHeldSpawns gave its routine's held list submits through the
+// held variants, which run it under the list's cancel flag and keep a reference.
+// A timed spawn's options object is never such a list: the checker requires a
+// timed spawn to be awaited where it is written, and the await joins it.
 function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const innerType = awaitedType(node.nodeType);
+	// The list is typed Ptr<void>; a generator frame or a closure env may have
+	// turned its identifier into a field read by now, so its type names it.
+	const last = cd.arguments.length == 2 ? cd.arguments[1] : null;
+	const held = last != null && last.nodeType != null && last.nodeType.kind == TypeKind.Ptr ? last : null;
 	if (inlineInFuture(innerType)) {
 		const futAlloc = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		futAlloc.nodeType = node.nodeType;  // Promise<T>
-		const spawnInto = makeCall(runtimeRef("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
+		const spawnInto = held != null
+			? makeCall(runtimeRef("msSpawnIntoHeldSubmit", loc), [futAlloc, cd.arguments[0], held], loc)
+			: makeCall(runtimeRef("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
 		spawnInto.nodeType = node.nodeType;  // Promise<T>
 		return spawnInto;
 	}
-	const spawnCall = makeCall(runtimeRef("msSpawn", loc), cd.arguments, loc);
+	const spawnCall = held != null
+		? makeCall(runtimeRef("msSpawnHeldSubmit", loc), [held, cd.arguments[0]], loc)
+		: makeCall(runtimeRef("msSpawn", loc), cd.arguments, loc);
 	spawnCall.nodeType = node.nodeType;
 	return spawnCall;
+}
+
+// T4: a spawn future drops a result nobody took when the future is destroyed,
+// which the submit-time completion ref holds back until the task has settled.
+function dropUnreadResult(spawnCall: Node, ctx: TransformContext, loc: SourceLocation): Node {
+	const innerType = awaitedType(spawnCall.nodeType);
+	if (!ownedInFuture(innerType)) return spawnCall;
+	const call = makeCall(runtimeRef("msFutureDropUnread", loc), [spawnCall, makeFutureDropClosure(innerType, ctx, loc)], loc);
+	call.nodeType = spawnCall.nodeType;
+	return call;
 }
 
 // Promise.all(Promise<T>[]) — dispatch to typed variant per inner T.
@@ -241,7 +263,7 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
 	}
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
-	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
+	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc), ctx, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
 	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
 	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;

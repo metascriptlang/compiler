@@ -23,9 +23,11 @@ RULES=(
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
+ORDER="tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana"
 LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
-KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san guard solana"
+PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "tsan" "solana")
+KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san tsan guard solana"
+RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
@@ -39,7 +41,8 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san guard solana
+  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana
+                 (tsan brings san, whose run writes the program list tsan reads)
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
   --local        with --record: write the reds the shared set lacks to this machine's
@@ -225,7 +228,7 @@ build_ctl() {
     if ! control_snapshot "$sha" "$tmp"; then rm -rf "$tmp"; return 1; fi
     builder="$tmp/builder$EXE_SUFFIX" ctl=$(control_binary "$tmp")
     cp "$BUILDER" "$builder" || { rm -rf "$tmp"; return 1; }
-    if ! (cd "$tmp" && bounded env -u NO_COLOR -u FORCE_COLOR "$builder" build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl" \
+    if ! (cd "$tmp" && bounded env -u NO_COLOR -u FORCE_COLOR "$builder" build src/index.ms --danger $CC_FLAG --output="$ctl" \
       && bounded self_host_boot "$ctl" "$CC_FLAG") >"$OUT/ctl.log" 2>&1; then
       rm -rf "$tmp"; return 1
     fi
@@ -415,11 +418,11 @@ narrow_for() {
   narrow="" only_csv="" lanes_csv=""
   [ "$select" -eq 1 ] || return 0
   [ "$1" != tests ] || return 0
-  only_csv=$(paste -sd, "$EMIT/only.$1")
+  only_csv=$(paste -sd, "$EMIT/only.$([ "$1" = tsan ] && printf san || printf '%s' "$1")")
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
+    lanes_csv="c,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }
@@ -509,8 +512,8 @@ emit_many() {
   for ((i = 0; i < ${#args[@]}; i += 3)); do
     n=${args[i]}
     cd "$root/$n" || exit 1
-    "$bin" build "${args[i + 2]}" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
-    "$bin" build "${args[i + 2]}" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
+    "$bin" build "${args[i + 2]}" --emit=c >c.log 2>&1; c_rc=$?
+    "$bin" build "${args[i + 2]}" --emit=c --danger >>c.log 2>&1 || c_rc=1
     "$bin" build "${args[i + 2]}" --target=js --output=out.js >js.log 2>&1; js_rc=$?
     [ -f out.js ] || : >out.js
     crc[$n]=$c_rc jrc[$n]=$js_rc count[$n]=0 ctext[$n]=""
@@ -583,11 +586,15 @@ reds_of() {
         /^  × / { t=$0; sub(/^  × /,"",t); print f " > " t }
       '
       ;;
-    corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
+    corpus|san|tsan) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
     guard|hcr|lsp) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
     solana) sed -n 's/^FAIL solana \([^:]*\):.*$/\1/p' "$log" ;;
     fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
+}
+
+tsan_pulls_san() {
+  awk '{ print; has[$0] = 1 } END { if (has["tsan"] && !has["san"]) print "san" }'
 }
 
 route_paths() {
@@ -819,7 +826,7 @@ self_host_boot() {
   for n in 2 3; do
     gen="$dir/boot$n/msc$ext"
     rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
-    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --gc=drc --danger $ccflag --output="$gen"; rc=$?
+    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --danger $ccflag --output="$gen"; rc=$?
     if [ "$rc" -ne 0 ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n build failed (exit $rc)"; return 1; fi
     if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
     diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
@@ -893,6 +900,9 @@ FAKE
   printf 'compile error\n' >"$d/log"
   got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
   [ "$got" = "build" ] || { printf 'FAIL boot: reds_of plain build failure: got "%s"\n' "$got"; bad=1; }
+  printf 'FAIL self-host: emit-reached rc op on a Type in genX__m_u0 at src/codegen/c/x.ms:9\n  msIncrefCyclic(t_1_);\n' >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: emit-reached rc op on a Type in genX__m_u0 at src/codegen/c/x.ms:9" ] || { printf 'FAIL boot: reds_of emit rc scan: got "%s"\n' "$got"; bad=1; }
   rm -rf "$d"
   return $bad
 }
@@ -1418,7 +1428,7 @@ control_key_self_test() (
   CONTROL_SUPPORT=support2
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: support identity change kept the key\n'; bad=1; }
   CONTROL_SUPPORT=support
-  eval "$(declare -f emit_many | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
+  eval "$(declare -f emit_many | sed 's/--emit=c --danger/--emit=c --release --danger/')"
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: changed emit definition kept the key\n'; bad=1; }
   cd / && rm -rf "$d"
   return $bad
@@ -1665,6 +1675,18 @@ runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
 CASES
+  INERT_RE=$INERT SCAN_RE=$RC_SCAN_PATHS awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["SCAN_RE"]) ? "rcscan" : "" }
+    got != $2 { printf "FAIL emit rc scan %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/codegen/c/statements.ms|rcscan
+src/analyzer/inject.ms|rcscan
+std/core/string/index.ms|rcscan
+runtime/drc.h|rcscan
+docs/TESTING.md|
+paper/ULTRALOCK.md|
+tools/gate.sh|
+CASES
   INERT_RE=$INERT RAISER_RE=$RAISER_PATHS awk -F'|' '
     { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["RAISER_RE"]) ? "raiser" : "" }
     got != $2 { printf "FAIL raiser lane %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
@@ -1792,6 +1814,9 @@ rc=1" ] || { printf 'FAIL guard claims: an unclaimed probe must be named, got "%
   : >"$EMIT/only.san"
   narrow_for san
   if ! select_leaves_nothing san; then printf 'FAIL san runs when select keeps no program\n'; bad=1; fi
+  printf 'p3\n' >"$EMIT/only.san"
+  narrow_for tsan
+  [ "$only_csv" = p3 ] || { printf 'FAIL tsan narrowed like san: want "p3", got "%s"\n' "$only_csv"; bad=1; }
   rm -rf "$EMIT"
   select=$keep_select EMIT=$keep_emit
   local jobs cap1 cap2 invalid rc
@@ -1811,6 +1836,19 @@ CASES
     got=$(cap_jobs 32 "$invalid" 2>/dev/null); rc=$?
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
+  got=$(printf 'tsan\nbuild\n' | tsan_pulls_san | sort | paste -sd' ' -)
+  [ "$got" = "build san tsan" ] || { printf 'FAIL tsan brings san: got "%s"\n' "$got"; bad=1; }
+  got=$(printf 'san\ntsan\n' | tsan_pulls_san | paste -sd' ' -)
+  [ "$got" = "san tsan" ] || { printf 'FAIL tsan with san adds nothing: got "%s"\n' "$got"; bad=1; }
+  for rule in "${RULES[@]}"; do
+    case ",${rule%%|*}," in *,tsan,*) case ",${rule%%|*}," in *,san,*) ;; *) printf 'FAIL rule selects tsan without san: %s\n' "$rule"; bad=1 ;; esac ;; esac
+  done
+  local phase_san=-1 phase_tsan=-1 i
+  for i in "${!PHASES[@]}"; do
+    case " ${PHASES[$i]} " in *" san "*) phase_san=$i ;; esac
+    case " ${PHASES[$i]} " in *" tsan "*) phase_tsan=$i ;; esac
+  done
+  [ "$phase_san" -ge 0 ] && [ "$phase_tsan" -gt "$phase_san" ] || { printf 'FAIL san phase %s must run before tsan phase %s\n' "$phase_san" "$phase_tsan"; bad=1; }
   shared_cache_self_test || bad=1
   known_local_self_test || bad=1
   stale_known_self_test || bad=1
@@ -1879,6 +1917,10 @@ else
   printf '%s\n' "$paths" | route_paths | sort -u >"$OUT/why"
   chosen=$(cut -f1 "$OUT/why" | sort -u)
 fi
+if printf '%s\n' $chosen | grep -x tsan >/dev/null && ! printf '%s\n' $chosen | grep -x san >/dev/null; then
+  printf 'san\t%s\n' "tsan reads the program list the san run writes" >>"$OUT/why"
+fi
+chosen=$(printf '%s\n' $chosen | tsan_pulls_san)
 
 lanes=""
 for l in $ORDER; do
@@ -1899,6 +1941,13 @@ case " $lanes " in *" corpus "*|*" san "*)
   fi ;;
 esac
 
+rcscan_on=0 rcscan_why=""
+if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then rcscan_on=1 rcscan_why="the full ladder"
+else
+  rcscan_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RC_SCAN_PATHS" | head -1)
+  [ -z "$rcscan_why" ] || rcscan_on=1
+fi
+
 raiser_on=0 raiser_why=""
 if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
 else
@@ -1917,6 +1966,9 @@ explain() {
   elif [ -n "$select_why" ] && [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ]; then
     say "gate: no narrowing for $select_label ($select_why)"
   fi
+  case " $lanes " in *" build "*)
+    if [ "$rcscan_on" -eq 1 ]; then say "gate: build runs the emit rc scan <- $rcscan_why"; else say "gate: build without the emit rc scan (no change under src/, std/ or runtime/)"; fi ;;
+  esac
   case " $lanes " in *" corpus "*)
     if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
   esac
@@ -1950,10 +2002,11 @@ CC_FLAG=""
 
 lane_cmd() {
   case "$1" in
-    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
+    build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
+    tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
     lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
   esac
@@ -2123,7 +2176,7 @@ totals_of() {
   local lane=$1 log=$2
   [ -f "$log" ] || return 0
   case "$lane" in
-    corpus|san)
+    corpus|san|tsan)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
         /^[0-9]+ pass · [0-9]+ fail/ { p = $1; f = $4 }
         END { if (p != "") printf "%d/%d", p, p + f }' ;;
@@ -2282,7 +2335,9 @@ build_lane() {
     rm -f "$CAND" "${CAND%.exe}.pdb"
     env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
   fi
-  self_host_boot "$CAND" "$CC_FLAG"
+  self_host_boot "$CAND" "$CC_FLAG" || return $?
+  [ "$rcscan_on" -eq 1 ] || return 0
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG
 }
 
 lane_body() {
@@ -2295,7 +2350,7 @@ lane_body() {
     guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|tsan|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
@@ -2304,8 +2359,6 @@ lane_body() {
   fi
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
-
-PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
@@ -2327,7 +2380,7 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do skip_lane "$lane" || fresh="$fresh $lane"; done
   [ "$todo" = " tools" ] || [ -z "$fresh" ] || admit
   heavy=0
-  for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
+  for lane in $todo; do case "$lane" in corpus|san|tsan) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
   MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
@@ -2344,12 +2397,15 @@ for phase in "${PHASES[@]}"; do
     log="$OUT/$lane.log"
     : >"$OUT/$lane.scope"
     case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
-    case "$lane" in corpus|san)
+    if [ "$lane" = tsan ]; then case " $blocked " in *" san "*)
+      say "gate: tsan BLOCKED, the san run that writes its program list was blocked on this host"; blocked="$blocked tsan"; continue ;;
+    esac; fi
+    case "$lane" in corpus|san|tsan)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""
       narrow_for "$lane"
-      if select_leaves_nothing "$lane"; then say "gate: $lane skipped, no program's emitted $([ "$lane" = san ] && printf 'C' || printf 'C or JS') differs"; continue; fi
+      if select_leaves_nothing "$lane"; then say "gate: $lane skipped, no program's emitted $([ "$lane" = corpus ] && printf 'C or JS' || printf 'C') differs"; continue; fi
       printf '%s\n%s\n' "$only_csv" "$lanes_csv" >"$OUT/$lane.scope" ;;
     esac
     launched="$launched $lane"

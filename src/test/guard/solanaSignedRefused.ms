@@ -24,13 +24,13 @@ function main(): void {
 	if (!first.ok || !second.ok) { return; }
 	const seeds = ["vault", [7]];
 	const amount: uint64 = 7;
-	const refusedCallee = signed(logU64(1), ["vault"]);
-	const refusedMember = signed(Pubkey.zero().isZero(), ["vault"]);
-	const refusedName = signed(transfer(first.value, second.value, 1), seeds);
-	const refusedCall = signed(first, ["vault"]);
-	const refusedMix = signed(transfer(first.value, second.value, 1), [["vault", [1]], "pet"]);
-	const refusedEmpty = signed(transfer(first.value, second.value, 1), []);
-	const refusedInteger = signed(transfer(first.value, second.value, 1), ["vault", amount]);
+	const refusedCallee = signed(logU64(1), ["vault"]); // GUARD-REFUSED
+	const refusedMember = signed(Pubkey.zero().isZero(), ["vault"]); // GUARD-REFUSED
+	const refusedName = signed(transfer(first.value, second.value, 1), seeds); // GUARD-REFUSED
+	const refusedCall = signed(first, ["vault"]); // GUARD-REFUSED
+	const refusedMix = signed(transfer(first.value, second.value, 1), [["vault", [1]], "pet"]); // GUARD-REFUSED
+	const refusedEmpty = signed(transfer(first.value, second.value, 1), []); // GUARD-REFUSED
+	const refusedInteger = signed(transfer(first.value, second.value, 1), ["vault", amount]); // GUARD-REFUSED
 	failWith(ProgramError.invalidArgument());
 }
 

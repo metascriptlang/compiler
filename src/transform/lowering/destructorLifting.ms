@@ -20,16 +20,16 @@
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle } from "../cycles";
-import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, custodyReaches, custodyAddsEdge } from "../cycles";
+import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
@@ -47,6 +47,7 @@ export function setJsProgramScope(on: boolean): void {
 
 export function resetLiftedOps(): void {
 	resetHookSyms();
+	resetHeldBeyond();
 }
 
 // ===== Lift Context (reference TLiftCtx) =====
@@ -63,11 +64,13 @@ class LiftCtx {
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 	seqTypes: Type[];
 	refCellTraces: Type[];
+	refCellCustodies: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	refusedArrayElems: HashSet<Type>;
 	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
+	callsUnavailableCopy: boolean; // the copy hook being lifted calls an UnavailableOp one
 	dropOwner: Symbol | null;
 }
 
@@ -163,6 +166,7 @@ function hookSuffix(hook: string): string {
 		"copy" => "Copy",
 		"sink" => "Sink",
 		"trace" => "Trace",
+		"custody" => "Custody",
 		_ => "WasMoved",
 	};
 }
@@ -197,6 +201,7 @@ function aliasLiftedOps(orig: Type, canon: Type): void {
 	aliasOpByKey(orig, canon, AttachedOp.AttachedSink);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedWasMoved);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedTrace);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedCustody);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
 }
 
@@ -272,8 +277,35 @@ function attachedOpOf(hook: string): AttachedOp {
 		"wasMoved" => AttachedOp.AttachedWasMoved,
 		"dup" => AttachedOp.AttachedDup,
 		"trace" => AttachedOp.AttachedTrace,
+		"custody" => AttachedOp.AttachedCustody,
 		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
 	};
+}
+
+// The trace and the custody walk share one shape: (self, callback), pushing the cells they reach.
+function walksCells(hook: string): boolean {
+	return hook == "trace" || hook == "custody";
+}
+
+// Whether a cell-walking hook enters a value of type `t`: the trace when it reaches a cell that
+// can form a cycle, the custody walk also through refs to acyclic cells.
+function walksValue(hook: string, t: Type | null, lctx: LiftCtx): boolean {
+	if (hook == "trace") return traceReachesCycle(t, lctx.cyclicCache, lctx.nonCyclicCache);
+	if (hook == "custody") return custodyReaches(t, lctx.cyclicCache, lctx.nonCyclicCache);
+	return true;
+}
+
+// The op a custody walk calls for a value of type `t`: its own when it differs from the trace.
+function custodyOpOf(t: Type): Symbol | null {
+	const own = getOpByKey(t, AttachedOp.AttachedCustody);
+	return own != null ? own : getOpByKey(t, AttachedOp.AttachedTrace);
+}
+
+function requireWalkOp(t: Type, hook: string): Symbol {
+	if (hook != "custody") return requireOpByKey(t, attachedOpOf(hook));
+	const op = custodyOpOf(t);
+	if (op == null) throw new Error(`internal: custody walk reached ${opTypeKey(t)} with neither a custody nor a trace op`);
+	return op;
 }
 
 // Emit runtime call — unary (destroy/wasMoved) or binary (copy/sink)
@@ -291,7 +323,6 @@ function genOpCall(sym: Symbol, hook: string, x: Node, y: Node, buf: NodeBuf, lo
 }
 
 // Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
-// For unary incref (msIncref, msClosureCopy), emit incref-new + decref-old + assign.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	const increfSym = attachedOpSym(increfFn, AttachedOp.AttachedAsgn);
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
@@ -300,27 +331,12 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
 	}
-	// Cyclic refs: Nim attachedAsgn isCyclic order (liftdestructors.nim:768-775) —
-	// incref new, assign, decref old last, so a collect triggered by the old value's
-	// destroy never traces a dest still pointing at the dying object.
-	if (isRuntimeProcSym(increfSym, "msIncrefCyclic")) {
-		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
+	if (isRuntimeProcSym(increfSym, "msClosureCopy")) {
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
+		genCall("msClosureSink", "sink", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
-	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
-	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
-	// the decref; then decref old, then assign.
-	const decrefFn = isRuntimeProcSym(increfSym, "msIncref") ? "msDecref"
-		: isRuntimeProcSym(increfSym, "msAtomicIncref") ? "msAtomicDecref"
-		: isRuntimeProcSym(increfSym, "msClosureCopy") ? "msClosureDestroy"
-		: isRuntimeProcSym(increfSym, "msClosureIncref") ? "msClosureDecref"
-		: isRuntimeProcSym(increfSym, "msMapIncref") ? "msMapDecref"
-		: "";
-	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
-	if (decrefFn != "") {
-		buf.items.push(makeExprStmt(makeCall(runtimeRef(decrefFn, loc), [clonePath(x, loc)], loc), loc));
-	}
-	buf.items.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
+	throw new Error(`internal: genCopyRef has no copy for '${increfFn}'; refs copy through refOp`);
 }
 
 // Inline sink: destroy old value + raw assign (eliminates per-field function call)
@@ -334,9 +350,12 @@ function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: NodeBuf, loc:
 // Each helper owns all runtime names for its type family.
 
 // --- Standard string hook generator ---
-function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
+function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, empties: boolean, buf: NodeBuf, loc: SourceLocation): void {
 	match (hook) {
-		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
+		"destroy" => {
+			genCall("msStringDecref", hook, xf, yf, buf, loc);
+			if (empties) genCall("msStringWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+		},
 		"copy" => { genCopyRef("msStringCopy", xf, yf, fieldName, buf, loc); },
 		"sink" => { genInlineSink("msStringDecref", xf, yf, buf, loc); },
 		"wasMoved" => { genCall("msStringWasMoved", hook, xf, yf, buf, loc); },
@@ -355,6 +374,78 @@ function liftTempSym(lctx: LiftCtx, name: string, t: Type | null): Symbol {
 	const sym = liftSym(lctx, SymbolKind.Temp, name, t);
 	sym.state = SymbolState.Checked;
 	return sym;
+}
+
+function storeThenDestroyWhole(objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const dest = hookParamDeref(s1, loc);
+	dest.nodeType = objType;
+	const src = hookParamDeref(s2, loc);
+	src.nodeType = objType;
+	const old = storeKeepingOld(dest, src, lctx, buf, loc);
+	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(objType, AttachedOp.AttachedDestructor), null, loc),
+		[makeHiddenAddr(old, loc)], loc), loc));
+}
+
+function storeKeepingOld(xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const old = keepOld(xf, lctx, buf, loc);
+	buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+	return old;
+}
+
+function keepOld(xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const oldName = "$old_" + ctr.toString();
+	const oldInit = clonePath(xf, loc);
+	if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
+	if (oldInit.nodeType == null) throw new Error(`internal: a hook store at ${loc.line}:${loc.column} has an untyped destination, so its old value cannot be kept`);
+	const oldSym = liftTempSym(lctx, oldName, oldInit.nodeType);
+	const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
+	oldDecl.resolvedSym = oldSym;
+	buf.items.push(oldDecl);
+	return makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
+}
+
+function heldCount(self: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const name = "$held_" + ctr.toString();
+	const t = createPrimitive(TypeKind.Int64);
+	const read = makeCall(runtimeRef("msHeldCount", loc), [makeIdentResolved(self, loc)], loc);
+	read.nodeType = t;
+	const sym = liftTempSym(lctx, name, t);
+	const decl = makeVarDecl(name, read, DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	buf.items.push(decl);
+	return makeTypedIdentResolved(sym, t, loc);
+}
+
+function takeOutThenDestroy(destroyName: string, wasMovedName: string, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const old = keepOld(xf, lctx, buf, loc);
+	genCall(wasMovedName, "wasMoved", clonePath(xf, loc), xf, buf, loc);
+	genCall(destroyName, "destroy", old, clonePath(old, loc), buf, loc);
+}
+
+function dropEdge(owner: Symbol, xf: Node, buf: NodeBuf, loc: SourceLocation): void {
+	buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+}
+
+function takeOutThenDropEdge(owner: Symbol, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const old = keepOld(xf, lctx, buf, loc);
+	genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+	dropEdge(owner, old, buf, loc);
+}
+
+function isArrayCell(t: Type): boolean {
+	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+}
+
+function emptiesSlot(hook: string, x: Node, fieldName: string): boolean {
+	if (hook != "destroy") return false;
+	if (fieldName != "") return true;
+	if (x.kind != NodeKind.ArrayAccess) return false;
+	const arrT = (x.data as ArrayAccessData).array.nodeType;
+	return arrT != null && arrT.kind == TypeKind.SizedArray;
 }
 
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
@@ -380,12 +471,13 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "<", lenAccess, loc);
 
 	const xi = makeArrayAccess(xClone, makeTypedIdentResolved(counterSym, null, loc), loc);
+	xi.nodeType = elemType;
 	const bodyBuf = newBuf();
 	const visited: NameSet = createNameSet();
 	const dropOwner = lctx.dropOwner;
 	lctx.dropOwner = null;
 
-	if (hook == "trace") {
+	if (walksCells(hook)) {
 		// Reference: trace passes raw callback (y), not y[i]
 		fillBody(hook, xi, yf, "", elemType, lctx, bodyBuf, visited, loc);
 	} else if (hook == "copy" || hook == "sink") {
@@ -431,10 +523,11 @@ function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: N
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
-function runtimeCellDestroy(elem: Type | null, canon: Type): string {
-	if (elem == null || isUncountedPtrElement(elem)) return "msNumberArrayDestroy";
+function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): string {
+	if (elem == null || isUncountedElement(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
 	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
+	if (isAcyclicRefElement(elem, lctx.cyclicCache, lctx.nonCyclicCache)) return "msAcyclicRefArrayDestroy";
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
 		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msNumberArrayDestroy";
 		return isAtomicRef(elem) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy";
@@ -452,7 +545,7 @@ function registerArrayOps(arrT: Type, lctx: LiftCtx): void {
 	const cell = createRef(arrT);
 	if (getOpByKey(cell, AttachedOp.AttachedDestructor) != null) return;
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
-	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon), AttachedOp.AttachedDestructor);
+	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon, lctx), AttachedOp.AttachedDestructor);
 	if (!isRuntimeArrayFamily(canon)) {
 		const seqName = arrayCTypeName(canon);
 		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
@@ -483,8 +576,14 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	if (needsElemLoop && elem != null) registerArrayOps(createArray(elem), lctx);
 	match (hook) {
 		"destroy" => {
-			if (needsElemLoop) { genArrayLoop("destroy", elem, xf, yf, lctx, buf, loc); }
-			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", hook, xf, yf, buf, loc);
+			if (needsElemLoop) {
+				const old = keepOld(xf, lctx, buf, loc);
+				genCall("msArrayWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+				genArrayLoop("destroy", elem, old, clonePath(old, loc), lctx, buf, loc);
+				genCall("msArrayDestroy", hook, clonePath(old, loc), old, buf, loc);
+			} else {
+				genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", hook, xf, yf, buf, loc);
+			}
 		},
 		"copy" => {
 			if (needsElemLoop && elem != null && elem.kind == TypeKind.String) {
@@ -501,17 +600,11 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 			}
 		},
 		"sink" => {
-			// reference parity: if (dest.p != src.p) { destroy(dest) }; dest = src
-			const guardCond = makeBinary(
-				makeMember(clonePath(xf, loc), "p", loc),
-				"!==",
-				makeMember(clonePath(yf, loc), "p", loc),
-				loc
-			);
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			const guardCond = makeBinary(makeMember(clonePath(old, loc), "p", loc), "!==", makeMember(clonePath(xf, loc), "p", loc), loc);
 			const destroyBuf = newBuf();
-			arrayOp("destroy", elem, clonePath(xf, loc), clonePath(xf, loc), lctx, destroyBuf, loc);
+			arrayOp("destroy", elem, clonePath(old, loc), clonePath(old, loc), lctx, destroyBuf, loc);
 			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
-			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 		},
 		"wasMoved" => { genCall("msArrayWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -523,44 +616,43 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				}
 			}
 		},
+		"custody" => {
+			if (needsElemLoop && elem != null && custodyReaches(elem, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				genArrayLoop("custody", elem, xf, yf, lctx, buf, loc);
+			}
+		},
 		_ => {},
 	};
 }
 
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
-// Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+// Cyclic types use msDecrefCyclic/msIncrefCyclic
+function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Type, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => {
 			const owner = lctx.dropOwner;
-			if (owner != null && isCyclic && !atomic) {
-				buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+			const edge = owner != null && isCyclic && !atomic;
+			if (empties && !isArrayCell(heldType)) {
+				if (edge) takeOutThenDropEdge(owner as Symbol, xf, lctx, buf, loc);
+				else takeOutThenDestroy(decrefFn, "msPtrWasMoved", xf, lctx, buf, loc);
 			} else {
-				genCall(decrefFn, hook, xf, yf, buf, loc);
+				if (edge) dropEdge(owner as Symbol, xf, buf, loc);
+				else genCall(decrefFn, hook, xf, yf, buf, loc);
+				if (empties) genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
 			}
 		},
-		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
+		"copy" => {
+			const incref = makeTypedIdentResolved(attachedOpSym(increfFn, AttachedOp.AttachedAsgn), null, loc);
+			buf.items.push(makeExprStmt(makeCall(incref, [clonePath(yf, loc)], loc), loc));
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
+		},
 		"sink" => {
-			if (isCyclic && !atomic) {
-				const ctr = lctx.tempCounter;
-				lctx.tempCounter = ctr + 1;
-				const oldName = "$old_" + ctr.toString();
-				const oldInit = clonePath(xf, loc);
-				if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
-				const oldSym = liftTempSym(lctx, oldName, oldInit.nodeType);
-				const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
-				oldDecl.resolvedSym = oldSym;
-				buf.items.push(oldDecl);
-				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
-				const oldRef = makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
-				genCall(decrefFn, "destroy", oldRef, oldRef, buf, loc);
-			} else {
-				genCall(decrefFn, "destroy", clonePath(xf, loc), yf, buf, loc);
-				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
-			}
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -572,26 +664,42 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
 		},
+		"custody" => {
+			if (!atomic && (isCyclic || custodyReaches(heldType, lctx.cyclicCache, lctx.nonCyclicCache))) {
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+			}
+		},
 		_ => {},
 	};
+}
+
+function beginHookLift(lctx: LiftCtx): boolean {
+	const outer = lctx.callsUnavailableCopy;
+	lctx.callsUnavailableCopy = false;
+	return outer;
+}
+
+function endHookLift(lctx: LiftCtx, outer: boolean, hook: string, sym: Symbol, unavailable: boolean): void {
+	if (hook == "copy" && (unavailable || lctx.callsUnavailableCopy)) setFlag(sym, SymbolFlag.UnavailableOp);
+	lctx.callsUnavailableCopy = outer;
 }
 
 // --- Standard value-type object hook generator ---
 // Reference parity: Named-type hooks take pointer params (ccgIntroducedPtr).
 // Wrap field accesses in HiddenAddr so codegen emits &(self.field).
-function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
+function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "sink") {
-		// Inline sink: destroy(&xf) + assign(xf = yf)
-		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(t, AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(xf, loc)], loc), loc));
-		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
+		const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(t, AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(old, loc)], loc), loc));
 		return;
 	}
-	const op = requireOpByKey(t, attachedOpOf(hook));
+	const op = requireWalkOp(t, hook);
+	if (hook == "copy" && hasFlag(op, SymbolFlag.UnavailableOp)) lctx.callsUnavailableCopy = true;
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), [ax], loc), loc));
-	} else if (hook == "trace") {
+	} else if (walksCells(hook)) {
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), [ax, yf], loc), loc));
 	} else {
 		const ay = makeHiddenAddr(yf, loc);
@@ -606,7 +714,7 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 		"copy" => { genCall(prefix + copySuffix, hook, xf, yf, buf, loc); },
 		"sink" => { genInlineSink(destroyName, xf, yf, buf, loc); },
 		"wasMoved" => { genCall(prefix + wasMovedSuffix, hook, xf, yf, buf, loc); },
-		"trace" => { if (hasTrace) genCall(prefix + traceSuffix, hook, xf, yf, buf, loc); },
+		"trace" | "custody" => { if (hasTrace) genCall(prefix + traceSuffix, "trace", xf, yf, buf, loc); },
 		_ => {},
 	};
 }
@@ -625,10 +733,11 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		: x;
 	if (fieldName != "") { xf.nodeType = fieldType; }
 	// reference parity: trace keeps y as raw callback, not y.field
-	let yf = (fieldName != "" && hook != "trace")
+	let yf = (fieldName != "" && !walksCells(hook))
 		? makeMember(y, fieldName, loc)
 		: y;
-	if (fieldName != "" && hook != "trace") { yf.nodeType = fieldType; }
+	if (fieldName != "" && !walksCells(hook)) { yf.nodeType = fieldType; }
+	const empties = emptiesSlot(hook, x, fieldName);
 
 	// Tuple case extracted from match (MetaScript match arm limitation with block-scoped vars)
 	if (fieldType.kind == TypeKind.Tuple) {
@@ -644,7 +753,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 
 	// Primitives fall through to _ => defaultOp (isPrimitiveKind is canonical list)
 	match (fieldType.kind) {
-		TypeKind.String | TypeKind.StringLiteral => { stringOp(hook, xf, yf, fieldName, buf, loc); },
+		TypeKind.String | TypeKind.StringLiteral => { stringOp(hook, xf, yf, fieldName, empties, buf, loc); },
 		TypeKind.Array => {
 			const elem = fieldType.typeReturn;
 			if (elem != null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
@@ -653,7 +762,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const elem = fieldType.typeReturn;
 			if (elem != null && sizedArrayNeedsHooks(fieldType, lctx, loc)) {
 				ensureSizedArrayHooks(fieldType, lctx, loc);
-				if (hook != "trace" || isCyclicType(elem, lctx, visited)) {
+				if (walksValue(hook, elem, lctx)) {
 					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
 				}
 			} else {
@@ -668,11 +777,11 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				? fieldType.typeName
 				: (fieldType.typeNames.length > 0 ? anonTypeName(fieldType) : "");
 			if (resolvedName != "") {
-				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
-				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
+				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -689,31 +798,35 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
+				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
 		TypeKind.BigInt => {
 			// msBigInt is a refcounted heap value that can never form a cycle and
 			// carries no atomic count — the plain non-cyclic ref ops, matching the
 			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
+			refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
 		TypeKind.Unknown => {
-			refOp(hook, xf, yf, fieldName, true, false, lctx, buf, loc);
+			refOp(hook, xf, yf, empties, fieldType, true, false, lctx, buf, loc);
 		},
 		TypeKind.Function => {
 			if (hook == "copy") {
 				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
+			} else if (hook == "sink") {
+				genCall("msClosureSink", hook, xf, yf, buf, loc);
+			} else if (empties) {
+				takeOutThenDestroy("msClosureDestroy", "msClosureWasMoved", xf, lctx, buf, loc);
 			} else {
 				runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc);
 			}
 		},
 		TypeKind.GenericInstance => {
 			if (isAwaitable(fieldType)) {
-				refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
+				refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
 				return;
 			}
 			const distinctInner = distinctBody(fieldType);
@@ -728,10 +841,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName != "") {
-				if (hook != "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(unwrapped.body, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -743,40 +856,41 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Union => {
 			const refInner = unwrapRefNullUnion(fieldType);
 			if (refInner != null) {
-				if (refInner.kind == TypeKind.Ptr
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(refInner), lctx, buf, loc);
+					refOp(hook, xf, yf, empties, refInner, cyclic, isAtomicRef(refInner), lctx, buf, loc);
 				}
 				return;
 			}
 			// Pure strlit union is msString-backed (see isTaggedUnion below) —
 			// same ops as a String field, never named tagged-union hooks.
 			if (isStringLike(fieldType)) {
-				stringOp(hook, xf, yf, fieldName, buf, loc);
+				stringOp(hook, xf, yf, fieldName, empties, buf, loc);
 			} else if (fieldType.typeName != "") {
-				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
+				if (empties) primitiveUnionOp("wasMoved", fieldType, clonePath(xf, loc), clonePath(xf, loc), buf, loc);
 			} else {
 				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
-				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, buf, loc);
+				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
 			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
-				if (hook != "trace") {
+				if (!walksCells(hook)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					namedObjOp(hook, fieldType, xf, yf, buf, loc);
+					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 				}
 			} else if (fieldType.typeReturn != null) {
 				fillBody(hook, x, y, fieldName, fieldType.typeReturn, lctx, buf, visited, loc);
@@ -980,7 +1094,7 @@ function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
 			? own
 			: own || hasUserDefinedHook(a, "destroy", lctx);
 		if (takes) {
-			if (hook != "trace") return a;
+			if (!walksCells(hook)) return a;
 			return isCyclicType(a, lctx, createNameSet()) ? a : null;
 		}
 		a = baseClassOf(a);
@@ -993,12 +1107,12 @@ function callBaseHook(owner: Type, hook: string, s1: Symbol, s2: Symbol, lctx: L
 	const ownerRef = baseSymOf(owner).symbolType;
 	const a1 = makeHiddenSubConv(makeIdentResolved(s1, loc), ownerRef, loc);
 	const args: Node[] = [a1];
-	if (hook == "trace") {
+	if (walksCells(hook)) {
 		args.push(makeIdentResolved(s2, loc));
 	} else if (hook == "copy" || hook == "sink") {
 		args.push(makeHiddenSubConv(makeIdentResolved(s2, loc), ownerRef, loc));
 	}
-	const op = requireOpByKey(owner, attachedOpOf(hook));
+	const op = requireWalkOp(owner, hook);
 	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), args, loc), loc));
 }
 
@@ -1028,18 +1142,10 @@ function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocatio
 }
 
 function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const isUnary = hook == "destroy" || hook == "wasMoved" || hook == "trace";
+	const isUnary = hook == "destroy" || hook == "wasMoved" || walksCells(hook);
 
-	// reference parity: sink must destroy old variant BEFORE reassigning _tag
 	if (hook == "sink") {
-		// 1. Destroy old fields (dispatch on dest._tag)
-		const destroyChain = buildVariantDispatch("destroy", typeName, objType, s1, s1, true, lctx, loc);
-		if (destroyChain != null) buf.items.push(destroyChain);
-		// 2. Assign _tag
-		emitTagCopy(buf, s1, s2, loc);
-		// 3. Assign new fields (dispatch on src._tag, simple assign only)
-		const assignChain = buildVariantChain("sinkAssign", objType, s1, s2, false, lctx, loc);
-		if (assignChain != null) buf.items.push(assignChain);
+		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
 		return;
 	}
 
@@ -1093,7 +1199,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
 			const h1 = liftSym(lctx, SymbolKind.Variable, s1.name, s1.symbolType);
-			const h2 = hook == "trace"
+			const h2 = walksCells(hook)
 				? liftSym(lctx, SymbolKind.Variable, s2.name, createPtr(voidType()))
 				: (s2.name == s1.name ? h1 : liftSym(lctx, SymbolKind.Variable, s2.name, s2.symbolType));
 			if (scalar) {
@@ -1108,7 +1214,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				const suffix = hookSuffix(hook);
 				const helperName = `${typeName}_${vName}${suffix}`;
 				if (!lctx.helperOps.has(helperName)) {
-					const isTrace = hook == "trace";
+					const isTrace = walksCells(hook);
 					let helperFn: Node | null = null;
 					if (isTrace) {
 						// Trace: (self, callback) — self is union type, callback is void*
@@ -1129,7 +1235,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
 			const a1 = makeIdentResolved(s1, loc);
 			const a2 = makeIdentResolved(s2, loc);
-			const callArgs: Node[] = (isUnary && hook != "trace")
+			const callArgs: Node[] = (isUnary && !walksCells(hook))
 				? [a1]
 				: [a1, a2];
 				const helperSym = lctx.helperOps.get(helperName);
@@ -1143,24 +1249,6 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 	return chain;
 }
 
-// Emit raw `dest.vN.field = src.vN.field` assignments for each variant field,
-// skipping void-typed slots (e.g. `Result<void, E>` v0 has no `value`). Used
-// for the `sinkAssign` hook by both inline and helper-extracted dispatch
-// patterns.
-function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: string, variant: Type, loc: SourceLocation): void {
-	let fi = 0;
-	while (fi < variant.typeNames.length) {
-		const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
-		if (storesNothing(variant, ft)) { fi += 1; continue; }
-		const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
-		const yBase = makeMember(hookParamDeref(s2, loc), vName, loc);
-		armBuf.items.push(makeExprStmt(makeAssign(
-			makeMember(xBase, variant.typeNames[fi], loc),
-			makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
-		fi += 1;
-	}
-}
-
 function fieldStored(owner: Type, i: number): boolean {
 	return i >= owner.typeChildren.length || !storesNothing(owner, owner.typeChildren[i]);
 }
@@ -1171,14 +1259,8 @@ function isScalarVariant(member: Type | null, variant: Type | null): boolean {
 }
 
 function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
-	if (hook == "sinkAssign") {
-		armBuf.items.push(makeExprStmt(makeAssign(
-			makeMember(hookParamDeref(s1, loc), vName, loc),
-			makeMember(hookParamDeref(s2, loc), vName, loc), loc), loc));
-		return;
-	}
 	const x = hookParamDeref(s1, loc);
-	const y = hook == "trace" ? makeIdentResolved(s2, loc)
+	const y = walksCells(hook) ? makeIdentResolved(s2, loc)
 		: (hook == "destroy" || hook == "wasMoved") ? hookParamDeref(s1, loc)
 		: hookParamDeref(s2, loc);
 	const visited: NameSet = createNameSet();
@@ -1197,14 +1279,12 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
 			fi -= 1;
 		}
-	} else if (hook == "sinkAssign") {
-		emitVariantSinkAssign(armBuf, s1, s2, vName, variant, loc);
 	} else {
 		let fi = 0;
 		while (fi < variant.typeNames.length) {
 			if (!fieldStored(variant, fi)) { fi += 1; continue; }
 			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
-			const yBase = (hook == "trace") ? makeIdentResolved(s2, loc)
+			const yBase = walksCells(hook) ? makeIdentResolved(s2, loc)
 				: isUnary ? makeMember(hookParamDeref(s1, loc), vName, loc)
 				: makeMember(hookParamDeref(s2, loc), vName, loc);
 			const visited: NameSet = createNameSet();
@@ -1212,29 +1292,6 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 			fi += 1;
 		}
 	}
-}
-
-// Build if/else chain over variant arms, dispatching on s1._tag
-function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
-	let chain = null as unknown as Node;
-	let vi = objType.typeChildren.length - 1;
-	while (vi >= 0) {
-		const variant = inlineVariantStruct(objType.typeChildren[vi]);
-		const armBuf = newBuf();
-		if (isScalarVariant(objType.typeChildren[vi], variant)) {
-			buildScalarArmBody(hook, s1, s2, "v" + vi.toString(), objType.typeChildren[vi], lctx, armBuf, loc);
-		} else if (variant != null && variant.typeNames != null) {
-			const vName = "v" + vi.toString();
-			buildVariantArmBody(hook, objType, s1, s2, vi, vName, variant, isUnary, lctx, armBuf, loc);
-		}
-		if (armBuf.items.length > 0) {
-			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
-			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain, loc);
-		}
-		vi -= 1;
-	}
-	return chain;
 }
 
 // ===== Generate a single hook (Reference produceSym per op) =====
@@ -1259,13 +1316,14 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
 function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
-	const isTrace = hook == "trace";
+	const isTrace = walksCells(hook);
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
 	const hookParamT = classType != null ? classType : createVar(objType);
 	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
 	const n2 = match (hook) {
-		"trace" => "callback",
+		"trace" | "custody" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
@@ -1287,18 +1345,22 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	}
 
 	// User-defined hook dispatch (Reference considerUserDefinedOp).
-	// A user hook fully OVERRIDES the compiler's field traversal (reference parity:
+	// A user hook OVERRIDES the compiler's field traversal (reference parity:
 	// destructors.md "the compiler-generated hooks can be overridden ... to use an
 	// alternative traversal ... or to avoid deep recursions"). This is load-bearing:
 	// the default destroy recurses per field, so a deep/self-referential structure
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
-	// a user hook lets the author traverse iteratively instead. The author is
-	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
+	// a user hook lets the author traverse iteratively instead. An onDestroy, of a
+	// struct or a class, still has its fields released after it, so such a hook
+	// detaches what it walked.
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
+	const releasesAfterHook = hookSym != null && hook == "destroy";
+	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
 	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
+		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
 		if (isTrace) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, makeIdentResolved(s2, loc)], loc), loc));
@@ -1308,10 +1370,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
-	} else if (hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
-		genOpCall(requireOpByKey(objType, AttachedOp.AttachedDestructor), "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
-		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
-	} else {
+	}
+	if (hookSym == null && hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
+		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
+	} else if (hookSym == null || releasesAfterHook) {
 		const base = baseClassOf(objType);
 		if (base != null) ensureClassHooks(base, lctx, loc);
 
@@ -1333,23 +1395,26 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		} else if (objType.kind == TypeKind.Distinct) {
 			fillBody(hook, x1, x2, "", objType.typeReturn!, lctx, buf, createNameSet(), loc);
 		} else if (hook == "destroy") {
-			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
+			const releaseBase = (): void => {
+				if (owner != null) {
+					callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+				} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
+					genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
+				}
+			};
+			if (releasesAfterHook) releaseBase();
 			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
 				if (!fieldStored(objType, i)) continue;
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (owner != null) {
-				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
-			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
-				genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
-			}
+			if (!releasesAfterHook) releaseBase();
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
 			if (owner != null) {
 				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
 			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
-				genOpCall(requireOpByKey(base, attachedOpOf(hook)), hook, x1, x2, buf, loc);
+				genOpCall(requireWalkOp(base, hook), hook, x1, x2, buf, loc);
 			}
 			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
 				if (!fieldStored(objType, i)) continue;
@@ -1358,19 +1423,11 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		}
 	}
-
-	// Wrap the destroy body in the ORC teardown critical section (msOrcBeginTeardown/EndTeardown):
-	// a field decref here can register a cycle root and trigger a re-entrant collect that traces
-	// this object's already-freed, not-yet-nulled slots (UAF). The guard defers collection until
-	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
-	// the statement list is sufficient. No-op under --gc=drc.
+	if (held != null) buf.items.push(makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(s1, loc), held], loc), loc));
 	if (lctx.dropOwner != null && classType != null) {
 		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
 	}
 	lctx.dropOwner = outerDropOwner;
-	if (hook == "destroy") {
-		buf.items = bracketTeardown(buf.items, loc);
-	}
 
 	const suffix = hookSuffix(hook);
 
@@ -1394,15 +1451,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
 	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
+	const copyUnavailable = classType == null && hookSym == null && hasUserDefinedHook(subject, "destroy", lctx);
+	endHookLift(lctx, outerLift, hook, sym, copyUnavailable);
 	lctx.collector.push(fnNode);
 	return sym;
-}
-
-function bracketTeardown(items: Node[], loc: SourceLocation): Node[] {
-	const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
-	for (const it of items) { wrapped.push(it); }
-	wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
-	return wrapped;
 }
 
 function dropEdgeCall(stmt: Node): Node | null {
@@ -1425,7 +1477,7 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 	const selfDecl = makeVarDecl(self.name, makeHiddenSubConv(makeIdentResolved(ownerSym, loc), classType, loc), DeclKind.Const, loc);
 	selfDecl.resolvedSym = self;
 	const head: Node[] = [];
-	const rest: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc), selfDecl];
+	const rest: Node[] = [selfDecl];
 	let segment: Node[] = [];
 	let resume = 0;
 	for (let i = 0; i < items.length; i += 1) {
@@ -1438,7 +1490,6 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 		resume += 1;
 		const deferred: Node[] = [
 			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNumber(resume, loc)], loc), loc),
-			makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc),
 			makeReturn(null as unknown as Node, loc),
 		];
 		const guard = makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc);
@@ -1452,7 +1503,6 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 		}
 	}
 	for (const it of segment) rest.push(it);
-	rest.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
 	(restFn.data as FunctionDeclData).fnBody = makeBlock(rest, loc);
 	lctx.collector.push(restFn);
 	return head;
@@ -1579,9 +1629,14 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 
 	const visited: NameSet = createNameSet();
 	hasCycles = isCyclicType(objType, lctx, visited);
-	if (hasCycles) {
+	if (traceReachesCycle(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
+		if (!hasCycles) setFlag(traceSym, SymbolFlag.Acyclic);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
+	}
+	if (!hasUserDefinedHook(orig, "trace", lctx) && custodyAddsEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
+		const custodySym = generateHook("custody", typeName, cName, objType, orig, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedCustody, custodySym);
 	}
 
 	const userDup = getUserDefinedHookSym(orig, AttachedOp.AttachedDup, lctx);
@@ -1654,6 +1709,7 @@ function generateUnionEq(typeName: string, t: Type, lctx: LiftCtx, loc: SourceLo
 // sites and the overwritten tuple's heap payload leaks.
 
 function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
@@ -1687,7 +1743,7 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
-	liftOp(fnNode, t, t, attachedOpOf(hook), tupleName + suffix);
+	endHookLift(lctx, outerLift, hook, liftOp(fnNode, t, t, attachedOpOf(hook), tupleName + suffix), false);
 	lctx.collector.push(fnNode);
 }
 
@@ -1747,6 +1803,7 @@ function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): bool
 function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const elem = t.typeReturn;
 	if (elem == null) return;
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
@@ -1768,7 +1825,7 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
 	setHookParamType(fnNode, 0, createVar(t));
 	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
-	liftOp(fnNode, t, t, attachedOpOf(hook), name + suffix);
+	endHookLift(lctx, outerLift, hook, liftOp(fnNode, t, t, attachedOpOf(hook), name + suffix), false);
 	lctx.collector.push(fnNode);
 }
 
@@ -1872,8 +1929,9 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const elemType = arrayType.typeReturn!;
 	const isUnary = hook == "destroy" || hook == "wasMoved";
-	const isTrace = hook == "trace";
+	const isTrace = walksCells(hook);
 	const sym = requireOpByKey(isTrace ? createRef(arrayType) : arrayType, attachedOpOf(hook));
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
 	const secondT = isTrace ? createPtr(voidType()) : arrayType;
@@ -1928,16 +1986,23 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 	sym.state = SymbolState.Checked;
 	sym.declNode = fnNode;
 	fnNode.resolvedSym = sym;
+	endHookLift(lctx, outerLift, hook, sym, false);
 	lctx.collector.push(fnNode);
 }
 
 function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 	let ti = 0;
+	let ci = 0;
 	let wi = 0;
-	while (ti < lctx.refCellTraces.length || wi < lctx.seqTypes.length) {
+	while (ti < lctx.refCellTraces.length || ci < lctx.refCellCustodies.length || wi < lctx.seqTypes.length) {
 		if (ti < lctx.refCellTraces.length) {
 			generateArrayHook("trace", lctx.refCellTraces[ti], lctx, loc);
 			ti += 1;
+			continue;
+		}
+		if (ci < lctx.refCellCustodies.length) {
+			generateArrayHook("custody", lctx.refCellCustodies[ci], lctx, loc);
+			ci += 1;
 			continue;
 		}
 		const arrT = lctx.seqTypes[wi];
@@ -1950,7 +2015,7 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 
 function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	const elem = arrayOpElement(arrT.typeReturn);
-	if (elem == null || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
+	if (elem == null || isUncountedElement(elem) || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
 	const cell = createRef(canon);
 	if (getOpByKey(cell, AttachedOp.AttachedTrace) != null) return;
@@ -1958,11 +2023,23 @@ function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellTraces.push(canon);
 }
 
+function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
+	const elem = arrayOpElement(arrT.typeReturn);
+	if (elem == null || isUncountedElement(elem) || hasGenericParams(arrT) || !elemNeedsLoop(elem)) return;
+	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
+	if (!custodyAddsEdge(canon, lctx.cyclicCache, lctx.nonCyclicCache)) return;
+	const cell = createRef(canon);
+	if (getOpByKey(cell, AttachedOp.AttachedCustody) != null) return;
+	opPrototype(cell, AttachedOp.AttachedCustody, refArrayCellName(canon) + "Custody", lctx.checkerCtx);
+	lctx.refCellCustodies.push(canon);
+}
+
 function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void {
 	if (t == null || visited.has(t)) return;
 	visited.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
+		registerRefCellCustody(t.typeReturn, lctx);
 	}
 	if (t.kind == TypeKind.Array) {
 		if (t.typeReturn != null) registerArrayOps(t, lctx);
@@ -2087,23 +2164,52 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 	});
 }
 
-function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
-	if (t == null || seen.has(t) || lctx.hookFreeTypes.has(t)) return null;
-	seen.add(t);
+let _freeOfDistinctArraysEpoch: int32 = -1;
+let _freeOfDistinctArrays = new HashSet<Type>();
+
+function keepDistinctMarksCurrent(): void {
+	if (_freeOfDistinctArraysEpoch == instantiatedBodyCount()) return;
+	_freeOfDistinctArraysEpoch = instantiatedBodyCount();
+	_freeOfDistinctArrays = new HashSet<Type>();
+}
+
+interface DistinctWalk {
+	seen: HashSet<Type>;
+	order: Type[];
+	reachesDistinctArray: boolean;
+}
+
+function hookedDistinctElement(t: Type | null, lctx: LiftCtx, walk: DistinctWalk): Type | null {
+	if (t == null || walk.seen.has(t) || _freeOfDistinctArrays.has(t)) return null;
+	if (lctx.hookFreeTypes.has(t)) {
+		walk.reachesDistinctArray = true;
+		return null;
+	}
+	walk.seen.add(t);
+	walk.order.push(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
-	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
+	if (elem != null && elem.kind == TypeKind.Distinct) {
+		walk.reachesDistinctArray = true;
+		if (hasAnyUserHook(elem, lctx)) return elem;
+	}
 	for (const child of t.typeChildren) {
-		const hit = hookedDistinctElement(child, lctx, seen);
+		const hit = hookedDistinctElement(child, lctx, walk);
 		if (hit != null) return hit;
 	}
-	return hookedDistinctElement(t.typeReturn, lctx, seen);
+	return hookedDistinctElement(t.typeReturn, lctx, walk);
 }
 
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
-	const seen = new HashSet<Type>();
-	const elem = hookedDistinctElement(t, lctx, seen);
-	if (elem == null) seen.forEach((v: Type): void => { lctx.hookFreeTypes.add(v); });
+	keepDistinctMarksCurrent();
+	const walk: DistinctWalk = { seen: new HashSet<Type>(), order: [], reachesDistinctArray: false };
+	const elem = hookedDistinctElement(t, lctx, walk);
+	if (!walk.reachesDistinctArray) {
+		for (const free of walk.order) _freeOfDistinctArrays.add(free);
+	}
+	if (elem == null) {
+		for (const free of walk.order) lctx.hookFreeTypes.add(free);
+	}
 	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
 	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
@@ -2251,11 +2357,13 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		nonCyclicCache: createNameSet(),
 		seqTypes: [],
 		refCellTraces: [],
+		refCellCustodies: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		refusedArrayElems: new HashSet<Type>(),
 		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
+		callsUnavailableCopy: false,
 		dropOwner: null,
 	};
 }
@@ -2508,4 +2616,48 @@ test "a lifted symbol cannot be minted without a checker context" {
 		refused = e.message;
 	}
 	assert refused.contains("self");
+}
+
+interface CheckedSource {
+	program: Node;
+	checker: CheckerContext;
+}
+
+function checkSource(input: string): CheckedSource {
+	resetHookSyms();
+	const pr = parseInput(input);
+	if (!pr.ok) throw new Error(`test source does not parse: ${input}`);
+	return { program: pr.value, checker: checkProgram(pr.value) };
+}
+
+function liftRefusals(src: CheckedSource): string {
+	liftDestructors(src.program, checkedCtx(src.checker), true);
+	let all = "";
+	for (const e of src.checker.errors) all += e.message + "\n";
+	return all;
+}
+
+function localTypeOf(program: Node, name: string): Type {
+	const found: Type[] = [];
+	walkNode(program, (node: Node): Node => {
+		if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declName == name && node.nodeType != null) found.push(node.nodeType!);
+		return node;
+	});
+	if (found.length == 0) throw new Error(`no local '${name}'`);
+	return found[0];
+}
+
+const HOOKED_FD_BOX = "type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\nstruct Box<T> { items: T[]; }\n";
+
+test "two instances of one generic are checked apart: the one holding an array of a hooked distinct type is refused" {
+	const src = checkSource(HOOKED_FD_BOX + "function run(): void { const plain: Box<int32> = { items: [] }; const held: Box<Fd> = { items: [] }; }");
+	assert liftRefusals(src).contains("an array of the distinct type 'Fd'");
+}
+
+test "a type walked free of distinct arrays is marked once and not walked again" {
+	const src = checkSource(HOOKED_FD_BOX + "function run(): void { const plain: Box<int32> = { items: [] }; }");
+	assert !liftRefusals(src).contains("distinct type");
+	const walk: DistinctWalk = { seen: new HashSet<Type>(), order: [], reachesDistinctArray: false };
+	assert hookedDistinctElement(localTypeOf(src.program, "plain"), newLiftCtx(checkedCtx(src.checker), false), walk) == null;
+	assert walk.order.length == 0;
 }

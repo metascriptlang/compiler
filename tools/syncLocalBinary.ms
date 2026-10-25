@@ -193,7 +193,7 @@ if (vendorDirt != "") {
 
 function builder(): string {
 	const built = exists(`${SRC}/msc${EXE}`) ? `${SRC}/msc${EXE}` : `${SRC}/msc`;
-	if (!exists(built)) die(`${SRC}/msc not found. Build it first:\n  msc build src/index.ms --gc=drc --danger --output=msc`);
+	if (!exists(built)) die(`${SRC}/msc not found. Build it first:\n  msc build src/index.ms --danger --output=msc`);
 	const srcCommitTime = git(["log", "-1", "--format=%ct", "--", "src"]).parseFloat();
 	if (modifiedTime(built) < srcCommitTime) die(`${built} is older than the last commit under src/. Rebuild it first.`);
 	return built;
@@ -329,7 +329,7 @@ if (web) {
 	removeAll(next);
 	ensureDir(next);
 	const link = `-sSTACK_SIZE=8MB -sMODULARIZE=1 -sEXPORT_NAME=createMsc -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=FS,callMain --preload-file ${SRC}/std@/std --exclude-file=*.md`;
-	const r = execFileResult(builder(), ["build", "src/index.ms", "--os=emcc", "--gc=drc", "--release", `--passL=${link}`, `--output=${next}/msc.js`, "--no-color"], SRC);
+	const r = execFileResult(builder(), ["build", "src/index.ms", "--os=emcc", "--release", `--passL=${link}`, `--output=${next}/msc.js`, "--no-color"], SRC);
 	if (!r.started || r.exitCode != 0) die(`the browser compiler did not build:\n${r.output}${r.errorOutput}`);
 	removeAll(`${next}/msc.js_link.rsp`);
 	removeAll(out);
@@ -351,7 +351,7 @@ if (syncBinary) {
 	const installed = `${DEST}/bin/msc${EXE}`;
 	const foreign = foreignBuildRoot(built);
 	if (foreign != "") {
-		const fix = `rebuild it from this checkout: cd ${SRC} && ./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`;
+		const fix = `rebuild it from this checkout: cd ${SRC} && ./msc build src/index.ms --danger --cc=clang --output=msc`;
 		if (check) {
 			console.log(`note: a sync now would refuse: ${foreign}\n${fix}`);
 		} else {

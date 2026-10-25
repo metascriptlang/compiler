@@ -25,17 +25,22 @@ function constDeclType(sym: Symbol | null): Type | null {
 	return sym.declNode.nodeType != null ? sym.declNode.nodeType : sym.symbolType;
 }
 
+export function constBindingInitializer(sym: Symbol | null): Node | null {
+	if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
+	if (sym.symFlags.has(SymbolFlag.Mutable)) return null;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return null;
+	const d = decl.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const) return null;
+	return d.initializer;
+}
+
 function constInitializer(node: Node): Node {
 	const none = null as unknown as Node;
 	const sym = node.resolvedSym;
-	if (sym == null || sym.symbolKind != SymbolKind.Variable) return none;
-	if (sym.symFlags.has(SymbolFlag.Mutable)) return none;
-	const decl = sym.declNode;
-	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
-	if (!isInlineConstantType(constDeclType(sym))) return none;
-	const d = decl.data as VariableDeclData;
-	if (d.declKind != DeclKind.Const || d.initializer == null) return none;
-	return d.initializer;
+	if (sym == null || !isInlineConstantType(constDeclType(sym))) return none;
+	const init = constBindingInitializer(sym);
+	return init == null ? none : init;
 }
 function readonlyStaticInitializer(node: Node): Node {
 	const none = null as unknown as Node;
@@ -503,9 +508,21 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 	return none;
 }
 
-export function foldConstInitializer(binding: Node): void {
+function holdsHookedValue(t: Type | null, declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	if (t == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
+	if (t.kind == TypeKind.SizedArray) return holdsHookedValue(t.typeReturn, declaresHook, depth + 1);
+	if (t.kind != TypeKind.Struct) return false;
+	if (declaresHook(t)) return true;
+	for (const f of t.typeChildren) {
+		if (holdsHookedValue(f, declaresHook, depth + 1)) return true;
+	}
+	return false;
+}
+
+export function foldConstInitializer(binding: Node, declaresHook: (owner: Type) => boolean): void {
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const || d.initializer == null || !readonlyDataTypeShape(binding.nodeType, 0)) return;
+	if (holdsHookedValue(binding.nodeType, declaresHook, 0)) return;
 	if (isScalarLiteral(d.initializer) || readonlyDataInitializer(d.initializer, 0)) return;
 	const folded = constantTreeOf(d.initializer, 0);
 	if (folded == null) return;
@@ -822,7 +839,7 @@ export function readonlyDataInitializer(init: Readonly<Node> | null, depth: int3
 	};
 }
 
-export function readonlyDataTypeShape(t: Type | null, depth: int32): boolean {
+export function readonlyDataTypeShape(t: Readonly<Type | null>, depth: int32): boolean {
 	if (t == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
 	if (isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean) return true;
 	if (t.kind == TypeKind.SizedArray) return readonlyDataTypeShape(t.typeReturn, depth + 1);

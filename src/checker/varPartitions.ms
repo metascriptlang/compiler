@@ -1,18 +1,21 @@
 import {
 	Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind,
-	VariableDeclData, MemberExprData, ArrayAccessData, BlockStmtData, BinaryExprData, UpdateExprData,
+	IdentifierData, VariableDeclData, MemberExprData, ArrayAccessData, BlockStmtData, BinaryExprData, UpdateExprData,
 	WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, CallExprData,
 	ObjectLiteralData, ArrayLiteralData, NewExprData, MoveExprData, OutExprData, DeferStmtData,
 	TypeAssertionData, HiddenStdConvData, ConditionalExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
-	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData,
+	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData, AwaitExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName } from "./types";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
+import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { sameUpToDistinct } from "./checkExprPass";
+import { isSpawnCall } from "./freestanding";
+import { refuseBorrowingHandleEscapes } from "./sendable";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -271,6 +274,7 @@ interface HandleKey {
 interface ResizeSummary {
 	unknown: boolean;
 	keys: HandleKey[];
+	writes: boolean;
 }
 
 let resizeDone = new HashMap<Symbol, ResizeSummary>();
@@ -286,11 +290,11 @@ export function resetResizeSummaries(): void {
 }
 
 function noResize(): ResizeSummary {
-	return { unknown: false, keys: [] };
+	return { unknown: false, keys: [], writes: false };
 }
 
 function anyResize(): ResizeSummary {
-	return { unknown: true, keys: [] };
+	return { unknown: true, keys: [], writes: true };
 }
 
 function anyKey(): HandleKey {
@@ -422,18 +426,6 @@ function effectKeys(available: HandleKey[], s: ResizeSummary): HandleKey[] {
 	return out;
 }
 
-function routineBody(decl: Node | null): Node | null {
-	if (decl == null) return null;
-	return match (decl.kind) {
-		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnBody,
-		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodBody,
-		NodeKind.ConstructorDecl => (decl.data as ConstructorDeclData).ctorBody,
-		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowBody,
-		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprBody,
-		_ => null,
-	};
-}
-
 function isDispatched(sym: Symbol): boolean {
 	const entry = dispatchEntryFor(sym);
 	if (entry == null) return false;
@@ -482,7 +474,11 @@ function newSummary(node: Node): ResizeSummary {
 	const ctor = constructorOf(node);
 	if (ctor != null) {
 		const s = noResize();
-		scanResizes(routineBody(ctor), s);
+		const body = routineBody(ctor);
+		const fresh: Symbol[] = [];
+		if (node.resolvedSym != null) fresh.push(node.resolvedSym);
+		freshLocals(body, fresh);
+		scanResizes(body, s, fresh);
 		return s;
 	}
 	for (const a of (node.data as NewExprData).newArguments) {
@@ -497,14 +493,34 @@ function joinSummary(s: ResizeSummary, c: ResizeSummary): void {
 		return;
 	}
 	for (const k of c.keys) { addKey(s.keys, k); }
+	if (c.writes) s.writes = true;
 }
 
-function scanResizes(node: Node | null, s: ResizeSummary): void {
+function freshLocals(node: Node | null, out: Symbol[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Mutable)) {
+		const init = peelConv((node.data as VariableDeclData).initializer);
+		if (init != null && (init.kind == NodeKind.NewExpr || init.kind == NodeKind.ObjectLiteral || init.kind == NodeKind.ArrayLiteral)) out.push(node.resolvedSym);
+	}
+	forEachChild(node, (child: Node): void => { freshLocals(child, out); });
+}
+
+function writesShared(target: Node | null, fresh: Symbol[]): boolean {
+	const t = peelConv(target);
+	if (t == null) return false;
+	if (t.kind == NodeKind.Identifier) return t.resolvedSym != null && t.resolvedSym.symbolType != null && t.resolvedSym.symbolType.kind == TypeKind.Var;
+	const base = peelConv(t.kind == NodeKind.MemberExpr ? (t.data as MemberExprData).object : t.kind == NodeKind.ArrayAccess ? (t.data as ArrayAccessData).array : null);
+	return base == null || base.kind != NodeKind.Identifier || base.resolvedSym == null || !fresh.includes(base.resolvedSym);
+}
+
+function scanResizes(node: Node | null, s: ResizeSummary, fresh: Symbol[]): void {
 	if (node == null || s.unknown) return;
 	match (node.kind) {
 		NodeKind.CallExpr => {
 			const recv = receiverOf(node);
 			if (recv != null && resizesReceiver(node, recv)) {
+				const r = peelConv(recv);
+				if (r == null || r.kind != NodeKind.Identifier || r.resolvedSym == null || !fresh.includes(r.resolvedSym)) s.writes = true;
 				const t = recv.nodeType;
 				const held = t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
 				addKey(s.keys, held != null && held.kind == TypeKind.Array ? arrayKey(held.typeReturn) : textKey());
@@ -515,13 +531,20 @@ function scanResizes(node: Node | null, s: ResizeSummary): void {
 		NodeKind.NewExpr => joinSummary(s, newSummary(node)),
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			if (isAssignOp(d.operator)) replacedKeys(d.left, s);
+			if (isAssignOp(d.operator)) {
+				replacedKeys(d.left, s);
+				if (writesShared(d.left, fresh)) s.writes = true;
+			}
 		},
-		NodeKind.MoveExpr => replacedKeys((node.data as MoveExprData).moveArg, s),
+		NodeKind.UpdateExpr => { if (writesShared((node.data as UpdateExprData).updateArg, fresh)) s.writes = true; },
+		NodeKind.MoveExpr => {
+			replacedKeys((node.data as MoveExprData).moveArg, s);
+			if (writesShared((node.data as MoveExprData).moveArg, fresh)) s.writes = true;
+		},
 		_ => {},
 	};
 	if (s.unknown) return;
-	forEachChild(node, (child: Node): void => { scanResizes(child, s); });
+	forEachChild(node, (child: Node): void => { scanResizes(child, s, fresh); });
 }
 
 function replacedKeys(target: Node | null, s: ResizeSummary): void {
@@ -533,7 +556,7 @@ function replacedKeys(target: Node | null, s: ResizeSummary): void {
 }
 
 function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
-	if (a.unknown != b.unknown || a.keys.length != b.keys.length) return false;
+	if (a.unknown != b.unknown || a.writes != b.writes || a.keys.length != b.keys.length) return false;
 	for (const k of a.keys) {
 		if (!matchesAnyKey(k, b.keys)) return false;
 	}
@@ -543,7 +566,10 @@ function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
 function scanRoutine(sym: Symbol): ResizeSummary {
 	const s = noResize();
 	resizeStack.push(sym);
-	scanResizes(routineBody(sym.declNode), s);
+	const body = routineBody(sym.declNode);
+	const fresh: Symbol[] = [];
+	freshLocals(body, fresh);
+	scanResizes(body, s, fresh);
 	resizeStack.pop();
 	return s;
 }
@@ -593,6 +619,30 @@ interface BorrowUnit {
 	suspends: int32[];
 	suspendSites: Node[];
 	escaped: Symbol[];
+	lends: Lend[];
+	closerSites: Node[];
+	closerAwaits: Node[];
+	thunks: Node[];
+	writers: Symbol[];
+	callWrites: CallWrite[];
+	worker: boolean;
+}
+
+interface CallWrite {
+	time: int32;
+	roots: Symbol[];
+	site: Node;
+}
+
+interface Lend {
+	site: Node;
+	handle: Symbol | null;
+	roots: Symbol[];
+	start: int32;
+	end: int32;
+	closer: Node | null;
+	scope: int32[];
+	bounds: Symbol[];
 }
 
 function isBorrower(u: BorrowUnit, sym: Symbol): boolean {
@@ -712,18 +762,6 @@ function rootsOf(node: Node | null, out: Symbol[]): void {
 		},
 		_ => {},
 	};
-}
-
-export function receiverOf(call: Node): Node | null {
-	const d = call.data as CallExprData;
-	if (d.callee == null || d.callee.kind != NodeKind.MemberExpr) return null;
-	if (call.flags.has(NodeFlag.ExtStatic)) return null;
-	const sym = call.resolvedSym;
-	if (call.flags.has(NodeFlag.ExtCall)) return (d.callee.data as MemberExprData).object;
-	if (sym != null && (sym.symbolKind == SymbolKind.Method || hasFlag(sym, SymbolFlag.NativeMethod))) {
-		return (d.callee.data as MemberExprData).object;
-	}
-	return null;
 }
 
 function supplies(t: Type | null): boolean {
@@ -1182,7 +1220,30 @@ function callEffects(u: BorrowUnit, node: Node): void {
 	}
 	storedIntoOther(u, all, summary);
 	const local = sym != null && sym.declNode != null && u.routines.includes(sym.declNode);
-	changeEscaped(u, node, passesRoutine ? anyResize() : summary, summary.unknown || passesRoutine || local);
+	const runsClosures = summary.unknown || passesRoutine || local;
+	changeEscaped(u, node, passesRoutine ? anyResize() : summary, runsClosures);
+	if (summary.writes || runsClosures) noteCallWrite(u, node, all, fnType, recv != null && !node.flags.has(NodeFlag.ExtCall) ? -1 : 0, runsClosures);
+}
+
+function noteCallWrite(u: BorrowUnit, site: Node, parts: Node[], fnType: Type | null, offset: int32, runsClosures: boolean): void {
+	if (u.lends.length == 0 && !u.worker) return;
+	const roots: Symbol[] = [];
+	for (let i = 0; i < parts.length; i += 1) {
+		const formal = i + offset >= 0 ? formalAt(fnType, i + offset) : null;
+		if (!carriesPointer(parts[i].nodeType) || (formal != null && isReadonlyView(formal))) continue;
+		rootsOf(parts[i], roots);
+	}
+	if (runsClosures) {
+		for (const w of u.writers) { roots.push(w); }
+	}
+	if (roots.length > 0) u.callWrites.push({ time: u.p.abstractTime, roots, site });
+}
+
+function thunkOf(arg: Node): Node {
+	const a = peelConv(arg)!;
+	if (a.kind != NodeKind.CallExpr) return a;
+	const callee = peelConv((a.data as CallExprData).callee);
+	return callee != null && callee.kind == NodeKind.ArrowFunction ? callee : a;
 }
 
 function capturedBy(u: BorrowUnit, node: Node | null, out: Symbol[]): void {
@@ -1207,13 +1268,21 @@ function capturedWrites(u: BorrowUnit, node: Node | null, s: ResizeSummary): voi
 function recordClosure(u: BorrowUnit, node: Node): void {
 	if (u.routines.includes(node)) return;
 	u.routines.push(node);
+	if (u.thunks.includes(node)) return;
 	const body = routineBody(node);
 	const s = noResize();
-	scanResizes(body, s);
+	const fresh: Symbol[] = [];
+	freshLocals(body, fresh);
+	scanResizes(body, s, fresh);
 	if (!s.unknown) capturedWrites(u, body, s);
-	if (!s.unknown && s.keys.length == 0) return;
 	const captured: Symbol[] = [];
 	capturedBy(u, body, captured);
+	if (s.writes) {
+		for (const sym of captured) {
+			if (!u.writers.includes(sym)) u.writers.push(sym);
+		}
+	}
+	if (!s.unknown && s.keys.length == 0) return;
 	for (const sym of captured) { escapeSym(u, sym, true); }
 }
 
@@ -1401,6 +1470,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			walk(u, d.initializer);
 			u.p.abstractTime += 1;
 			declare(u, node.resolvedSym, u.p.inLoop > 0);
+			if (u.pass == 1) nameLend(u, node.resolvedSym, d.initializer);
 			if (u.pass == 2) deps(u, node.resolvedSym, d.initializer);
 		},
 		NodeKind.BinaryExpr => {
@@ -1417,8 +1487,10 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			walk(u, d.callee);
+			if (u.pass == 2 && isSpawnCall(node) && d.arguments.length > 0) u.thunks.push(thunkOf(d.arguments[0]));
 			for (const a of d.arguments) { walk(u, a); }
-			if (u.pass == 2) callEffects(u, node);
+			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
+			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
@@ -1427,6 +1499,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 2) {
 				const summary = newSummary(node);
 				for (const a of d.newArguments) { argEffect(u, a, null, false, summary); }
+				if (summary.writes) noteCallWrite(u, node, d.newArguments, null, 0, false);
 			}
 		},
 		NodeKind.MoveExpr => {
@@ -1450,8 +1523,11 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		NodeKind.BlockStmt => {
 			openScope(u, node);
-			for (const s of (node.data as BlockStmtData).statements) { walk(u, s); }
+			walkStatements(u, (node.data as BlockStmtData).statements);
 			u.scope.pop();
+		},
+		NodeKind.Program => {
+			walkStatements(u, (node.data as ProgramData).programStmts);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
@@ -1508,7 +1584,10 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			u.p.abstractTime -= 1;
 		},
 		NodeKind.AwaitExpr | NodeKind.YieldExpr => {
+			if (u.pass == 1 && node.kind == NodeKind.AwaitExpr) markJoins(u, node);
 			forEachChild(node, (child: Node): void => { walk(u, child); });
+			if (u.pass == 1) endLends(u, node);
+			u.p.abstractTime += 1;
 			if (u.pass == 2) {
 				u.suspends.push(u.p.abstractTime);
 				u.suspendSites.push(node);
@@ -1516,6 +1595,198 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		_ => { forEachChild(node, (child: Node): void => { walk(u, child); }); },
 	};
+}
+
+function peelConv(node: Node | null): Node | null {
+	let n = node;
+	while (n != null && (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv)) n = (n.data as HiddenStdConvData).convExpr;
+	return n;
+}
+
+function walkStatements(u: BorrowUnit, statements: Node[]): void {
+	for (const s of statements) {
+		if (u.pass == 1) findJoin(u, s);
+		walk(u, s);
+	}
+}
+
+function innerParams(node: Node | null, out: Symbol[]): void {
+	if (node == null) return;
+	if (node.paramSyms != null) {
+		for (const s of node.paramSyms) { out.push(s); }
+	}
+	forEachChild(node, (child: Node): void => { innerParams(child, out); });
+}
+
+function lendable(sym: Symbol): boolean {
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return false;
+	return !isLockedRef(sym.symbolType) && !isAtomicRef(sym.symbolType);
+}
+
+function lentRoots(u: BorrowUnit, node: Node | null, inner: Symbol[], out: Symbol[], via: Symbol[]): void {
+	if (node == null || node.kind == NodeKind.MoveExpr) return;
+	const sym = node.kind == NodeKind.Identifier ? node.resolvedSym : null;
+	if (sym != null && lendable(sym) && !out.includes(sym) && !inner.includes(sym)
+		&& (variableId(u.p, sym) >= 0 || !hasFlag(sym, SymbolFlag.Global))) out.push(sym);
+	const bound = boundRoutine(sym);
+	if (bound != null && !via.includes(sym!)) {
+		via.push(sym!);
+		innerParams(bound, inner);
+		lentRoots(u, bound, inner, out, via);
+	}
+	forEachChild(node, (child: Node): void => { lentRoots(u, child, inner, out, via); });
+}
+
+function joinedBy(node: Node): Node[] {
+	const out: Node[] = [];
+	const arg = peelConv((node.data as AwaitExprData).awaitArg);
+	if (arg == null) return out;
+	out.push(arg);
+	const kind = arg.kind == NodeKind.CallExpr && arg.resolvedSym != null ? arg.resolvedSym.builtinKind : "";
+	if (kind != "PromiseAll" && kind != "PromiseAllSettled") return out;
+	const args = (arg.data as CallExprData).arguments;
+	const list = args.length > 0 ? peelConv(args[0]) : null;
+	if (list == null || list.kind != NodeKind.ArrayLiteral) return out;
+	for (const e of (list.data as ArrayLiteralData).elements) {
+		const p = peelConv(e);
+		if (p != null) out.push(p);
+	}
+	return out;
+}
+
+function joinOf(node: Node | null, handle: Symbol): Node | null {
+	if (node == null) return null;
+	match (node.kind) {
+		NodeKind.AwaitExpr => {
+			for (const op of joinedBy(node)) {
+				if (op.kind == NodeKind.Identifier && op.resolvedSym == handle) return node;
+			}
+		},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			if (d.operator == "&&" || d.operator == "||" || d.operator == "??") return joinOf(d.left, handle);
+		},
+		NodeKind.MemberExpr => { if ((node.data as MemberExprData).isOptional) return null; },
+		NodeKind.ExprStmt | NodeKind.ReturnStmt | NodeKind.VariableDecl | NodeKind.UnaryExpr | NodeKind.CallExpr | NodeKind.NewExpr
+			| NodeKind.ArrayAccess | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral | NodeKind.TypeAssertion
+			| NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.HiddenDeref | NodeKind.SpreadExpr => {},
+		_ => { return null; },
+	};
+	let found: Node | null = null;
+	forEachChild(node, (child: Node): void => { if (found == null) found = joinOf(child, handle); });
+	return found;
+}
+
+function findJoin(u: BorrowUnit, stmt: Node): void {
+	for (const l of u.lends) {
+		if (l.handle != null && l.closer == null && l.scope.length == u.scope.length && encloses(l.scope, u.scope)) l.closer = joinOf(stmt, l.handle);
+	}
+}
+
+function markJoins(u: BorrowUnit, node: Node): void {
+	for (const op of joinedBy(node)) {
+		if (isSpawnCall(op)) {
+			u.closerSites.push(op);
+			u.closerAwaits.push(node);
+		}
+	}
+}
+
+function endLends(u: BorrowUnit, node: Node): void {
+	for (const l of u.lends) {
+		if (l.closer == node) l.end = u.p.abstractTime;
+	}
+}
+
+function openLend(u: BorrowUnit, site: Node, thunk: Node): void {
+	const start = u.p.abstractTime + 1;
+	for (const l of u.lends) {
+		if (l.site != site) continue;
+		if (l.closer != null) {
+			l.start = start;
+			l.end = -1;
+		}
+		return;
+	}
+	const inner: Symbol[] = [];
+	innerParams(thunk, inner);
+	const roots: Symbol[] = [];
+	const reached: Symbol[] = [];
+	lentRoots(u, thunk, inner, roots, reached);
+	const bounds = reached.filter((b: Symbol): boolean => !containsNode(thunk, boundRoutine(b)!));
+	for (const r of roots) { registerVariable(u.p, r, true, 0); }
+	const at = u.closerSites.indexOf(site);
+	const closer = at >= 0 ? u.closerAwaits[at] : null;
+	u.lends.push({ site, handle: null, roots, start, end: -1, closer, scope: closer != null ? currentScope(u) : [], bounds });
+}
+
+function nameLend(u: BorrowUnit, sym: Symbol | null, init: Node | null): void {
+	const site = peelConv(init);
+	if (sym == null || site == null) return;
+	for (const l of u.lends) {
+		if (l.site == site && l.handle == null) {
+			l.handle = sym;
+			l.scope = currentScope(u);
+		}
+	}
+}
+
+function lendMutation(g: MutationInfo, l: Lend): int32 {
+	if ((g.flags & SF_IS_MUTATED) == 0) return -1;
+	for (let i = 0; i < g.mutations.length; i += 1) {
+		const m = g.mutations[i];
+		if (m < l.start || m > l.end) continue;
+		const keep = g.keeps[i];
+		if (!(keep.length == 1 && keep[0] == -1) && encloses(keep, l.scope)) continue;
+		return i;
+	}
+	return -1;
+}
+
+function checkLends(u: BorrowUnit, unitEnd: string): void {
+	for (const l of u.lends) {
+		const spawnAt = `${l.site.location.line}:${l.site.location.column}`;
+		const until = l.closer != null ? `its await at ${l.closer.location.line}:${l.closer.location.column}` : unitEnd;
+		for (const r of l.roots) {
+			const id = variableId(u.p, r);
+			if (id < 0) continue;
+			const root = ufRoot(u.p, id);
+			const call = callWriteIn(u, l, root);
+			if (call != null) {
+				addError(u.ctx, `'${r.name}' is lent to the spawn at ${spawnAt} until ${until}, and the call at ${call.location.line}:${call.location.column} can change it while the task reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`, l.site.location.line, l.site.location.column);
+				break;
+			}
+			if (u.p.vars[root].con.kind != CK_ROOT_OF) continue;
+			const g = u.p.graphs[u.p.vars[root].con.target];
+			const i = lendMutation(g, l);
+			if (i < 0) continue;
+			const site = g.sites[i];
+			const change = site != null ? `the change at ${site.location.line}:${site.location.column}` : "a change";
+			addError(u.ctx, `'${r.name}' is lent to the spawn at ${spawnAt} until ${until}, and ${change} changes it while the task reads it; make the change after the await, or give the task its own copy`, l.site.location.line, l.site.location.column);
+			break;
+		}
+	}
+}
+
+function callWriteIn(u: BorrowUnit, l: Lend, root: int32): Node | null {
+	for (const w of u.callWrites) {
+		if (w.time < l.start || w.time > l.end) continue;
+		for (const s of w.roots) {
+			const id = variableId(u.p, s);
+			if (id >= 0 && ufRoot(u.p, id) == root) return w.site;
+		}
+	}
+	return null;
+}
+
+function spawnsIn(node: Node | null): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return false;
+	if (isSpawnCall(node)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found && spawnsIn(child)) found = true; });
+	return found;
 }
 
 function declaresView(node: Node | null, clear: TypeVisitSet): boolean {
@@ -1547,14 +1818,94 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 	for (let i = defers.length - 1; i >= 0; i -= 1) { walk(u, defers[i]); }
 }
 
+function newUnit(ctx: CheckerContext, pointers: Symbol[], worker: boolean): BorrowUnit {
+	return {
+		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
+		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], worker,
+	};
+}
+
+function routineBodies(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
+		const body = routineBody(node);
+		if (body != null && !out.includes(body)) out.push(body);
+	}
+	forEachChild(node, (child: Node): void => { routineBodies(child, out); });
+}
+
+function containsNode(root: Node | null, target: Node): boolean {
+	if (root == null) return false;
+	if (root == target) return true;
+	let found = false;
+	forEachChild(root, (child: Node): void => { if (!found && containsNode(child, target)) found = true; });
+	return found;
+}
+
+function writeSite(u: BorrowUnit, id: int32): Node | null {
+	const root = ufRoot(u.p, id);
+	if (u.p.vars[root].con.kind == CK_ROOT_OF) {
+		const g = u.p.graphs[u.p.vars[root].con.target];
+		for (let i = 0; i < g.mutations.length; i += 1) {
+			if (g.keeps[i].length == 1 && g.keeps[i][0] == -1) return g.sites[i];
+		}
+	}
+	for (const w of u.callWrites) {
+		for (const s of w.roots) {
+			const sid = variableId(u.p, s);
+			if (sid >= 0 && ufRoot(u.p, sid) == root) return w.site;
+		}
+	}
+	return null;
+}
+
+function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
+	const bodies: Node[] = [];
+	const own: Symbol[] = [];
+	for (const b of l.bounds) {
+		const routine = boundRoutine(b);
+		routineBodies(routine, bodies);
+		innerParams(routine, own);
+	}
+	const pointers: Symbol[] = [];
+	for (const b of bodies) { collectPointers(b, pointers); }
+	const u = newUnit(parent.ctx, pointers, true);
+	for (let pass = 1; pass <= 2; pass += 1) {
+		for (const b of bodies) { runPass(u, b, pass); }
+	}
+	const named: int32[] = [];
+	for (let id = 0; id < u.p.vars.length; id += 1) {
+		const v = u.p.vars[id];
+		if (!v.external || own.includes(v.sym) || !lendable(v.sym) || !carriesPointer(v.sym.symbolType)) continue;
+		const root = ufRoot(u.p, id);
+		if (named.includes(root)) continue;
+		const site = writeSite(u, id);
+		if (site == null) continue;
+		named.push(root);
+		let found: Symbol | null = null;
+		for (let i = l.bounds.length - 1; i >= 0; i -= 1) { if (containsNode(boundRoutine(l.bounds[i]), site)) found = l.bounds[i]; }
+		if (found == null) throw new Error(`internal: the write to '${v.sym.name}' at ${site.location.line}:${site.location.column} lies in no closure bound by the spawn at ${l.site.location.line}:${l.site.location.column}`);
+		const bound = aliasTarget(found)!;
+		addError(parent.ctx, `cannot write through Readonly<${typeDisplayName(v.sym.symbolType)}> — a read-only view never converts back to the mutable type (PARALOCK E24)\n'${v.sym.name}' is captured by '${bound.name}', bound at ${bound.location.line}:${bound.location.column}, which the spawn at ${l.site.location.line}:${l.site.location.column} runs on another thread; the write is here`,
+			site.location.line, site.location.column);
+	}
+}
+
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
-	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
+	if (body == null) return;
+	if (spawnsIn(body)) refuseBorrowingHandleEscapes(ctx, body);
+	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
-	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet())) return;
-	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [] };
+	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet()) && !spawnsIn(body)) return;
+	const u = newUnit(ctx, pointers, false);
 	runPass(u, body, 1);
+	for (const l of u.lends) {
+		if (l.end < 0) l.end = u.p.abstractTime;
+	}
 	runPass(u, body, 2);
+	checkLends(u, body.kind == NodeKind.Program ? "the end of the module" : "the end of the function");
+	for (const l of u.lends) { refuseWorkerWrites(u, l); }
 	for (const v of u.p.vars) {
 		if (v.external || !isBorrower(u, v.sym)) continue;
 		for (let bi = 0; bi < v.borrowsFrom.length; bi += 1) {
@@ -1625,7 +1976,7 @@ function borrowedRoot(node: Node | null): Node | null {
 	return null;
 }
 
-export function passedByValue(t: Type | null): boolean {
+export function passedByValue(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct) return passedByValue(t.typeReturn);
 	if (isPrimitiveKind(t.kind) || isStructType(t)) return true;
@@ -1638,6 +1989,12 @@ export function passedByValue(t: Type | null): boolean {
 
 function checkBorrowReturns(ctx: CheckerContext, routine: Node, name: string, body: Node | null): void {
 	const sig = routine.nodeType;
+	if (body != null && sig != null && sig.kind == TypeKind.Function && sig.typeReturn != null && sig.typeReturn.kind != TypeKind.Borrow && returnsView(sig.typeReturn)) {
+		const arms: Node[] = [];
+		collectReturnArms(body, arms);
+		refuseViewReturns(ctx, arms, routine, name, sig.typeReturn);
+		return;
+	}
 	if (body == null || sig == null || sig.kind != TypeKind.Function || sig.typeReturn == null || sig.typeReturn.kind != TypeKind.Borrow) return;
 	const shown = typeDisplayName(sig.typeReturn);
 	const first = routine.paramSyms != null && routine.paramSyms.length > 0 ? routine.paramSyms[0] : null;
@@ -1665,6 +2022,155 @@ function refuseBorrowedReturns(ctx: CheckerContext, node: Node | null, first: Sy
 	forEachChild(node, (child: Node): void => { refuseBorrowedReturns(ctx, child, first, name, shown); });
 }
 
+function collectReturnArms(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
+	if (node.kind == NodeKind.ReturnStmt) {
+		splitArms((node.data as ReturnStmtData).argument, out);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { collectReturnArms(child, out); });
+}
+
+function splitArms(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.ConditionalExpr) {
+		splitArms((node.data as ConditionalExprData).ternaryConsequent, out);
+		splitArms((node.data as ConditionalExprData).ternaryAlternate, out);
+	} else if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "??") {
+		splitArms((node.data as BinaryExprData).left, out);
+		splitArms((node.data as BinaryExprData).right, out);
+	} else {
+		out.push(node);
+	}
+}
+
+function isNullArm(node: Node): boolean {
+	if (node.kind == NodeKind.TypeAssertion) return isNullArm((node.data as TypeAssertionData).asExpr);
+	if (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) return isNullArm((node.data as HiddenStdConvData).convExpr);
+	return node.kind == NodeKind.NullLiteral;
+}
+
+function checkClosureViewReturns(ctx: CheckerContext, routine: Node, body: Node | null): void {
+	const sig = routine.nodeType;
+	if (body == null || sig == null || sig.kind != TypeKind.Function || sig.typeReturn == null || sig.typeReturn.kind == TypeKind.Borrow || !returnsView(sig.typeReturn)) return;
+	const arms: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) collectReturnArms(body, arms);
+	else splitArms(body, arms);
+	refuseViewReturns(ctx, arms, routine, "function value", sig.typeReturn);
+}
+
+function refuseViewReturns(ctx: CheckerContext, arms: Node[], routine: Node, name: string, result: Type): void {
+	let view: Node | null = null;
+	for (const arm of arms) {
+		if (!isNullArm(arm) && viewReturnFault(arm, routine, false) == "") { view = arm; break; }
+	}
+	const shown = typeDisplayName(result);
+	const owning = owningResult(result);
+	for (const arm of arms) {
+		const why = viewReturnFault(arm, routine, false);
+		if (why == "") continue;
+		const at = `${arm.location.line}:${arm.location.column}`;
+		if (view == null) {
+			addError(ctx, `${why}: '${name}' returns ${shown}, a borrow of a view parameter or of a Readonly module constant, so this return must be a path from one; declare the owning result type '${owning}' to return it`, arm.location.line, arm.location.column);
+		} else {
+			addError(ctx, `${why}: '${name}' returns ${shown}, a borrow, but mixes the return at ${at}, which is not a path from a view parameter, with the view return at ${view.location.line}:${view.location.column}; split '${name}' into a view routine and an owning one, or return an explicit structural copy of the view (clone or spread) under the owning result type '${owning}'`, arm.location.line, arm.location.column);
+		}
+	}
+}
+
+function owningResult(t: Type): string {
+	if (t.kind != TypeKind.Union || isReadonlyView(t)) return typeDisplayName(withoutReadonlyView(t));
+	const parts: string[] = [];
+	for (const m of t.typeChildren) { parts.push(typeDisplayName(withoutReadonlyView(m))); }
+	return parts.join(" | ");
+}
+
+function viewReturnFault(node: Node, routine: Node, stepped: boolean): string {
+	match (node.kind) {
+		NodeKind.NullLiteral => { return ""; },
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			const a = viewReturnFault(d.ternaryConsequent, routine, stepped);
+			return a != "" ? a : viewReturnFault(d.ternaryAlternate, routine, stepped);
+		},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			if (d.operator != "??") return "cannot borrow from this expression, it is not a path expression";
+			const a = viewReturnFault(d.left, routine, stepped);
+			return a != "" ? a : viewReturnFault(d.right, routine, stepped);
+		},
+		NodeKind.MemberExpr => { return viewReturnFault((node.data as MemberExprData).object, routine, true); },
+		NodeKind.ArrayAccess => { return viewReturnFault((node.data as ArrayAccessData).array, routine, true); },
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return viewReturnFault((node.data as { expr: Node }).expr, routine, stepped); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { return viewReturnFault((node.data as HiddenStdConvData).convExpr, routine, stepped); },
+		NodeKind.TypeAssertion => { return viewReturnFault((node.data as TypeAssertionData).asExpr, routine, stepped); },
+		NodeKind.CallExpr => {
+			if (!isViewCall(node)) return "cannot borrow from this expression, it is not a path expression";
+			const sources: Node[] = [];
+			viewCallSources(node, sources);
+			for (const a of sources) {
+				if (!carriesBorrow(a)) continue;
+				const why = viewReturnFault(a, routine, true);
+				if (why != "") return why;
+			}
+			return "";
+		},
+		NodeKind.Identifier => { return viewRootFault(node, routine, stepped); },
+		_ => { return "cannot borrow from this expression, it is not a path expression"; },
+	};
+}
+
+function carriesBorrow(arg: Node): boolean {
+	return arg.nodeType == null || typeCarriesRef(arg.nodeType);
+}
+
+function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
+	const sym = id.resolvedSym;
+	if (sym == null) return signatureParamFault(routine, (id.data as IdentifierData).name) ?? "cannot borrow from this expression, it is not a path expression";
+	if (sym.symbolKind == SymbolKind.Parameter) {
+		if (!isOwnParam(routine, sym)) return `'${sym.name}' is not a parameter of this routine`;
+		return signatureParamFault(routine, sym.name) ?? "";
+	}
+	if (hasFlag(sym, SymbolFlag.Global) && !hasFlag(sym, SymbolFlag.StaticLocal)) {
+		if (hasFlag(sym, SymbolFlag.Mutable) || sym.symbolKind != SymbolKind.Variable || !isReadonlyView(sym.symbolType)) return `'${sym.name}' is not a Readonly module constant`;
+		if (stepped) return `a path below the module constant '${sym.name}' can be released while borrowed`;
+		return "";
+	}
+	const bound = constRefAlias(sym);
+	if (bound != null && viewReturnFault(bound, routine, stepped) == "") return "";
+	return `'${sym.name}' escapes its stack frame`;
+}
+
+function constRefAlias(sym: Symbol): Node | null {
+	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Mutable) || hasFlag(sym, SymbolFlag.Global) || sym.symbolType == null) return null;
+	if (withoutReadonlyView(withoutNullMember(withoutReadonlyView(sym.symbolType))).kind != TypeKind.Ref) return null;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl || decl.resolvedSym != sym) return null;
+	return (decl.data as VariableDeclData).initializer;
+}
+
+// The signature carries a parameter's sink mode, and still names a parameter a generic body leaves
+// unbound until it is instantiated.
+function signatureParamFault(routine: Node, name: string): string | null {
+	const sig = routine.nodeType;
+	if (sig == null || sig.kind != TypeKind.Function || sig.typeNames == null) return null;
+	for (let i = 0; i < sig.typeNames.length; i += 1) {
+		if (sig.typeNames[i] != name) continue;
+		const t = i < sig.typeChildren.length ? sig.typeChildren[i] : null;
+		return t != null && t.kind == TypeKind.Sink ? `'${name}' is a sink parameter, owned by the routine` : "";
+	}
+	return null;
+}
+
+function isOwnParam(routine: Node, sym: Symbol): boolean {
+	if (routine.paramSyms != null) {
+		for (const p of routine.paramSyms) { if (p == sym) return true; }
+	}
+	return sym.name == "this";
+}
+
 function scanUnits(ctx: CheckerContext, node: Node | null): void {
 	if (node == null) return;
 	match (node.kind) {
@@ -1677,8 +2183,14 @@ function scanUnits(ctx: CheckerContext, node: Node | null): void {
 			checkUnit(ctx, (node.data as MethodDeclData).methodBody);
 		},
 		NodeKind.ConstructorDecl => checkUnit(ctx, (node.data as ConstructorDeclData).ctorBody),
-		NodeKind.ArrowFunction => checkUnit(ctx, (node.data as ArrowFunctionData).arrowBody),
-		NodeKind.FunctionExpr => checkUnit(ctx, (node.data as FunctionExprData).funcExprBody),
+		NodeKind.ArrowFunction => {
+			checkClosureViewReturns(ctx, node, (node.data as ArrowFunctionData).arrowBody);
+			checkUnit(ctx, (node.data as ArrowFunctionData).arrowBody);
+		},
+		NodeKind.FunctionExpr => {
+			checkClosureViewReturns(ctx, node, (node.data as FunctionExprData).funcExprBody);
+			checkUnit(ctx, (node.data as FunctionExprData).funcExprBody);
+		},
 		NodeKind.TestDecl => checkUnit(ctx, (node.data as TestDeclData).testBody),
 		_ => {},
 	};

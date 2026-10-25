@@ -12,7 +12,7 @@ import { TypeKind } from "../../ast/node";
 import { noneType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
 import { isAssignable, typeRelation, TypeRelation } from "../../checker/compat";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
-import { createCGen } from "../../codegen/c/context";
+import { CEmissionFacts, createAliveSet, createCGen } from "../../codegen/c/context";
 import { hasErrors } from "../../checker/context";
 import { checkSource } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
@@ -57,7 +57,9 @@ test "None at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	// emission is a compiler bug, Nim's else-branch.
 	const ctx = checkSource("function main(): void { }");
 	assert ctx != null;
-	const g = createCGen(ctx, "gate.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(ctx, "gate.ms", alive, facts);
 	getTypeDesc(g, noneType());
 	assert g.errors.length > 0 && g.errors[0].message.contains("internal: unresolved type"), "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
 }

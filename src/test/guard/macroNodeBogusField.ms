@@ -13,12 +13,12 @@
 import { Node, NodeKind } from "std/meta";
 
 export macro mBogus(n: Node): Node {
-	const z = n.totallyBogusFieldXyz;
+	const z = n.totallyBogusFieldXyz; // GUARD-REFUSED
 	return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: "x" };
 }
 
 export macro mAmbig(n: Node): Node {
-	const v = n.value;
+	const v = n.value; // GUARD-REFUSED
 	return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: "y" };
 }
 

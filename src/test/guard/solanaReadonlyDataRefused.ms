@@ -26,11 +26,11 @@ function grow(ref p: Pet): void { p.hearts = 9; }
 function look(this p: Readonly<Pet>): uint64 { return p.hearts; }
 
 function refused(proof: Owned<Pet>, rolled: Delegated<Pet>): void {
-	proof.data()[].heal();
-	grow(proof.data()[]);
-	rolled.data()[].heal();
-	grow(rolled.data()[]);
-	rolled.data()[].hearts = 3;
+	proof.data()[].heal(); // GUARD-REFUSED
+	grow(proof.data()[]); // GUARD-REFUSED
+	rolled.data()[].heal(); // GUARD-REFUSED
+	grow(rolled.data()[]); // GUARD-REFUSED
+	rolled.data()[].hearts = 3; // GUARD-REFUSED
 }
 
 function allowed(mine: Mutable<Pet>, proof: Owned<Pet>): uint64 {

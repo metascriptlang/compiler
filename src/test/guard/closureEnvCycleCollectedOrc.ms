@@ -12,10 +12,10 @@
 // RED MEANS an env TypeInfo lost its traceFn or a closure release stopped
 // registering the env as a cycle candidate; run /trace-nim on the named type.
 //
-// GUARD-BALANCE-ORC Widget
-// GUARD-BALANCE-ORC Btn
-// GUARD-BALANCE-ORC Tag
-// GUARD-BALANCE-ORC Kept
+// GUARD-BALANCE Widget
+// GUARD-BALANCE Btn
+// GUARD-BALANCE Tag
+// GUARD-BALANCE Kept
 
 class Widget {
 	label: string = "w";

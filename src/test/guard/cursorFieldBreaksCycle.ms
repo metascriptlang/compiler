@@ -21,7 +21,7 @@
 // RED MEANS: the cursor model drifted from Nim. Run /trace-nim on classifyType,
 //   sinkClassify, and the MemberExpr arm of processAssignment.
 // GUARD-BALANCE CurRing
-// GUARD-BALANCE-ORC OwnRing
+// GUARD-BALANCE OwnRing
 
 interface CurRing { tag: string; next: Cursor<CurRing>; }
 interface OwnRing { tag: string; next: OwnRing | null; }

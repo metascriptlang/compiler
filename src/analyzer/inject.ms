@@ -10,9 +10,11 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import { bakesIntoStaticCell } from "../checker/reachability";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { flowStart, flowStop } from "../compiler/flows";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
@@ -28,8 +30,11 @@ import {
 	addPre,
 	testStringRc, classifyRc,
 } from "./scope";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
+import { isViewCall, returnsView } from "../checker/effects";
+import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { checkedCtx, bindCStd } from "../transform/testUtil";
@@ -295,22 +300,9 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
 	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
+	if (isViewCall(node) || node.flags.has(NodeFlag.Closure)) return node;
 	const exprType = node.nodeType;
-	if (exprType == null) {
-		// Null type is benign for void/synthetic calls and bare-fn closure pairs (`{fn, env:null}` —
-		// msClosureDestroy is null-env-safe). But an NF_CLOSURE pair with a NON-null env is a heap
-		// closure that LEAKS if not captured, and reaches here only when a transform built it without a
-		// nodeType (the closure leak this session). FAIL LOUD on that exact signature — narrow on
-		// purpose (a blanket warning fires ~800×/build on benign untyped calls). Surfaces via console
-		// like the existing DRC param warning; checkerCtx.errors does NOT print from Phase 4.
-		if (k == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
-			const od = node.data as ObjectLiteralData;
-			if (od.properties.length > 1 && od.properties[1] != null && od.properties[1].kind != NodeKind.NullLiteral) {
-				console.log("DRC INTERNAL ERROR: env-bearing closure reached DRC without a type at " + node.location.line + ":" + node.location.column + " — its captured env will leak (a transform built the closure-pair without setting nodeType)");
-			}
-		}
-		return node;
-	}
+	if (exprType == null) return node;
 	// Inside a non-RC binding/condition walk (skipAwaitableCapture), never capture a future:
 	// the await/spawn lowering's stepper owns awaited futures, so scope-exit destroy here
 	// double-frees (PARALOCK). A genuine discarded fire-and-forget future is captured by the
@@ -482,6 +474,25 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 	}
 }
 
+function boundElement(formals: Type[], i: int32, args: Node[]): Type | null {
+	const formal = formals[i].typeReturn;
+	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
+	for (let j = 0; j < formals.length && j < args.length; j += 1) {
+		const f = peelSlot(formals[j]);
+		if (f == null || f.kind != TypeKind.Array || f.typeReturn == null || f.typeReturn.kind != TypeKind.GenericParam || f.typeReturn.typeName != formal.typeName) continue;
+		const arr = peelSlot(args[j].nodeType);
+		if (arr != null && arr.kind == TypeKind.Array) return arr.typeReturn;
+	}
+	return null;
+}
+
+function peelSlot(t: Type | null): Type | null {
+	let cur = t;
+	while (cur != null && cur.typeReturn != null
+		&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Var || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref)) cur = cur.typeReturn;
+	return cur;
+}
+
 function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
@@ -491,6 +502,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	let sinkParams: Type[] | null = null;
 	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 		sinkParams = sym.symbolType.typeChildren;
+	} else if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
+		sinkParams = cd.callee.nodeType.typeChildren;
 	}
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
@@ -508,10 +521,12 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		isActorSendHandoff = true;
 	}
 
+	const lent = cloneForCall(dctx.writes, node, dctx.callerDefs);
+	const keepAlive = borrowedArgsToCopy(dctx.writes, node, dctx.callerDefs);
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink)) {
+		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(sinkParams, i, cd.arguments)))) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
@@ -522,15 +537,32 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			}
 		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
+		if (argMode == DrcMode.Normal && keepAlive[i]) cd.arguments[i] = keepArgumentAlive(cd.arguments[i], dctx);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(cd.arguments, marks, dctx);
+	if (lent != null) {
+		if (cd.callee.resolvedSym === node.resolvedSym) cd.callee.resolvedSym = lent;
+		node.resolvedSym = lent;
+	}
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
-	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && isCursorSlot(node.nodeType)) {
+	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && (isCursorSlot(node.nodeType) || isViewCall(node))) {
 		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 	}
 	return node;
+}
+
+function keepArgumentAlive(arg: Node, dctx: DrcContext): Node {
+	const source = cstringSource(arg);
+	if (source != null) {
+		(arg.data as CallExprData).arguments[0] = keepArgumentAlive(source, dctx);
+		return arg;
+	}
+	const copied = passCopyToSink(arg, dctx);
+	if (copied === arg || copied.resolvedSym == null) return arg;
+	registerVar(dctx, classifyRc(arg.nodeType, dctx), false, copied.resolvedSym);
+	return copied;
 }
 
 function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -600,10 +632,31 @@ function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
 	});
 }
 
+function unavailableCopyRoot(t: Type, depth: int32): Type {
+	if (depth > 16 || t.typeChildren == null) return t;
+	for (const part of t.typeChildren) {
+		const op = part != null ? getOpByKey(part, AttachedOp.AttachedAsgn) : null;
+		if (op != null && hasFlag(op, SymbolFlag.UnavailableOp)) return unavailableCopyRoot(part, depth + 1);
+	}
+	return t;
+}
+
+function reportUnavailableCopy(srcExpr: Node, rcInfo: RcInfo, viaDup: boolean, dctx: DrcContext): void {
+	const op = viaDup && rcInfo.dupFn != null ? null : rcInfo.copyFn;
+	if (op == null || !hasFlag(op, SymbolFlag.UnavailableOp) || dctx.ctx.checkerCtx == null || srcExpr.nodeType == null) return;
+	const root = unavailableCopyRoot(srcExpr.nodeType, 0);
+	const held = root == srcExpr.nodeType ? "" : `'${typeDisplayName(srcExpr.nodeType)}' holds a value of '${typeDisplayName(root)}', and `;
+	const message = `cannot copy '${moveSourceText(srcExpr)}': ${held}'${typeDisplayName(root)}' declares onDestroy and no onCopy, so each copy would run onDestroy — make this its last use, pass it with 'move', or declare onCopy`;
+	dctx.ctx.checkerCtx.errors.push({
+		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+	});
+}
+
 function passCopyToSink(srcExpr: Node, dctx: DrcContext, viaDup: boolean = false): Node {
 	const rcInfo = sinkClassify(srcExpr.nodeType, dctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 	reportFailedMove(srcExpr, dctx);
+	reportUnavailableCopy(srcExpr, rcInfo, viaDup, dctx);
 
 	const loc = srcExpr.location;
 	const tmpSym = freshTempSym(dctx.ctx, "borrow", srcExpr.nodeType);
@@ -764,7 +817,8 @@ function isPtrField(objType: Type | null, fieldName: string): boolean {
 	if (fieldIdx < 0 || fieldIdx >= t.typeChildren.length) return false;
 	const ft = t.typeChildren[fieldIdx];
 	if (ft == null) return false;
-	return ft.kind == TypeKind.Ptr || ft.kind == TypeKind.Cursor;
+	const bare = ft.kind == TypeKind.Union ? unwrapRefNullUnion(ft) : ft;
+	return bare != null && (bare.kind == TypeKind.Ptr || bare.kind == TypeKind.Cursor);
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -782,21 +836,15 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	// GenericInstance (monomorphized generic struct, e.g. Entry<int32, Box>) is treated as
 	// a named struct: its fields must sink so Ref field values transfer ownership to the
 	// struct instead of being decref'd at caller scope exit.
-	// A closure-pair literal (NF_CLOSURE) is heap-owning like a ref constructor: its env field must
-	// sink-in (COPY/incref) so the closure owns a counted ref to the env. Without this, setting the
-	// pair's nodeType to Function (needed so DRC captures + destroys the pair) flips the env field to
-	// a borrow (no incref) → the pair's scope-exit msClosureDestroy decrefs an env it doesn't own →
-	// double-free with the env-var's own lifecycle (lambda-lifting). The Function type alone is NOT
-	// isRefConstr, so the flag is what keeps the env a COPY.
 	// Anon structs included since they became OWNED values (DuVariant/(d') work):
 	// an owned literal whose fields only BORROW over-releases at its destroy — the
 	// capture of an inner fresh value (new Boxed in a field) and the literal's own
 	// destroy both released the same +1 (finding #4, holderonly ASan UAF).
-	const isRefConstr = t == null || t.kind == TypeKind.Ref
+	const isRefConstr = node.flags.has(NodeFlag.Closure) ? mode != DrcMode.Normal
+		: t == null || t.kind == TypeKind.Ref
 		|| t.kind == TypeKind.Struct
 		|| t.kind == TypeKind.GenericInstance
-		|| t.kind == TypeKind.Union
-		|| node.flags.has(NodeFlag.Closure);
+		|| t.kind == TypeKind.Union;
 	const fieldDefault = isRefConstr ? DrcMode.SinkArg
 		: (mode == DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	const marks: Node[] = [];
@@ -810,6 +858,11 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	return node;
 }
 
+function holdsUncountedElements(literalType: Type | null): boolean {
+	const arrayType = literalType != null && literalType.kind == TypeKind.Ref ? literalType.typeReturn : literalType;
+	return arrayType != null && arrayType.kind == TypeKind.Array && isUncountedElement(arrayType.typeReturn);
+}
+
 function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// MS arrays are reference types (heap, ref-counted): a fresh array literal OWNS its elements, so
 	// they always sink in (SinkArg) — and in a Normal (non-consumed) position the literal is itself an
@@ -821,8 +874,9 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 	// (binding RHS, sink param, field, return) already owned the shell upstream → skip the capture.
 	const ad = node.data as ArrayLiteralData;
 	const marks: Node[] = [];
+	const elemMode = holdsUncountedElements(node.nodeType) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < ad.elements.length; i += 1) {
-		ad.elements[i] = processNode(ad.elements[i], dctx, DrcMode.SinkArg);
+		ad.elements[i] = processNode(ad.elements[i], dctx, elemMode);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(ad.elements, marks, dctx);
@@ -1176,18 +1230,14 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		evalSourceFirst(stmt, dest, rhs, dctx);
 		return emitSaveAssignDestroySimple(stmt, dest, rcInfo, "oldField", dctx, loc);
 	}
-	// Identifier LHS: use sinkFn if available, else destroy-assign
 	if (destSym != null) {
-		if (deepAliases(dest, rhs)) {
-			clearPendingForVar(dctx, destSym);
-			evalSourceFirst(stmt, dest, rhs, dctx);
-			return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
-		}
-		if (rcInfo.sinkFn != null) {
+		const aliased = deepAliases(dest, rhs);
+		if (aliased) clearPendingForVar(dctx, destSym);
+		if (rcInfo.sinkFn != null && !aliased) {
 			return makeSinkCall(destSym, rhs, rcInfo, loc);
 		}
 		evalSourceFirst(stmt, dest, rhs, dctx);
-		return makeBlock([makeDestroyCall(destSym, rcInfo, loc), stmt], loc);
+		return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
 	}
 	return stmt;
 }
@@ -1204,6 +1254,7 @@ function resolveLhs(flags: int32, dest: Node, destSym: Symbol | null, loc: Sourc
 function genCopy(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcInfo: RcInfo,
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
 	reportFailedMove(rhs, dctx);
+	reportUnavailableCopy(rhs, rcInfo, false, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn != null) {
 		const lhsExpr = resolveLhs(flags, dest, destSym, loc);
@@ -1795,7 +1846,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 }
 
 // Phase G: detect generator/async state machine bodies — leading state-selector decl
-function isGeneratorBody(body: Node): boolean {
+export function isGeneratorBody(body: Node): boolean {
 	if (body == null || body.kind != NodeKind.BlockStmt) return false;
 	const bd = body.data as BlockStmtData;
 	if (bd.statements.length == 0) return false;
@@ -1870,16 +1921,18 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
+	const outerDefs = dctx.callerDefs;
 	const outerCache = dctx.cfgCache;
 	const outerResultIsCursor = dctx.resultIsCursor;
 	const fnType = ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function ? ownerSym.symbolType : funcNodeType;
-	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && isCursorSlot(fnType.typeReturn);
+	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && (isCursorSlot(fnType.typeReturn) || returnsView(fnType.typeReturn));
 
 	// Phase A: scan finally blocks for protected variables
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
 	// Phase B: infer cursor (borrowed) variables for this function
-	inferCursors(body);
+	const outerLending = enterRoutineLending(dctx.writes, ownerSym, paramSyms);
+	dctx.callerDefs = inferCursors(dctx.writes, body) ?? callerDefsOf(dctx.writes, body);
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
@@ -1908,8 +1961,10 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const cleanup = generateCleanup(scope, loc);
 
+	leaveRoutineLending(dctx.writes, outerLending);
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
+	dctx.callerDefs = outerDefs;
 	dctx.cfgCache = outerCache;
 	dctx.resultIsCursor = outerResultIsCursor;
 
@@ -1940,19 +1995,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// (e.g., `const d = node.data as Variant`). If not registered as cursor, field
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
-	let isCursor = false;
-	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
-	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
-	if (d.initializer != null && d.initializer.kind == NodeKind.TypeAssertion) {
-		const tad = d.initializer.data as TypeAssertionData;
-		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union && !isFreshExpr(skipConvDfa(tad.asExpr).kind)) {
-			isCursor = true;
-		}
-	}
-	// Phase B: check cursor inference results (borrow-only variables skip all RC)
-	if (isCursorSym(stmt.resolvedSym)) {
-		isCursor = true;
-	}
+	const isCursor = isCursorSym(stmt.resolvedSym);
 
 	// Pass resolvedSym so generateCleanup emits destroy/wasMoved with the correct symbol.
 	// This lets the C codegen resolve same-named variables in different scopes to unique C names.
@@ -2641,6 +2684,25 @@ function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): 
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
+function releaseLeavesSlotNamingIt(rcInfo: RcInfo): boolean {
+	return rcInfo.rcKind == RcKind.Ref || rcInfo.rcKind == RcKind.String;
+}
+
+function tearDownGlobals(dctx: DrcContext, baked: Symbol[], loc: SourceLocation): Node[] {
+	const result: Node[] = [];
+	for (let i = dctx.globalsToDestroy.length - 1; i >= 0; i -= 1) {
+		const vi = dctx.globalsToDestroy[i];
+		if (baked.includes(vi.sym)) {
+			for (const s of destroyBakedCell(vi.sym, loc, dctx)) result.push(s);
+			continue;
+		}
+		if (vi.isCursor || vi.rcInfo.destroyFn == null) continue;
+		result.push(makeDestroyCall(vi.sym, vi.rcInfo, loc));
+		if (releaseLeavesSlotNamingIt(vi.rcInfo)) result.push(makeWasMovedCall(vi.sym, vi.rcInfo, loc));
+	}
+	return result;
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2658,24 +2720,21 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
+	const fPrep = flowStart();
 	dctx.finallyProtectedVars = collectFinallyVars(program);
-	inferCursors(program);
+	flowStop("inject.finallyVars", fPrep);
+	const fCursors = flowStart();
+	dctx.callerDefs = inferCursors(dctx.writes, program) ?? callerDefsOf(dctx.writes, program);
+	flowStop("inject.cursors", fCursors);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
+	const fWalk = flowStart();
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
+	flowStop("inject.walk", fWalk);
+	const fExits = flowStart();
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
-	const exits: Node[] = [];
-	let g = dctx.globalsToDestroy.length;
-	while (g > 0) {
-		g -= 1;
-		const vi = dctx.globalsToDestroy[g];
-		if (baked.includes(vi.sym)) {
-			for (const s of destroyBakedCell(vi.sym, program.location, dctx)) exits.push(s);
-		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {
-			exits.push(makeDestroyCall(vi.sym, vi.rcInfo, program.location));
-		}
-	}
+	const exits: Node[] = tearDownGlobals(dctx, baked, program.location);
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
 	}
@@ -2684,7 +2743,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		destroys.flags = destroys.flags.incl(NodeFlag.GlobalDestroys);
 		d.programStmts.push(destroys);
 	}
-
+	flowStop("inject.exits", fExits);
 	return program;
 }
 
@@ -2693,7 +2752,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 function testDrcContext(input: string): DrcContext {
 	const ctx = checkSource(input);
 	const tctx = checkedCtx(ctx);
-	return createDrcContext(tctx);
+	return createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), []));
 }
 
 export function testLoc(): SourceLocation {

@@ -5,12 +5,12 @@
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, MethodDeclData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion, skipModifier } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, fieldTypeView, peelToStructOrUnion, skipModifier } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
+	setLocalSymName, addIndirectSym, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -19,7 +19,7 @@ import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, s
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
-import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, RoutineFlag, decodeRoutineFlags } from "../../checker/symbol";
 import { bakesIntoStaticCell, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
@@ -96,9 +96,9 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern);
+	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || decodeRoutineFlags(d.fnFlags).has(RoutineFlag.Extern);
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
-	let name = mangledFunctionName(sym, d.fnName, ovIdx);
+	let name = mangledFunctionName(g.emissionFacts.moduleNameRoots!, sym, d.fnName, ovIdx);
 
 	// Track whether we already emitted the proto or the body
 	const alreadyDeclared = nameSetHas(g.declaredProcs, name);
@@ -162,7 +162,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	// Skip body for duplicate generic instances — forward decl already emitted above.
 	if (instanceAlreadyEmitted && !inlineCopy) return;
 	if (d.fnBody != null) {
-		const p = createProc(name, fnType.typeReturn);
+		const p = createProc(name, fnType.typeReturn != null ? getTypeDesc(g, fnType.typeReturn) : "", fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Void);
 		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
@@ -176,7 +176,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated, pi == 0 && returnsBorrow(fnType)));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
-				if (paramSym != null) p.indirectSyms.push(paramSym);
+				if (paramSym != null) addIndirectSym(p, paramSym);
 			}
 			if (pi < fnType.typeChildren.length && isOpenArrayParam(fnType.typeChildren[pi])) {
 				const spanName = safeName(d.params[pi]);
@@ -198,11 +198,13 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	}
 }
 
+function emitInlineCopy(g: CGen, sym: Readonly<Symbol>): void {
+	const decl = inlineDeclOf(g.emissionFacts, sym);
+	if (decl != null) genFunctionDecl(g, decl, false, true);
+}
+
 export function emitInlineCopies(g: CGen): void {
-	for (let i = 0; i < g.inlineCopies.length; i += 1) {
-		const decl = inlineDeclOf(g.inlineCopies[i]);
-		if (decl != null) genFunctionDecl(g, decl, false, true);
-	}
+	for (let i = 0; i < g.inlineCopies.length; i += 1) emitInlineCopy(g, g.inlineCopies[i]);
 }
 
 // ===== Overload Index Matching =====
@@ -210,9 +212,8 @@ export function emitInlineCopies(g: CGen): void {
 
 // The C name of a declared type comes from the same sym-aware helper the
 // Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
-function declTypeSym(node: Readonly<Node>): Symbol | null {
-	const t = node.nodeType;
-	if (t != null && t.sym != null) return t.sym;
+function declTypeSym(node: Readonly<Node>): Readonly<Symbol | null> {
+	if (node.nodeType != null && node.nodeType.sym != null) return node.nodeType.sym;
 	return node.resolvedSym;
 }
 
@@ -235,7 +236,7 @@ export function registerDeclCName(g: CGen, node: Readonly<Node>): void {
 	if (n.flags.has(NodeFlag.ExternC)) return;
 	const sym = declTypeSym(n);
 	if (sym == null) return;
-	const cn = mangledTypeName(sym, sym.name);
+	const cn = mangledTypeName(g.emissionFacts.moduleNameRoots!, sym, sym.name);
 	typeCacheSet(g.typeCache, "decl:" + cn, cn);
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
 }
@@ -246,7 +247,7 @@ function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 	// Extern enum: defined in C header — skip emission entirely.
 	if (node.flags.has(NodeFlag.ExternC)) return;
 
-	const name = mangledTypeName(declTypeSym(node), d.enumName);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.enumName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const key = "enum:" + name;
@@ -284,7 +285,7 @@ function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 	const declType = node.nodeType;
 	if (declType != null && hasGenericParams(declType)) return;
 
-	const name = mangledTypeName(declTypeSym(node), d.interfaceName);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.interfaceName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const ifaceKey = "object:" + name;
@@ -348,7 +349,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		return;
 	}
 
-	const name = mangledTypeName(declTypeSym(node), d.className);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + name;
@@ -391,8 +392,8 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
-function initializerLiteralType(literal: Readonly<Node>, declType: Type | null): Type | null {
-	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32 ? literal.nodeType : declType;
+function isFloat32Literal(literal: Readonly<Node>): boolean {
+	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32;
 }
 
 // Static field globals + initializer emission for a class body. Shared by the
@@ -413,13 +414,13 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 			addCGenError(g, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
 			return;
 		}
-		const globalName = staticFieldCName(fieldSym);
+		const globalName = staticFieldCName(g.emissionFacts.moduleNameRoots!, fieldSym);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
 					const nd = pd.propInitializer.data as NumberLiteralData;
-					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, isFloat32Literal(pd.propInitializer) ? pd.propInitializer.nodeType : member.nodeType)};`);
 				},
 				NodeKind.StringLiteral => {
 					const sv = (pd.propInitializer.data as StringLiteralData).value;
@@ -526,7 +527,7 @@ function isInitProcLocal(node: Readonly<Node>): boolean {
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
 	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
-	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
@@ -550,7 +551,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 		const init = d.initializer;
 		if (init.kind == NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
-			const litStr = formatCNumberLit(nd, initializerLiteralType(init, node.nodeType));
+			const litStr = formatCNumberLit(nd, isFloat32Literal(init) ? init.nodeType : node.nodeType);
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
 			const castedLit = (node.nodeType != null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
@@ -663,7 +664,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const owner = peelToStructOrUnion(node.nodeType);
 	let i = 0;
 	for (const prop of od.properties) {
-		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, fieldTypeView(owner, od.keys[i]))) {
 			i = i + 1;
 			continue;
 		}
@@ -705,7 +706,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	nameSetAdd(g.declaredGlobals, varName);
 }
 
-function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
+function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Readonly<Type | null>): string {
 	match (init.kind) {
 		NodeKind.NumberLiteral => {
 			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
@@ -743,7 +744,7 @@ function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): 
 	};
 }
 
-import { createCGen, assembleOutput, scopeMangledParam } from "./context";
+import { CEmissionFacts, createAliveSet, createCGen, assembleOutput, scopeMangledParam } from "./context";
 import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -753,7 +754,9 @@ function declOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genDecl(g, pd.programStmts[i], false);
 	}

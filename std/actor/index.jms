@@ -26,12 +26,59 @@ export enum ExitReason {
 	Error,
 }
 
+// A timer armed while an actor runs (`__msActors.cur`, set by the mailbox pump) is the
+// actor's: its callback runs as the actor, and stop() clears it (ULTRALOCK A4). Once an
+// actor is constructed in that run (`next` moved past `curNext`), what follows is left
+// unowned, because a constructor is not bracketed and could be either actor's.
+function ownTimers(): boolean {
+	@emit(`var g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new Map() });
+if (g.timerOwner !== undefined) return true;
+g.timerOwner = new Map();
+g.clearTimer = globalThis.clearTimeout;
+var own = function (arm, periodic) {
+	return function (fn, ms) {
+		var a = g.cur;
+		if (a === undefined || g.next !== g.curNext) return arm.apply(globalThis, arguments);
+		var args = Array.prototype.slice.call(arguments, 2);
+		var id = arm(function () {
+			if (!periodic) { g.timerOwner.delete(id); a.__msTimers.delete(id); }
+			var prev = g.cur, prevNext = g.curNext;
+			g.cur = a;
+			g.curNext = g.next;
+			try { return fn.apply(this, args); } finally { g.cur = prev; g.curNext = prevNext; }
+		}, ms);
+		g.timerOwner.set(id, a);
+		(a.__msTimers || (a.__msTimers = new Set())).add(id);
+		return id;
+	};
+};
+var release = function (clear) {
+	return function (id) {
+		var a = g.timerOwner.get(id);
+		if (a !== undefined) { g.timerOwner.delete(id); a.__msTimers.delete(id); }
+		return clear.apply(globalThis, arguments);
+	};
+};
+globalThis.setTimeout = own(globalThis.setTimeout, false);
+globalThis.setInterval = own(globalThis.setInterval, true);
+globalThis.clearTimeout = release(globalThis.clearTimeout);
+globalThis.clearInterval = release(globalThis.clearInterval);
+return true;`);
+	unreachable;
+}
+
+const _timersOwned: boolean = ownTimers();
+
 export function stop(pid: int64, reason: ExitReason): void {
 	@emit(`var g = globalThis.__msActors;
 if (!g) return;
 var a = g.live.get(${pid});
 if (a === undefined) return;
 g.live.delete(${pid});
+if (a.__msTimers !== undefined) {
+	for (var id of a.__msTimers) { g.timerOwner.delete(id); g.clearTimer(id); }
+	a.__msTimers.clear();
+}
 if (typeof a.onTerminate === "function") a.onTerminate(${reason});`);
 }
 

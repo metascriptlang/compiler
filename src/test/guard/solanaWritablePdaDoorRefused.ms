@@ -7,8 +7,8 @@
 // found. No exported function builds one from an index alone, from the barrel or from std/solana/typed.
 // RED MEANS: an author calls writablePda(index) and hands createPda<T>() a proof whose bump is 0, so
 // the account is created at the bump-0 address (not the canonical one) and pda() later refuses it with 2006.
-import { writablePda } from "std/solana";
-import { writablePda as direct, writablePdaProof, writablePdaProofFailure } from "std/solana/typed";
+import { writablePda } from "std/solana"; // GUARD-REFUSED
+import { writablePda as direct, writablePdaProof, writablePdaProofFailure } from "std/solana/typed"; // GUARD-REFUSED
 
 function doors(): void {
 	const a = writablePda(1);

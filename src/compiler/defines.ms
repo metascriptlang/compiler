@@ -23,6 +23,8 @@ export function createDefineTable(): DefineTable {
 	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
 	// std blocks the previous compiler cannot read sit under this symbol; the guards go one sync cycle after the compiler lands.
 	defineSymbol(t, "mscDeclaresRuntime", "true");
+	// The runtime aborts on a foreign root entry only under this symbol: a compiler built by one that predates it still emits worker code that registers program cells in worker roots, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscKeepsRootsWithOwner", "true");
 	return t;
 }
 
@@ -96,7 +98,7 @@ export function initDefines(t: DefineTable, backendName: string, targetOs: strin
 	seed(t, "backend", backendName);
 	seed(t, "os", os);
 	seed(t, "cpu", cpu);
-	seed(t, "gc", gcMode);
+	seed(t, "mm", gcMode);
 	seed(t, "mode", modeName);
 }
 
@@ -114,8 +116,8 @@ export function seedProjectDir(t: DefineTable, dir: string): void {
 
 // A name msc answers from its own options, on this build or another: a project define of it would
 // turn `when solana` or `os == …` into a lie about the build.
-const OPTION_NAMES = ["msc", "backend", "os", "cpu", "gc", "mode", "hcr", "projectDir", "posix", "unix", "bsd",
-	"c", "js", "raiser", "debug", "release", "danger", "drc", "orc", "none", "manual",
+const OPTION_NAMES = ["msc", "backend", "os", "cpu", "mm", "mode", "hcr", "projectDir", "posix", "unix", "bsd",
+	"c", "js", "raiser", "debug", "release", "danger", "drc", "none", "manual",
 	"bare", "solana", "wasm", "emcc", "linux", "macos", "windows", "darwin", "freebsd", "ios", "android"];
 
 export function isOptionDefine(t: DefineTable, name: string): boolean {
@@ -178,6 +180,7 @@ test "define: bare flag stores true" {
 test "define: a fresh table carries the compiler feature symbol" {
 	const t = createDefineTable();
 	assert isDefined(t, "mscDeclaresRuntime");
+	assert isDefined(t, "mscKeepsRootsWithOwner");
 }
 
 test "define: unknown flag is false, never an error" {
@@ -213,18 +216,18 @@ test "define: undef removes" {
 	assert !isDefined(t, "gone");
 }
 
-test "initDefines seeds backend, os, cpu, gc and mode" {
+test "initDefines seeds backend, os, cpu, mm and mode" {
 	const t = createDefineTable();
-	initDefines(t, "js", "darwin", "arm64", "orc", 0);
+	initDefines(t, "js", "darwin", "arm64", "manual", 0);
 	assert isDefined(t, "js");
 	assert isDefined(t, "macos");
-	assert isDefined(t, "orc");
+	assert isDefined(t, "manual");
 	assert isDefined(t, "debug");
 	assert definedValue(t, "backend") == "js";
 	assert definedValue(t, "os") == "macos";
 	assert isDefined(t, "arm64");
 	assert definedValue(t, "cpu") == "arm64";
-	assert definedValue(t, "gc") == "orc";
+	assert definedValue(t, "mm") == "manual";
 	assert definedValue(t, "mode") == "debug";
 }
 

@@ -6,7 +6,7 @@ import { makeSymbol } from "../../checker/symbol";
 import { getSysType } from "../../checker/types";
 import { makeNumber, makeString } from "../../checker/literalNodes";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
-import { mangleModuleName } from "../../codegen/c/names";
+import { mangleModuleName, buildModuleNameRoots } from "../../codegen/c/names";
 import { mapChildren } from "../walker";
 import { makeCall, makeIdentResolved, runtimeRef } from "../util";
 
@@ -34,7 +34,7 @@ function lowerNode(n: Node): Node {
 	if (n == null) return n;
 	const target = dynamicImportTarget(n);
 	if (target != "") {
-		const call = makeCall(runtimeRef("msModuleImport", n.location), [makeString(mangleModuleName(target), n.location)], n.location);
+		const call = makeCall(runtimeRef("msModuleImport", n.location), [makeString(mangleModuleName(buildModuleNameRoots(), target), n.location)], n.location);
 		call.nodeType = n.nodeType;
 		return call;
 	}

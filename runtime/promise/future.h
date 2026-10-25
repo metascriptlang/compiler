@@ -75,6 +75,47 @@ static inline void msCallSoon(msClosure cb) {
 	}
 }
 
+/* ===== Actor jobs (runtime/actor/actor.h, ULTRALOCK A4) ===== */
+
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#define MS_ACTOR_JOBS 1
+typedef struct msActor msActor;
+MS_TLS_EXTERN(msActor*, msCurrentActor);
+#define MS_ACTOR_JOB_PATH __attribute__((cold, noinline))
+MS_ACTOR_JOB_PATH msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
+MS_ACTOR_JOB_PATH void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
+MS_ACTOR_JOB_PATH void msActorJobFire(void* job);
+MS_ACTOR_JOB_PATH void msActorJobTick(void* job);
+MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
+MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
+MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
+MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
+
+/* Set by the first thread to enter an actor; a thread whose msCurrentActor is set has
+ * set it itself, so a relaxed read is enough and a program without actors reads no TLS. */
+extern _Atomic(bool) msActorEntered;
+MS_ACTOR_JOB_PATH msActor* msActorCurrentNoHoist(void);
+
+static inline bool msActorMaybeCurrent(void) {
+	return __builtin_expect(atomic_load_explicit(&msActorEntered, memory_order_relaxed), 0);
+}
+
+static inline msActor* msActorCurrentForJobs(void) {
+	return msActorMaybeCurrent() ? msActorCurrentNoHoist() : NULL;
+}
+
+static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) return msActorStamp(cb, drop, chain);
+	return cb;
+}
+#else
+#define MS_ACTOR_JOBS 0
+static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
+	(void)drop; (void)chain;
+	return cb;
+}
+#endif
+
 /* ===== Callback list (Standard reference CallbackList pattern — singly-linked) ===== */
 
 typedef struct msFutureCb {
@@ -82,6 +123,27 @@ typedef struct msFutureCb {
 	void* env;
 	struct msFutureCb* next;
 } msFutureCb;
+
+#if MS_ACTOR_JOBS
+MS_ACTOR_JOB_PATH static inline void msActorJobsForgetList(msFutureCb* cb) {
+	for (; cb != NULL; cb = cb->next) {
+		if (cb->fn == (void (*)(void*))msActorJobFire) msActorJobAbandon(cb->env);
+	}
+}
+
+static inline void msActorJobsForget(msFutureCb* cb) {
+	if (msActorMaybeCurrent() && cb != NULL) msActorJobsForgetList(cb);
+}
+#else
+static inline void msActorJobsForget(msFutureCb* cb) { (void)cb; }
+#endif
+
+/* The futures a combinator's or an async function's result waits on, so a blocked
+ * waiter can run the queued tasks behind them. Owned by the result future. */
+typedef struct msFutureEdge {
+	int32_t count;
+	void* to[];  /* NULL once that input settled or the function resumed */
+} msFutureEdge;
 
 /* ===== Future Base (shared fields — used by event loop, callbacks, dispatch) ===== */
 
@@ -95,12 +157,14 @@ typedef struct msFutureBase {
 	                            * race because no drain decref can exist for a future
 	                            * that never crossed threads. When true, defer to TLS
 	                            * to serialize with the dispatcher drain. */
+	bool spawned;         /* completed by a spawned task: a waiter on it waits on that task */
+	void* completionQueue;
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
-	/* Set by the async writer: the future owns its value, readers copy it out and
-	 * this drops whatever the slot still holds when the future is destroyed. NULL
-	 * on futures completed across threads (spawn, actor reply, doneFut): their
-	 * single reader takes the value. */
+	/* Drops whatever the slot still holds when the future is destroyed. Set by the
+	 * async writer, whose readers copy the value out, and by spawn, whose future
+	 * completes across threads: there every reader takes the value, so the drop
+	 * meets only a result nobody read. */
 	void (*valueDrop)(void* fut);
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
@@ -110,6 +174,7 @@ typedef struct msFutureBase {
 	 * Atomic because poll-style readers (waitFor) may run on worker threads
 	 * while the dispatcher fires callbacks on the main thread. */
 	_Atomic(bool) errorObserved;
+	_Atomic(msFutureEdge*) edge;
 } msFutureBase;
 
 /* Verify: finished is the first field. awaitGroup.c uses msFutureBaseMinimal
@@ -227,11 +292,13 @@ static inline void msFutureDestroyInner(void* fp) {
 	if (f->valueDrop != NULL) f->valueDrop(fp);
 	msFutureDropError(f);
 	msFutureCb* cb = f->callbacks;
+	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
 		free(cb);
 		cb = next;
 	}
+	free(atomic_load_explicit(&f->edge, memory_order_relaxed));
 	msDestroyAndDispose(f);
 }
 
@@ -243,6 +310,7 @@ static inline void msFutureDestroy(void* f) { msFutureDestroyInner(f); }
  * rejection: reported at process exit with exit code 1 (Node parity). */
 void msNoteOrphanFailure(void* fut);
 void msClearOrphanFailure(void* fut);
+void msNoteOrphanError(void* err);
 
 /* Standard reference future.finished parity */
 static inline bool msFutureFinished(void* fp) {
@@ -252,6 +320,13 @@ static inline bool msFutureFinished(void* fp) {
 /* Global completion notification — wakes worker threads blocking on futures.
  * Implemented in dispatch.c (Change 4: global completion condvar). */
 extern void msNotifyFutureComplete(void);
+
+void* msLoopCompletionQueue(void);
+
+static inline void msFuturePublishCrossThread(void* fp) {
+	((msFutureBase*)fp)->crossThreadPublished = true;
+	((msFutureBase*)fp)->completionQueue = msLoopCompletionQueue();
+}
 
 /* Fire all registered callbacks via callSoon (reference parity).
  * Deferred execution prevents reentrancy during msProcessTimers/msFutureComplete. */
@@ -300,6 +375,7 @@ static inline void msFutureCancel(void* fp) {
 	f->callbacks = NULL;
 	f->cbTail = NULL;
 	msFutCbUnlock();
+	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
 		free(cb);
@@ -349,7 +425,7 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 		msCallSoon(cb);
 		return;
 	}
-	msFutureCb* node = (msFutureCb*)malloc(sizeof(msFutureCb));
+	msFutureCb* node = (msFutureCb*)msMemAlloc(sizeof(msFutureCb));
 	node->fn = (void(*)(void*))cb.fn;
 	node->env = cb.env;
 	node->next = NULL;
@@ -490,10 +566,15 @@ static inline void* msFutureRead(void* fp) {
 /* Owning futures (valueDrop set). The drop routine takes the slot without the
  * finished/failed checks: an unfinished or failed future holds an empty slot. */
 static inline bool msFutureOwnsValue(void* fp) {
-	return ((msFutureBase*)fp)->valueDrop != NULL && !((msFutureBase*)fp)->failed;
+	msFutureBase* f = (msFutureBase*)fp;
+	return f->valueDrop != NULL && !f->failed && !f->crossThreadPublished;
 }
 static inline void msFutureSetValueDrop(void* fp, msClosure drop) {
 	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;
+}
+static inline void* msFutureDropUnread(void* fp, msClosure drop) {
+	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;
+	return fp;
 }
 static inline void* msFutureTakeRaw(void* fp) {
 	msFuture* f = (msFuture*)fp;
@@ -533,7 +614,14 @@ static inline void* msFutureBoxAt(void* fp) {
 
 typedef struct {
 	msClosure stepper;
+	void* retFut;
 } msAsyncCbEnv;
+
+/* Wait edges (pool.c): an input of a Promise.all / allSettled result, and the
+ * future an async function's body is suspended on. */
+void msFutureEdgeAll(void* result, void* const* inputs, int32_t count);
+void msFutureEdgeSettle(void* result, int32_t index);
+void msFutureEdgeAwait(void* retFut, void* awaited);
 
 void msAsyncCb(void* raw);
 void msAsyncStart(void* retFut, msClosure stepper);

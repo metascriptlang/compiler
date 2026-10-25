@@ -33,7 +33,7 @@ async function run() {
 	writeFileSync(proofPath, `${json(proof)}\n`, { flag: "wx" });
 	try {
 		writeFileSync(entry, `import ${JSON.stringify(source.slice(0, -3))};\nimport { Word, fromUint64, returnWord } from "std/arbitrum";\n\nWord.fromUint64(0).returnWord();\n`, { flag: "wx" });
-		const command = ["build", entry, "--os=bare", "--cpu=wasm32", "--gc=manual", "--app=lib", `--cc=${values.cc}`, "--release", `--output=${wasm}`];
+		const command = ["build", entry, "--os=bare", "--cpu=wasm32", "--app=lib", `--cc=${values.cc}`, "--release", `--output=${wasm}`];
 		proof.build = { compiler, args: command };
 		const build = execFileSync(compiler, command, { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
 		writeFileSync(join(output, "build.log"), build);

@@ -6,7 +6,7 @@
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
 import { isStructType, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { statementCanRaise, callCanRaise, finallyIsErrorBlind } from "../../checker/raises";
+import { statementCanRaise, inferredCallRaises, finallyIsErrorBlind } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -17,7 +17,7 @@ import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions"
 import { formatCNumber, formatCNumberLit, cBoolLiteral } from "./literals";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
+import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName, overloadAt } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit, returnsBorrow } from "./types";
 import { computedGotoSize, isComputedGotoMark } from "../../checker/computedGoto";
@@ -71,13 +71,14 @@ function isNumericCType(cType: string): boolean {
 
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: string): string {
 	const cd = callNode.data as CallExprData;
-	const winner = callOverloadWinner(callNode);
+	const winnerIdx = callOverloadWinner(callNode);
+	const winner = winnerIdx >= 0 && callNode.resolvedSym != null ? overloadAt(callNode.resolvedSym, winnerIdx) : null;
 	let callee = winner != null
-		? mangledFunctionName(winner.winnerSym, winner.winnerSym.name, winner.winnerIdx)
+		? mangledFunctionName(g.emissionFacts.moduleNameRoots!, winner, winner.name, winnerIdx)
 		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
-	const nrvoSym = winner != null ? winner.winnerSym : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
-	let nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
+	const nrvoSym = winner != null ? winner : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
+	let nrvoFnType: Readonly<Type | null> = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : cd.callee.nodeType;
 	if (nrvoFnType == null || nrvoFnType.kind != TypeKind.Function) {
 		const calleeFnType = getCalleeFuncType(callNode);
 		if (calleeFnType != null) nrvoFnType = calleeFnType;
@@ -217,48 +218,42 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 // the nearest enclosing error target when the exception flag is set — so
 // statements after a raising call do not run on the raise path (double-exec).
 // Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
-// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
+// (raiseExit L==0). A destroy is checked only when the hook it runs can raise.
 export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!statementCanRaise(exprNode)) return;
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
-function frameLocalRoot(p: CProc, n: Readonly<Node>): Symbol | null {
-	let cur = n;
-	while (cur != null) {
-		match (cur.kind) {
-			NodeKind.Identifier => {
-				const sym = cur.resolvedSym;
-				if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
-				if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.ForVar)) return null;
-				if (isIndirectRef(p, sym, (cur.data as IdentifierData).name)) return null;
-				return sym;
-			},
-			NodeKind.MemberExpr => {
-				const obj = (cur.data as MemberExprData).object;
-				if (!isValueKind(obj.nodeType, TypeKind.Struct)) return null;
-				cur = obj;
-			},
-			NodeKind.ArrayAccess => {
-				const ad = cur.data as ArrayAccessData;
-				if (!isValueKind(ad.array.nodeType, TypeKind.SizedArray) || !isPureIndex(ad.index)) return null;
-				cur = ad.array;
-			},
-			NodeKind.CallExpr => {
-				const cd = cur.data as CallExprData;
-				const sym = cd.callee.resolvedSym;
-				if (!isRuntimeProcSym(sym, "msSizedArrayAccess") && !isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked")) return null;
-				if (cd.arguments.length != 3 || !isPureIndex(cd.arguments[1])) return null;
-				cur = cd.arguments[0];
-			},
-			_ => { return null; },
-		};
+function frameLocalRoot(n: Readonly<Node | null>, p: Readonly<CProc>): Readonly<Symbol | null> {
+	if (n == null) return null;
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
+		if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.ForVar)) return null;
+		if (isIndirectRef(p, sym, (n.data as IdentifierData).name)) return null;
+		return n.resolvedSym;
+	}
+	if (n.kind == NodeKind.MemberExpr) {
+		if (!isValueKind((n.data as MemberExprData).object.nodeType, TypeKind.Struct)) return null;
+		return frameLocalRoot((n.data as MemberExprData).object, p);
+	}
+	if (n.kind == NodeKind.ArrayAccess) {
+		const ad = n.data as ArrayAccessData;
+		if (!isValueKind(ad.array.nodeType, TypeKind.SizedArray) || !isPureIndex(ad.index)) return null;
+		return frameLocalRoot((n.data as ArrayAccessData).array, p);
+	}
+	if (n.kind == NodeKind.CallExpr) {
+		const cd = n.data as CallExprData;
+		const sym = cd.callee.resolvedSym;
+		if (!isRuntimeProcSym(sym, "msSizedArrayAccess") && !isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked")) return null;
+		if (cd.arguments.length != 3 || !isPureIndex(cd.arguments[1])) return null;
+		return frameLocalRoot((n.data as CallExprData).arguments[0], p);
 	}
 	return null;
 }
 
-function isValueKind(t: Type | null, kind: TypeKind): boolean {
+function isValueKind(t: Readonly<Type | null>, kind: TypeKind): boolean {
 	const peeled = t != null ? peelThrough(t, PEEL_ALL) : null;
 	return peeled != null && peeled.kind == kind;
 }
@@ -271,7 +266,7 @@ function isPureIndex(n: Readonly<Node>): boolean {
 	return cur.kind == NodeKind.NumberLiteral || cur.kind == NodeKind.Identifier;
 }
 
-function readsFrameLocal(p: CProc, root: Symbol, n: Readonly<Node>): boolean {
+function readsFrameLocal(p: Readonly<CProc>, root: Readonly<Symbol>, n: Readonly<Node>): boolean {
 	if (n == null) return false;
 	if (mayHoldAddress(n.nodeType)) return true;
 	return match (n.kind) {
@@ -302,7 +297,7 @@ function readsFrameLocal(p: CProc, root: Symbol, n: Readonly<Node>): boolean {
 	};
 }
 
-function anyReadsFrameLocal(p: CProc, root: Symbol, nodes: Readonly<Node[]>): boolean {
+function anyReadsFrameLocal(p: Readonly<CProc>, root: Readonly<Symbol>, nodes: Readonly<Node[]>): boolean {
 	for (const n of nodes) {
 		if (readsFrameLocal(p, root, n)) return true;
 	}
@@ -319,14 +314,14 @@ function assignTargetCType(g: CGen, left: Readonly<Node>): string {
 
 function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
 	if (d.operator != "=" || (d.right.kind != NodeKind.ObjectLiteral && d.right.kind != NodeKind.CallExpr)) return false;
-	const root = frameLocalRoot(p, d.left);
+	const root = frameLocalRoot(d.left, p);
 	if (root == null || readsFrameLocal(p, root, d.right)) return false;
 	if (d.right.kind == NodeKind.CallExpr && !(isPlainStruct(d.left.nodeType) && storeIsUnobservable(p, d.right))) return false;
 	const destCType = assignTargetCType(g, d.left);
 	return destCType != "" && buildsInPlace(g, d.right, destCType);
 }
 
-function isPlainStruct(t: Type | null): boolean {
+function isPlainStruct(t: Readonly<Type | null>): boolean {
 	const v = t != null ? peelThrough(t, PEEL_ALIAS) : null;
 	if (v != null && v.kind == TypeKind.GenericInstance) return isPlainStruct(v.typeReturn);
 	return v != null && v.kind == TypeKind.Struct && !hasAsgnFlag(v);
@@ -335,7 +330,7 @@ function isPlainStruct(t: Type | null): boolean {
 function storesAfterRaiseCheck(g: CGen, p: CProc, expr: Readonly<Node>): boolean {
 	const bd = expr.data as BinaryExprData;
 	if (p.suppressRaiseCheck || !statementCanRaise(expr)) return false;
-	if (p.nestedTryStmts.length == 0 && frameLocalRoot(p, bd.left) != null) return false;
+	if (p.nestedTryStmts.length == 0 && frameLocalRoot(bd.left, p) != null) return false;
 	const left = bd.left.nodeType;
 	const right = bd.right.nodeType;
 	if (left == null || right == null) return false;
@@ -346,7 +341,7 @@ function storesAfterRaiseCheck(g: CGen, p: CProc, expr: Readonly<Node>): boolean
 	return bd.operator == "=" && isPlainStruct(left) && assignTargetCType(g, bd.left) == getTypeDesc(g, right);
 }
 
-function isArithmetic(t: Type): boolean {
+function isArithmetic(t: Readonly<Type>): boolean {
 	const v = peelThrough(t, PEEL_ALIAS);
 	return isIntegerType(v) || isFloatType(v) || v.kind == TypeKind.Boolean || v.kind == TypeKind.Char;
 }
@@ -355,8 +350,8 @@ function returnsInto(value: Readonly<Node>): boolean {
 	return value.kind == NodeKind.CallExpr && isNrvoReturnType(getCalleeReturnType(value), getCalleeFuncType(value));
 }
 
-function storeIsUnobservable(p: CProc, call: Readonly<Node>): boolean {
-	return p.nestedTryStmts.length == 0 || !callCanRaise(call);
+function storeIsUnobservable(p: Readonly<CProc>, call: Readonly<Node>): boolean {
+	return p.nestedTryStmts.length == 0 || !inferredCallRaises(call);
 }
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
@@ -421,7 +416,7 @@ function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 // opened BEFORE the initializer is generated: otherwise that preparation would
 // run on every call while only the store was guarded.
 function genStaticStorageVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
-	const slot = mangledGlobalName(node.resolvedSym, d.declName);
+	const slot = mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	let cType = "";
 	if (node.nodeType != null) {
 		cType = getTypeDesc(g, node.nodeType);
@@ -455,7 +450,7 @@ export function isComptimeOnlyVarDecl(node: Readonly<Node>): boolean {
 }
 
 function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
-	const varName = mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	if (!nameSetHas(g.declaredGlobals, varName)) {
 		addLine(sec(g, CSection.GlobalVars), `${getTypeDesc(g, node.nodeType)} ${varName};`);
 		nameSetAdd(g.declaredGlobals, varName);
@@ -464,7 +459,7 @@ function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly
 	emitStmtsLine(p, `${varName} = ${genExpr(g, p, d.initializer)};`);
 }
 
-export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): string {
+export function readonlyDataBracedInit(init: Readonly<Node>, t: Readonly<Type | null>): string {
 	match (init.kind) {
 		NodeKind.NumberLiteral => {
 			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
@@ -694,12 +689,12 @@ function wrapCond(s: string): string {
 //   Lend: ;
 function genIfStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// Collect all branches: [{cond, body}, ...] + optional elseBody
-	const branches: Readonly<Node>[] = [];
-	const bodies: Readonly<Node>[] = [];
-	let elseBody: Readonly<Node> | null = null;
-	let current: Readonly<Node> | null = node;
+	const branches: Cursor<Readonly<Node>>[] = [];
+	const bodies: Cursor<Readonly<Node>>[] = [];
+	let elseBody: Cursor<Readonly<Node>> | null = null;
+	let current: Cursor<Readonly<Node>> | null = node;
 	while (current != null && current.kind == NodeKind.IfStmt) {
-		const d = current.data as IfStmtData;
+		const d: Cursor<Readonly<IfStmtData>> = current.data as IfStmtData;
 		branches.push(d.condition);
 		bodies.push(d.consequent);
 		if (isEmptyBlock(d.alternate)) {
@@ -749,7 +744,7 @@ function dispatchSwitchOf(stmt: Readonly<Node>): Readonly<Node> | null {
 	const body = (stmt.data as DoWhileStmtData).doBody;
 	if (body.kind != NodeKind.BlockStmt) return null;
 	const inner = (body.data as BlockStmtData).statements;
-	return inner.length == 1 && inner[0].kind == NodeKind.SwitchStmt ? inner[0] : null;
+	return inner.length == 1 && inner[0].kind == NodeKind.SwitchStmt ? ((stmt.data as DoWhileStmtData).doBody.data as BlockStmtData).statements[0] : null;
 }
 
 function holdsLabel(node: Readonly<Node>): boolean {
@@ -787,46 +782,52 @@ function endsInJump(stmts: Readonly<Node[]>): boolean {
 }
 
 interface DispatchTail {
-	pre: Readonly<Node>[];
-	post: Readonly<Node>[];
-	disc: Readonly<Node>;
+	at: int32;
 	table: string;
 	wrapper: string;
 	emitted: int32;
 }
 
-function genDispatchTail(g: CGen, p: CProc, t: DispatchTail): void {
+function genLoopSide(g: CGen, p: CProc, loop: Readonly<Node>, at: int32, before: boolean): void {
+	const stmts = ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+	const end = before ? at : stmts.length;
+	for (let i = before ? 0 : at + 1; i < end; i += 1) {
+		if (!isComputedGotoMark(stmts[i])) genStmt(g, p, stmts[i]);
+	}
+}
+
+function genDispatchTail(g: CGen, p: CProc, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	const wasReemitting = p.reemitting;
 	p.reemitting = t.emitted > 0;
-	genStmts(g, p, t.post);
+	genLoopSide(g, p, loop, t.at, false);
 	p.reemitting = true;
-	genStmts(g, p, t.pre);
+	genLoopSide(g, p, loop, t.at, true);
 	p.reemitting = wasReemitting;
-	emitStmtsLine(p, `goto *${t.table}[${genExpr(g, p, t.disc)}];`);
+	emitStmtsLine(p, `goto *${t.table}[${genExpr(g, p, (sw.data as SwitchStmtData).switchDisc)}];`);
 	t.emitted += 1;
 }
 
-function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
+function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	emitStmts(p, "{\n");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 	if (node.kind == NodeKind.BlockStmt) {
-		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t);
+		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t, loop, sw);
 	} else {
-		const one: Readonly<Node>[] = [node];
-		genStmtsWithTail(g, p, one, t);
+		const one: Cursor<Readonly<Node>>[] = [node];
+		genStmtsWithTail(g, p, one, t, loop, sw);
 	}
 	setStmtsIndent(p, oldIndent);
 	emitStmtsLine(p, "}");
 }
 
-function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
-	const conds: Readonly<Node>[] = [];
-	const bodies: Readonly<Node>[] = [];
-	let elseBody: Readonly<Node> | null = null;
-	let current: Readonly<Node> | null = node;
+function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
+	const conds: Cursor<Readonly<Node>>[] = [];
+	const bodies: Cursor<Readonly<Node>>[] = [];
+	let elseBody: Cursor<Readonly<Node>> | null = null;
+	let current: Cursor<Readonly<Node>> | null = node;
 	while (current != null && current.kind == NodeKind.IfStmt) {
-		const d = current.data as IfStmtData;
+		const d: Cursor<Readonly<IfStmtData>> = current.data as IfStmtData;
 		conds.push(d.condition);
 		bodies.push(d.consequent);
 		if (isEmptyBlock(d.alternate)) {
@@ -845,15 +846,15 @@ function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): vo
 		const lnext = `__L${p.labels}`;
 		emitStmtsLine(p, "{");
 		emitStmtsLine(p, `if (!(${genExpr(g, p, conds[i])})) goto ${lnext};`);
-		genBlockWithTail(g, p, bodies[i], t);
+		genBlockWithTail(g, p, bodies[i], t, loop, sw);
 		emitStmtsLine(p, `} goto ${lend};`);
 		emitStmtsLine(p, lnext + ":;");
 	}
 	if (elseBody != null) {
-		genBlockWithTail(g, p, elseBody, t);
+		genBlockWithTail(g, p, elseBody, t, loop, sw);
 		emitStmtsNl(p);
 	} else {
-		genDispatchTail(g, p, t);
+		genDispatchTail(g, p, t, loop, sw);
 	}
 	emitStmtsLine(p, lend + ":;");
 }
@@ -862,7 +863,7 @@ function endsCase(stmt: Readonly<Node>, t: DispatchTail): boolean {
 	return t.wrapper != "" && stmt.kind == NodeKind.BreakStmt && (stmt.data as BreakStmtData).breakLabel == t.wrapper;
 }
 
-function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: DispatchTail): void {
+function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	let n = stmts.length;
 	if (n > 0 && endsCase(stmts[n - 1], t)) {
 		n -= 1;
@@ -873,15 +874,19 @@ function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: Dispatc
 	const last = n - 1;
 	for (let i = 0; i < last; i += 1) genStmt(g, p, stmts[i]);
 	if (last >= 0 && stmts[last].kind == NodeKind.IfStmt) {
-		genTailIf(g, p, stmts[last], t);
+		genTailIf(g, p, stmts[last], t, loop, sw);
 		return;
 	}
 	if (last >= 0 && stmts[last].kind == NodeKind.BlockStmt) {
-		genBlockWithTail(g, p, stmts[last], t);
+		genBlockWithTail(g, p, stmts[last], t, loop, sw);
 		return;
 	}
 	if (last >= 0) genStmt(g, p, stmts[last]);
-	genDispatchTail(g, p, t);
+	genDispatchTail(g, p, t, loop, sw);
+}
+
+function whileLabelOf(loop: Readonly<Node>): string {
+	return (loop.data as WhileStmtData).whileLabel;
 }
 
 function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readonly<Node>, at: int32): void {
@@ -889,16 +894,12 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	const stmts = (d.whileBody.data as BlockStmtData).statements;
 	const sd = sw.data as SwitchStmtData;
 	const size = computedGotoSize(sd.switchDisc.nodeType);
-	const pre: Readonly<Node>[] = [];
-	const post: Readonly<Node>[] = [];
 	for (let i = 0; i < stmts.length; i += 1) {
 		if (i == at || isComputedGotoMark(stmts[i])) continue;
 		if (holdsLabel(stmts[i])) {
 			addCGenError(g, "computed goto repeats the statements around the switch, and one of them holds a label", stmts[i].location.line, stmts[i].location.column);
 			return;
 		}
-		if (i < at) pre.push(stmts[i]);
-		else post.push(stmts[i]);
 	}
 	if (size == 0) {
 		addCGenError(g, "internal: computed goto reached C codegen without a table size", sw.location.line, sw.location.column);
@@ -916,7 +917,7 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	if (d.whileLabel != "") { whileBlk.label = d.whileLabel; }
 	setStmtsIndent(p, oldIndent + 1);
 
-	genStmts(g, p, pre);
+	genLoopSide(g, p, node, at, true);
 	let entries = "";
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
@@ -934,7 +935,7 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	emitStmtsLine(p, `static void* const ${table}[${size}] = { ${entries} };`);
 	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, sd.switchDisc)}];`);
 
-	const tail: DispatchTail = { pre: pre, post: post, disc: sd.switchDisc, table: table, wrapper: wrapperLabel, emitted: 0 };
+	const tail: DispatchTail = { at: at, table: table, wrapper: wrapperLabel, emitted: 0 };
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
 		emitStmtsLine(p, `__cg${id}_${k}: ;`);
@@ -943,20 +944,21 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 			p.blocks[p.blocks.length - 1].label = wrapperLabel;
 			p.blocks[p.blocks.length - 1].landing = `__cg${id}_${k}_end`;
 		}
-		genStmtsWithTail(g, p, cd.caseStmts, tail);
+		genStmtsWithTail(g, p, cd.caseStmts, tail, node, sw);
 		if (wrapperLabel != "") {
 			const landed = p.blocks[p.blocks.length - 1].breakUsed;
 			popBlock(p);
 			if (landed) {
 				emitStmtsLine(p, `__cg${id}_${k}_end: ;`);
-				if (!endsInJump(cd.caseStmts)) genDispatchTail(g, p, tail);
+				if (!endsInJump(cd.caseStmts)) genDispatchTail(g, p, tail, node, sw);
 			}
 		}
 	}
-	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
+	const whileLabel = whileLabelOf(node);
+	if (whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${whileLabel}: ;`); }
 	popBlock(p);
 	emitStmtsLine(p, "}");
-	if (d.whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${d.whileLabel}_x_: ;`); }
+	if (whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${whileLabel}_x_: ;`); }
 }
 
 // ===== While Statement =====
@@ -1071,7 +1073,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// `return expr` where expr is void (T=void instantiation): C forbids returning a
 	// void expression. A void local has no storage, so an identifier emits nothing.
 	const argIsVoid = d.argument != null && !isNrvo
-		&& ((p.returnType != null && p.returnType.kind == TypeKind.Void)
+		&& (p.returnsVoid
 			|| (d.argument.nodeType != null && d.argument.nodeType.kind == TypeKind.Void));
 	if (argIsVoid && d.argument != null) {
 		if (d.argument.kind != NodeKind.Identifier) {
@@ -1083,7 +1085,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, "return;");
 		return;
 	}
-	if (d.argument != null && isNrvo && p.returnType != null && buildsInPlace(g, d.argument, getTypeDesc(g, p.returnType))) {
+	if (d.argument != null && isNrvo && p.returnDesc != "" && buildsInPlace(g, d.argument, p.returnDesc)) {
 		const built = genExprInto(g, p, d.argument, "(*__result)");
 		if (built != "(*__result)") emitStmtsLine(p, `*__result = ${built};`);
 	} else if (d.argument != null) {
@@ -1091,8 +1093,8 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		if (isNrvo) {
 			// C99 compound literal: (Type){ .f = v } needs the (Type) prefix.
 			// Hoisted temp variable: _lit3_ does NOT — struct-to-struct cast is invalid C.
-			if (d.argument.kind == NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) == "{" && p.returnType != null) {
-				const castType = getTypeDesc(g, p.returnType);
+			if (d.argument.kind == NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) == "{" && p.returnDesc != "") {
+				const castType = p.returnDesc;
 				emitStmtsLine(p, `*__result = (${castType})${snippet};`);
 			} else {
 				emitStmtsLine(p, `*__result = ${snippet};`);
@@ -1102,7 +1104,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				// Reference parity: save return value to temp before finally cleanup.
 				// blockLeaveActions may emit wasMoved that zeros the returned local.
 				// Store in temp first, then run cleanup, then return temp.
-				const retType = p.returnType != null ? getTypeDesc(g, p.returnType) : (d.argument.nodeType != null ? getTypeDesc(g, d.argument.nodeType) : "");
+				const retType = p.returnDesc != "" ? p.returnDesc : (d.argument.nodeType != null ? getTypeDesc(g, d.argument.nodeType) : "");
 				if (retType != "" && retType != "void") {
 					const tmp = getTemp(p, retType);
 					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
@@ -1430,7 +1432,7 @@ function genUnreachableStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 // ===== Tests =====
 
-import { createCGen, createProc } from "./context";
+import { CEmissionFacts, createAliveSet, createCGen, createProc } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -1441,8 +1443,10 @@ function stmtOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null);
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
+	const p = createProc("test");
 	// Inline loop instead of genStmts to reduce call depth
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genStmt(g, p, pd.programStmts[i]);
@@ -1559,8 +1563,10 @@ function stmtErrors(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR";
 	const pd = pr.value.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null);
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
+	const p = createProc("test");
 	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
 	let messages = "";
 	for (const e of g.errors) messages = messages + e.message + "\n";

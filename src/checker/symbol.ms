@@ -103,7 +103,7 @@ export function routineFlagSet(text: string): BitSet<RoutineFlag> {
 	return set;
 }
 
-function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
+export function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 	let set = 0 as BitSet<RoutineFlag>;
 	let inTypeText = false;
 	for (const word of splitTopLevel(text, "|")) {
@@ -128,6 +128,16 @@ function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 		inTypeText = key == "gen:" || key == "ext:" || key == "sext:";
 	}
 	return set;
+}
+
+// The implementation is the unique member of an overload set without the OverloadSig flag;
+// null when every member is a signature.
+export function findOverloadImpl(sym: Symbol): Symbol {
+	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return sym;
+	for (const o of sym.overloads) {
+		if (!hasFlag(o, SymbolFlag.OverloadSig)) return o;
+	}
+	return null as unknown as Symbol;
 }
 
 export function overloadWinner(set: Symbol, idx: number): Symbol {
@@ -275,13 +285,12 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 export function lookupSymbolReadonly(table: Readonly<SymbolTable>, name: string): Readonly<Symbol> {
 	const nameId = findIdentId(table.identCache, name);
 	if (nameId == 0) return null as unknown as Readonly<Symbol>;
-	let scope = table.current;
-	while (scope != null) {
-		const sym = scope.symbols.get(nameId);
-		if (sym != null) return sym;
-		scope = scope.parent;
-	}
-	return null as unknown as Readonly<Symbol>;
+	return scopeSymbol(table.current, nameId);
+}
+
+function scopeSymbol(scope: Readonly<Scope | null>, nameId: int32): Readonly<Symbol> {
+	if (scope == null) return null as unknown as Readonly<Symbol>;
+	return scope.symbols.readonlyGet(nameId) ?? scopeSymbol(scope.parent, nameId);
 }
 
 // Check current scope only, O(1) via symbols.
@@ -320,6 +329,15 @@ export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, 
 		scope = scope.parent;
 	}
 	return true;
+}
+
+export function scopeHolding(table: SymbolTable, sym: Symbol): Cursor<Scope> {
+	const nameId = getIdentId(table.identCache, sym.name);
+	let scope = table.current;
+	while (scope != null && scope.symbols.get(nameId) != sym) {
+		scope = scope.parent;
+	}
+	return scope;
 }
 
 export function scopeDefining(table: SymbolTable, definer: string, name: string): Cursor<Scope> {
@@ -433,6 +451,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		item: 0,
 		instantiatedFrom: null,
 		instanceArgs: null,
+		instanceParams: null,
 		ctorRoutine: null,
 		borrowedFrom: null,
 		typeParams: [],

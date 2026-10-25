@@ -83,18 +83,16 @@ msString msFsReadDirEntries(msString path) {
 		} else if (e->d_type == DT_UNKNOWN || e->d_type == DT_LNK) {
 #endif
 			/* Fall back to stat: build "path/name" and check S_ISDIR */
-			char* tmp = (char*)malloc(pathLen + 1 + nlen + 1);
-			if (tmp) {
-				memcpy(tmp, cpath, pathLen);
-				tmp[pathLen] = '/';
-				memcpy(tmp + pathLen + 1, e->d_name, nlen);
-				tmp[pathLen + 1 + nlen] = '\0';
-				struct stat st;
-				if (stat(tmp, &st) == 0 && S_ISDIR(st.st_mode)) {
-					isDir = 1;
-				}
-				free(tmp);
+			char* tmp = (char*)msMemAlloc(pathLen + 1 + nlen + 1);
+			memcpy(tmp, cpath, pathLen);
+			tmp[pathLen] = '/';
+			memcpy(tmp + pathLen + 1, e->d_name, nlen);
+			tmp[pathLen + 1 + nlen] = '\0';
+			struct stat st;
+			if (stat(tmp, &st) == 0 && S_ISDIR(st.st_mode)) {
+				isDir = 1;
 			}
+			free(tmp);
 #ifdef DT_DIR
 		}
 #endif

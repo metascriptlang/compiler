@@ -13,6 +13,7 @@ import { hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
 import { CliOptions } from "./options";
 import { readSource, writeOutput, printTiming, replaceExt, ensureDir, exeSuffix } from "./io";
 import { cmdBuildC, cmdCheckC } from "./compile";
@@ -103,7 +104,7 @@ export function cmdPipeline(filePath: string): void {
 
 	// Phase 4: Analyze (DRC)
 	console.log("\n" + cyan("[4/5]") + " Analyze " + dim("(DRC injection)") + "...");
-	const analyzed = analyzeProgram(transformed, checkerCtx);
+	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	console.log("  " + green("OK"));
 
 	// Phase 5: Codegen

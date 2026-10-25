@@ -73,8 +73,7 @@ msBuffer msBufferAlloc(int64_t size) {
 	if (size <= 0) return MS_EMPTY_BUFFER;
 	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
-	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + size + 1);
-	if (!p) return MS_EMPTY_BUFFER;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + size + 1);
 
 	p->cap = size;
 	/* calloc zero-fills data; null-terminate for safety */
@@ -90,8 +89,7 @@ msBuffer msBufferAllocUnsafe(int64_t size) {
 	if (size <= 0) return MS_EMPTY_BUFFER;
 	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
-	msStrPayload* p = (msStrPayload*)malloc(sizeof(msStrPayload) + size + 1);
-	if (!p) return MS_EMPTY_BUFFER;
+	msStrPayload* p = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + size + 1);
 
 	p->cap = size;
 	p->data[size] = '\0';  /* null-terminate only */
@@ -167,8 +165,7 @@ msString msBufferToHex(msBuffer buf) {
 	if (!buf.p || buf.len == 0) return MS_EMPTY_STRING;
 
 	int64_t hexLen = buf.len * 2;
-	char* out = (char*)malloc(hexLen + 1);
-	if (!out) return MS_EMPTY_STRING;
+	char* out = (char*)msMemAlloc(hexLen + 1);
 
 	for (int64_t i = 0; i < buf.len; i++) {
 		unsigned char byte = (unsigned char)buf.p->data[i];
@@ -186,8 +183,7 @@ msString msBufferToBase64(msBuffer buf) {
 	if (!buf.p || buf.len == 0) return MS_EMPTY_STRING;
 
 	int64_t outLen = ((buf.len + 2) / 3) * 4;
-	char* out = (char*)malloc(outLen + 1);
-	if (!out) return MS_EMPTY_STRING;
+	char* out = (char*)msMemAlloc(outLen + 1);
 
 	int64_t j = 0;
 	for (int64_t i = 0; i < buf.len; i += 3) {
@@ -1008,8 +1004,7 @@ msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msStrin
 	}
 
 	if (encodingEq(enc, encLen, "ascii")) {
-		char* out = (char*)malloc(len + 1);
-		if (!out) return MS_EMPTY_STRING;
+		char* out = (char*)msMemAlloc(len + 1);
 		for (int64_t i = 0; i < len; i++) {
 			out[i] = buf.p->data[start + i] & 0x7F;
 		}
@@ -1021,8 +1016,7 @@ msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msStrin
 
 	if (encodingEq(enc, encLen, "hex")) {
 		int64_t hexLen = len * 2;
-		char* out = (char*)malloc(hexLen + 1);
-		if (!out) return MS_EMPTY_STRING;
+		char* out = (char*)msMemAlloc(hexLen + 1);
 		for (int64_t i = 0; i < len; i++) {
 			unsigned char byte = (unsigned char)buf.p->data[start + i];
 			out[i * 2] = hexTable[byte >> 4];
@@ -1036,8 +1030,7 @@ msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msStrin
 
 	if (encodingEq(enc, encLen, "base64") || encodingEq(enc, encLen, "base64url")) {
 		int64_t outLen = ((len + 2) / 3) * 4;
-		char* out = (char*)malloc(outLen + 1);
-		if (!out) return MS_EMPTY_STRING;
+		char* out = (char*)msMemAlloc(outLen + 1);
 		int64_t j = 0;
 		for (int64_t i = 0; i < len; i += 3) {
 			unsigned char b0 = (unsigned char)buf.p->data[start + i];

@@ -26,6 +26,6 @@ struct FeedAccounts {
 	pet: Mutable<Pet>;
 }
 
-console.log(anchorIdl<PetOp>({ name: "pets", address: "", Feed: [FeedAccounts], accounts: [Pet], events: [], errors: "" }));
-console.log(anchorIdl<PetOp>({ name: "deep", address: "", Feed: [FeedAccounts], accounts: [Deep], events: [], errors: "" }));
-console.log(anchorIdl<PetOp>({ name: "heroes", address: "", Feed: [FeedAccounts], accounts: [Hero], events: [], errors: "" }));
+console.log(anchorIdl<PetOp>({ name: "pets", address: "", Feed: [FeedAccounts], accounts: [Pet], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<PetOp>({ name: "deep", address: "", Feed: [FeedAccounts], accounts: [Deep], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<PetOp>({ name: "heroes", address: "", Feed: [FeedAccounts], accounts: [Hero], events: [], errors: "" })); // GUARD-REFUSED

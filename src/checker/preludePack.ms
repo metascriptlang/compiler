@@ -30,7 +30,7 @@ import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType } from "./types";
-import { makeSymbolState } from "./symbol";
+import { makeSymbolState, setFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
@@ -1528,7 +1528,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 
 	for (let i = 0; i < compilerFuncNames.length; i += 1) {
 		const si = compilerFuncSym[i];
-		if (si >= 0 && si < syms.length) ctx.compilerFuncs.set(compilerFuncNames[i], syms[si]);
+		if (si < 0 || si >= syms.length) continue;
+		setFlag(syms[si], SymbolFlag.CompilerProc);
+		ctx.compilerFuncs.set(compilerFuncNames[i], syms[si]);
 	}
 	for (let i = 0; i < interfSpecs.length; i += 1) {
 		const members: Symbol[] = [];

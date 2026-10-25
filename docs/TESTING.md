@@ -143,7 +143,7 @@ silent contract drift between adjacent phases.
 Compiler-source contracts run in a **native test binary**; adding `--target=js`
 asks the JS backend to compile the checker itself, not to exercise the checked
 program on JS. For example, run
-`msc test src/test/handoff/intLiteralBoundary.ms --tests-in-dir --gc=orc`.
+`msc test src/test/handoff/intLiteralBoundary.ms --tests-in-dir`.
 Its runtime sibling is [`013-int64Fidelity.ms`](../src/test/corpus/programs/013-int64Fidelity.ms),
 run through the real C and JS backends rather than duplicated in the helper tier.
 Measured 2026-09-27 with installed build `b899f456`, source baseline tree
@@ -166,8 +166,8 @@ lines), and ALL determinism obligations live on the program:
   - `// @exit: <n>` — expected exit code, all lanes (default 0).
   - `// @skip-js: <reason>` — C-only program; the JS lane skips it and
     logs the reason. The skip list doubles as the JS backend's worklist.
-  - `// @maxrss: <MB>` — RSS program: built + run under `--gc=drc`,
-    `--gc=orc` and `--danger` (`-O3 -flto`, `--cc=clang`) via
+  - `// @maxrss: <MB>` — RSS program: built + run on the `c` lane and the
+    `danger` lane (`--danger`: `-O3 -flto`, `--cc=clang`) via
     `/usr/bin/time -l`, asserting exit + signal + stdout + peak RSS (the
     former native/ tier semantics).
   - `// @stdout: <substr>` — merged output must CONTAIN the substring.
@@ -192,12 +192,12 @@ lines), and ALL determinism obligations live on the program:
     fails, and diff 0 with slack declared fails as "slack unused" so the
     marker self-cleans if global-destroy ever lands. Never use @xfail for
     a survivor — it would mask every future real leak in that program.
-- **Programs WITHOUT `@maxrss` are parity programs**: run through C-drc,
-  C-orc, C-danger and (unless `@skip-js`) JS-on-node.
+- **Programs WITHOUT `@maxrss` are parity programs**: run through the `c`,
+  `danger` and (unless `@skip-js`) `js` and `esm` lanes, plus `raiser` when
+  `MSCORPUS_RAISER=1` turns it on.
 - **EVERY program is byte-compared across all of its lanes** — no golden
   files, nothing to bless, nothing to drift. The axes are independent and
-  each catches its own class: C↔JS (backend), drc↔orc (GC mode changing
-  observable behaviour), O0↔danger (UB the optimizer is free to exploit,
+  each catches its own class: C↔JS (backend), O0↔danger (UB the optimizer is free to exploit,
   and DCE masking leaks). A program whose output legitimately differs on
   one axis is classified out with `@xfail(<lane>)` and a reason — never
   by weakening the comparison.
@@ -275,7 +275,7 @@ last sync, and its link response file `msc_link.rsp` names that root in every
 removed from the repo, while the same source built by `./msc build` (the repo
 root) printed every byte.
 
-So the loop is: edit the repo → `./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`
+So the loop is: edit the repo → `./msc build src/index.ms --danger --cc=clang --output=msc`
 (`msc build` only when no `./msc` exists yet, then once more with `./msc`) →
 **test the candidate** → `./msc run --target=raiser tools/syncLocalBinary.ms`
 only once green (publish: candidate + repo std/runtime become the installed
@@ -324,8 +324,8 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   binaries at the tree root so each reads this tree's support files:
 
   ```bash
-  ./msc build src/index.ms --gc=drc --danger --lto=off --output=msc-stage1
-  ./msc-stage1 build src/index.ms --gc=drc --danger --lto=off --output=msc-stage2
+  ./msc build src/index.ms --danger --lto=off --output=msc-stage1
+  ./msc-stage1 build src/index.ms --danger --lto=off --output=msc-stage2
   ```
 
   Measured 2026-10-04: earlier old-builder candidates failed corpus
@@ -402,9 +402,9 @@ Both binaries sit under `out/gate/`, so they resolve the same `std/` and
 and `out/gate/emit/cand/<n>` with `<n>` the program's line in the list: emitted
 C file names embed the absolute path, and a side emitting one level deeper
 crossed Windows MAX_PATH on multi-module programs while the other did not. The signature per program
-is the C of `--gc=drc` plus `--gc=drc --danger` and the JS bundle; the differing
+is the C of a plain build plus `--danger` and the JS bundle; the differing
 set goes to the runner as `MSCORPUS_ONLY=<exact names>` (SAN: the C set only),
-a JS-only set adds `MSCORPUS_LANES=c,drc,js,esm`, and `known-red.json` is read
+a JS-only set adds `MSCORPUS_LANES=c,js,esm` (`,raiser` when the raiser lane is on), and `known-red.json` is read
 for those programs alone. Changed files under `corpus/programs/` always join
 the set.
 
@@ -463,7 +463,7 @@ Recipe:
    built with the last good binary), candidate = HEAD+fix. Run each from its
    OWN cwd — `--emit=c` writes `out/debug/<mangled>.c` relative to cwd and
    the flat mangled names collide across programs.
-2. For every `programs/NNN-*` entry: `msc build <entry> --emit=c --gc=drc`,
+2. For every `programs/NNN-*` entry: `msc build <entry> --emit=c`,
    then sweep `out/debug/*.c` aside into a per-program dir. Shared std
    modules are identical anyway; the entry module is what carries the diff.
 3. Hash-compare both sides per program. Identical ⇒ provably unaffected.
@@ -486,8 +486,9 @@ Traps, all paid for on 2026-09-05:
   through a function call so the argument is a real local.
 - `MSCORPUS_FILTER` is substring (`name.contains`), not prefix — "2" matches
   012/102/202/…. `MSCORPUS_ONLY=a,b` takes exact names and fails loud on a
-  name that is not a program; `MSCORPUS_LANES=c,drc,js,esm` builds those
-  parity cells alone (unknown lane, or combined with `MSCORPUS_SAN=1`: error).
+  name that is not a program; `MSCORPUS_LANES=c,js,esm` builds those
+  parity cells alone (the lanes are `c`/`danger`/`js`/`esm`/`raiser`; an unknown
+  lane, or combined with `MSCORPUS_SAN=1`: error).
 - The selector degenerates for broad changes (codegen/runtime/analyzer work
   that rewrites most programs' C): |A| large ⇒ the full run is the honest
   option. |A| is self-calibrating, no guessing up front.
@@ -539,7 +540,7 @@ Traps, all paid for on 2026-09-05:
   This proves the x64 Windows loader and sanitizer sensitivity, not the full
   integration guard/SAN lane or the arm64/i386 runtime filenames.
 - Heap corruption inside the compiler itself: build it under ASan with the
-  DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
+  DRC slab off, `msc build src/index.ms --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
   --output=/tmp/msc-asan`, then compile a real program with it. zig cc on
   macOS cannot link the ASan runtime, and slab recycling hides use-after-free

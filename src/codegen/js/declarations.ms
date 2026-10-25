@@ -10,7 +10,7 @@ import { useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
-import { mangleQualified, mangleModuleName } from "../c/names";
+import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 
@@ -466,7 +466,7 @@ function recordBundleExport(gen: JSGenerator, name: string, local: string): void
 }
 
 function bundleDefaultLocal(gen: JSGenerator): string {
-	return mangleQualified("default", mangleModuleName(gen.sourceFile));
+	return mangleQualified("default", mangleModuleName(buildModuleNameRoots(), gen.sourceFile));
 }
 
 function emitBundleDefaultExport(gen: JSGenerator, exprStmt: Node, declaration: string): void {

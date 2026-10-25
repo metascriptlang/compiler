@@ -3,8 +3,8 @@
 
 import { execFileCapture, cwd, env, exit } from "std/process";
 
-function fixtureVerdict(msc: string, root: string, gc: string): string {
-	const r = execFileCapture(msc, ["test", root + "/src/test/guard/fixtures/assertMessageBorrow.test.ms", "--gc=" + gc, "--cc=clang", "--sanitize=address"]);
+function fixtureVerdict(msc: string, root: string): string {
+	const r = execFileCapture(msc, ["test", root + "/src/test/guard/fixtures/assertMessageBorrow.test.ms", "--cc=clang", "--sanitize=address"]);
 	if (r.ok) return "the fixture's assert did not fail";
 	if (r.error.signal !== 0) return "msc itself died by signal " + r.error.signal.toString();
 	if (r.error.exitCode !== 1) return "msc test exited " + r.error.exitCode.toString() + "\n" + r.error.output + r.error.errorOutput;
@@ -16,11 +16,9 @@ function fixtureVerdict(msc: string, root: string, gc: string): string {
 const root = cwd();
 const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : root + "/msc";
-for (const gc of ["drc", "orc"]) {
-	const why = fixtureVerdict(msc, root, gc);
-	if (why != "") {
-		console.log("GUARD-FAIL " + gc + ": " + why);
-		exit(1);
-	}
+const why = fixtureVerdict(msc, root);
+if (why != "") {
+	console.log("GUARD-FAIL " + why);
+	exit(1);
 }
 console.log("GUARD-OK");

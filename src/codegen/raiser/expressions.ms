@@ -1,7 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
-import { resolveOverloadWinner } from "../c/names";
+import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
@@ -20,9 +20,9 @@ import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
-import { placedInstanceOf } from "../../checker/instantiate";
+import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -1480,7 +1480,7 @@ function callBlock(s: RaiserCompState, resultType: Type | null, args: Node[], pa
 
 function calleeParamTypes(sym: Symbol | null): Type[] | null {
 	if (sym == null) return null;
-	const declared = placedInstanceOf(sym).symbolType;
+	const declared = placedInstanceOf(placedInstances(), sym).symbolType;
 	return declared != null && declared.kind == TypeKind.Function ? declared.typeChildren : null;
 }
 
@@ -1586,6 +1586,22 @@ function compileHiXorLoCall(s: RaiserCompState, node: Node): int32 {
 	return emitIntBinary(s, RaiserOpcode.BitXor, high, low);
 }
 
+function compileLoadLECall(s: RaiserCompState, node: Node, width: int32): int32 {
+	const d = node.data as CallExprData;
+	const bytes = compileExpr(s, d.arguments[0]);
+	const offset = compileExpr(s, d.arguments[1]);
+	let value = emitIntConst(s, 0);
+	for (let i = 0; i < width; i += 1) {
+		const index = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.AddI64Imm, index, offset, immField(i)));
+		const byte = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, byte, bytes, index));
+		const shifted = emitIntBinary(s, RaiserOpcode.ShiftLeft, byte, emitIntConst(s, i * 8));
+		value = emitIntBinary(s, RaiserOpcode.BitOr, value, shifted);
+	}
+	return value;
+}
+
 function namespaceMemberIdent(node: Node): Node | null {
 	if (node.kind != NodeKind.MemberExpr || node.resolvedSym == null) return null;
 	const d = node.data as MemberExprData;
@@ -1648,6 +1664,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
+	}
+	if ((builtinKind == "LoadLE64" || builtinKind == "LoadLE32") && d.arguments.length == 2) {
+		return compileLoadLECall(s, node, builtinKind == "LoadLE64" ? 8 : 4);
 	}
 	if (builtinKind == "Float64Bits" && d.arguments.length == 1) {
 		const value = compileExpr(s, d.arguments[0]);
@@ -1811,7 +1830,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
-			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
+			calleeSym = overloadAt(calleeSym, resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx));
 		}
 		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
@@ -2049,7 +2068,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	// Set each field
 	for (let i = 0; i < d.keys.length; i = i + 1) {
 		const fieldType = node.nodeType != null
-			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
+			? fieldTypeView(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
 		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
 		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
 		emitInst(s, fieldInst(s, node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));
@@ -2559,7 +2578,7 @@ function literalClass(t: Type | null): Symbol | null {
 	const bare = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
 	if (runtimeClassSym(bare) == null) return null;
 	const sym = classSymOfType(bare);
-	return sym != null ? placedInstanceOf(sym) : null;
+	return sym != null ? placedInstanceOf(placedInstances(), sym) : null;
 }
 
 function emitObjectShell(s: RaiserCompState, dest: int32, t: Type | null): void {

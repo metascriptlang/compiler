@@ -22,8 +22,8 @@
 //
 // RED MEANS: the open-class canFormAcycle rule drifted from the Nim tfFinal model.
 //   Run /trace-nim on canFormAcycleAux (types.nim:408-461).
-// GUARD-BALANCE-ORC CChild
-// GUARD-BALANCE-ORC DirectCycle
+// GUARD-BALANCE CChild
+// GUARD-BALANCE DirectCycle
 
 class CBase { tag: string }
 class CChild extends CBase { link: CBase | null = null }

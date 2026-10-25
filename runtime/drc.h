@@ -1,8 +1,8 @@
 /*
  * MetaScript DRC Runtime — ARC + ORC Cycle Collector
  *
- * ARC: refcount primitives (incref/decref). Active under --gc=drc and --gc=orc.
- * ORC: cycle collector (Bacon's trial deletion). Active under --gc=orc (MSGC_ORC defined).
+ * ARC: refcount primitives (incref/decref).
+ * ORC: cycle collector (Bacon's trial deletion), linked in every --mm=drc build.
  *
  * RefHeader prepended to all heap-allocated RC objects.
  * Layout: [rc:4][rootIdx:4][type:8] = 16 bytes on 64-bit
@@ -10,8 +10,6 @@
  * ORC supplements ARC for cyclic data structures. Non-cyclic objects
  * use plain ARC (zero overhead). Cyclic objects get registered in the
  * root set; periodically the collector runs a 3-phase mark-scan-collect.
- *
- * When MSGC_ORC is not defined (--gc=drc), ORC functions are no-ops.
  */
 
 #ifndef MSGC_DRC_H
@@ -27,22 +25,16 @@
 #include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
-/* Under --gc=orc (MSGC_ORC), rc field = [count:28][flags:4].
+/* rc field = [count:28][flags:4].
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
- * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits.
- * Under --gc=drc (plain ARC), rc is a simple counter. */
-#ifdef MSGC_ORC
+ * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits. */
 #define MS_RC_INCREMENT 16
 #define MS_RC_MASK      15   /* lower 4 bits: color + flags */
-#else
-#define MS_RC_INCREMENT 1
-#define MS_RC_MASK      0
-#endif
 
 /* ===== Reference Header ===== */
 
 typedef struct {
-	_Atomic(intptr_t) rc;    /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
+	intptr_t rc;             /* Reference count (0 = unique, >0 = shared). Plain word: only the SHARE helpers use __atomic builtins on it. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
 	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
@@ -85,7 +77,7 @@ void msDrcStatCycle(const msTypeInfo* type);
 /* Built with -DMS_DRC_LEDGER (off by default → zero cost in normal builds).
  * Records alloc/destroy events to catch double-destroy (abort on the 2nd
  * finalize of a live pointer) and leaks (per-type alloc/destroy imbalance
- * dumped at exit). Present in BOTH --gc=drc and --gc=orc. Every last-ref
+ * dumped at exit). Every last-ref
  * destroyFn dispatch routes through MS_DESTROY_DISPATCH so the ledger sees
  * exactly one finalize per object; a second is the drift signal.
  * See src/test/guard/ and the /nim-guard skill. */
@@ -100,6 +92,9 @@ void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
 #endif
 
 #ifdef MS_DRC_LEDGER
+enum { MS_LEDGER_RC_INC, MS_LEDGER_RC_DEC, MS_LEDGER_SHARE_INC, MS_LEDGER_SHARE_DEC, MS_LEDGER_ROOT_REG, MS_LEDGER_THREAD_START, MS_LEDGER_COUNTERS };
+void msLedgerCount(int counter);
+#define MS_LEDGER_COUNT(counter)   msLedgerCount(counter)
 void msLedgerAlloc(void* p, const msTypeInfo* type);
 void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_LEDGER_ALLOC(p, t)      msLedgerAlloc((p), (t))
@@ -108,6 +103,7 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
 #else
+#define MS_LEDGER_COUNT(counter)   ((void)0)
 #define MS_LEDGER_ALLOC(p, t)      ((void)0)
 #define MS_DESTROY_DISPATCH(t, p)  do { \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
@@ -164,6 +160,29 @@ static inline int msSlabBucket(size_t totalSize) {
 /* Round up to bucket max so any request in the bucket range fits a reused entry. */
 static const size_t msSlabBucketSize[] = {32, 64, 96, 128};
 
+/* Every runtime allocation that holds a value goes through these: a failed
+ * allocation stops the program at the allocator, so no string, array or object
+ * ever carries a NULL payload. */
+_Noreturn void msRaiseOutOfMemory(void);
+
+static inline void* msMemAlloc(size_t size) {
+	void* p = malloc(size);
+	if (p == NULL && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
+static inline void* msMemAlloc0(size_t size) {
+	void* p = calloc(1, size);
+	if (p == NULL && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
+static inline void* msMemAllocN0(size_t n, size_t size) {
+	void* p = calloc(n, size);
+	if (p == NULL && n != 0 && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
 /* Slab primitive WITHOUT any zeroing — caller owns the memory state.
  * Returns dirty memory on cache hit; malloc'd (dirty) memory on cache miss.
  * Used by the Uninit alloc variants whose callers guarantee full field coverage. */
@@ -176,7 +195,7 @@ static inline void* msSlabAllocRaw(size_t totalSize) {
 		return p;
 	}
 	/* Allocate bucket max, not exact size — slab reuses by bucket, not by exact size */
-	return malloc(b >= 0 ? msSlabBucketSize[b] : totalSize);
+	return msMemAlloc(b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
 /* Safe slab primitive: zero-initialises the caller's requested range on both
@@ -194,7 +213,7 @@ static inline void* msSlabAlloc(size_t totalSize) {
 		memset(p, 0, totalSize);
 		return p;
 	}
-	return calloc(1, b >= 0 ? msSlabBucketSize[b] : totalSize);
+	return msMemAlloc0(b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
 static inline void msSlabFree(void* p, size_t totalSize) {
@@ -239,7 +258,9 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
 	(void)oldSize;
-	return realloc(old, newSize);
+	void* p = realloc(old, newSize);
+	if (p == NULL && newSize != 0) msRaiseOutOfMemory();
+	return p;
 }
 
 /* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).
@@ -283,12 +304,12 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 }
 
 /* ===== ARC Operations ===== */
-/* All rc arithmetic uses MS_RC_INCREMENT to preserve ORC's lower bits.
- * Under --gc=drc, MS_RC_INCREMENT=1 and MS_RC_MASK=0 — same as plain rc++/rc--. */
+/* All rc arithmetic uses MS_RC_INCREMENT to preserve ORC's lower bits. */
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
+		MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -298,30 +319,25 @@ static inline void msIncRef(void* p) {
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
-		atomic_fetch_add_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_relaxed);
+		MS_LEDGER_COUNT(MS_LEDGER_SHARE_INC);
+		__atomic_fetch_add(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELAXED);
 	}
 }
 
-#ifdef MSGC_ORC
 void msUnregisterCycle(void* p);
-#endif
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
+	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
-	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
-	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
+	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
 	if ((h->rc & ~MS_RC_MASK) != 0) {
-		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
-		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
-		if (!concurrentDecrefLeftUsLast) return false;
-		h->rc += MS_RC_INCREMENT;
+		h->rc -= MS_RC_INCREMENT;
+		return false;
 	}
-#ifdef MSGC_ORC
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 	return true;
 }
 
@@ -329,13 +345,14 @@ static inline bool msDecRefIsLast(void* p) {
  * fetch_sub plus the Acquire fence before the caller destroys is the load-bearing
  * ordering (Rust Arc protocol) — it must not be weakened. fetch_sub by
  * MS_RC_INCREMENT preserves the ORC flag bits; Arc is acyclic so this never routes
- * through the cycle collector even under --gc=orc. */
+ * through the cycle collector. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
-	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
+	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
-		atomic_thread_fence(memory_order_acquire);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		return true;
 	}
 	return false;
@@ -345,13 +362,11 @@ static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
-#ifdef MSGC_ORC
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots — every free path, including codegen's sole-owner
 		 * direct dispose that bypasses msOrcDecRefIsLast. Else msOrcCollect later
 		 * walks a dangling root (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
@@ -360,9 +375,7 @@ static inline void msDestroyAndDispose(void* p) {
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
-#ifdef MSGC_ORC
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 	MS_HCR_COUNT(h->type, -1);
 	int b = msSlabBucket(h->allocSize);
 	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
@@ -410,9 +423,6 @@ static inline bool msDropEdgeLast(void* owner, void* p) {
 #define msWasMoved(p) ((p) = NULL)
 
 /* ===== ORC Cycle Collector ===== */
-/* Enabled by --gc=orc (defines MSGC_ORC). --gc=drc uses plain ARC below. */
-
-#ifdef MSGC_ORC
 
 #define MS_COL_BLACK   0
 #define MS_COL_GRAY    1
@@ -433,7 +443,14 @@ typedef struct {
 } msCellSeq;
 
 void msCellSeqInit(msCellSeq* s);
-void msCellSeqPush(msCellSeq* s, msCell cell);
+__attribute__((noinline)) void msCellSeqGrow(msCellSeq* s);
+
+static inline void msCellSeqPush(msCellSeq* s, msCell cell) {
+	if (s->len >= s->cap) msCellSeqGrow(s);
+	s->data[s->len] = cell;
+	s->len++;
+}
+
 void msCellSeqClear(msCellSeq* s);
 void msCellSeqFree(msCellSeq* s);
 
@@ -442,6 +459,9 @@ MS_TLS_EXTERN(int32_t, msRootsThreshold);
 
 void msRegisterCycle(void* p, const msTypeInfo* type);
 void msUnregisterCycle(void* p);
+void msRootsSwap(msCellSeq* other);
+void msRootsAdopt(msCellSeq* orphan);
+void msRootsThreadTeardown(void);
 
 /* rememberCycle — register/unregister cycle candidate */
 static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* desc) {
@@ -461,11 +481,13 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
+	MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
+	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
@@ -484,26 +506,11 @@ static inline void msMarkMaybeCycle(void* p) {
 
 /* GC_runOrc / GC_enableOrc / GC_disableOrc parity */
 void msOrcCollect(void);
-void msOrcPartialCollect(int32_t lowMark);
+void msOrcDisown(void* p);
+void msOrcDisownValue(void* p, msTraceProc custody);
 
 static inline void msOrcEnable(void) { msRootsThreshold = 0; }
 static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }
-static inline int32_t msOrcPrepare(void) { return msRoots.len; }
-
-/* Teardown critical section (=destroy hooks). While a destructor is unwinding, an
- * object's fields are half-freed and its slots not yet nulled; a threshold-triggered
- * msOrcCollect() here would markGray-trace a dangling slot → UAF. Suppress collection
- * for the whole (possibly nested) teardown, then run one deferred collect on unwind.
- * Mirrors the reference collector's own free-loop guard, extended to ARC scope-exit
- * destroys (which the free-loop threshold hack does not cover). */
-MS_TLS_EXTERN(int32_t, msOrcTeardownDepth);
-static inline void msOrcBeginTeardown(void) { msOrcTeardownDepth += 1; }
-static inline void msOrcEndTeardown(void) {
-	msOrcTeardownDepth -= 1;
-	if (msOrcTeardownDepth == 0 && msRoots.len - 128 >= msRootsThreshold) {
-		msOrcCollect();
-	}
-}
 
 typedef struct {
 	msCellSeq traceStack;
@@ -515,19 +522,16 @@ typedef struct {
 	bool keepThreshold;
 } msGcEnv;
 
-void msOrcTraceRef(void* child, void* env);
+static inline void msOrcTraceRef(void* slotAddr, void* env) {
+	void* child = *(void**)slotAddr;
+	if (child == NULL) return;
+	msCell cell = { slotAddr, msHeader(child)->type };
+	msCellSeqPush(&((msGcEnv*)env)->traceStack, cell);
+}
 
 #ifdef MSGC_ORC_STATS
 MS_TLS_EXTERN(int32_t, msFreedCyclicObjects);
+MS_TLS_EXTERN(int32_t, msOrcCollections);
 #endif
-
-#else /* !MSGC_ORC — plain ARC (--gc=drc) */
-
-static inline void msOrcCollect(void) {}
-static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
-static inline void msOrcBeginTeardown(void) {}
-static inline void msOrcEndTeardown(void) {}
-
-#endif /* MSGC_ORC */
 
 #endif /* MSGC_DRC_H */

@@ -26,8 +26,7 @@ exact counts, e.g. `tests/arc/tarcmisc.nim`).
 ## Running
 
 ```bash
-msc run --target=raiser src/test/guard/run.ms              # both gc modes (drc + orc)
-GUARD_GC=drc msc run --target=raiser src/test/guard/run.ms
+msc run --target=raiser src/test/guard/run.ms
 MSC=./msc msc run --target=raiser src/test/guard/run.ms    # a specific compiler
 ```
 
@@ -54,7 +53,17 @@ Optional header directive:
 //                               run; with GUARD-CHECK-FAIL the build must fail with every tag
 // GUARD-ASAN                    with GUARD-OS bare: also build under ASan and run on the
 //                               host; GUARD-OK printed and no AddressSanitizer report
+<code> // GUARD-REFUSED          with GUARD-CHECK-FAIL, on each refused line: the build must
+                                 report an error on that line (`// GUARD-WARNED`: a warning)
 ```
+
+A CHECK-FAIL probe whose errors sit on two or more lines marks every refused shape, so
+one shape that starts compiling turns it red while the others still fail. Mark a shape
+from what the probe means to refuse, never from today's output: an intended shape with no
+error on its line is a finding, not a mark to move.
+
+`GUARD_SELFTEST=1` runs `selftest/`: each fixture breaks one check on purpose and must go
+red with the reason it names, so a check that cannot fail shows up there.
 
 Note: mangled type names are compiler-internal and can shift under transform
 refactors — prefer the double-destroy abort (name-agnostic) as the core signal;

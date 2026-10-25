@@ -40,7 +40,7 @@ test "instanceHookIdentity: independent requesters retain checked records withou
 	const requester = createContext();
 	const copy = makeSymbol("differentEmissionSpelling", SymbolKind.Function, instances[0].sym.symbolType, false);
 	copy.instantiatedFrom = generic;
-	requester.procInstCache.set(generic, [{ sym: copy, concreteTypes: instances[0].concreteTypes }]);
+	requester.procInstCache.set(generic, [{ sym: copy, params: instances[0].params, concreteTypes: instances[0].concreteTypes }]);
 	retainCheckedInstances([ctx, requester]);
 	assert sameCheckedInstance(copy, instances[0].sym);
 	assert !sameCheckedInstance(copy, instances[1].sym);
@@ -103,7 +103,7 @@ test "instanceHookIdentity: DCE follows an independent requester copy by phantom
 	const copy = makeSymbol("unrelatedOutputName", SymbolKind.Function, selected.symbolType, false);
 	copy.instantiatedFrom = generic;
 	copy.modulePath = "/owner.ms";
-	requester.procInstCache.set(generic, [{ sym: copy, concreteTypes: instances[0].concreteTypes }]);
+	requester.procInstCache.set(generic, [{ sym: copy, params: instances[0].params, concreteTypes: instances[0].concreteTypes }]);
 	retainCheckedInstances([ctx, requester]);
 	const loc = makeLoc(1, 1);
 	const owner = createNodeAt(NodeKind.Program, { programStmts: [selected.declNode!, unused.declNode!] }, loc);

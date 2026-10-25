@@ -2,7 +2,9 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs, isVarargs, unwrapVarargs, UnifyBindings } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings } from "./types";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
 
 
 function isOpenElement(t: Type): boolean {
@@ -41,6 +43,18 @@ function isLiteralKind(t: Type): boolean {
 	return t.kind == TypeKind.EnumLiteral || t.kind == TypeKind.StringLiteral || t.kind == TypeKind.BooleanLiteral || t.kind == TypeKind.NumberLiteral;
 }
 
+function readElementOf(elem: Type | null): Type | null {
+	const held = elem != null && elem.kind == TypeKind.Cursor && elem.typeReturn != null ? elem.typeReturn : elem;
+	return held != null && isReadonlyView(held) && held.mutableView != null ? held.mutableView : held;
+}
+
+// A read-only container is only read, so a Cursor or view element fits by the element it holds.
+function readElementsFit(source: Type, target: Type): boolean {
+	const elem = readElementOf(source.typeReturn);
+	const want = readElementOf(target.typeReturn);
+	return sameElementRepr(elem, want) && sameElement(elem, want);
+}
+
 function sameElementRepr(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
 	if (!isNumeric(a) || !isNumeric(b)) return true;
@@ -74,8 +88,8 @@ export function isNominalMismatch(source: Type | null, target: Type | null): boo
 	return !isAssignable(source, target);
 }
 
-const _reprSources: Type[] = [];
-const _reprTargets: Type[] = [];
+const _reprSources: Cursor<Readonly<Type>>[] = [];
+const _reprTargets: Cursor<Readonly<Type>>[] = [];
 export function isReinterpretUnsafe(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	if (pairOnStack(_reprSources, _reprTargets, source, target)) return false;
@@ -116,9 +130,11 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	if (source.kind == TypeKind.Ptr && isUntypedPointer(target)) return false;
 	if (source.kind == TypeKind.Array || source.kind == TypeKind.Span
 		|| source.kind == TypeKind.Ptr || source.kind == TypeKind.SizedArray) {
-		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
-		if (!sameElement(source.typeReturn, target.typeReturn)) return true;
-		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
+		const elem = readElementOf(source.typeReturn);
+		const want = readElementOf(target.typeReturn);
+		if (!sameElementRepr(elem, want)) return true;
+		if (!sameElement(elem, want)) return true;
+		return isReinterpretUnsafe(elem, want);
 	}
 	// Closures are raw-copied msClosure structs and the call site casts fn to the
 	// DECLARED signature — a numeric-repr mismatch in return/params calls through
@@ -309,15 +325,15 @@ export function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 // An array layer costs two frames; 256 keeps the 50 nested instantiations the checker admits comparable.
 const RELATION_MAX_DEPTH = 256;
 
-function pairOnStack(sources: Type[], targets: Type[], source: Type | null, target: Type | null): boolean {
+function pairOnStack(sources: Readonly<Cursor<Readonly<Type>>[]>, targets: Readonly<Cursor<Readonly<Type>>[]>, source: Readonly<Type | null>, target: Readonly<Type | null>): boolean {
 	for (let i = 0; i < sources.length; i += 1) {
 		if (sources[i] == source && targets[i] == target) return true;
 	}
 	return false;
 }
 
-const _assignSources: Type[] = [];
-const _assignTargets: Type[] = [];
+const _assignSources: Cursor<Readonly<Type>>[] = [];
+const _assignTargets: Cursor<Readonly<Type>>[] = [];
 let _isaCount: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount]; }
 export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
@@ -430,7 +446,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return match (source.kind) {
 			TypeKind.SizedArray => source.typeValue == target.typeValue && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Set => sameElement(source.typeReturn, target.typeReturn),
-			TypeKind.Array | TypeKind.Span => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span => isReadonlyView(target) ? readElementsFit(source, target)
+				: sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Ptr => isUntypedPointer(target)
 				|| (sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn)),
 			TypeKind.Ref => {
@@ -444,6 +461,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
+				if (isReadonlyView(target) && source.typeReturn != null && target.typeReturn != null
+					&& (target.typeReturn.kind == TypeKind.Array || target.typeReturn.kind == TypeKind.Span)
+					&& source.typeReturn.kind == target.typeReturn.kind) return readElementsFit(source.typeReturn, target.typeReturn);
 				return isAssignable(source.typeReturn, isReadonlyView(target) ? createReadonlyView(target.typeReturn) : target.typeReturn);
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
@@ -483,7 +503,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	}
 
 	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
-		const body = matchUnionBehindInstance(target);
+		const body = instantiatedUnionBehind(target);
 		if (body != target) {
 			for (const member of body.typeChildren) {
 				if (sameType(member, source)) return true;
@@ -496,11 +516,11 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Struct/Union-backed generic like Map/Result), compare against it so
 	// `U<Box<string>>` (resolves to string) accepts a string value.
 	if (target.kind == TypeKind.GenericInstance && target.typeReturn != null
-		&& target.typeReturn.kind != TypeKind.Struct && target.typeReturn.kind != TypeKind.Union) {
+		&& target.typeReturn.kind != TypeKind.Struct && target.typeReturn.kind != TypeKind.Union && target.typeReturn.kind != TypeKind.Distinct) {
 		return isAssignable(source, target.typeReturn);
 	}
 	if (source.kind == TypeKind.GenericInstance && source.typeReturn != null
-		&& source.typeReturn.kind != TypeKind.Struct && source.typeReturn.kind != TypeKind.Union) {
+		&& source.typeReturn.kind != TypeKind.Struct && source.typeReturn.kind != TypeKind.Union && source.typeReturn.kind != TypeKind.Distinct) {
 		return isAssignable(source.typeReturn, target);
 	}
 
@@ -1094,7 +1114,9 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	return objectLayoutFits(source, target, isReadonlyView(target));
+	if (!objectLayoutFits(source, target, isReadonlyView(target))) return false;
+	noteHeldBeyond(target, source);
+	return true;
 }
 
 // A writable target field aliases the source's slot, so it must hold the same type
@@ -1421,8 +1443,8 @@ export enum TypeRelation {
 //
 interface SameTypeClosure {
 	recCheck: int32;
-	left: Type[];
-	right: Type[];
+	left: Cursor<Readonly<Type>>[];
+	right: Cursor<Readonly<Type>>[];
 }
 
 function createSameTypeClosure(): SameTypeClosure {
@@ -1449,17 +1471,17 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
-function sameDistinct(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+function sameDistinct(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
 	return sameNominalAux(a, b, c);
 }
 
-export function sameNominal(a: Type, b: Type): boolean {
+export function sameNominal(a: Readonly<Type>, b: Readonly<Type>): boolean {
 	if (a == b) return true;
 	return sameNominalAux(a, b, createSameTypeClosure());
 }
 
-function sameNominalAux(a: Type, b: Type, c: SameTypeClosure): boolean {
+function sameNominalAux(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure): boolean {
 	if (a == b) return true;
 	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
 	if (a.sym != null && b.sym != null) {
@@ -1494,7 +1516,7 @@ function isOwnGenericBase(base: Type, inst: Type): boolean {
 	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
-function sameGenericBase(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+function sameGenericBase(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeExtra != null && b.typeExtra != null) {
 		return sameNominalAux(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), c);
 	}
@@ -1520,26 +1542,26 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t, isReadonlyView(target));
 }
 
-function sameEnumMember(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+function sameEnumMember(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeNames.length == 0 || b.typeNames.length == 0 || a.typeNames[0] != b.typeNames[0]) return false;
 	if (a.typeReturn != null && b.typeReturn != null) return sameNominalAux(a.typeReturn, b.typeReturn, c);
 	return a.typeName == b.typeName;
 }
 
-function skipAliasWrapper(t: Type): Type {
-	let cur = t;
-	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
-	const seen = peelTransparentInstance(cur);
-	return seen != cur ? skipAliasWrapper(seen) : cur;
+function skipAliasWrapper(t: Type): Type;
+function skipAliasWrapper(t: Readonly<Type>): Readonly<Type>;
+function skipAliasWrapper(t: Readonly<Type>): Readonly<Type> {
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return skipAliasWrapper(t.typeReturn);
+	return peelTransparentInstance(t) != t ? skipAliasWrapper(peelTransparentInstance(t)) : t;
 }
 
-export function sameType(a: Type | null, b: Type | null): boolean {
+export function sameType(a: Readonly<Type | null>, b: Readonly<Type | null>): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
 	return sameTypeAux(a, b, createSameTypeClosure());
 }
 
-function sameTypeAux(a: Type | null, b: Type | null, c: SameTypeClosure): boolean {
+function sameTypeAux(a: Readonly<Type | null>, b: Readonly<Type | null>, c: SameTypeClosure): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
 	const left = skipAliasWrapper(a);
@@ -1555,7 +1577,7 @@ function sameTypeAux(a: Type | null, b: Type | null, c: SameTypeClosure): boolea
 	return sameTypeInner(left, right, c);
 }
 
-function sameTypeList(a: Type[], b: Type[], c: SameTypeClosure): boolean {
+function sameTypeList(a: Readonly<Type[]>, b: Readonly<Type[]>, c: SameTypeClosure): boolean {
 	if (a == null && b == null) return true;
 	if (a == null || b == null) return false;
 	if (a.length != b.length) return false;
@@ -1565,7 +1587,7 @@ function sameTypeList(a: Type[], b: Type[], c: SameTypeClosure): boolean {
 	return true;
 }
 
-function sameNameList(a: string[], b: string[]): boolean {
+function sameNameList(a: Readonly<string[]>, b: Readonly<string[]>): boolean {
 	if (a == null && b == null) return true;
 	if (a == null || b == null) return false;
 	if (a.length != b.length) return false;
@@ -1575,7 +1597,7 @@ function sameNameList(a: string[], b: string[]): boolean {
 	return true;
 }
 
-function sameStructType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+function sameStructType(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
 	if (a.typeName != "" || b.typeName != "") return sameNominalAux(a, b, c);
 	if (a.typeFlags != b.typeFlags) return false;
@@ -1583,17 +1605,17 @@ function sameStructType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClo
 	return sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
-function sameInnerType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+function sameInnerType(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeReturn == null && b.typeReturn == null) return true;
 	if (a.typeReturn == null || b.typeReturn == null) return false;
 	return sameTypeAux(a.typeReturn, b.typeReturn, c);
 }
 
-function isDoubleKind(t: Type): boolean {
+function isDoubleKind(t: Readonly<Type>): boolean {
 	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64;
 }
 
-function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
+function sameTypeInner(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure): boolean {
 	if (a.kind != b.kind) return isDoubleKind(a) && isDoubleKind(b);
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b, c),
@@ -1618,8 +1640,8 @@ function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
 	};
 }
 
-const _relationFormals: Type[] = [];
-const _relationActuals: Type[] = [];
+const _relationFormals: Cursor<Readonly<Type>>[] = [];
+const _relationActuals: Cursor<Readonly<Type>>[] = [];
 function setRelation(formal: Type, actual: Type): TypeRelation {
 	if (formal.typeReturn == null || actual.typeReturn == null) return sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None;
 	const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
@@ -1628,6 +1650,9 @@ function setRelation(formal: Type, actual: Type): TypeRelation {
 }
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (formal == null || actual == null) return typeRelationInner(formal, actual);
+	if (formal.kind == TypeKind.Cursor && formal.typeReturn != null) return typeRelation(formal.typeReturn, actual);
+	if (actual.kind == TypeKind.Cursor && actual.typeReturn != null) return typeRelation(formal, actual.typeReturn);
+	if (dropsReadonlyView(actual, formal)) return TypeRelation.None;
 	if (pairOnStack(_relationFormals, _relationActuals, formal, actual)) return TypeRelation.Exact;
 	if (_relationFormals.length >= RELATION_MAX_DEPTH) return TypeRelation.None;
 	_relationFormals.push(formal);
@@ -1635,7 +1660,7 @@ export function typeRelation(formal: Type | null, actual: Type | null): TypeRela
 	const result = typeRelationInner(formal, actual);
 	_relationFormals.pop();
 	_relationActuals.pop();
-	return result;
+	return result == TypeRelation.Exact && dropsReadonlyView(formal, actual) ? TypeRelation.Subtype : result;
 }
 
 function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelation {
@@ -1688,7 +1713,8 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => {
 				if (formal.typeReturn != null && actual.typeReturn != null) {
-					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					const readsElem = isReadonlyView(formal) && formal.kind != TypeKind.Ref && formal.kind != TypeKind.Ptr;
+					const elemRel = readsElem ? typeRelation(readElementOf(formal.typeReturn), readElementOf(actual.typeReturn)) : typeRelation(formal.typeReturn, actual.typeReturn);
 					if (elemRel == TypeRelation.None) return TypeRelation.None;
 					return elemRel;
 				}
@@ -1896,11 +1922,12 @@ export interface TypeParamFold {
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = []): TypeParamFold {
+export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = [], fromMapped: boolean[] = []): TypeParamFold {
 	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
 	const order: int32[] = [];
-	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci)) order.push(ci); }
-	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci) && !isLiteralCandidate(fromMapped, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci) && !isLiteralCandidate(fromMapped, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(fromMapped, ci)) order.push(ci); }
 	const firsts: Type[] = [];
 	for (let oi = 0; oi < order.length; oi += 1) {
 		const ci = order[oi];
@@ -1914,7 +1941,7 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 			chosen = ci;
 			for (let oj = oi + 1; oj < order.length; oj += 1) {
 				const cj = order[oj];
-				if (candParams[cj] != param || skip[cj]) continue;
+				if (candParams[cj] != param || skip[cj] || outranked(fromMapped, cj, ci)) continue;
 				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
@@ -1924,11 +1951,17 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 		out.chosen.push(chosen);
 		for (let oj = oi; oj < order.length; oj += 1) {
 			const cj = order[oj];
-			if (candParams[cj] != param || cj == chosen || skip[cj]) continue;
+			if (candParams[cj] != param || cj == chosen || skip[cj] || outranked(fromMapped, cj, ci)) continue;
 			if (!candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) out.misfits.push(cj);
 		}
 	}
 	return out;
+}
+
+// Reference: inferWithPriority — a candidate inferred through a homomorphic mapped type is
+// dropped when the parameter also has a direct one.
+function outranked(fromMapped: boolean[], candidate: int32, first: int32): boolean {
+	return isLiteralCandidate(fromMapped, candidate) && !isLiteralCandidate(fromMapped, first);
 }
 
 function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
@@ -2163,7 +2196,7 @@ let sumGenericDepth = 0;
 function sumGeneric(t: Type | null): int32 {
 	if (t == null) return 0;
 	if (t.kind == TypeKind.GenericParam || t.kind == TypeKind.Unknown || t.kind == TypeKind.None || t.kind == TypeKind.Inferred) return 1;
-	if (sumGenericDepth > 20) return 0;
+	if (t.kind == TypeKind.Struct || sumGenericDepth > 20) return 0;
 	sumGenericDepth = sumGenericDepth + 1;
 	let childSum = 0;
 	let i = 0;
@@ -2410,6 +2443,15 @@ test "two object types of the same shape relate exactly, a different shape does 
 	assert typeRelation(a, same) == TypeRelation.Exact;
 	assert typeRelation(a, wider) == TypeRelation.Subtype;
 	assert typeRelation(a, other) == TypeRelation.None;
+}
+
+test "a mutable argument ranks below an exact match on a view formal, and a view never ranks on a mutable formal" {
+	const cart = createRef(createStruct("Cart", [], [], false));
+	const view = createReadonlyView(cart);
+	assert typeRelation(cart, cart) == TypeRelation.Exact;
+	assert typeRelation(view, view) == TypeRelation.Exact;
+	assert typeRelation(view, cart) == TypeRelation.Subtype;
+	assert typeRelation(cart, view) == TypeRelation.None;
 }
 
 test "exact args" {
@@ -2849,18 +2891,17 @@ test "a read-only view reaches a union only through a matching read-only member"
 }
 
 
-test "readonly propagation stops at the shared type graph" {
+test "readonly propagation reaches the shared type graph like any user class" {
 	const graph = createRef(createStruct("Type", [], [], false));
 	graph.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
+	graph.typeReturn.sym!.modulePath = join(resolveRuntimeDir(), "std/meta/node.ms");
 	const user = createRef(createStruct("Cart", [], [], false));
 	user.typeReturn.sym = makeSymbol("Cart", SymbolKind.Class, null, false);
-	const nullGraph = createUnion([graph, nullType()]);
-	const arrGraph = createArray(graph);
-	assert isSharedGraphType(graph);
-	assert isSharedGraphType(nullGraph);
-	assert isSharedGraphType(arrGraph);
-	assert !isSharedGraphType(user);
-	assert propagateReadonlyView(graph) == graph;
+	const namesake = createRef(createStruct("Type", [], [], false));
+	namesake.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
+	namesake.typeReturn.sym!.modulePath = "/app/lib/std/meta/node.ms";
+	assert isReadonlyView(propagateReadonlyView(namesake));
+	assert isReadonlyView(propagateReadonlyView(graph));
 	assert isReadonlyView(propagateReadonlyView(user));
 	assert isReadonlyView(createReadonlyView(graph));
 }
@@ -2901,7 +2942,7 @@ test "a rejected promise fits a promise of any payload, as an empty container do
 	assert !isAssignable(createPromise(int32T), createPromise(neverType()));
 }
 
-export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
+export function duVariantIndexOfType(unionType: Readonly<Type | null>, variantType: Readonly<Type | null>): int32 {
 	if (unionType == null || unionType.typeChildren == null || variantType == null) return -1;
 	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
 		if (unionType.typeChildren[i] == variantType) return i;
@@ -2958,4 +2999,13 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 		vi += 1;
 	}
 	return found;
+}
+
+test "a candidate inferred through a mapped type yields to a direct one" {
+	const t = createGenericParam("T");
+	const viaMapped = createRef(createStruct("", ["id"], [int32Type()], true));
+	const fold = foldTypeParamCandidates([t, t], [viaMapped, stringType()], [false, false], createUnifyBindings(), [], [true, false]);
+	assert fold.types.length == 1 && fold.types[0].kind == TypeKind.String && fold.misfits.length == 0;
+	const alone = foldTypeParamCandidates([t], [viaMapped], [false], createUnifyBindings(), [], [true]);
+	assert alone.types[0] == viaMapped;
 }

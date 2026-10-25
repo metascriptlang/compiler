@@ -40,7 +40,7 @@ import { checkProgramJs } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { JsImportEntry } from "../../checker/context";
 import { DynamicModulePlan } from "../../module/graph";
-import { mangleQualified, mangleModuleName } from "../c/names";
+import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../c/names";
 
 // ===== Node Dispatcher =====
 
@@ -137,7 +137,7 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 // ===== Modules Reached Only Through import() =====
 
 function lazyModuleInitName(modulePath: string): string {
-	return mangleQualified("msModuleInit", mangleModuleName(modulePath));
+	return mangleQualified("msModuleInit", mangleModuleName(buildModuleNameRoots(), modulePath));
 }
 
 function declarationOf(stmt: Node): Node {

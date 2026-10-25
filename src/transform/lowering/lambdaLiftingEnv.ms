@@ -9,7 +9,10 @@ import {
 	makeObjectLiteral, makeHiddenDeref, makeNull, makeAssign, makeExprStmt, syntheticToken,
 	resolveSimpleTypeStr,
 } from "../util";
-import { createPtr, createRef, voidType } from "../../checker/types";
+import { createCursor, createPtr, createRef, isAwaitable, voidType } from "../../checker/types";
+import { CaptureCursors, inferCaptureCursors } from "../../analyzer/cursors";
+import { WriteEffects, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
+import { RcInfo, RcKind, classifyType } from "../../analyzer/classify";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { DetectionState, createDetectionState } from "./lambdaLiftingDetect";
 import { ScopeStack, createScopeStack, isModuleLevelVar } from "./lambdaLiftingScope";
@@ -110,6 +113,7 @@ export interface LiftState {
 	liftOwnLocals: SymSet;
 	envFieldSyms: HashMap<Type, Symbol[]>;
 	ctx: TransformContext;
+	writes: WriteEffects;
 }
 
 export interface RoutineInfo {
@@ -222,8 +226,23 @@ export function createLiftState(ctx: TransformContext): LiftState {
 		liftOwnLocals: createSymSet(),
 		envFieldSyms: new HashMap<Type, Symbol[]>(),
 		ctx,
+		writes: liftWrites(ctx),
 	};
 	return state;
+}
+
+function liftWrites(ctx: TransformContext): WriteEffects {
+	return {
+		tables: ctx.liftTables ?? createWriteSummaries(createRoutineDecls(), []),
+		checker: ctx.checkerCtx,
+		unit: ctx.checkerCtx != null ? ctx.checkerCtx.modulePath : "",
+		rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false),
+		aliasMemo: new HashMap<Type, HashMap<Type, int32>>(),
+	};
+}
+
+function heldUncounted(state: LiftState, t: Type | null): boolean {
+	return t != null && (isAwaitable(t) || t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Struct) && classifyType(t, state.ctx, false).rcKind == RcKind.Ref;
 }
 
 // Lift-state context discriminator. `tryLiftClosure` invokes `saveSharedEnv`
@@ -346,6 +365,37 @@ export function chainIndexOf(state: LiftState, chainTypes: Type[], sym: Symbol):
 	return -1;
 }
 
+function envHasUp(state: LiftState, envStructType: Type): boolean {
+	const fieldSyms = state.envFieldSyms.get(envStructType);
+	if (fieldSyms == null) return false;
+	for (const s of fieldSyms) {
+		if (s == null) return true;
+	}
+	return false;
+}
+
+export function requireUp(state: LiftState, envStructType: Type, target: string, loc: SourceLocation): void {
+	if (!envHasUp(state, envStructType)) {
+		reportTransformError(state.ctx, `internal: the env '${envStructType.typeName}' has no $up on the walk to '${target}'`, loc);
+	}
+}
+
+function readsAncestorEnv(state: LiftState, nestedReads: SymSet, ownLocals: SymSet | null, chainTypes: Type[]): boolean {
+	for (const sym of nestedReads.items) {
+		if (ownLocals != null && symSetContains(ownLocals, sym)) continue;
+		if (!isRoutineSym(state, sym)) {
+			if (chainIndexOf(state, chainTypes, sym) >= 0) return true;
+			continue;
+		}
+		const info = routineInfoOf(state, sym);
+		if (info == null) return true;
+		for (const t of chainTypes) {
+			if (t == info.envStructType) return true;
+		}
+	}
+	return false;
+}
+
 // Walk `$up` from a base env-struct access up the ancestor chain to the env that
 // stores `sym` (chainTypes[targetIdx]).
 // `access0` is the starting env-struct value: `(*((Cur*)_envP))` for a lifted body
@@ -355,6 +405,7 @@ function chainWalkFrom(state: LiftState, access0: Node, curType0: Type, sym: Sym
 	let curType = curType0;
 	let k = 0;
 	while (k <= targetIdx) {
+		requireUp(state, curType, sym.name, loc);
 		const upMember = makeMember(access, UP_FIELD, loc);
 		upMember.nodeType = createPtr(voidType());  // read $up (owning Ref<parent>, or void* at a root env) then cast
 		const nextCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: chainNames[k] }, syntheticToken(loc));
@@ -628,13 +679,15 @@ export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], 
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
-export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet): void {
+export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet): void {
+	const lent: CaptureCursors = inferCaptureCursors(state.writes, body, state.currentParams.items);
 	const outerEnvName = entryChainNames.length > 0 ? entryChainNames[0] : "";
 	const outerEnvStructType = entryChainTypes.length > 0 ? entryChainTypes[0] : (null as unknown as Type);
 	const frameCaptures = createSymSet();
 	for (const sym of withoutRoutines(allCaptures, state).items) {
 		if (!symSetContains(loopSyms, sym)) symSetAdd(frameCaptures, sym);
 	}
+	const nestedReads = allCaptures;
 	allCaptures = frameCaptures;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
@@ -652,20 +705,16 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 	const envFieldSyms: Symbol[] = [];
 	const envFieldTypes: string[] = [];
 	const envResolvedTypes: Type[] = [];
-	// Up-chain field: pointer to lexical parent env. For shared (function-root)
-	// envs this is null; per-closure envs created inside functions point back to
-	// the function's shared env via this field. Drives chain walk in rewriteNode.
-	envFieldSyms.push(null as unknown as Symbol);
-	if (outerEnvName != "" && outerEnvStructType != null) {
+	const wiresUp = outerEnvName != "" && outerEnvStructType != null && readsAncestorEnv(state, nestedReads, ownLocals, parentChainTypes);
+	const upType = lent.envEscapes ? createRef(outerEnvStructType) : createCursor(createRef(outerEnvStructType));
+	if (wiresUp) {
 		// Owning ref to the enclosing env: keeps the parent
 		// frame alive while any nested closure holds this env, so the `$up` walk
 		// never dangles for an escaping closure (DRC increfs on wire, ORC decrefs
 		// on destroy). Chain is acyclic → no cycle, short → no destroy-recursion.
+		envFieldSyms.push(null as unknown as Symbol);
 		envFieldTypes.push("");
-		envResolvedTypes.push(createRef(outerEnvStructType));
-	} else {
-		envFieldTypes.push("unknown");
-		envResolvedTypes.push(createPtr(voidType()));
+		envResolvedTypes.push(upType);
 	}
 	for (const sym of allCaptures.items) {
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
@@ -678,13 +727,14 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 		envFieldSyms.push(sym);
 		envFieldTypes.push(lookupVarType(state, sym));
 		const orig = findCapturedIdent(sym, state.sharedEnvCapturedIdents);
+		let held: Type;
 		if (orig != null && orig.nodeType != null) {
-			envResolvedTypes.push(orig.nodeType);
+			held = orig.nodeType!;
 		} else {
 			const fallback = lookupVarResolvedType(state, sym);
-			if (fallback != null) { envResolvedTypes.push(fallback); }
-			else { envResolvedTypes.push(resolveSimpleTypeStr(lookupVarType(state, sym))); }
+			held = fallback != null ? fallback : resolveSimpleTypeStr(lookupVarType(state, sym));
 		}
+		envResolvedTypes.push(lent.lent.has(sym) && heldUncounted(state, held) ? createCursor(held) : held);
 	}
 	const envDecl = makeEnvStruct(state, state.sharedEnvName, envFieldSyms, envFieldTypes, envResolvedTypes, loc);
 	if (envDecl.nodeType != null) { state.sharedEnvStructType = envDecl.nodeType; }
@@ -706,9 +756,9 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 	// Wire `$up` to the enclosing env. This closure's lifted body receives the
 	// enclosing env as `_envP` (the closure pair carries it), so nested closures
 	// walk `$up` to reach ancestor-frame slots.
-	if (outerEnvName != "" && outerEnvStructType != null) {
+	if (wiresUp) {
 		const upLhs = makeMember(envVarDeref(state.sharedEnvVarSym!, state.sharedEnvStructType, loc), UP_FIELD, loc);
-		upLhs.nodeType = createRef(outerEnvStructType);
+		upLhs.nodeType = upType;
 		// Cast the void* enclosing-env param to Ref<outerEnv> so DRC sees an owning
 		// ref copy and increfs the parent (balanced by ORC decref on env destroy).
 		const upRhs = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(state.envParamSym, null, loc), asType: outerEnvName }, syntheticToken(loc));
@@ -739,9 +789,9 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 				continue;
 			}
 			const lhs = makeMember(envVarDeref(state.sharedEnvVarSym!, state.sharedEnvStructType, loc), envFieldName(state, state.sharedEnvStructType, sym), loc);
-			if (orig != null && orig.nodeType != null) {
-				lhs.nodeType = orig.nodeType;
-			}
+			const held = envFieldType(state, state.sharedEnvStructType, sym);
+			if (held != null && held.kind == TypeKind.Cursor) lhs.nodeType = held;
+			else if (orig != null && orig.nodeType != null) lhs.nodeType = orig.nodeType;
 			let rhs = makeTypedIdentResolved(sym, orig != null ? orig.nodeType : null, loc);
 			// Module-level functions: wrap as msClosure { fn: func, env: null }
 			const isFnCapture = sk == SymbolKind.Function;

@@ -161,6 +161,12 @@ void msFutureDropError(msFutureBase* f) {
 
 void (*msFatalTrap)(void) = NULL;
 
+_Noreturn void msRaiseOutOfMemory(void) {
+	fputs("Error: out of memory\n", stderr);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	fprintf(stderr, "Error: index %lld out of bounds (length %lld)\n",
 		(long long)idx, (long long)len);
@@ -177,6 +183,12 @@ static const char* msTypeInfoShownName(const msTypeInfo* t) {
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
 	const msTypeInfo* t = msHeader(p)->type;
 	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n", msTypeInfoShownName(t), msTypeInfoShownName(target));
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseDestroyKeptSelf(void* p) {
+	fprintf(stderr, "Error: onDestroy kept a reference to the %s it destroys; that reference would dangle once the object is freed\n", msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }

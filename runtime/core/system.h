@@ -227,7 +227,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	if ((arr).p != NULL) { \
 		size_t _ac1_esz = sizeof((arr).p->data[0]); \
 		size_t _ac1_sz = sizeof(msArrayPayloadBase) + (size_t)(arr).p->cap * _ac1_esz; \
-		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))malloc(_ac1_sz); \
+		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))msMemAlloc(_ac1_sz); \
 		_ac1_newp->cap = (arr).p->cap; \
 		memcpy(_ac1_newp->data, (arr).p->data, (size_t)(arr).len * _ac1_esz); \
 		(arr).p = _ac1_newp; \
@@ -237,7 +237,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	if ((s).p != NULL) { \
 		size_t _ac_esz = sizeof((s).p->data[0]); \
 		size_t _ac_sz = sizeof(msArrayPayloadBase) + (size_t)(s).p->cap * _ac_esz; \
-		(d).p = (__typeof__((s).p))malloc(_ac_sz); \
+		(d).p = (__typeof__((s).p))msMemAlloc(_ac_sz); \
 		(d).p->cap = (s).p->cap; \
 		memcpy((d).p->data, (s).p->data, (size_t)(s).len * _ac_esz); \
 	} else { \
@@ -262,7 +262,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msStringPayload* _asc_newp = NULL; \
 	if (_asc_sp) { \
 		size_t _asc_sz = sizeof(msStringPayload) + (size_t)_asc_sp->cap * sizeof(msString); \
-		_asc_newp = (msStringPayload*)calloc(1, _asc_sz); \
+		_asc_newp = (msStringPayload*)msMemAlloc0(_asc_sz); \
 		_asc_newp->cap = _asc_sp->cap; \
 		for (int64_t _asc_i = 0; _asc_i < _asc_len; _asc_i++) { \
 			_asc_newp->data[_asc_i] = _asc_sp->data[_asc_i]; \
@@ -281,31 +281,38 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).p = _ass_src.p; \
 } while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
+#define msArrayRefCopy(d, s)           msArrayRefCopyThen(d, s, msRefArrayDestroy)
+#define msArrayRefSink(d, ...)         msArrayRefSinkThen(msRefArrayDestroy, d, __VA_ARGS__)
+#define msArrayAcyclicRefDestroy(arr)  msAcyclicRefArrayDestroy((msRefArray*)&(arr))
+#define msArrayAcyclicRefCopy(d, s)    msArrayRefCopyThen(d, s, msAcyclicRefArrayDestroy)
+#define msArrayAcyclicRefSink(d, ...)  msArrayRefSinkThen(msAcyclicRefArrayDestroy, d, __VA_ARGS__)
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
-#define msArrayRefCopy(d, s)           do { \
+#define msArrayRefCopyThen(d, s, destroyArr) do { \
 	msRefArray _arc_src = (s); \
 	int64_t _arc_len = _arc_src.len; \
 	msRefPayload* _arc_sp = (msRefPayload*)_arc_src.p; \
 	msRefPayload* _arc_newp = NULL; \
 	if (_arc_sp) { \
 		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
-		_arc_newp = (msRefPayload*)calloc(1, _arc_sz); \
+		_arc_newp = (msRefPayload*)msMemAlloc0(_arc_sz); \
 		_arc_newp->cap = _arc_sp->cap; \
 		for (int64_t _arc_i = 0; _arc_i < _arc_len; _arc_i++) { \
 			_arc_newp->data[_arc_i] = _arc_sp->data[_arc_i]; \
 			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
 		} \
 	} \
-	msRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _arc_old = *(msRefArray*)&(d); \
 	(d).len = _arc_len; \
 	(d).p = (void*)_arc_newp; \
+	destroyArr(&_arc_old); \
 } while(0)
-#define msArrayRefSink(d, ...)         do { \
+#define msArrayRefSinkThen(destroyArr, d, ...) do { \
 	msRefArray _ars_src = (__VA_ARGS__); \
-	if ((void*)(d).p != (void*)_ars_src.p) msRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _ars_old = *(msRefArray*)&(d); \
 	(d).len = _ars_src.len; \
 	(d).p = (void*)_ars_src.p; \
+	if (_ars_old.p != _ars_src.p) destroyArr(&_ars_old); \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
@@ -323,16 +330,17 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefPayload* _aarc_newp = NULL; \
 	if (_aarc_sp) { \
 		size_t _aarc_sz = sizeof(msRefPayload) + (size_t)_aarc_sp->cap * sizeof(void*); \
-		_aarc_newp = (msRefPayload*)calloc(1, _aarc_sz); \
+		_aarc_newp = (msRefPayload*)msMemAlloc0(_aarc_sz); \
 		_aarc_newp->cap = _aarc_sp->cap; \
 		for (int64_t _aarc_i = 0; _aarc_i < _aarc_len; _aarc_i++) { \
 			_aarc_newp->data[_aarc_i] = _aarc_sp->data[_aarc_i]; \
 			if (_aarc_newp->data[_aarc_i]) msAtomicIncRef(_aarc_newp->data[_aarc_i]); \
 		} \
 	} \
-	msAtomicRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _aarc_old = *(msRefArray*)&(d); \
 	(d).len = _aarc_len; \
 	(d).p = (void*)_aarc_newp; \
+	msAtomicRefArrayDestroy(&_aarc_old); \
 } while(0)
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
@@ -367,19 +375,20 @@ static inline void msStringCopy(msString* dest, msString src) {
  * value layout is uniform. */
 #define msArrayClosureDestroy(arr)     msClosureArrayDestroy(&(arr))
 #define msArrayClosureCopy(d, s)       msClosureArrayCopy(&(d), &(s))
-#define msArrayClosureSink(d, ...)     do { msClosureArrayDestroy(&(d)); (d) = (__VA_ARGS__); } while(0)
+#define msArrayClosureSink(d, ...)     do { msClosureArray __caold = (d); (d) = (__VA_ARGS__); if (__caold.p != (d).p) msClosureArrayDestroy(&__caold); } while(0)
 #define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
 #define msDecref(p)           do { \
-	if ((p) != NULL) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
+	void* __msDecrefP = (void*)(p); \
+	if (__msDecrefP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msDecrefP)->type; \
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(p); \
-		} else if (msDecRefIsLast(p)) { \
-			MS_DESTROY_DISPATCH(__t, p); \
-			msDestroyAndDispose(p); \
+			msFutureDeferredRelease(__msDecrefP); \
+		} else if (msDecRefIsLast(__msDecrefP)) { \
+			MS_DESTROY_DISPATCH(__t, __msDecrefP); \
+			msDestroyAndDispose(__msDecrefP); \
 		} \
 	} \
 } while(0)
@@ -388,31 +397,28 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* --- Arc<T> atomic ref lifecycle (cross-thread shared; decref tail == msDecref) --- */
 #define msAtomicIncref(p)     msAtomicIncRef(p)
 #define msAtomicDecref(p)     do { \
-	if ((p) != NULL && msAtomicDecRefIsLast(p)) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
-		MS_DESTROY_DISPATCH(__t, p); \
-		msDestroyAndDispose(p); \
+	void* __msAtomicDecrefP = (void*)(p); \
+	if (__msAtomicDecrefP != NULL && msAtomicDecRefIsLast(__msAtomicDecrefP)) { \
+		const msTypeInfo* __t = msHeader(__msAtomicDecrefP)->type; \
+		MS_DESTROY_DISPATCH(__t, __msAtomicDecrefP); \
+		msDestroyAndDispose(__msAtomicDecrefP); \
 	} \
 } while(0)
 
 /* --- ORC-aware ref lifecycle for cyclic types --- */
-#ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
 #define msDecrefCyclic(p)     do { \
-	if ((p) != NULL) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
+	void* __msDecrefCyclicP = (void*)(p); \
+	if (__msDecrefCyclicP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msDecrefCyclicP)->type; \
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(p); \
-		} else if (msOrcDecRefIsLast(p)) { \
-			MS_DESTROY_DISPATCH(__t, p); \
-			msDestroyAndDispose(p); \
+			msFutureDeferredRelease(__msDecrefCyclicP); \
+		} else if (msOrcDecRefIsLast(__msDecrefCyclicP)) { \
+			MS_DESTROY_DISPATCH(__t, __msDecrefCyclicP); \
+			msDestroyAndDispose(__msDecrefCyclicP); \
 		} \
 	} \
 } while(0)
-#else
-#define msIncrefCyclic(p)     msIncref(p)
-#define msDecrefCyclic(p)     msDecref(p)
-#endif
 
 #define MS_DECREF_EDGE(owner, p, isLast) ({ \
 	void* __msEdgeP = (void*)(p); \
@@ -428,11 +434,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	__msEdgeQueued; \
 })
 #define msDecrefEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
-#ifdef MSGC_ORC
 #define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msOrcDecRefIsLast)
-#else
-#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
-#endif
 
 /* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
  * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */
@@ -447,8 +449,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecrefCyclic((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureCopy(c)      do { if ((c).env != NULL) msIncrefCyclic((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
-#define msClosureSink(d, ...) do { msClosureDestroy(d); (d) = (__VA_ARGS__); } while(0)
+#define msClosureSink(d, ...) do { msClosure __clold = (d); (d) = (__VA_ARGS__); msClosureDestroy(__clold); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
+#define msClosureDisown(c) msOrcDisown((c).env)
 
 /* --- Map lifecycle --- */
 /* DRC emits these as fn(varName) — macros handle address-of */
@@ -486,7 +489,7 @@ static inline void msStringCopy(msString* dest, msString src) {
  * reason; this function stays for direct callers, which must copy first if
  * they need to keep the source alive. */
 static inline void* msBoxString(msString v) {
-	msString* p = (msString*)malloc(sizeof(msString));
+	msString* p = (msString*)msMemAlloc(sizeof(msString));
 	*p = v;
 	return p;
 }
@@ -538,8 +541,8 @@ static inline msString msFutureTakeStringRaw(void* fp) {
  * Caller passes &value and sizeof(Type). Box allocates heap copy.
  * Unbox: cast void* to Type*, dereference, free. */
 static inline void* msBoxStruct(const void* val, size_t size) {
-	void* p = malloc(size);
-	if (p) memcpy(p, val, size);
+	void* p = msMemAlloc(size);
+	memcpy(p, val, size);
 	return p;
 }
 
@@ -609,6 +612,7 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
 _Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
+_Noreturn void msRaiseDestroyKeptSelf(void* p);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);
 _Noreturn void msRaiseNumLitError(double v, msString target);
@@ -617,6 +621,14 @@ double msNumLitConv(double v, const double* members, int64_t n, msString target)
 static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);
 	return p;
+}
+
+static inline intptr_t msHeldCount(void* p) {
+	return msHeader(p)->rc & ~MS_RC_MASK;
+}
+
+static inline void msDestroyLeftNoRef(void* p, intptr_t held) {
+	if (msHeldCount(p) > held) msRaiseDestroyKeptSelf(p);
 }
 
 static inline void msFfiRetain(void* p) { msIncrefCyclic(p); }

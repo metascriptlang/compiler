@@ -17,10 +17,10 @@ function main(): void {
 	const second = account(1);
 	if (!first.ok || !second.ok) { return; }
 	const seeds = ["vault"];
-	const refusedCallee = signedPda(logU64(1), first.value, ["vault"]);
-	const refusedSigners = signedPda(transfer(first.value, second.value, 1), first.value, [["vault", [1]], ["pet"]]);
-	const refusedName = signedPda(transfer(first.value, second.value, 1), first.value, seeds);
-	const refusedEmpty = signedPda(transfer(first.value, second.value, 1), first.value, []);
+	const refusedCallee = signedPda(logU64(1), first.value, ["vault"]); // GUARD-REFUSED
+	const refusedSigners = signedPda(transfer(first.value, second.value, 1), first.value, [["vault", [1]], ["pet"]]); // GUARD-REFUSED
+	const refusedName = signedPda(transfer(first.value, second.value, 1), first.value, seeds); // GUARD-REFUSED
+	const refusedEmpty = signedPda(transfer(first.value, second.value, 1), first.value, []); // GUARD-REFUSED
 	failWith(ProgramError.invalidArgument());
 }
 

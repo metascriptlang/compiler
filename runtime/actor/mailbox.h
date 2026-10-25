@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "runtime/hcrTls.h"
+#include "runtime/drc.h"
 #include <string.h>
 
 /* ===== Message (Pony parity: size-class allocation, exact-fit per method) ===== */
@@ -76,9 +77,18 @@ typedef struct msMsgPool {
  * different freelists. */
 MS_TLS_EXTERN_ARRAY(msMsgPool, msMsgPools, MS_MSG_POOL_CLASSES);
 
-static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
+extern int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
+msMessage* msMsgOrphansTake(uint8_t cls);
+void msMsgPoolsThreadTeardown(void);
+
+static inline void msMsgPoolGrow(msMsgPool* pool, uint8_t cls) {
+    if (__atomic_load_n(&msMsgOrphansPending[cls], __ATOMIC_RELAXED) != 0) {
+        pool->free_list = msMsgOrphansTake(cls);
+        if (pool->free_list != NULL) return;
+    }
+    int msgSize = MS_MSG_CLASS_SIZE[cls];
     /* Allocate slab as raw bytes — messages are msgSize apart */
-    char* slab = (char*)calloc(MS_MSG_POOL_SLAB, msgSize);
+    char* slab = (char*)msMemAllocN0((size_t)MS_MSG_POOL_SLAB, msgSize);
     for (int i = 0; i < MS_MSG_POOL_SLAB - 1; i++) {
         msMessage* cur = (msMessage*)(slab + i * msgSize);
         msMessage* nxt = (msMessage*)(slab + (i + 1) * msgSize);
@@ -94,7 +104,7 @@ static inline msMessage* msMsgAllocSized(int32_t kind, void* replyFut, int argCo
     uint8_t cls = msMsgSizeClass(argCount);
     msMsgPool* pool = &msMsgPools[cls];
     if (pool->free_list == NULL) {
-        msMsgPoolGrow(pool, MS_MSG_CLASS_SIZE[cls]);
+        msMsgPoolGrow(pool, cls);
     }
     msMessage* m = pool->free_list;
     pool->free_list = (msMessage*)atomic_load_explicit(&m->next, memory_order_relaxed);
@@ -230,13 +240,10 @@ static inline bool msMpscPush(msMpscQueue* q, msMessage* msg) {
 	/* Release fence: ensure msg fields are visible before linking */
 	atomic_thread_fence(memory_order_release);
 
-	/* Swap head atomically. acq_rel pairs producer-producer: prev owner's
-	 * writes (msg init, pool slab calloc, etc.) are visible to the next producer
-	 * that pops this msg off head via exchange. Relaxed here (Pony's choice)
-	 * would require ANNOTATE_HAPPENS_BEFORE for TSan visibility; acq_rel is
-	 * free on aarch64 (swpal vs swpl, same cycles) and x86 (xchg is seq_cst
-	 * regardless), and gives correct happens-before without annotations. */
-	msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_acq_rel);
+	/* seq_cst, not acq_rel: the actor's visit end drops its run token and then
+	 * marks this queue empty, and the pusher takes the token after this exchange;
+	 * both sides must be in one total order (same instruction on aarch64 and x86). */
+	msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_seq_cst);
 
 	/* Check if queue was empty (LSB tag) */
 	bool wasEmpty = ((uintptr_t)prev & 1) != 0;
@@ -304,7 +311,7 @@ static inline bool msMpscIsEmpty(msMpscQueue* q) {
  */
 static inline bool msMpscMarkEmpty(msMpscQueue* q) {
     msMessage* tail = q->tail;
-    msMessage* head = atomic_load_explicit(&q->head, memory_order_acquire);
+    msMessage* head = atomic_load_explicit(&q->head, memory_order_seq_cst);
 
     /* Already marked empty */
     if (((uintptr_t)head & 1) != 0) return true;
@@ -316,7 +323,7 @@ static inline bool msMpscMarkEmpty(msMpscQueue* q) {
     msMessage* tagged = (msMessage*)((uintptr_t)head | 1);
     return atomic_compare_exchange_strong_explicit(
         &q->head, &tail, tagged,
-        memory_order_acq_rel, memory_order_acquire);
+        memory_order_seq_cst, memory_order_seq_cst);
 }
 
 #endif /* MS_MAILBOX_H */

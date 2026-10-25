@@ -53,6 +53,7 @@ import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { tdzBindingOf } from "./moduleTdz";
+import { cstringSource } from "../native/cstringConvLower";
 
 // ===== Hoist (top-down) =====
 
@@ -350,6 +351,11 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		|| (parent.kind == NodeKind.BinaryExpr && isAssignOperator((parent.data as BinaryExprData).operator)));
 	if (isLocation) return hoistAssignTargetEffects(child, pre, ctx, writes);
 	if (isLiteral(child)) return child;
+	const source = cstringSource(child);
+	if (source != null) {
+		(child.data as CallExprData).arguments[0] = captureSibling(child, 1, source, pre, writes, calls, ctx);
+		return child;
+	}
 	const isReceiver = index == 1 && parent.kind == NodeKind.CallExpr
 		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
 	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);

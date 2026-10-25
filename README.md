@@ -64,7 +64,7 @@ done.
 ## Why MetaScript
 
 - **Familiar surface, systems substrate.** If you read TypeScript you can read MetaScript. Underneath: sized integers (`int32`, `uint64`, `float64`), value `struct` versus reference `interface`, `move` for ownership transfer, `defer` for scope-exit cleanup, `distinct` nominal types, `out` parameters.
-- **Deterministic memory.** Reference counting with compiler-synthesized `=destroy`, `=sink` and `=wasMoved` hooks per type, plus a cycle collector. Four modes: `--gc=orc` (default), `--gc=drc`, `--gc=none`, `--gc=manual`. `--os=bare` builds freestanding, without libc ([docs/BARE.md](docs/BARE.md)).
+- **Deterministic memory.** Reference counting with compiler-synthesized `=destroy`, `=sink` and `=wasMoved` hooks per type, plus a cycle collector. Three modes: `--mm=drc` (default, always with the cycle collector), `--mm=none`, `--mm=manual`. `--os=bare` builds freestanding, without libc ([docs/BARE.md](docs/BARE.md)).
 - **`match` is the dispatch backbone.** Or-patterns, `when` guards, destructuring, as an expression, lowered to a C `switch` where the discriminant allows it.
 - **Errors as values.** `Result<T, E>` with `try` to unwrap-or-return and `try … catch fallback` to unwrap-or-substitute. `Promise<Result<T, E>>` is type-checked for async failures.
 - **One concurrency model.** `await`. `spawn` returns an affine handle: it must be awaited exactly once and cannot escape, and the checker enforces it. Actors own a mailbox; a `void` method is a send, a returning method is a call that yields a `Promise`. Actor state is isolated, `nonisolated` fields opt out. Details: [docs/LANG-CONCURRENCE.md](docs/LANG-CONCURRENCE.md).
@@ -148,14 +148,14 @@ Counted from this tree on 2026-09-13:
 | Lifecycle guards (`src/test/guard/`) | 130 probes |
 | Self-hosted `msc` | 12.0 MB |
 
-A lifecycle guard is proven red on a binary that has the bug before it is trusted green. The corpus runs C/JS parity, RSS ceilings under both `--gc=drc` and `--gc=orc`, and an AddressSanitizer lane with a reference-count ledger that aborts on a double release. Build timings and how they are measured: [docs/BUILD-PERF.md](docs/BUILD-PERF.md).
+A lifecycle guard is proven red on a binary that has the bug before it is trusted green. The corpus runs C/JS parity, RSS ceilings on the C lanes, and an AddressSanitizer lane with a reference-count ledger that aborts on a double release. Build timings and how they are measured: [docs/BUILD-PERF.md](docs/BUILD-PERF.md).
 
 **Known gaps** are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), each entry measured on a named commit. In short: `@derive` is planned, not implemented; the JavaScript backend is secondary and has no lifecycle analyzer; an Erlang backend is postponed.
 
 ## Development
 
 ```bash
-msc build src/index.ms --gc=drc --danger --output=msc   # self-host binary
+msc build src/index.ms --danger --output=msc   # self-host binary
 msc test src/index.ms                                   # full compiler suite
 msc run src/test/corpus/run.ms                          # corpus: parity + RSS lanes
 ```

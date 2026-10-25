@@ -1,5 +1,5 @@
 // A prelude pack or std graph seed written for one target is a miss for every other target. The
-// std closure and the parsed prelude follow the `when` blocks in std, which read --os, --cpu, --gc,
+// std closure and the parsed prelude follow the `when` blocks in std, which read --os, --cpu, --mm,
 // the build mode and -d flags, so a host, an `--os=solana` and an `--os=bare` run each read only
 // what their own target wrote to $HOME/.metascript/cache/prelude.
 //
@@ -180,7 +180,7 @@ function buildOrder(first: string, second: string, hostCc: string): void {
 	const home = privateHome(`build-${first}-${second}`);
 	let step = 0;
 	for (const target of [first, second]) {
-		const extra: string[] = target == "host" ? ["--gc=drc", `--cc=${hostCc}`, `--output=${dir}/prog-${first}-${second}-host`] : [`--output=${dir}/prog-${first}-${second}.so`];
+		const extra: string[] = target == "host" ? [`--cc=${hostCc}`, `--output=${dir}/prog-${first}-${second}-host`] : [`--output=${dir}/prog-${first}-${second}.so`];
 		const r = runMsc(home, targetArgs("build", target, extra));
 		if (r.exitCode != 0) report(`${first} build then ${second} build, step ${step + 1}: the ${target} build failed: ${firstLines(r)}`);
 		step = step + 1;

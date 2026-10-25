@@ -188,9 +188,16 @@ export function registerHeaderIncludes(header: string, included: string[]): void
 	includedByHeader.set(header, included);
 }
 
+// The include table, handed to emission through its facts.
+export function headerIncludeTable(): HashMap<string, string[]> {
+	return includedByHeader;
+}
+
+const NO_INCLUDES: Readonly<string[]> = [];
+
 // The headers whose declarations `header` brings in through its #includes.
-export function headerIncludes(header: string): string[] {
-	return includedByHeader.get(header) ?? [];
+export function headerIncludes(table: Readonly<HashMap<string, string[]>>, header: string): Readonly<string[]> {
+	return table.readonlyGet(header) ?? NO_INCLUDES;
 }
 
 function mappedWidth(ms: string): int32 {

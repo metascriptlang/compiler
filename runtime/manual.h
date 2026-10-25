@@ -1,7 +1,7 @@
 /*
  * MetaScript Manual Runtime — No RC, Optional Freestanding
  *
- * --gc=manual mode. No reference counting, no DRC injection.
+ * --mm=manual mode. No reference counting, no DRC injection.
  *
  * Two sub-modes controlled by MSOS_BARE (set via --os=bare):
  *   Without MSOS_BARE: malloc-backed allocation (like drc.h minus RC). Desktop use.
@@ -60,6 +60,10 @@ typedef struct {
 } msException;
 
 /* ===== Allocation ===== */
+
+_Noreturn static inline void msRaiseOutOfMemory(void) {
+    __builtin_trap();
+}
 
 #ifdef MSOS_BARE
 
@@ -166,7 +170,7 @@ static size_t _ms_arena_pos = 0;
 
 static inline void* msArenaAlloc(size_t size) {
     size = (size + 7) & ~(size_t)7;
-    if (_ms_arena_pos + size > MS_ARENA_SIZE) return (void*)0;
+    if (_ms_arena_pos + size > MS_ARENA_SIZE) msRaiseOutOfMemory();
     void* p = &_ms_arena[_ms_arena_pos];
     _ms_arena_pos += size;
     __builtin_memset(p, 0, size);
@@ -214,6 +218,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 static inline void* msAlloc(size_t size) {
     msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    if (h == NULL) msRaiseOutOfMemory();
     h->rc = 0;
     h->rootIdx = -1;
     h->type = NULL;
@@ -223,6 +228,7 @@ static inline void* msAlloc(size_t size) {
 
 static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    if (h == NULL) msRaiseOutOfMemory();
     h->rc = 0;
     h->rootIdx = -1;
     h->type = type;
@@ -354,6 +360,24 @@ void* msReallocNeedsOldSize(void* old, size_t size)
 
 #endif
 
+static inline void* msMemAlloc(size_t size) {
+    void* p = malloc(size);
+    if (p == (void*)0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
+
+static inline void* msMemAlloc0(size_t size) {
+    void* p = calloc(1, size);
+    if (p == (void*)0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
+
+static inline void* msMemAllocN0(size_t n, size_t size) {
+    void* p = calloc(n, size);
+    if (p == (void*)0 && n != 0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
+
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"
 
@@ -464,6 +488,9 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayRefDestroy(arr)         ((void)0)
 #define msArrayRefCopy(d, s)           do { (d) = (s); } while(0)
 #define msArrayRefSink(d, ...)         do { (d) = (__VA_ARGS__); } while(0)
+#define msArrayAcyclicRefDestroy(arr)  ((void)0)
+#define msArrayAcyclicRefCopy(d, s)    do { (d) = (s); } while(0)
+#define msArrayAcyclicRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayRefTrace(arr, cb)       ((void)0)
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
 #define msArrayUint8Destroy(arr)       ((void)0)
@@ -491,6 +518,7 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msClosureWasMoved(c)  do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureSink(d, ...) do { (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, e)  ((void)0)
+#define msClosureDisown(c)  ((void)0)
 
 /* Cyclic ref =copy - system.h:347 without the refcount traffic. */
 #define msRefCopyCyclic(d, s) do { (d) = (s); } while(0)
@@ -636,9 +664,9 @@ static inline void* msBoxString(msString v) {
 #ifdef MSOS_BARE
     msString* p = (msString*)msArenaAlloc(sizeof(msString));
 #else
-    msString* p = (msString*)malloc(sizeof(msString));
+    msString* p = (msString*)msMemAlloc(sizeof(msString));
 #endif
-    if (p) *p = v;
+    *p = v;
     return p;
 }
 static inline msString msUnboxString(void* p) {
@@ -651,27 +679,25 @@ static inline msString msUnboxString(void* p) {
 static inline void* msBoxStruct(const void* val, size_t size) {
 #ifdef MSOS_BARE
     void* p = msArenaAlloc(size);
-    if (p) __builtin_memcpy(p, val, size);
+    __builtin_memcpy(p, val, size);
 #else
-    void* p = malloc(size);
-    if (p) memcpy(p, val, size);
+    void* p = msMemAlloc(size);
+    memcpy(p, val, size);
 #endif
     return p;
 }
 
-/* ===== Locked<T> stubs (--gc=manual has no threading: the lock is a no-op) =====
+/* ===== Locked<T> stubs (--mm=manual has no threading: the lock is a no-op) =====
  * The cell itself is an ordinary allocation whose payload the backend reaches
  * through the generated struct's field, so only the lock ops need stubbing. */
-static inline void  msLockedAcquire(void* cell)              { (void)cell; }
-static inline void  msLockedRelease(void* cell)              { (void)cell; }
+static inline bool  msLockedHeldHere(void* cell)             { return ((int64_t*)cell)[1] != 0; }
+static inline void  msLockedAcquire(void* cell)              { ((int64_t*)cell)[1] = 1; }
+static inline void  msLockedRelease(void* cell)              { ((int64_t*)cell)[1] = 0; }
 
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}
+static inline void msRootsThreadTeardown(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
-/* Teardown critical section - drc.h:411-412 already stubs these when ORC is off;
- * manual.h owns the guard, so the same pair has to exist here. */
-static inline void msOrcBeginTeardown(void) {}
-static inline void msOrcEndTeardown(void) {}
 
 /* ===== Async stubs ===== */
 #ifndef MS_THREAD_LOCAL
@@ -697,6 +723,7 @@ typedef struct msFutureBase {
     bool failed;
     bool cancelled;
     bool crossThreadPublished;
+    void* completionQueue;
     void* error;
     void (*valueDestructor)(void*);
     void (*valueDrop)(void*);

@@ -10,7 +10,7 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType, isStringLike } from "./types";
+import { isReadonlyView, isAtomicRef, isStringLike } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -170,23 +170,6 @@ export function writeThroughArc(target: Node): boolean {
 		} else {
 			break;
 		}
-	}
-	return false;
-}
-
-export function writeThroughGraphBackedge(target: Node): boolean {
-	let cur: Node | null = target;
-	while (cur != null) {
-		let base: Node | null = null;
-		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
-		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
-		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
-		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
-		else break;
-		if (base != null && base.nodeType != null && cur.nodeType != null
-				&& isSharedGraphType(base.nodeType) && isNodeGraphType(cur.nodeType)
-				&& cur != target) return true;
-		cur = base;
 	}
 	return false;
 }

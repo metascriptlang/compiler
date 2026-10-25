@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, OverloadWinner } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner, hasNoRuntimeRepr, isOpenArrayParam, openArrayDataName, openArrayLenName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
@@ -31,6 +31,57 @@ export struct HcrIndirectModule {
 	afterReload: string[];
 }
 
+export struct HcrVariableStorage {
+	value: Type;
+	pointer: Type;
+}
+
+export struct HcrStorageTable {
+	voidPointer: Type;
+	byBinding: HashMap<string, HcrVariableStorage>;
+}
+
+export function createHcrStorageTable(): HcrStorageTable {
+	return { voidPointer: createPtr(voidType()), byBinding: new HashMap<string, HcrVariableStorage>() };
+}
+
+struct HcrImportedVariable { targetId: string; symbol: string; key: string; }
+
+function importedVariable(n: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): HcrImportedVariable | null {
+	if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return null;
+	const sym = n.resolvedSym;
+	if (sym == null || !isModuleGlobalVar(sym)) return null;
+	if (n.kind == NodeKind.MemberExpr) {
+		const baseSym = (n.data as MemberExprData).object.resolvedSym;
+		if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return null;
+	}
+	const target = moduleForPath(modules, sym.modulePath);
+	if (target == null || target.moduleId == own.moduleId) return null;
+	const symbol = mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(n)));
+	return { targetId: target.moduleId, symbol, key: "v:" + hcrSignatureKey(sym.symbolType) };
+}
+
+function storageId(own: HcrIndirectModule, v: HcrImportedVariable): string {
+	return own.modulePath + "\n" + v.targetId + "\n" + v.symbol + "\n" + v.key;
+}
+
+export function buildHcrStorage(table: HcrStorageTable, program: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): void {
+	if (program == null || program.kind != NodeKind.Program) return;
+	let slot: int32 = 0;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		walkNode(stmt, (n: Node): Node => {
+			const v = importedVariable(n, own, modules);
+			if (v == null) return n;
+			const id = storageId(own, v);
+			if (table.byBinding.has(id)) return n;
+			slot += 1;
+			const value = spelled(createStruct(`_ms_hcr_import_value${slot}`, ["value"], [n.resolvedSym!.symbolType], true));
+			table.byBinding.set(id, { value, pointer: createPtr(value) });
+			return n;
+		});
+	}
+}
+
 export struct HcrFunction {
 	symbol: string;
 	key: string;
@@ -48,7 +99,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 		const sym = fn.resolvedSym;
 		if (d.fnBody == null || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
 		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.CompileTime))) continue;
-		const symbol = mangledFunctionName(sym, d.fnName, sym != null ? sym.overloadIdx : 0);
+		const symbol = mangledFunctionName(buildModuleNameRoots(), sym, d.fnName, sym != null ? sym.overloadIdx : 0);
 		if (facts.genericOwners.has(symbol) && facts.genericOwners.readonlyGet(symbol) != modulePath) continue;
 		if (seen.has(symbol)) continue;
 		seen.add(symbol);
@@ -87,6 +138,7 @@ export function lowerHcrIndirection(
 	owners: HashMap<string, string>,
 	aliveSet: Readonly<AliveSet>,
 	facts: Readonly<CEmissionFacts>,
+	storageTable: HcrStorageTable,
 ): Node {
 	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
@@ -107,7 +159,7 @@ export function lowerHcrIndirection(
 			registrations.push(makeEmitStmt(`/*DATINITSECTION*/  ${register};`, loc));
 			continue;
 		}
-		const cell = `_ms_hcr_self_${mangleModuleName(own.modulePath)}_${selfSlot}`;
+		const cell = `_ms_hcr_self_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${selfSlot}`;
 		selfSlot += 1;
 		selfCells.set(fn.symbol, cell);
 		emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${cell};`, loc));
@@ -120,7 +172,7 @@ export function lowerHcrIndirection(
 	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
 
 	const bound = new HashMap<string, string>();
-	const storageTypes = new HashMap<string, Type>();
+	const storageTypes = new HashMap<string, HcrVariableStorage>();
 	let bindings = "";
 	let bindSlot: int32 = 0;
 	const foreignOps: string[] = [];
@@ -143,7 +195,7 @@ export function lowerHcrIndirection(
 		const key = foreignOpKeys.get(symbol)!;
 		const id = owner + "\n" + symbol + "\n" + key;
 		if (bound.has(id)) continue;
-		const pointer = `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
+		const pointer = `_ms_hcr_bind_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${bindSlot}`;
 		bindSlot += 1;
 		bound.set(id, pointer);
 		bindings = bindings + `${cString(owner)}, ${cString(symbol)}, ${cString(key)}, `;
@@ -171,16 +223,20 @@ export function lowerHcrIndirection(
 		if (fn != null) {
 			const sym = fn.resolvedSym;
 			const data = fn.data as FunctionDeclData;
-			const symbol = mangledFunctionName(sym, data.fnName, sym != null ? sym.overloadIdx : 0);
+			const symbol = mangledFunctionName(buildModuleNameRoots(), sym, data.fnName, sym != null ? sym.overloadIdx : 0);
 			if (!ownFunctions.has(symbol)) continue;
 			const cell = selfCells.get(symbol);
 			if (cell != null) forwardToCurrent(fn, symbol, cell);
 		}
-		const overloadCallees = new HashMap<Node, OverloadWinner>();
+		const overloadCallees = new HashMap<Node, Symbol>();
+		const overloadIdxs = new HashMap<Node, number>();
 		walkNode(pd.programStmts[i], (n: Node): Node => {
-			if (n.kind != NodeKind.CallExpr) return n;
-			const winner = callOverloadWinner(n);
-			if (winner != null) overloadCallees.set((n.data as CallExprData).callee, winner);
+			if (n.kind != NodeKind.CallExpr || n.resolvedSym == null) return n;
+			const winnerIdx = callOverloadWinner(n);
+			if (winnerIdx < 0) return n;
+			const callee = (n.data as CallExprData).callee;
+			overloadCallees.set(callee, overloadAt(n.resolvedSym!, winnerIdx));
+			overloadIdxs.set(callee, winnerIdx);
 			return n;
 		});
 		pd.programStmts[i] = walkNode(pd.programStmts[i], (n: Node): Node => {
@@ -188,7 +244,7 @@ export function lowerHcrIndirection(
 				const target = closureFunction(n);
 				if (target == null) return n;
 				const sym = target.resolvedSym;
-				const symbol = mangledFunctionName(sym, referenceName(sym, referenceText(target)), sym.overloadIdx);
+				const symbol = mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(target)), sym.overloadIdx);
 				let cell = selfCells.get(symbol);
 				if (cell == null) {
 					const owner = owners.get(symbol);
@@ -207,41 +263,46 @@ export function lowerHcrIndirection(
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
 			const constructed = n.kind == NodeKind.NewExpr ? (n.data as NewExprData).newCallee.resolvedSym : null;
 			const winner = overloadCallees.get(n);
-			const sym = winner != null ? winner.winnerSym : n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
+			const sym = winner != null ? winner : n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
 			const isVariable = constructed == null && isModuleGlobalVar(sym);
-			const text = constructed != null ? sym.name : referenceText(n);
-			const symbol = isVariable
-				? mangledGlobalName(sym, referenceName(sym, text))
-				: mangledFunctionName(sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
 			let targetId = "";
+			let symbol = "";
+			let key = "";
+			let variableStorageId = "";
 			if (isVariable) {
-				const target = moduleForPath(modules, sym.modulePath);
-				if (target == null || target.moduleId == own.moduleId) return n;
-				targetId = target.moduleId;
+				const v = importedVariable(n, own, modules);
+				if (v == null) return n;
+				targetId = v.targetId;
+				symbol = v.symbol;
+				key = v.key;
+				variableStorageId = storageId(own, v);
 			} else {
+				const text = constructed != null ? sym.name : referenceText(n);
+				symbol = mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, text), winner != null ? overloadIdxs.get(n)! : sym.overloadIdx);
 				if (sym.symbolKind != SymbolKind.Function || ownFunctions.has(symbol)) return n;
 				const owner = owners.get(symbol);
 				if (owner == null || owner == own.moduleId) return n;
 				targetId = owner;
+				key = "f:" + hcrSignatureKey(sym.symbolType);
 			}
 			if (!own.imports.includes(targetId)) own.imports.push(targetId);
-			const key = (isVariable ? "v:" : "f:") + hcrSignatureKey(sym.symbolType);
 			const id = targetId + "\n" + symbol + "\n" + key;
 			const cachedPointer = bound.get(id);
-			const pointer = cachedPointer != null ? cachedPointer : `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
+			const pointer = cachedPointer != null ? cachedPointer : `_ms_hcr_bind_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${bindSlot}`;
 			if (cachedPointer == null) {
 				bindSlot += 1;
 				bound.set(id, pointer);
 				bindings = bindings + `${cString(targetId)}, ${cString(symbol)}, ${cString(key)}, `;
 				if (isVariable) {
-					const storageType = spelled(createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true));
-					storageTypes.set(id, storageType);
-					emitted.push(hcrStorageDecl(storageType, loc));
+					const storage = storageTable.byBinding.get(variableStorageId);
+					if (storage == null) throw new Error(`internal: HCR bind slot ${bindSlot} for '${targetId}::${symbol}' has no storage type built before emission`);
+					storageTypes.set(id, storage);
+					emitted.push(hcrStorageDecl(storage.value, loc));
 					emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${pointer};`, loc));
 					emitted.push(makeEmitStmt(
 						`/*DATINITSECTION*/  ${pointer} = msHcrBind(${cString(targetId)}, ${cString(symbol)}, ${cString(key)});`,
@@ -257,12 +318,12 @@ export function lowerHcrIndirection(
 				}
 			}
 			if (!isVariable) return n;
-			const storageType = storageTypes.get(id);
-			if (storageType == null) throw new Error(`internal: missing HCR storage type for '${targetId}::${symbol}'`);
-			const raw = makeCall(runtimeRef("msHcrVariableStorage", n.location), [makeTypedIdent(pointer, createPtr(voidType()), n.location)], n.location);
-			raw.nodeType = createPtr(voidType());
-			const cast = createNode(NodeKind.TypeAssertion, { asExpr: raw, asType: storageType.typeName }, syntheticToken(n.location));
-			cast.nodeType = createPtr(storageType);
+			const storage = storageTypes.get(id);
+			if (storage == null) throw new Error(`internal: missing HCR storage type for '${targetId}::${symbol}'`);
+			const raw = makeCall(runtimeRef("msHcrVariableStorage", n.location), [makeTypedIdent(pointer, storageTable.voidPointer, n.location)], n.location);
+			raw.nodeType = storageTable.voidPointer;
+			const cast = createNode(NodeKind.TypeAssertion, { asExpr: raw, asType: storage.value.typeName }, syntheticToken(n.location));
+			cast.nodeType = storage.pointer;
 			const value = makeMember(makeHiddenDeref(cast, n.location), "value", n.location);
 			value.nodeType = n.nodeType != null ? n.nodeType : sym.symbolType;
 			return value;

@@ -56,6 +56,7 @@
 
 #include "runtime/drc.h"  /* msIncRef for the Amendment-G submit-time completion ref */
 #include "runtime/promise/future.h"  /* msFutureBase + msFutureDrcDestroy for Amendment H */
+#include "runtime/promise/locked.h"  /* msFutexWait for a parked slot waiter */
 #ifndef MS_THREAD_LOCAL
 #define MS_THREAD_LOCAL _Thread_local
 #endif
@@ -74,13 +75,12 @@ MS_TLS_EXTERN(bool, msErr);         /* slot-failure propagation (mirror future.h
  * compiled out and PushOwned degenerates to Push there.
  *
  * Windows history: the gate was 0 while msDispatcher (and its iocp) was
- * thread-local and pool workers never posted — msPostCompletion took the
- * in-flight ref at post time on the loop thread instead. That arrangement
- * became unsound the moment the IOCP went process-global (msFirstLoopIocp
- * routing, dispatchFull.c): workers post, so a post-time incref races the
- * owning thread's decref on the non-atomic rc field. With this gate now 1,
- * msPostCompletion's incref applies only to the public Push path, and the
- * Owned path carries the submit ref exactly like POSIX. */
+ * thread-local and pool workers never posted — the post took the in-flight
+ * ref on the loop thread instead. That arrangement became unsound the moment
+ * the IOCP went process-global (msFirstLoopIocp routing, dispatchFull.c):
+ * workers post, so a post-time incref races the owning thread's decref on the
+ * non-atomic rc field. The Owned path carries the submit ref exactly like
+ * POSIX. */
 #if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 #define MS_FUTURE_SUBMIT_REF 1
 #else
@@ -149,7 +149,6 @@ typedef struct msAwaitGroup {
 	_Atomic(bool) finishDone;     /* set after the last worker exits finishSlot — msAwaitGroupFree must wait for this */
 	void* error;                  /* first error payload (protected by mutex) */
 	void** results;               /* size-length array of void* result values */
-	int64_t deadlineMs;           /* Phase 3: absolute monotonic deadline (0 = none) */
 	bool timedOut;                /* Phase 3: set when blocking returns due to timeout */
 	_Atomic(void*) doneFut;       /* Phase 4: msFuture_void* completed when all slots done (NULL = blocking path) */
 
@@ -209,10 +208,8 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error);
  * SYNC CONTEXT ONLY. This is the Phase 2 variant. Phase 4 will add an async
  * variant that registers a callback instead of blocking.
  *
- * Deadlock caveat: if the calling thread is itself a pool worker and all
- * pool workers end up blocked in msAwaitGroupBlocking on groups whose
- * tasks are queued behind them, the pool deadlocks. Phase 8 adds help-first
- * scheduling (waiting workers steal tasks from the queue) to prevent this. */
+ * The waiter runs the group's own queued tasks (msPoolRunEdge), so nested
+ * groups cannot leave every worker blocked on tasks queued behind them. */
 void msAwaitGroupBlocking(msAwaitGroup* g);
 
 /* Block until all slots done OR deadline expires (Phase 3).
@@ -221,88 +218,77 @@ void msAwaitGroupBlocking(msAwaitGroup* g);
  * all slots complete. Workers check cancelled at safe points to early-return. */
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs);
 
-/* Cancel all pending tasks. Sets the cancelled flag so workers can check at
- * safe points and early-return. Does NOT block or wait for workers to stop. */
-void msAwaitGroupCancel(msAwaitGroup* g);
-
 /* ===== Queries (non-blocking, for advanced use) ===== */
-
-/* Returns true if all slots have completed (successfully or failed). */
-static inline bool msAwaitGroupFinished(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->pending, memory_order_acquire) == 0;
-}
-
-/* Returns true if any slot reported a failure. Only meaningful after
- * msAwaitGroupFinished returns true (or msAwaitGroupBlocking returns). */
-static inline bool msAwaitGroupFailed(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->failed, memory_order_acquire);
-}
 
 /* Read the result for slot `i`. Only valid after the group has finished.
  * Returns NULL for failed slots. */
 static inline void* msAwaitGroupResult(msAwaitGroup* g, int32_t slot) {
-	if (g == NULL || slot < 0 || slot >= g->size) return NULL;
+	if (slot < 0 || slot >= g->size) return NULL;
 	return g->results[slot];
-}
-
-/* Read the first error encountered. Returns NULL if no slot failed. */
-static inline void* msAwaitGroupError(msAwaitGroup* g) {
-	return g != NULL ? g->error : NULL;
 }
 
 /* Phase 3: Did the timed wait expire before all slots completed? */
 static inline bool msAwaitGroupTimedOut(msAwaitGroup* g) {
-	return g != NULL && g->timedOut;
+	return g->timedOut;
 }
 
 /* Phase 4b: set the done future for async cooperative group await.
  * Called by transform-generated code before submitting tasks. */
 static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
-	if (g != NULL) {
 #if MS_FUTURE_SUBMIT_REF
-		/* Amendment G: take the queue's completion ref on the owner thread now,
-		 * before any worker can publish doneFut as finished. Paired with the
-		 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
-		if (fut != NULL) {
-			msIncRef(fut);
-			((msFutureBase*)fut)->crossThreadPublished = true;
-		}
+	/* Amendment G: take the queue's completion ref on the owner thread now,
+	 * before any worker can publish doneFut as finished. Paired with the
+	 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
+	if (fut != NULL) {
+		msIncRef(fut);
+		msFuturePublishCrossThread(fut);
+	}
 #endif
 #ifdef _WIN32
-		/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
-		 * sites (thread.h): finishSlot's last worker completes doneFut via
-		 * msCompletionQueuePushOwned -> msPostCompletion, which needs the
-		 * scheduler-0 loop's IOCP to exist or it falls back to the
-		 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
-		{
-			extern void msEnsureLoopChannel(void);
-			msEnsureLoopChannel();
-		}
-#endif
-		atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+	/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
+	 * sites (thread.h): finishSlot's last worker completes doneFut via
+	 * msCompletionQueuePushOwned, which needs the
+	 * scheduler-0 loop's IOCP to exist or it falls back to the
+	 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
+	{
+		extern void msEnsureLoopChannel(void);
+		msEnsureLoopChannel();
 	}
+#endif
+	atomic_store_explicit(&g->doneFut, fut, memory_order_release);
 }
 
 /* Phase 3: Fast-path cancellation check for spawn safe points.
  * Called at loop backedges inside spawn closures. Single branch on
  * relaxed atomic load — ~1ns overhead per check. */
 static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->cancelled, memory_order_relaxed);
+	return atomic_load_explicit(&g->cancelled, memory_order_relaxed);
 }
 
 /* ===== msAwaitSlot — Stack-Allocated Fast Path (Malebolgia parity) ===== */
 
 /* Minimal completion target for fused await-spawn. Stack-allocated (24 bytes),
- * no mutex, no condvar. Waiter spins via help-first (msPoolHelpOne).
+ * no mutex, no condvar. Its waiter runs its own task when still queued, else spins.
  * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
 
-extern bool msPoolHelpOne(void);  /* pool.h — avoid circular include */
+extern bool msPoolRunEdge(const void* awaited, bool follow, bool descend);  /* pool.h — avoid circular include */
 extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
+/* Set in pending by a waiter that parks on it (PARKED) or waits in its loop (LOOP):
+ * the completion that takes the count to 0 wakes it. */
+#define MS_SLOT_PARKED 0x40000000
+#define MS_SLOT_LOOP 0x20000000
+#define MS_SLOT_COUNT 0x1fffffff
+/* The cap on one loop wait, as msWaitFor's: a completion or a loop event ends it sooner. */
+#define MS_SLOT_LOOP_WAIT_MS 5
+#define MS_SLOT_PARK_MIN_US 50
+#define MS_SLOT_PARK_MAX_US 1000
+
 typedef struct msAwaitSlot {
-    _Atomic(int32_t) pending;     /* starts at N, decremented per completion */
+    _Atomic(int32_t) pending;     /* starts at N, decremented per completion; | MS_SLOT_PARKED */
     _Atomic(bool) failed;
+    _Atomic(bool) cancelled;      /* a task not yet started is skipped */
     void* error;
     void* result;                 /* single-slot result (void*, boxed) */
 } msAwaitSlot;
@@ -314,17 +300,27 @@ typedef struct msAwaitSlot {
 void* msAwaitSlotCreate(int32_t n);
 void msAwaitSlotRelease(void* sp);
 
+void msActorWakeEventLoop(void);  /* dispatchFull.c: wakes the loop thread's poll */
+void msEnsureWakePipe(void);
+
+static inline void msAwaitSlotDone(msAwaitSlot* s) {
+    int32_t prev = atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    if ((prev & MS_SLOT_COUNT) != 1) return;
+    if (prev & MS_SLOT_PARKED) msFutexWakeAll((int*)&s->pending);
+    if (prev & MS_SLOT_LOOP) msActorWakeEventLoop();
+}
+
 static inline void msAwaitSlotComplete(void* sp, int32_t idx, void* value) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     if (idx == 0) s->result = value;
-    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    msAwaitSlotDone(s);
 }
 
 static inline void msAwaitSlotFail(void* sp, void* error) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     atomic_store_explicit(&s->failed, true, memory_order_release);
     s->error = error;
-    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    msAwaitSlotDone(s);
 }
 
 /* msIsPoolWorker declared in pool.c — true only for pool worker threads */
@@ -333,8 +329,8 @@ MS_TLS_EXTERN(bool, msIsPoolWorker);
 extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include */
 
 /* Dual-path wait, same split msWaitFor uses (dispatchFull.c): a pool worker
- * helps and yields, but the LOOP thread must keep pumping its loop while it
- * waits. Helping alone is not enough — a spawn child can be blocked on
+ * runs its queued task or yields, but the LOOP thread must keep pumping its loop while it
+ * waits. Running the task is not enough — a spawn child can be blocked on
  * something only the loop can complete (a timer armed by sleepAsync, a
  * cross-thread completion posted to the loop's port), and nobody else will
  * ever run it while the loop thread spins here. Proven 2026-09-05 by corpus
@@ -348,13 +344,25 @@ extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include 
 static inline void msAwaitSlotWait(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     /* Re-increment ONLY if the decrement took: the count saturates at 0 and a
-     * nested help-first chain reaches it routinely, so an unconditional Inc
+     * nested wait chain reaches it routinely, so an unconditional Inc
      * adds a count nobody removed. */
     bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
-    while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
-        if (msPoolHelpOne()) continue;
-        if (!msIsPoolWorker) msRunOnce(0);
-        msYield();
+    uint32_t parkUs = MS_SLOT_PARK_MIN_US;
+    while ((atomic_load_explicit(&s->pending, memory_order_acquire) & MS_SLOT_COUNT) > 0) {
+        if (msPoolRunEdge(sp, false, true)) { parkUs = MS_SLOT_PARK_MIN_US; continue; }
+        /* Its task runs on another thread. The loop thread waits in its loop, which
+         * the completion wakes as it wakes for a loop event; a worker parks, waking
+         * to run the descendants the task queues meanwhile. */
+        int32_t flag = msIsPoolWorker ? MS_SLOT_PARKED : MS_SLOT_LOOP;
+        if (!msIsPoolWorker) msEnsureWakePipe();
+        int32_t v = atomic_fetch_or_explicit(&s->pending, flag, memory_order_acq_rel) | flag;
+        if ((v & MS_SLOT_COUNT) == 0) break;
+        if (!msIsPoolWorker) {
+            msRunOnce(MS_SLOT_LOOP_WAIT_MS);
+            continue;
+        }
+        msFutexWaitUs((int*)&s->pending, v, parkUs);
+        if (parkUs < MS_SLOT_PARK_MAX_US) parkUs *= 2;
     }
     if (dec) msPoolBusyInc();  /* back to own work */
 }

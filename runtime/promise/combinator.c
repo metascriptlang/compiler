@@ -24,6 +24,7 @@ static void msPromiseAllCb(void* env) {
 			s->values[idx] = f->value;
 		}
 	}
+	msFutureEdgeSettle(s->result, idx);
 	msDecref(f);
 
 	/* Always decrement. Last callback frees state. */
@@ -52,19 +53,20 @@ void* msPromiseAll(msRefArray* arr) {
 	}
 
 	/* Copy futures array — caller may free original */
-	msFuture** inputsCopy = (msFuture**)malloc(count * sizeof(msFuture*));
+	msFuture** inputsCopy = (msFuture**)msMemAlloc(count * sizeof(msFuture*));
 	for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); }
 
-	msPromiseAllState* state = (msPromiseAllState*)calloc(1, sizeof(msPromiseAllState));
+	msPromiseAllState* state = (msPromiseAllState*)msMemAlloc0(sizeof(msPromiseAllState));
 	state->result = result;
 	msIncref(result);
 	state->inputs = inputsCopy;
-	state->values = (void**)calloc(count, sizeof(void*));
+	state->values = (void**)msMemAllocN0(count, sizeof(void*));
 	state->count = count;
 	state->remaining = count;
+	msFutureEdgeAll(result, (void* const*)inputsCopy, count);
 
 	for (int i = 0; i < count; i++) {
-		msPromiseAllCbEnv* env = (msPromiseAllCbEnv*)malloc(sizeof(msPromiseAllCbEnv));
+		msPromiseAllCbEnv* env = (msPromiseAllCbEnv*)msMemAlloc(sizeof(msPromiseAllCbEnv));
 		env->state = state;
 		env->index = i;
 		msFutureAddCallback(futures[i], (msClosure){
@@ -110,13 +112,13 @@ void* msPromiseRace(msRefArray* arr) {
 
 	if (count == 0 || futures == NULL) return result;  /* never settles — ECMAScript spec */
 
-	msPromiseRaceState* state = (msPromiseRaceState*)calloc(1, sizeof(msPromiseRaceState));
+	msPromiseRaceState* state = (msPromiseRaceState*)msMemAlloc0(sizeof(msPromiseRaceState));
 	state->result = result;
 	msIncref(result);
 	state->remaining = count;
 
 	for (int i = 0; i < count; i++) {
-		msPromiseRaceCbEnv* env = (msPromiseRaceCbEnv*)malloc(sizeof(msPromiseRaceCbEnv));
+		msPromiseRaceCbEnv* env = (msPromiseRaceCbEnv*)msMemAlloc(sizeof(msPromiseRaceCbEnv));
 		env->state = state;
 		env->input = futures[i];
 		msIncref(futures[i]);
@@ -135,6 +137,7 @@ static void msPromiseAllSettledCb(void* env) {
 	msPromiseAllSettledState* s = e->state;
 	int idx = e->index;
 	free(e);
+	msFutureEdgeSettle(s->result, idx);
 	msDecref(s->inputs[idx]);
 
 	/* Always decrement. Last callback completes (never fails). */
@@ -158,18 +161,19 @@ void* msPromiseAllSettled(msRefArray* arr) {
 	}
 
 	/* Copy futures array — caller may free original */
-	msFuture** inputsCopy = (msFuture**)malloc(count * sizeof(msFuture*));
+	msFuture** inputsCopy = (msFuture**)msMemAlloc(count * sizeof(msFuture*));
 	for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); }
 
-	msPromiseAllSettledState* state = (msPromiseAllSettledState*)calloc(1, sizeof(msPromiseAllSettledState));
+	msPromiseAllSettledState* state = (msPromiseAllSettledState*)msMemAlloc0(sizeof(msPromiseAllSettledState));
 	state->result = result;
 	msIncref(result);
 	state->inputs = inputsCopy;
 	state->count = count;
 	state->remaining = count;
+	msFutureEdgeAll(result, (void* const*)inputsCopy, count);
 
 	for (int i = 0; i < count; i++) {
-		msPromiseAllSettledCbEnv* env = (msPromiseAllSettledCbEnv*)malloc(sizeof(msPromiseAllSettledCbEnv));
+		msPromiseAllSettledCbEnv* env = (msPromiseAllSettledCbEnv*)msMemAlloc(sizeof(msPromiseAllSettledCbEnv));
 		env->state = state;
 		env->index = i;
 		msFutureAddCallback(futures[i], (msClosure){
@@ -221,14 +225,14 @@ void* msPromiseAny(msRefArray* arr) {
 		return result;
 	}
 
-	msPromiseAnyState* state = (msPromiseAnyState*)calloc(1, sizeof(msPromiseAnyState));
+	msPromiseAnyState* state = (msPromiseAnyState*)msMemAlloc0(sizeof(msPromiseAnyState));
 	state->result = result;
 	msIncref(result);
 	state->count = count;
 	state->remaining = count;
 
 	for (int i = 0; i < count; i++) {
-		msPromiseAnyCbEnv* env = (msPromiseAnyCbEnv*)malloc(sizeof(msPromiseAnyCbEnv));
+		msPromiseAnyCbEnv* env = (msPromiseAnyCbEnv*)msMemAlloc(sizeof(msPromiseAnyCbEnv));
 		env->state = state;
 		env->input = futures[i];
 		msIncref(futures[i]);
@@ -340,13 +344,19 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv));
+	msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv));
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = typeTag;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
+	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env}, msFutureCatchEnvDrop, NULL));
 	return output;
 }
 
 /* ===== Promise.finally ===== */
+
+static void msFutureFinallyEnvDrop(void* raw) {
+	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
+	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
+	free(e);
+}
 
 static void msFutureFinallyCb(void* raw) {
 	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
@@ -366,9 +376,9 @@ static void msFutureFinallyCb(void* raw) {
 
 void* msFutureFinally(void* input, msClosure onSettled) {
 	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv));
+	msFutureFinallyEnv* env = (msFutureFinallyEnv*)msMemAlloc(sizeof(msFutureFinallyEnv));
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});
+	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env}, msFutureFinallyEnvDrop, NULL));
 	return output;
 }
 

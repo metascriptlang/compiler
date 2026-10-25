@@ -79,7 +79,7 @@ export enum TypeFlag {
 	DuVariant,            // INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
 	OpenClass,            // class is extended (non-final): canFormAcycle returns true unconditionally, the tfFinal rule. Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
 	BrandWiden,           // TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
-	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
+	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, lockHolder, value }` cell (PARALOCK I22)
 	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
@@ -90,6 +90,8 @@ export enum TypeFlag {
 	ArityAdapter,         // env of a closure that drops the slot's trailing arguments: identity compares its adaptee
 	CompleteStruct,       // extern struct whose declared fields are all of C's, from a header translation: its layout is folded and asserted against C
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
+	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
+	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -104,6 +106,7 @@ export enum AttachedOp {
 	AttachedLt,
 	AttachedLe,
 	AttachedToString,
+	AttachedCustody,
 }
 
 // ===== Type =====
@@ -194,7 +197,6 @@ export enum SymbolFlag {
 	Exported,       // symbol is exported
 	Mutable,        // let/var/mutable
 	Forward,        // forward declaration (body not yet seen)
-	NoSideEffect,  // @pure — no side effects
 	Global,        // module-level variable
 	ImportC,       // extern declaration (extern ... from)
 	CompileTime,  // @comptime
@@ -239,6 +241,10 @@ export enum SymbolFlag {
 	HoistedCall, // a `__call_N_` temp the conditional lowering binds to a raising call: the value is the call and nothing else
 	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 	Anon, // minted by a transform: its name is generated and positional, never one the author wrote
+	UnavailableOp, // a lifted hook no site may call: the analyzer refuses each copy that needs it (reference: sfError on a hook)
+	Acyclic, // @acyclic on a class: resolveClass stamps TypeFlag.Acyclic on its struct
+	CompilerProc, // a routine a synthesized call names: a @compilerFunc declaration or a generated runtime proc (reference: sfCompilerProc)
+	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 }
 
 // ===== Symbol =====
@@ -274,6 +280,7 @@ export class Symbol {
 	item: int32;
 	instantiatedFrom: Symbol | null;
 	instanceArgs: Type[] | null;
+	instanceParams: Type[] | null;
 	ctorRoutine: Symbol | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
@@ -312,6 +319,8 @@ export enum NodeFlag {
 	ObjectSlot,    // checker: this union projection reads whichever slot holds an object, the conversion above it checks the class
 	CanRaise,      // raises inference: this statement's value holds a call that can raise
 	CannotRaise,   // raises inference: no call in this statement's value can raise
+	RaisingCall,   // raises inference: this call or `new` can raise
+	NonRaisingCall, // raises inference: this call or `new` cannot raise
 	WhenDeferred,  // parser: a `when` chain kept as nested IfStmt because a condition asks a type trait; the checker picks the branch per instance
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
@@ -327,6 +336,8 @@ export enum NodeFlag {
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 	Optional,      // parser: this class field was written `name?`
 	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
+	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
+	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 }
 
 // ===== Node Kind Enum =====

@@ -27,25 +27,25 @@ export struct Deep extends Middle { extra: WritableSigner; }
 export struct Renamed { payer: WritableSigner; target: Slot; }
 
 function own(): Result<uint64, ProgramError> {
-	const x = try accounts<Own>();
+	const x = try accounts<Own>(); // GUARD-REFUSED
 	const made = try createPda<Pet>(x.payer, x.target, ["pet"]);
 	return Result.ok(made.foundBump() as uint64);
 }
 
 function inherits(): Result<uint64, ProgramError> {
-	const x = try accounts<Inherits>();
+	const x = try accounts<Inherits>(); // GUARD-REFUSED
 	const made = try createPda<Pet>(x.payer, x.target, ["pet"]);
 	return Result.ok(made.foundBump() as uint64);
 }
 
 function deep(): Result<uint64, ProgramError> {
-	const x = try accounts<Deep>();
+	const x = try accounts<Deep>(); // GUARD-REFUSED
 	const made = try createPda<Pet>(x.payer, x.target, ["pet"]);
 	return Result.ok(made.foundBump() as uint64);
 }
 
 function renamed(): Result<uint64, ProgramError> {
-	const x = try accounts<Renamed>();
+	const x = try accounts<Renamed>(); // GUARD-REFUSED
 	const made = try createPda<Pet>(x.payer, x.target, ["pet"]);
 	return Result.ok(made.foundBump() as uint64);
 }

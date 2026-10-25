@@ -9,7 +9,7 @@ import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, raiserI
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
-import { placedInstanceOf } from "../../checker/instantiate";
+import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 
 // --- Bytecode-compiler error queue ---
 // The expression/statement compilers used to silently emit LoadConst nil
@@ -120,7 +120,7 @@ export interface RaiserCompState {
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
-	copyTypes: Type[];
+	copyTypes: Cursor<Readonly<Type>>[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
@@ -531,15 +531,15 @@ function demandIndex(index: int32 | null): int32 {
 }
 
 export function resolveRoutine(s: RaiserCompState, sym: Symbol | null): int32 {
-	return sym != null && isRoutineSym(sym) ? demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(sym))) : -1;
+	return sym != null && isRoutineSym(sym) ? demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(placedInstances(), sym))) : -1;
 }
 
 export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 {
-	return demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(classSym)));
+	return demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(placedInstances(), classSym)));
 }
 
 export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
-	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(classSym)));
+	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(placedInstances(), classSym)));
 }
 
 // --- Builtin helpers ---

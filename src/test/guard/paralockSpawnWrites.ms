@@ -49,35 +49,35 @@ interface Boxed { box: Counter; }
 // 1 — direct field write through a captured ref.
 function directWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { c.n = c.n + 1; return c.n; });
+	const f = spawn(() => { c.n = c.n + 1; return c.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 2 — compound assignment, same chain root.
 function compoundWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { c.n += 1; return c.n; });
+	const f = spawn(() => { c.n += 1; return c.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 3 — increment write-back.
 function incrementWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { c.n++; return c.n; });
+	const f = spawn(() => { c.n++; return c.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 4 — element write through a captured array.
 function elementWrite(): int32 {
 	const arr: int32[] = [0, 0];
-	const f = spawn(() => { arr[0] = 7; return arr[0]; });
+	const f = spawn(() => { arr[0] = 7; return arr[0]; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 5 — nested chain: the root is still the captured binding.
 function nestedChainWrite(): int32 {
 	const h: Boxed = { box: { n: 0 } };
-	const f = spawn(() => { h.box.n = 1; return h.box.n; });
+	const f = spawn(() => { h.box.n = 1; return h.box.n; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -85,7 +85,7 @@ function nestedChainWrite(): int32 {
 function nestedSpawnWrite(): int32 {
 	const c: Counter = { n: 0 };
 	const f = spawn(() => {
-		const g = spawn(() => { c.n = 2; return c.n; });
+		const g = spawn(() => { c.n = 2; return c.n; }); // GUARD-REFUSED
 		return await g;
 	});
 	return await f;
@@ -94,28 +94,28 @@ function nestedSpawnWrite(): int32 {
 // 7 — alias: the view follows the value, not the name.
 function aliasWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { const a = c; a.n = a.n + 1; return a.n; });
+	const f = spawn(() => { const a = c; a.n = a.n + 1; return a.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 8 — loop binding over a captured array.
 function loopBindingWrite(): int32 {
 	const arr: Counter[] = [{ n: 0 }];
-	const f = spawn(() => { for (const x of arr) { x.n = 5; } return arr[0].n; });
+	const f = spawn(() => { for (const x of arr) { x.n = 5; } return arr[0].n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 9 — destructuring from a captured ref.
 function destructureWrite(): int32 {
 	const h: Boxed = { box: { n: 0 } };
-	const f = spawn(() => { const { box } = h; box.n = 3; return box.n; });
+	const f = spawn(() => { const { box } = h; box.n = 3; return box.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 10 — a builtin mutator is a write.
 function pushWrite(): int32 {
 	const arr: int32[] = [];
-	const f = spawn(() => { arr.push(1); return arr.length; });
+	const f = spawn(() => { arr.push(1); return arr.length; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -123,7 +123,7 @@ function pushWrite(): int32 {
 function bump(c: Counter): void { c.n = c.n + 1; }
 function calleeWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { bump(c); return c.n; });
+	const f = spawn(() => { bump(c); return c.n; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -132,14 +132,14 @@ struct Slot { c: Counter; }
 interface Rack { slot: Slot; }
 function structCopyWrite(): int32 {
 	const r: Rack = { slot: { c: { n: 0 } } };
-	const f = spawn(() => { const s = r.slot; s.c.n = 9; return 0; });
+	const f = spawn(() => { const s = r.slot; s.c.n = 9; return 0; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 13 — an array literal cannot launder the view into a mutable element type.
 function arrayLiteralWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { const xs: Counter[] = [c]; xs[0].n = 9; return 0; });
+	const f = spawn(() => { const xs: Counter[] = [c]; xs[0].n = 9; return 0; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -147,14 +147,14 @@ function arrayLiteralWrite(): int32 {
 class Tally { n: int32 = 0; bump(): void { this.n = this.n + 1; } }
 function methodWrite(): int32 {
 	const t = new Tally();
-	const f = spawn(() => { t.bump(); return t.n; });
+	const f = spawn(() => { t.bump(); return t.n; }); // GUARD-REFUSED
 	return await f;
 }
 
 // 15 — `as` does not cast the view away.
 function castWrite(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => { const m = c as Counter; m.n = 9; return 0; });
+	const f = spawn(() => { const m = c as Counter; m.n = 9; return 0; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -162,7 +162,7 @@ function castWrite(): int32 {
 interface MoveBox { c: Counter; }
 function moveOut(): int32 {
 	const b: MoveBox = { c: { n: 0 } };
-	const f = spawn(() => { const t = move b.c; return t.n; });
+	const f = spawn(() => { const t = move b.c; return t.n; }); // GUARD-REFUSED
 	return await f;
 }
 
@@ -171,6 +171,6 @@ interface OutCell { k: int32; }
 function fill(out r: int32): void { r = 7; }
 function outWrite(): int32 {
 	const cell: OutCell = { k: 0 };
-	const f = spawn(() => { fill(out cell.k); return 0; });
+	const f = spawn(() => { fill(out cell.k); return 0; }); // GUARD-REFUSED
 	return await f;
 }

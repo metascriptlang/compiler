@@ -17,20 +17,21 @@
  *
  * The ticket lock below is the whole locking runtime — one fair FIFO spinlock
  * with an adaptive spin→park tail. It has exactly one consumer (this cell), so
- * it lives here rather than in a header of its own; the --gc=manual stubs in
+ * it lives here rather than in a header of its own; the --mm=manual stubs in
  * runtime/manual.h are single-threaded no-ops and do not need the layout.
  */
 #ifndef MS_LOCKED_H
 #define MS_LOCKED_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* ===== Atomic primitives ===== */
 
 #if defined(__GNUC__) || defined(__clang__)
-  #define msAtomicFetchAdd(p, v) __atomic_fetch_add(p, v, __ATOMIC_RELAXED)
-  #define msAtomicLoad(p) __atomic_load_n(p, __ATOMIC_ACQUIRE)
-  #define msAtomicStore(p, v) __atomic_store_n(p, v, __ATOMIC_RELEASE)
+  #define msAtomicFetchAdd(p, v) __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST)
+  #define msAtomicLoad(p) __atomic_load_n(p, __ATOMIC_SEQ_CST)
+  #define msAtomicStore(p, v) __atomic_store_n(p, v, __ATOMIC_SEQ_CST)
   #if defined(__x86_64__) || defined(__i386__)
     #define msCpuRelax() __builtin_ia32_pause()
   #elif defined(__aarch64__)
@@ -64,16 +65,24 @@
   static inline void msFutexWakeAll(int* addr) {
     __ulock_wake(MS_ULOCK_CMP_WAIT | MS_ULOCK_WAKE_ALL, (void*)addr, 0);
   }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    __ulock_wait(MS_ULOCK_CMP_WAIT, (void*)addr, (uint32_t)expected, us);
+  }
 #elif defined(__linux__)
   #include <limits.h>
   #include <unistd.h>
   #include <sys/syscall.h>
   #include <linux/futex.h>
+  #include <time.h>
   static inline void msFutexWait(int* addr, int expected) {
     syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, (void*)0, (void*)0, 0);
   }
   static inline void msFutexWakeAll(int* addr) {
     syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, INT_MAX, (void*)0, (void*)0, 0);
+  }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
+    syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, &ts, (void*)0, 0);
   }
 #elif defined(_WIN32)
   /* WaitOnAddress/WakeByAddressAll (Amendment E Tier 1's Windows arm) live in
@@ -124,9 +133,16 @@
   static inline void msFutexWakeAll(int* addr) {
     if (msWakeByAddressAllP != NULL) msWakeByAddressAllP((void*)addr);
   }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    msFutexResolve();
+    int cmp = expected;
+    if (msWaitOnAddressP != NULL) msWaitOnAddressP((volatile void*)addr, &cmp, sizeof(int), (DWORD)((us + 999u) / 1000u));
+    else msCpuRelax();
+  }
 #else
   static inline void msFutexWait(int* addr, int expected) { (void)addr; (void)expected; msCpuRelax(); }
   static inline void msFutexWakeAll(int* addr) { (void)addr; }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) { (void)addr; (void)expected; (void)us; msCpuRelax(); }
 #endif
 
 /* ===== Ticket lock =====
@@ -138,6 +154,7 @@
 typedef struct {
 	int nextTicket;
 	int nowServing;
+	int64_t holder;
 } msTicketLock;
 
 #ifndef MS_LOCK_SPIN_BUDGET
@@ -167,14 +184,33 @@ static inline void msTicketLockRelease(msTicketLock* L) {
 		msFutexWakeAll(&L->nowServing);
 }
 
-/* ===== Locked<T> cell surface ===== */
+/* ===== Locked<T> cell surface =====
+ * `holder` names the thread inside the critical section, so a callback that
+ * enters its own cell again is refused instead of waiting on itself. Only the
+ * holder writes it, between acquire and release, so a relaxed store and load
+ * suffice: another thread can only ever read 0 or a foreign id. */
+
+#if defined(_WIN32)
+  static inline int64_t msLockedSelf(void) { return (int64_t)GetCurrentThreadId(); }
+#else
+  #include <pthread.h>
+  static inline int64_t msLockedSelf(void) { return (int64_t)(uintptr_t)pthread_self(); }
+#endif
+
+static inline bool msLockedHeldHere(void* cell) {
+	return __atomic_load_n(&((msTicketLock*)cell)->holder, __ATOMIC_RELAXED) == msLockedSelf();
+}
 
 static inline void msLockedAcquire(void* cell) {
-	msTicketLockAcquire((msTicketLock*)cell);
+	msTicketLock* L = (msTicketLock*)cell;
+	msTicketLockAcquire(L);
+	__atomic_store_n(&L->holder, msLockedSelf(), __ATOMIC_RELAXED);
 }
 
 static inline void msLockedRelease(void* cell) {
-	msTicketLockRelease((msTicketLock*)cell);
+	msTicketLock* L = (msTicketLock*)cell;
+	__atomic_store_n(&L->holder, 0, __ATOMIC_RELAXED);
+	msTicketLockRelease(L);
 }
 
 #endif /* MS_LOCKED_H */

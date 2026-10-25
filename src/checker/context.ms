@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -736,7 +736,16 @@ function parentLevel(level: (Type | null)[]): (Type | null)[] {
 }
 
 function classBaseStruct(t: Type): Type | null {
-	const parent = classParentOf(t);
+	return baseStructOf(classParentOf(t));
+}
+
+// The base as the class declares it, its type arguments unbound: enough for a walk that only
+// names each class, and it creates no type, so emission may walk it.
+function classBaseOwner(t: Type): Type | null {
+	return baseStructOf(classDeclaredParentOf(t));
+}
+
+function baseStructOf(parent: Type | null): Type | null {
 	if (parent == null) return null;
 	let inner = parent;
 	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
@@ -829,7 +838,7 @@ export function resetDispatchRegistry(): void {
 	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
 }
 
-export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
+export function dispatchEntryFor(sym: Readonly<Symbol>): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
 }
 
@@ -849,7 +858,7 @@ export function dispatchMethodOf(classSym: Symbol, methodName: string): DispMeth
 		const own = classOwnSym(cur);
 		const entry = own != null ? dispatchDeclaredEntry(own, methodName) : null;
 		if (entry != null) return entry;
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return null;
@@ -866,14 +875,14 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	let d = 0;
 	while (cur != null && d < 64) {
 		if (classOwnSym(cur) == root) return d;
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return -1;
 }
 
 export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
-	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
+	let cur = classSym.symbolType != null ? classBaseOwner(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
 		const baseSym = classOwnSym(cur);
@@ -883,16 +892,40 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 				if (e.methodName == methodName) return e;
 			}
 		}
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return null;
 }
 
 export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
+	return overridesAmong(_dispEntries, classSym, methodName);
+}
+
+// Every dispatched method with the overrides its dispatcher tries, deepest first, read once before emission.
+export function dispatchOverrideTable(): HashMap<Symbol, Symbol[]> {
+	const byName = new HashMap<string, DispMethodEntry[]>();
+	for (const e of _dispEntries) {
+		const named = byName.get(e.methodName);
+		if (named != null) named.push(e);
+		else byName.set(e.methodName, [e]);
+	}
+	const table = new HashMap<Symbol, Symbol[]>();
+	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+		if (e.overloaded) return;
+		const overrides = overridesAmong(byName.get(e.methodName)!, e.classSym, e.methodName);
+		if (overrides.length == 0) return;
+		const syms: Symbol[] = [];
+		for (const o of overrides) syms.push(o.sym);
+		table.set(sym, syms);
+	});
+	return table;
+}
+
+function overridesAmong(entries: DispMethodEntry[], classSym: Symbol, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
-	for (const e of _dispEntries) {
+	for (const e of entries) {
 		if (e.methodName != methodName) continue;
 		const dd = dispDepthBelow(e.classSym, classSym);
 		if (dd < 0) continue;
@@ -1279,6 +1312,7 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 
 export interface CheckedInstantiation {
 	sym: Symbol;
+	params: Type[];
 	concreteTypes: Type[];
 }
 
@@ -1304,14 +1338,11 @@ export interface CheckerError {
 
 // ===== GC Mode =====
 // GC mode — explicitly chosen, drives DRC and allocation behavior.
-// Orc: default, ARC + cycle collector (malloc + refcount + ORC cycle detection).
-// Drc: ARC only, no cycle collection (malloc + refcount, no ORC).
 // None: no RC, use malloc, never free (debug/leak testing).
 // Manual: no RC, freestanding — arena allocator, no malloc, no POSIX (see docs/BARE.md).
 
 export enum GcMode {
 	Drc,
-	Orc,
 	None,
 	Manual,
 }
@@ -1325,6 +1356,7 @@ export class CheckerContext {
 	                               // Cross-compile detected via `targetOs !== platform`.
 	targetInfo: TargetInfo;
 	appMode: string;
+	stdRoot: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActor: Symbol | null;
 	staticBlockClass: Symbol | null;
@@ -1332,6 +1364,7 @@ export class CheckerContext {
 	readonlyBoundary: Cursor<Scope>;
 	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
+	awaitedCall: Node | null;  // the call an await expression is checking as its operand
 	typeTestDepth: int32;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
@@ -1415,10 +1448,11 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
-		gcMode: GcMode.Orc,
+		gcMode: GcMode.Drc,
 		targetOs: platform,
 		targetInfo: hostTargetInfo(),
 		appMode: "console",
+		stdRoot: "",
 		currentFunction: null,
 		currentActor: null,
 		staticBlockClass: null,
@@ -1426,6 +1460,7 @@ export function createContext(): CheckerContext {
 		readonlyBoundary: null as unknown as Cursor<Scope>,
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
+		awaitedCall: null,
 		typeTestDepth: 0,
 		inLoop: false,
 		inSwitch: false,
@@ -1539,6 +1574,11 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;
+}
+
+export function isOutsideResolvedStd(ctx: CheckerContext, path: string): boolean {
+	const root = ctx.preludeCtx != null ? ctx.preludeCtx.stdRoot : ctx.stdRoot;
+	return root != "" && !path.startsWith(root.endsWith("/") ? root : root + "/");
 }
 
 // Create context with a shared IdentCache (one cache per compilation).

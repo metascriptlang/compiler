@@ -11,4 +11,4 @@ actor Srv {
 }
 
 const s = new Srv();
-console.log(s.name);
+console.log(s.name); // GUARD-REFUSED

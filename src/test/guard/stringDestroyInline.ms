@@ -69,7 +69,7 @@ for (const program of PROGRAMS) {
 	writeFile(`${dir}/${program.name}.ms`, program.source);
 	for (const mode of MODES) {
 		const binary = `${dir}/${program.name}${mode.replace("--", "-")}`;
-		const build = execFileResult(msc, ["build", `${program.name}.ms`, "--gc=drc", mode, "--lto=off", `--output=${binary}`], dir);
+		const build = execFileResult(msc, ["build", `${program.name}.ms`, "--mm=drc", mode, "--lto=off", `--output=${binary}`], dir);
 		if (build.exitCode != 0) {
 			console.log(`GUARD-FAIL ${program.name} ${mode}: build failed\n${build.output}${build.errorOutput}`);
 			failed = failed + 1;

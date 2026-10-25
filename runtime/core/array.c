@@ -33,16 +33,16 @@ static int64_t msArrayCountAdd(int64_t len, int64_t addLen) {
 void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
 	if (cap == 0) return NULL;
 	int64_t totalSize = msArrayBytes(cap, elemSize);
-	msArrayPayloadBase* p = (msArrayPayloadBase*)calloc(1, totalSize);
-	if (p) { p->cap = cap; }
+	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc0(totalSize);
+	p->cap = cap;
 	return p;
 }
 
 void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
 	if (cap == 0) return NULL;
 	int64_t totalSize = msArrayBytes(cap, elemSize);
-	msArrayPayloadBase* p = (msArrayPayloadBase*)malloc(totalSize);
-	if (p) { p->cap = cap; }
+	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc(totalSize);
+	p->cap = cap;
 	return p;
 }
 
@@ -57,14 +57,12 @@ static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 	int64_t newSize = msArrayBytes(newCap, elemSize);
-	msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(newSize);
-	if (q) {
-		memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
-		if (zeroTail) {
-			memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
-		}
-		q->cap = newCap;
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(newSize);
+	memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
+	if (zeroTail) {
+		memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
 	}
+	q->cap = newCap;
 	return q;
 }
 
@@ -258,8 +256,8 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	if (p == NULL) {
 		int64_t cap = msArrayCountAdd(len, addLen);
 		int64_t totalSize = msArrayBytes(cap, elemSize);
-		msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(totalSize);
-		if (q) q->cap = cap;
+		msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(totalSize);
+		q->cap = cap;
 		return q;
 	}
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
@@ -277,7 +275,7 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
-	if (q) q->cap = newCap;
+	q->cap = newCap;
 	return q;
 }
 
@@ -605,32 +603,30 @@ msRefArray msRefArrayNew(int64_t cap) {
 	return arr;
 }
 
-static void msRefArrayFreeAfterDrop(void* owner, int32_t resume) {
+static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {
 	(void)resume;
-	msRefArray* arr = (msRefArray*)owner;
-	free(arr->p);
-	arr->p = NULL;
-	arr->len = 0;
+	free(payload);
 }
 
 void msRefArrayDestroy(msRefArray* arr) {
-	if (arr->p != NULL) {
-		bool pending = false;
-		if (msDropHasRoom()) {
-			for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
-		} else for (int64_t i = 0; i < arr->len; i++) {
-			void* e = arr->p->data[i];
-			if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
-			else pending |= msDecrefCyclicEdge(arr, e);
-		}
-		if (pending) {
-			msDropDefer(arr, msRefArrayFreeAfterDrop, 0);
-			return;
-		}
-		free(arr->p);
-		arr->p = NULL;
-	}
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
 	arr->len = 0;
+	if (p == NULL) return;
+	bool pending = false;
+	if (msDropHasRoom()) {
+		for (int64_t i = 0; i < len; i++) msDecrefCyclic(p->data[i]);
+	} else for (int64_t i = 0; i < len; i++) {
+		void* e = p->data[i];
+		if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
+		else pending |= msDecrefCyclicEdge(arr, e);
+	}
+	if (pending) {
+		msDropDefer(p, msRefPayloadFreeAfterDrop, 0);
+		return;
+	}
+	free(p);
 }
 
 void msRefArrayPush(msRefArray* arr, void* value) {
@@ -655,12 +651,12 @@ void* msRefArrayAt(msRefArray* arr, int64_t idx) {
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
-	if (newLen >= arr->len) return;
-	for (int64_t i = newLen; i < arr->len; i++) {
-		msDecrefCyclic(arr->p->data[i]);
-		arr->p->data[i] = NULL;
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msDecrefCyclic(evicted);
 	}
-	arr->len = newLen;
 }
 
 void msRefArrayGrow(msRefArray* arr, int64_t newLen, void* value) {
@@ -703,17 +699,46 @@ void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen) {
  * fills with NULL and takes no share, so it reuses msRefArrayGrow. */
 void msAtomicRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
-	if (newLen >= arr->len) return;
-	for (int64_t i = newLen; i < arr->len; i++) {
-		msAtomicDecref(arr->p->data[i]);
-		arr->p->data[i] = NULL;
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msAtomicDecref(evicted);
 	}
-	arr->len = newLen;
 }
 
 void msAtomicRefArraySetLen(msRefArray* arr, int64_t newLen) {
 	if (newLen < arr->len) {
 		msAtomicRefArrayShrink(arr, newLen);
+	} else if (newLen > arr->len) {
+		msRefArrayGrow(arr, newLen, NULL);
+	}
+}
+
+void msAcyclicRefArrayDestroy(msRefArray* arr) {
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msDecref(p->data[i]);
+		free(p);
+	}
+}
+
+void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen) {
+	if (newLen < 0) newLen = 0;
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msDecref(evicted);
+	}
+}
+
+void msAcyclicRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	if (newLen < arr->len) {
+		msAcyclicRefArrayShrink(arr, newLen);
 	} else if (newLen > arr->len) {
 		msRefArrayGrow(arr, newLen, NULL);
 	}
@@ -829,27 +854,36 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 /* Atomic-rc elements (Locked<T>, Arc<T>) — same walk, atomic ops. A cell is
  * born at MS_RC_INCREMENT, so a plain msDecref never reaches last and leaks. */
 void msAtomicRefArrayDestroy(msRefArray* arr) {
-	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) msAtomicDecref(arr->p->data[i]);
-		free(arr->p);
-		arr->p = NULL;
-	}
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
 	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msAtomicDecref(p->data[i]);
+		free(p);
+	}
 }
 
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
-void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
-	if (item != NULL) msIncref(item);
+static void msReleaseCyclic(void* p) { msDecrefCyclic(p); }
+static void msReleaseAtomic(void* p) { msAtomicDecref(p); }
+static void msReleaseAcyclic(void* p) { msDecref(p); }
+
+static void msRefArraySpliceThenRelease(msRefArray* arr, int64_t start, int64_t deleteCount, void* item, void (*release)(void*)) {
 	if (start < 0) start = 0;
+	void* fewRemoved[8];
+	void** removed = fewRemoved;
+	int64_t removedLen = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
-		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-		for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
-		int64_t remaining = arr->len - start - deleteCount;
+		removedLen = start + deleteCount > arr->len ? arr->len - start : deleteCount;
+		if (removedLen > 8) removed = (void**)msMemAlloc(removedLen * sizeof(void*));
+		memcpy(removed, arr->p->data + start, removedLen * sizeof(void*));
+		int64_t remaining = arr->len - start - removedLen;
 		if (remaining > 0) {
-			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+			memmove(arr->p->data + start, arr->p->data + start + removedLen, remaining * sizeof(void*));
 		}
-		arr->len -= deleteCount;
+		arr->len -= removedLen;
 	}
 	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
 		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
@@ -861,6 +895,13 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	}
 	arr->p->data[start] = item;
 	arr->len += 1;
+	for (int64_t i = 0; i < removedLen; i++) release(removed[i]);
+	if (removed != fewRemoved) free(removed);
+}
+
+void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msIncref(item);
+	msRefArraySpliceThenRelease(arr, start, deleteCount, item, msReleaseCyclic);
 }
 
 void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
@@ -877,26 +918,12 @@ void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount)
 
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
 	if (item != NULL) msAtomicIncref(item);
-	if (start < 0) start = 0;
-	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
-		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-		for (int64_t i = start; i < start + deleteCount; i++) msAtomicDecref(arr->p->data[i]);
-		int64_t remaining = arr->len - start - deleteCount;
-		if (remaining > 0) {
-			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
-		}
-		arr->len -= deleteCount;
-	}
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
-		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
-	}
-	if (start > arr->len) start = arr->len;
-	int64_t tail = arr->len - start;
-	if (tail > 0) {
-		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
-	}
-	arr->p->data[start] = item;
-	arr->len += 1;
+	msRefArraySpliceThenRelease(arr, start, deleteCount, item, msReleaseAtomic);
+}
+
+void msAcyclicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msIncref(item);
+	msRefArraySpliceThenRelease(arr, start, deleteCount, item, msReleaseAcyclic);
 }
 
 /* ===== Closure Array =====
@@ -905,16 +932,18 @@ void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount
  * Layout: msClosure structs stored inline (16B stride), NOT void* indirection. */
 
 void msClosureArrayDestroy(msClosureArray* arr) {
-	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) {
-			if (arr->p->data[i].env != NULL) {
-				msDecref(arr->p->data[i].env);
+	msClosurePayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) {
+			if (p->data[i].env != NULL) {
+				msDecrefCyclic(p->data[i].env);
 			}
 		}
-		free(arr->p);
-		arr->p = NULL;
+		free(p);
 	}
-	arr->len = 0;
 }
 
 void msClosureArrayPush(msClosureArray* arr, msClosure value) {
@@ -936,7 +965,7 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 	msClosurePayload* newp = NULL;
 	if (src->p != NULL) {
 		const size_t sz = sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure);
-		newp = (msClosurePayload*)calloc(1, sz);
+		newp = (msClosurePayload*)msMemAlloc0(sz);
 		newp->cap = cap;
 		for (int64_t i = 0; i < len; i++) {
 			newp->data[i] = src->p->data[i];
@@ -946,9 +975,10 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 			}
 		}
 	}
-	msClosureArrayDestroy(dest);
+	msClosureArray old = *dest;
 	dest->len = len;
 	dest->p = newp;
+	msClosureArrayDestroy(&old);
 }
 
 void msClosureArrayWasMoved(msClosureArray* arr) {

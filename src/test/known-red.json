@@ -5,7 +5,6 @@
     "762-bitSetMacro [danger]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {

@@ -5,11 +5,13 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase } from "../../checker/types";
-import { TransformContext } from "../context";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, SymbolKind, DeclKind, createNode } from "../../ast/node";
+import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
+import { GcMode } from "../../checker/context";
+import { TransformContext, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture } from "../util";
+import { custodyReaches } from "../cycles";
+import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl, makeMoveExpr } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -93,6 +95,192 @@ export function boxReturns(node: Node, retType: Type): void {
 	};
 }
 
+function adapterThunk(body: Node, retType: Type, loc: SourceLocation): Node {
+	const thunk = createNode(NodeKind.ArrowFunction, {
+		arrowParams: [] as string[],
+		arrowParamTypes: [] as string[],
+		arrowBody: body,
+		arrowFlags: "",
+		arrowReturnType: "",
+		arrowDefaults: [] as Node[],
+	}, syntheticToken(loc));
+	thunk.nodeType = createFunction([], [], retType);
+	thunk.paramSyms = [];
+	return thunk;
+}
+
+// A bare function reference whose result needs work on the worker gets a thunk that calls it,
+// so the result passes through the same thunk body as an arrow's.
+export function callingThunk(fnIdent: Node, retType: Type): Node {
+	const call = makeCall(fnIdent, [], fnIdent.location);
+	call.nodeType = retType;
+	return adapterThunk(call, retType, fnIdent.location);
+}
+
+export function spawnThunk(closure: Node): Node {
+	if (closure.kind != NodeKind.CallExpr) return closure;
+	const iife = (closure.data as CallExprData).callee;
+	if (iife.kind != NodeKind.ArrowFunction) return closure;
+	const inner = (iife.data as ArrowFunctionData).arrowBody;
+	return inner != null && (inner.kind == NodeKind.ArrowFunction || inner.kind == NodeKind.FunctionExpr) ? inner : closure;
+}
+
+export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean {
+	if (ctx.checkerCtx == null || ctx.checkerCtx.gcMode != GcMode.Drc) return false;
+	const bare = skipModifier(t);
+	if (bare == null) return false;
+	if (bare.kind == TypeKind.Function) return true;
+	if (bare.kind == TypeKind.Array) return isCountedRefTo(bare.typeReturn) && custodyReaches(bare.typeReturn, ctx.cyclicCache, ctx.acyclicCache);
+	if (isCountedRefTo(bare)) return custodyReaches(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
+	return isHeldInline(bare) && custodyReaches(bare, ctx.cyclicCache, ctx.acyclicCache);
+}
+
+function isHeldInline(t: Type): boolean {
+	if (t.kind == TypeKind.GenericInstance) return !isAwaitable(t);
+	return t.kind == TypeKind.Struct || t.kind == TypeKind.Union || t.kind == TypeKind.Tuple || t.kind == TypeKind.SizedArray;
+}
+
+function isCountedRefTo(t: Type | null): boolean {
+	if (t == null) return false;
+	const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t);
+	return ref != null && ref.kind == TypeKind.Ref && !isAtomicRef(ref) && !(ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor);
+}
+
+export function disownStmt(value: Node, t: Type | null, loc: SourceLocation): Node {
+	const bare = skipModifier(t);
+	const proc = bare != null && bare.kind == TypeKind.Function ? "msClosureDisown"
+		: bare != null && isHeldInline(bare) && !isCountedRefTo(bare) ? "msOrcDisownValue"
+		: "msOrcDisown";
+	return makeExprStmt(makeCall(runtimeRef(proc, loc), [value], loc), loc);
+}
+
+function prependStmts(fn: Node, stmts: Node[], loc: SourceLocation): void {
+	if (fn.kind == NodeKind.FunctionExpr) {
+		const bd = (fn.data as FunctionExprData).funcExprBody.data as BlockStmtData;
+		bd.statements = stmts.concat(bd.statements);
+		return;
+	}
+	const ad = fn.data as ArrowFunctionData;
+	if (ad.arrowBody.kind == NodeKind.BlockStmt) {
+		const bd = ad.arrowBody.data as BlockStmtData;
+		bd.statements = stmts.concat(bd.statements);
+	} else {
+		ad.arrowBody = makeBlock(stmts.concat([makeReturn(ad.arrowBody, loc)]), loc);
+	}
+}
+
+// ULTRALOCK V3: a moved capture leaves the sender's cycle roots before the task is submitted.
+export function disownMovedCaptures(closure: Node, ctx: TransformContext): void {
+	if (closure.kind != NodeKind.CallExpr) return;
+	const cd = closure.data as CallExprData;
+	const iife = cd.callee;
+	if (iife.kind != NodeKind.ArrowFunction || iife.paramSyms == null) return;
+	const params = iife.paramSyms!;
+	const loc = iife.location;
+	const atSubmit: Node[] = [];
+	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
+		if (cd.arguments[i].kind == NodeKind.MoveExpr && mayHoldCycleRoot(params[i].symbolType, ctx)) {
+			atSubmit.push(disownStmt(makeIdentResolved(params[i], loc), params[i].symbolType, loc));
+		}
+	}
+	if (atSubmit.length > 0) prependStmts(iife, atSubmit, loc);
+}
+
+function disownedReturn(arg: Node, retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const tmp = freshOwnedSym(ctx, "result", retType);
+	const decl = makeVarDecl(tmp.name, arg, DeclKind.Const, loc);
+	decl.resolvedSym = tmp;
+	decl.nodeType = retType;
+	return makeBlock([decl, disownStmt(makeIdentResolved(tmp, loc), retType, loc), makeReturn(makeIdentResolved(tmp, loc), loc)], loc);
+}
+
+function disownReturnsIn(node: Node | null, retType: Type, ctx: TransformContext): Node | null {
+	if (node == null) return node;
+	if (node.kind == NodeKind.ReturnStmt) {
+		const arg = (node.data as ReturnStmtData).argument;
+		return arg != null ? disownedReturn(arg, retType, ctx, node.location) : node;
+	}
+	if (node.kind == NodeKind.BlockStmt) {
+		const d = node.data as BlockStmtData;
+		d.statements = d.statements.map((s: Node): Node => disownReturnsIn(s, retType, ctx)!);
+	} else if (node.kind == NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		d.consequent = disownReturnsIn(d.consequent, retType, ctx)!;
+		d.alternate = disownReturnsIn(d.alternate, retType, ctx) as Node;
+	} else if (node.kind == NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		d.whileBody = disownReturnsIn(d.whileBody, retType, ctx)!;
+	} else if (node.kind == NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		d.forOfBody = disownReturnsIn(d.forOfBody, retType, ctx)!;
+	} else if (node.kind == NodeKind.TryCatchStmt) {
+		const d = node.data as TryCatchStmtData;
+		d.tryBody = disownReturnsIn(d.tryBody, retType, ctx)!;
+		d.catchBody = disownReturnsIn(d.catchBody, retType, ctx) as Node;
+		d.finallyBody = disownReturnsIn(d.finallyBody, retType, ctx) as Node;
+	} else if (node.kind == NodeKind.SwitchStmt) {
+		for (const caseNode of (node.data as SwitchStmtData).switchCases) {
+			const sc = caseNode.data as SwitchCaseData;
+			sc.caseStmts = sc.caseStmts.map((s: Node): Node => disownReturnsIn(s, retType, ctx)!);
+		}
+	}
+	return node;
+}
+
+// A routine whose result moves to another executor (an actor CALL reply) disowns it at each return.
+export function disownReturns(body: Node, retType: Type | null, ctx: TransformContext): Node {
+	const t = retType != null && isAwaitable(retType) ? awaitedType(retType) : retType;
+	if (t != null && mayHoldCycleRoot(t, ctx)) disownReturnsIn(body, t, ctx);
+	return body;
+}
+
+// ULTRALOCK V3: a task result moved back to the awaiter leaves the worker's cycle roots before it is stored.
+export function disownResult(thunk: Node, retType: Type | null, ctx: TransformContext): void {
+	if (retType == null || !mayHoldCycleRoot(retType, ctx)) return;
+	if (thunk.kind == NodeKind.ArrowFunction) {
+		const ad = thunk.data as ArrowFunctionData;
+		if (ad.arrowBody == null) return;
+		if (ad.arrowBody.kind == NodeKind.BlockStmt) disownReturnsIn(ad.arrowBody, retType, ctx);
+		else ad.arrowBody = disownedReturn(ad.arrowBody, retType, ctx, ad.arrowBody.location);
+	} else if (thunk.kind == NodeKind.FunctionExpr) {
+		disownReturnsIn((thunk.data as FunctionExprData).funcExprBody, retType, ctx);
+	}
+}
+
+// ULTRALOCK T4: the thunk takes each moved capture out of its env slot at entry, so the scope-end
+// destroy drops it inside the task, before the result is published.
+export function takeMovedCaptures(closure: Node, ctx: TransformContext): void {
+	if (closure.kind != NodeKind.CallExpr) return;
+	const cd = closure.data as CallExprData;
+	const iife = cd.callee;
+	if (iife.kind != NodeKind.ArrowFunction || iife.paramSyms == null) return;
+	const thunk = spawnThunk(closure);
+	if (thunk == closure) return;
+	const params = iife.paramSyms!;
+	const loc = thunk.location;
+	const takes: Node[] = [];
+	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
+		if (cd.arguments[i].kind != NodeKind.MoveExpr) continue;
+		const slot = params[i];
+		const taken = newLoweredSym(ctx, SymbolKind.Variable, "__taken_" + slot.name + "_" + ctx.tempCounter.toString(), slot.symbolType, true);
+		ctx.tempCounter += 1;
+		walkNode(thunk, (n: Node): Node => {
+			if (n.kind == NodeKind.Identifier && n.resolvedSym === slot) {
+				n.resolvedSym = taken;
+				(n.data as IdentifierData).name = taken.name;
+			}
+			return n;
+		});
+		const src = makeMoveExpr(makeIdentResolved(slot, loc), loc);
+		src.nodeType = slot.symbolType;
+		const decl = makeVarDecl(taken.name, src, DeclKind.Let, loc);
+		decl.resolvedSym = taken;
+		decl.nodeType = slot.symbolType;
+		takes.push(decl);
+	}
+	if (takes.length > 0) prependStmts(thunk, takes, loc);
+}
+
 export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.CallExpr) return node;
@@ -103,6 +291,11 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 
 		let closureArg = cd.arguments[0];
 
+		const bareRetType = closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function ? closureArg.nodeType.typeReturn : null;
+		if (closureArg.kind == NodeKind.Identifier && bareRetType != null && mayHoldCycleRoot(bareRetType, ctx)) {
+			closureArg = callingThunk(closureArg, bareRetType);
+			cd.arguments[0] = closureArg;
+		}
 		// Bare function reference (Identifier): wrap as msClosure {fn, env=null}
 		// so codegen emits the struct literal expected by msSpawn/msSpawnTaskSubmit.
 		if (closureArg.kind == NodeKind.Identifier) {
@@ -114,14 +307,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureArg = pair;
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
-		let boxTarget = closureArg;
-		if (closureArg.kind == NodeKind.CallExpr) {
-			const iife = (closureArg.data as CallExprData).callee;
-			if (iife.kind == NodeKind.ArrowFunction) {
-				const inner = (iife.data as ArrowFunctionData).arrowBody;
-				if (inner != null && (inner.kind == NodeKind.ArrowFunction || inner.kind == NodeKind.FunctionExpr)) boxTarget = inner;
-			}
-		}
+		const boxTarget = spawnThunk(closureArg);
 		let closureRetType: Type | null = null;
 		if (node.nodeType != null && isAwaitable(node.nodeType)) {
 			closureRetType = awaitedType(node.nodeType);
@@ -129,6 +315,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureRetType = closureArg.nodeType.typeReturn;
 		}
 
+		disownResult(boxTarget, closureRetType, ctx);
 		if (closureRetType != null && needsBoxing(closureRetType)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):
 			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
@@ -137,18 +324,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
 				const innerCall = makeCall(fnIdent, [], loc);
 				innerCall.nodeType = closureRetType;
-				const boxed = boxForType(innerCall, closureRetType, loc);
-				const wrapper = createNode(NodeKind.ArrowFunction, {
-					arrowParams: [] as string[],
-					arrowParamTypes: [] as string[],
-					arrowBody: boxed,
-					arrowFlags: "",
-					arrowReturnType: "",
-					arrowDefaults: [] as Node[],
-				}, syntheticToken(loc));
-				wrapper.nodeType = createFunction([], [], createPtr(voidType()));
-				wrapper.paramSyms = [];
-				cd.arguments[0] = wrapper;
+				cd.arguments[0] = adapterThunk(boxForType(innerCall, closureRetType, loc), createPtr(voidType()), loc);
 				return node;
 			}
 			// Box return values inside the closure body
@@ -175,6 +351,8 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
+		takeMovedCaptures(closureArg, ctx);
+		disownMovedCaptures(closureArg, ctx);
 
 		return node;
 	});

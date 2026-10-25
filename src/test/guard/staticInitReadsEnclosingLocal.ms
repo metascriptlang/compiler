@@ -5,9 +5,11 @@
 function local(n: int32): int32 {
 	const k: int32 = n * 2;
 	class L {
-		static a: int32 = k + 1;
+		static a: int32 = k + 1; // GUARD-REFUSED
 		static b: int32 = 0;
-		static { L.b = n; }
+		static {
+			L.b = n; // GUARD-REFUSED
+		}
 	}
 	return L.a + L.b;
 }

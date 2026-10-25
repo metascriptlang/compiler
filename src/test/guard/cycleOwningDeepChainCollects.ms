@@ -4,8 +4,8 @@
 // RED MEANS the collector's destroy of a cycle member recursed down an owned list
 // (a crash), or a list freed through the drain was left behind (Link imbalance).
 //
-// GUARD-BALANCE-ORC Link
-// GUARD-BALANCE-ORC Pair
+// GUARD-BALANCE Link
+// GUARD-BALANCE Pair
 
 class Link {
 	next: Link | null = null;

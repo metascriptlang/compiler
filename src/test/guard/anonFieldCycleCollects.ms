@@ -16,9 +16,9 @@
 // DRC is NOT asserted: DRC does not collect cycles by design.
 //
 // RED MEANS: a TypeInfo defined in codegen lost its trace hook. Run /trace-nim on Box.
-// GUARD-BALANCE-ORC Box
-// GUARD-BALANCE-ORC Named
-// GUARD-BALANCE-ORC DeepBox
+// GUARD-BALANCE Box
+// GUARD-BALANCE Named
+// GUARD-BALANCE DeepBox
 
 interface Box { inner: { back: Box | null; s: string }; }
 interface Link { back: Named | null; s: string; }

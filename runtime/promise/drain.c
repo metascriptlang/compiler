@@ -25,9 +25,11 @@ static pthread_mutex_t msOrphanMu = PTHREAD_MUTEX_INITIALIZER;
 static msFutureBase* msOrphanFails[MS_ORPHAN_MAX];
 static int msOrphanCount = 0;
 static int msOrphanOverflow = 0;
+static void* msOrphanErrors[MS_ORPHAN_MAX];
+static int msOrphanErrorCount = 0;
 
 /* Called from msFutureFireCallbacks when a future completes FAILED with no
- * callback attached. Cross-thread safe: msPostCompletion's no-dispatcher
+ * callback attached. Cross-thread safe: the Windows completion post's no-loop
  * fallback runs msFutureFail on pool threads. The incref keeps the entry
  * valid until the exit report; it is deliberately never released (the
  * process is exiting). */
@@ -54,6 +56,26 @@ void msNoteOrphanFailure(void* fut) {
 	MS_ORPHAN_UNLOCK();
 }
 
+void msNoteOrphanError(void* err) {
+	MS_ORPHAN_LOCK();
+	if (msOrphanErrorCount < MS_ORPHAN_MAX) {
+		msOrphanErrors[msOrphanErrorCount++] = err;
+	} else {
+		msOrphanOverflow++;
+		msDecref(err);
+	}
+	MS_ORPHAN_UNLOCK();
+}
+
+static void msReportRejection(void* error) {
+	fputs("Error: unhandled rejection: ", stderr);
+	if (error != NULL) {
+		msString m = ((msError*)error)->message;
+		if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
+	}
+	fputc('\n', stderr);
+}
+
 /* Called when the failure becomes observed: an await reads it
  * (msFutureRaiseFrom) or a callback is attached to the already-failed
  * future (msFutureAddCallback's finished branch). */
@@ -77,17 +99,19 @@ int msReportOrphanFailures(void) {
 		msOrphanFails[i] = NULL;
 		if (f == NULL) continue;
 		if (f->failed && !f->cancelled) {
-			fputs("Error: unhandled rejection: ", stderr);
-			if (f->error != NULL) {
-				msString m = ((msError*)f->error)->message;
-				if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
-			}
-			fputc('\n', stderr);
+			msReportRejection(f->error);
 			reported++;
 		}
 		msDecref(f);
 	}
 	msOrphanCount = 0;
+	for (int i = 0; i < msOrphanErrorCount; i++) {
+		msReportRejection(msOrphanErrors[i]);
+		msDecref(msOrphanErrors[i]);
+		msOrphanErrors[i] = NULL;
+		reported++;
+	}
+	msOrphanErrorCount = 0;
 	if (msOrphanOverflow > 0) {
 		fprintf(stderr, "Error: %d additional unhandled rejection(s)\n", msOrphanOverflow);
 		reported++;
@@ -98,8 +122,14 @@ int msReportOrphanFailures(void) {
 	return reported;
 }
 
+/* The pending count rises when a task is submitted and falls after its worker
+ * has published it and posted its completion, so with none pending every posted
+ * completion is already in the queue and one drain takes it, noting a failure
+ * even when nothing created a dispatcher. */
+extern bool msCompletionQueueDrain(void);
+
 void msDrainUntilIdle(void) {
-	if (!msHasDispatcher()) return;
+	if (!msHasDispatcher() && msPoolPendingPeek() == 0 && !msCompletionQueueDrain()) return;
 	msDispatcher* d = msGetDispatcher();
 	int idleSweeps = 0;
 	while (idleSweeps < 2) {

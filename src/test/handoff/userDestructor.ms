@@ -6,8 +6,6 @@
 //      so the hook was never reached (typeNeedsHooks ignored user hooks).
 //   2. retrieval — the hook was looked up by reconstructing `typeName+"onDestroy"`,
 //      which never matched the real (mangled) symbol → call dropped.
-// A user hook OVERRIDES the field traversal (reference parity) — the author owns
-// all fields, so the auto field-walk is skipped when a hook is present.
 
 import { compileToC } from "../helpers";
 
@@ -45,17 +43,16 @@ test "user onDestroy on a handle-only class is wired into the destructor" {
 	assert countSub(c.value, "Res_onDestroy") >= 3;
 }
 
-test "user onDestroy OVERRIDES the field walk (replace, not augment)" {
+test "a class onDestroy runs first, then the destructor releases the class's fields" {
 	const src = "class Aug { name: string; h: int64; onDestroy(): void { this.h = 0; } }\n"
 		+ "function use(): void { const a: Aug = { name: \"x\", h: 1 }; a.h = 2; }\n"
 		+ "use();";
 	const c = compileToC(src);
-	assert c.ok;
-	// Isolate the destructor body (def-brace → next function) and assert the hook
-	// is called but the owned `name` string is NOT auto-freed — the author owns it.
+	assert c.ok, c.error;
 	const body = destroyBody(c.value, "Aug");
-	assert body.contains("Aug_onDestroy");
-	assert body.indexOf("msStringDecref") < 0;
+	const hook = body.indexOf("Aug_onDestroy");
+	assert hook >= 0;
+	assert body.indexOf("msStringDecref", hook) > hook;
 }
 
 test "extension-method onDestroy is wired (registry retrieval, not name guess)" {

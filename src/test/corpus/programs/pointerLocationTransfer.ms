@@ -1,7 +1,7 @@
 // @stdout: location-transfer 42 parent field true | 42 parent field global | 41
 struct TextBox { text: string; }
 struct Plain { n: int32; }
-let globalText = "global";
+const globalText = "global";
 const globalPointer = globalText as Ptr<string>;
 
 async function run(): Promise<void> {

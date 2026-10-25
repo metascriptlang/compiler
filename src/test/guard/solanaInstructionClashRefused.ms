@@ -13,7 +13,7 @@ export enum AcronymOp { InitNFT, InitNft }
 export enum SpreadOp { Close, Open, close }
 
 function byCase(): Result<uint64, ProgramError> {
-	return match (try instruction<CaseOp>()) {
+	return match (try instruction<CaseOp>()) { // GUARD-REFUSED
 		CaseOp.Make => Result.ok(0),
 		CaseOp.TakeAll => Result.ok(1),
 		CaseOp.takeAll => Result.ok(2),
@@ -21,14 +21,14 @@ function byCase(): Result<uint64, ProgramError> {
 }
 
 function byAcronym(): Result<uint64, ProgramError> {
-	return match (try instruction<AcronymOp>()) {
+	return match (try instruction<AcronymOp>()) { // GUARD-REFUSED
 		AcronymOp.InitNFT => Result.ok(0),
 		AcronymOp.InitNft => Result.ok(1),
 	};
 }
 
 function bySpread(): Result<uint64, ProgramError> {
-	return match (try instruction<SpreadOp>()) {
+	return match (try instruction<SpreadOp>()) { // GUARD-REFUSED
 		SpreadOp.Close => Result.ok(0),
 		SpreadOp.Open => Result.ok(1),
 		SpreadOp.close => Result.ok(2),

@@ -1,6 +1,3 @@
-// @xfail(c): the continuation of an async call made in a spawn task runs on the loop thread, concurrently with the task, so the count loses updates (PARALOCK-runtime Amendment R)
-// @xfail(orc): the continuation of an async call made in a spawn task runs on the loop thread, concurrently with the task, so the count loses updates (PARALOCK-runtime Amendment R)
-// @xfail(danger): the continuation of an async call made in a spawn task runs on the loop thread, concurrently with the task, so the count loses updates (PARALOCK-runtime Amendment R)
 // @xfail(raiser): raiser runtime error: interpretation requires too many iterations (limit 10000000)
 // @serial
 

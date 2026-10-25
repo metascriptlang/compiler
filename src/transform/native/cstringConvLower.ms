@@ -22,6 +22,12 @@ function peelInverse(call: Node, fn: string): Node {
 	return cd.arguments[0];
 }
 
+export function cstringSource(a: Node | null): Node | null {
+	if (a == null || a.kind != NodeKind.CallExpr) return null;
+	const cd = a.data as CallExprData;
+	return cd.arguments.length == 1 && isRuntimeProcSym(cd.callee.resolvedSym, "msStringToCString") ? cd.arguments[0] : null;
+}
+
 export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.HiddenStdConv && node.kind != NodeKind.HiddenSubConv) return node;

@@ -38,6 +38,7 @@ typedef struct msTimer {
 	int64_t id;            /* handle returned to the caller; 0 for sleep timers */
 	int64_t periodMs;      /* > 0 → interval: re-armed after each fire */
 	bool cancelled;        /* clearTimeout/clearInterval marks, the loop skips */
+	bool actorJob;         /* cb.env is an actor job record (actor.h): posted, never run here */
 } msTimer;
 
 typedef struct msTimerHeap {
@@ -110,6 +111,7 @@ void msNoteOrphanFailure(void* fut);
 void msClearOrphanFailure(void* fut);
 /* Queued-or-running pool task count (pool.c; 0 on single-threaded targets) */
 int32_t msPoolPendingPeek(void);
+int32_t msPoolThreadPeek(void);
 
 bool msRunOnce(int timeoutMs);
 int32_t msGetWakePipeFd(void);
@@ -118,8 +120,6 @@ void* msWaitFor(void* fut);
 void msWaitForReady(void* fut);
 void msRunForever(void);
 
-/* Post completion from pool thread to event loop (libuv pattern) */
-void msPostCompletion(void* fut, void* value, bool isFail, void* error);
 void msPostEnvRelease(void* env);
 
 /* Standard reference sleepAsync(ms) — returns msFuture_void* */

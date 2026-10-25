@@ -80,7 +80,7 @@ export macro hashOf(t: Node): Node {
 			return {
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
 				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashPointer" },
-				arguments: [{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "Ptr<void>" }],
+				arguments: [{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "Readonly<Ptr<void>>" }],
 			};
 		}
 		let base = shape;

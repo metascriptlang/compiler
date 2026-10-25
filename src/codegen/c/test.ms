@@ -15,7 +15,7 @@ import {
 	createProc, createBuilder, addLine, addNewline, sec, extract, emitProcBody,
 } from "./context";
 import { genStmt } from "./statements";
-import { mangleModuleName } from "./names";
+import { mangleModuleName, buildModuleNameRoots } from "./names";
 import { escapeCString } from "./literals";
 
 // ===== Test Declaration → Wrapper Function =====
@@ -35,7 +35,7 @@ export function genTestDeclNode(g: CGen, node: Readonly<Node>): void {
 
 	if (d.testBody.kind == NodeKind.BlockStmt) {
 		const bd = d.testBody.data as BlockStmtData;
-		const p = createProc(funcName, null);
+		const p = createProc(funcName);
 		g.currentProc = p;
 		for (const stmt of bd.statements) {
 			genStmt(g, p, stmt);
@@ -68,7 +68,7 @@ export function emitTestTable(g: CGen): void {
 	if (!g.isTestBuild) return;
 
 	const procs = sec(g, CSection.Procs);
-	const modName = mangleModuleName(g.modulePath);
+	const modName = mangleModuleName(g.emissionFacts.moduleNameRoots!, g.modulePath);
 	const tableName = `__ms_tests_${modName}`;
 
 	// Test entry table (non-static, referenced by dispatcher)
@@ -98,12 +98,12 @@ export function genTestDispatcher(modulePaths: string[], testedPaths: string[], 
 
 	// Forward declarations: init functions + test entry tables
 	for (const mp of modulePaths) {
-		const modName = mangleModuleName(mp);
+		const modName = mangleModuleName(buildModuleNameRoots(), mp);
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
 	}
 	for (const mp of testedPaths) {
-		addLine(b, `extern MsTestEntry __ms_tests_${mangleModuleName(mp)}[];`);
+		addLine(b, `extern MsTestEntry __ms_tests_${mangleModuleName(buildModuleNameRoots(), mp)}[];`);
 	}
 	addNewline(b);
 
@@ -132,17 +132,17 @@ export function genTestDispatcher(modulePaths: string[], testedPaths: string[], 
 
 	// Init all modules
 	for (const mp of modulePaths) {
-		addLine(b, `  ${mangleModuleName(mp)}__DatInit000();`);
+		addLine(b, `  ${mangleModuleName(buildModuleNameRoots(), mp)}__DatInit000();`);
 	}
 	for (const mp of modulePaths) {
-		addLine(b, `  ${mangleModuleName(mp)}__Init000();`);
+		addLine(b, `  ${mangleModuleName(buildModuleNameRoots(), mp)}__Init000();`);
 	}
 	addNewline(b);
 
 	// Build module descriptor table and call runtime
 	addLine(b, "  MsTestModule __ms_modules[] = {");
 	for (const mp of testedPaths) {
-		const modName = mangleModuleName(mp);
+		const modName = mangleModuleName(buildModuleNameRoots(), mp);
 		const escaped = escapeCString(mp);
 		addLine(b, `    {"${escaped}", __ms_tests_${modName}},`);
 	}

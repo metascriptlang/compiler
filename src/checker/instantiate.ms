@@ -191,6 +191,11 @@ export function instanceArgsOf(sym: Symbol): Type[] {
 	return sym.instanceArgs;
 }
 
+export function instanceParamsOf(sym: Symbol): Type[] {
+	if (sym.instanceParams == null) throw new Error(`internal: instance '${sym.name}' has no retained type parameters`);
+	return sym.instanceParams;
+}
+
 export function sameCheckedInstance(a: Symbol, b: Symbol): boolean {
 	if (a == b) return true;
 	return a.instantiatedFrom != null && a.instantiatedFrom == b.instantiatedFrom
@@ -372,7 +377,7 @@ export function distinctInstances(order: Node[]): Node[] {
 	for (const node of order) {
 		const generic = instanceGenericOf(node);
 		if (generic == null) throw new Error(`internal: a generic instance of this build has no generic it was made from`);
-		const inst: CheckedInstantiation = { sym: node.resolvedSym!, concreteTypes: instanceArgsOf(node.resolvedSym!) };
+		const inst: CheckedInstantiation = { sym: node.resolvedSym!, params: instanceParamsOf(node.resolvedSym!), concreteTypes: instanceArgsOf(node.resolvedSym!) };
 		let instances = seen.get(generic);
 		if (instances == null) {
 			instances = [];
@@ -393,8 +398,15 @@ export function distinctInstances(order: Node[]): Node[] {
 	return out;
 }
 
-export function placedInstanceOf(sym: Symbol): Symbol {
-	return _placedInstances.get(sym) ?? sym;
+// The placement table, handed to emission through its facts.
+export function placedInstances(): HashMap<Symbol, Symbol> {
+	return _placedInstances;
+}
+
+export function placedInstanceOf(placed: HashMap<Symbol, Symbol>, sym: Symbol): Symbol;
+export function placedInstanceOf(placed: Readonly<HashMap<Symbol, Symbol>>, sym: Readonly<Symbol>): Readonly<Symbol>;
+export function placedInstanceOf(placed: Readonly<HashMap<Symbol, Symbol>>, sym: Readonly<Symbol>): Readonly<Symbol> {
+	return placed.readonlyGet(sym) ?? sym;
 }
 
 function declaredClass(stmt: Node): Node | null {
@@ -503,26 +515,34 @@ function cachedInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic:
 	return null;
 }
 
-function cacheInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: Symbol, inst: Symbol, types: Type[]): void {
+function cacheInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: Symbol, inst: Symbol, params: Type[], types: Type[]): void {
 	let instances: CheckedInstantiation[] = [];
 	const known = cache.get(generic);
 	if (known != null) instances = known;
-	const record: CheckedInstantiation = { sym: inst, concreteTypes: types };
+	const record: CheckedInstantiation = { sym: inst, params: params, concreteTypes: types };
 	instances.push(record);
 	inst.instanceArgs = types;
+	inst.instanceParams = params;
 	cache.set(generic, instances);
 }
 
 export function retainCheckedInstances(ctxs: CheckerContext[]): void {
 	for (const ctx of ctxs) {
 		for (const instances of ctx.procInstCache.values()) {
-			for (const inst of instances) inst.sym.instanceArgs = inst.concreteTypes;
+			for (const inst of instances) {
+				inst.sym.instanceArgs = inst.concreteTypes;
+				inst.sym.instanceParams = inst.params;
+			}
 		}
 		for (const instances of ctx.typeInstCache.values()) {
 			for (const inst of instances) {
 				inst.sym.instanceArgs = inst.concreteTypes;
+				inst.sym.instanceParams = inst.params;
 				const ctor = ctorRoutineOf(inst.sym);
-				if (ctor != null && ctor.instantiatedFrom != null && ctor.instanceArgs == null) ctor.instanceArgs = inst.concreteTypes;
+				if (ctor != null && ctor.instantiatedFrom != null && ctor.instanceArgs == null) {
+					ctor.instanceArgs = inst.concreteTypes;
+					ctor.instanceParams = inst.params;
+				}
 			}
 		}
 	}
@@ -930,7 +950,7 @@ function instantiateLocalGeneric(ctx: CheckerContext, sym: Symbol, name: string,
 	const callerScope = openInstanceScope(ctx, routine.b.params, routine.b.types, routine.outer, declScope);
 	const instSym = callCheckLocalInstance(ctx, cloned, (declared: Symbol): void => {
 		declared.instantiatedFrom = sym;
-		cacheInstance(host.procInstCache, sym, declared, routine.b.types);
+		cacheInstance(host.procInstCache, sym, declared, routine.b.params, routine.b.types);
 	});
 	ctx.table.current = callerScope;
 	if (instSym == null) throw new Error(`internal: the instance '${name}' of local generic '${sym.name}' declared no symbol`);
@@ -1053,7 +1073,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	instSym.instantiatedFrom = sym;
 	if (hasFlag(sym, SymbolFlag.Borrow)) setFlag(instSym, SymbolFlag.Borrow);
 	if (isAsyncFunctionNode(cloned)) setFlag(instSym, SymbolFlag.Async);
-	cacheInstance(host.procInstCache, sym, instSym, dedup.types);
+	cacheInstance(host.procInstCache, sym, instSym, dedup.params, dedup.types);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
@@ -1333,7 +1353,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.nameId = getIdentId(host.table.identCache, mangledClass);
 	instSym.instantiatedFrom = classSym;
 	substStruct.sym = instSym;
-	cacheInstance(host.typeInstCache, classSym, instSym, dedup.types);
+	cacheInstance(host.typeInstCache, classSym, instSym, params, dedup.types);
 	const classBody: Node[] = instanceFieldInits(classData, params, dedup.types, substStruct, classSym, ctx, loc);
 	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
@@ -1424,6 +1444,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
 	ctorSym.instanceArgs = types;
+	ctorSym.instanceParams = params;
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols

@@ -47,8 +47,7 @@ typedef struct {
 int64_t msBlake2bInit(int32_t hashSize) {
 	if (hashSize < 1 || hashSize > 64) hashSize = 32;
 
-	msBlake2bCtx *c = (msBlake2bCtx *)calloc(1, sizeof(msBlake2bCtx));
-	if (!c) return 0;
+	msBlake2bCtx *c = (msBlake2bCtx *)msMemAlloc0(sizeof(msBlake2bCtx));
 
 	c->hash_size = (size_t)hashSize;
 	crypto_blake2b_init(&c->ctx, c->hash_size);

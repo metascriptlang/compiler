@@ -69,8 +69,7 @@ int64_t msCryptoRsaGenerate(int32_t bits) {
 	mbedtls_svc_key_id_t keyId;
 	psa_status_t status = psa_generate_key(&attributes, &keyId);
 	if (status != PSA_SUCCESS) return 0;
-	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)calloc(1, sizeof(msCryptoRsaKeyPair));
-	if (!kp) { psa_destroy_key(keyId); return 0; }
+	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)msMemAlloc0(sizeof(msCryptoRsaKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_copy_from_psa(keyId, &kp->pk);
 	psa_destroy_key(keyId);
@@ -79,8 +78,7 @@ int64_t msCryptoRsaGenerate(int32_t bits) {
 }
 
 int64_t msCryptoRsaImportPrivatePem(msString pem) {
-	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)calloc(1, sizeof(msCryptoRsaKeyPair));
-	if (!kp) return 0;
+	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)msMemAlloc0(sizeof(msCryptoRsaKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	const char* pemStr = msStringToCString(pem);
 	int ret = mbedtls_pk_parse_key(&kp->pk, (const unsigned char*)pemStr,
@@ -90,8 +88,7 @@ int64_t msCryptoRsaImportPrivatePem(msString pem) {
 }
 
 int64_t msCryptoRsaImportPublicPem(msString pem) {
-	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)calloc(1, sizeof(msCryptoRsaKeyPair));
-	if (!kp) return 0;
+	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)msMemAlloc0(sizeof(msCryptoRsaKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	const char* pemStr = msStringToCString(pem);
 	int ret = mbedtls_pk_parse_public_key(&kp->pk, (const unsigned char*)pemStr,
@@ -160,8 +157,7 @@ msString msCryptoRsaEncrypt(int64_t handle, msString data) {
 	if (ret != 0) return MS_EMPTY_STRING;
 	size_t keyBits = mbedtls_pk_get_bitlen(&key->pk);
 	size_t outSize = (keyBits + 7) / 8;
-	unsigned char* output = (unsigned char*)malloc(outSize);
-	if (!output) { psa_destroy_key(keyId); return MS_EMPTY_STRING; }
+	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_encrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
 		(const uint8_t*)msStringToCString(data), data.len, NULL, 0, output, outSize, &olen);
@@ -184,8 +180,7 @@ msString msCryptoRsaDecrypt(int64_t handle, msString data) {
 	if (ret != 0) return MS_EMPTY_STRING;
 	size_t keyBits = mbedtls_pk_get_bitlen(&key->pk);
 	size_t outSize = (keyBits + 7) / 8;
-	unsigned char* output = (unsigned char*)malloc(outSize);
-	if (!output) { psa_destroy_key(keyId); return MS_EMPTY_STRING; }
+	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_decrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
 		(const uint8_t*)msStringToCString(data), data.len, NULL, 0, output, outSize, &olen);
@@ -226,8 +221,7 @@ int64_t msCryptoEcGenerate(msString curve) {
 	mbedtls_svc_key_id_t keyId;
 	psa_status_t status = psa_generate_key(&attributes, &keyId);
 	if (status != PSA_SUCCESS) return 0;
-	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)calloc(1, sizeof(msCryptoEcKeyPair));
-	if (!kp) { psa_destroy_key(keyId); return 0; }
+	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)msMemAlloc0(sizeof(msCryptoEcKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_copy_from_psa(keyId, &kp->pk);
 	psa_destroy_key(keyId);
@@ -236,8 +230,7 @@ int64_t msCryptoEcGenerate(msString curve) {
 }
 
 int64_t msCryptoEcImportPrivatePem(msString pem) {
-	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)calloc(1, sizeof(msCryptoEcKeyPair));
-	if (!kp) return 0;
+	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)msMemAlloc0(sizeof(msCryptoEcKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_parse_key(&kp->pk, (const unsigned char*)msStringToCString(pem),
 	                                strlen(msStringToCString(pem)) + 1, NULL, 0);
@@ -246,8 +239,7 @@ int64_t msCryptoEcImportPrivatePem(msString pem) {
 }
 
 int64_t msCryptoEcImportPublicPem(msString pem) {
-	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)calloc(1, sizeof(msCryptoEcKeyPair));
-	if (!kp) return 0;
+	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)msMemAlloc0(sizeof(msCryptoEcKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_parse_public_key(&kp->pk, (const unsigned char*)msStringToCString(pem),
 	                                       strlen(msStringToCString(pem)) + 1);

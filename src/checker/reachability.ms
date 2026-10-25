@@ -12,9 +12,9 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
-import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName, valueCustodyOp } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -135,6 +135,9 @@ function walkBody(node: Node, modulePath: string): void {
 			markArcCell(node.nodeType.typeReturn, modulePath);
 		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
 			markPromiseAllResult(node.nodeType, modulePath);
+		} else if (magic == "OrcDisownValue" && cd.arguments.length > 0) {
+			const custody = valueCustodyOp(cd.arguments[0].nodeType);
+			if (custody != null) markReferenced(custody, modulePath);
 		}
 		walkBody(cd.callee, modulePath);
 		for (const arg of cd.arguments) {
@@ -206,6 +209,7 @@ function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 		aliveSetAddModule(_aliveSet, demander);
 		if (demand.destroy != null) markReferenced(demand.destroy, demander);
 		if (demand.trace != null) markReferenced(demand.trace, demander);
+		if (demand.custody != null) markReferenced(demand.custody, demander);
 		return;
 	}
 }
@@ -220,18 +224,21 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
 	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
+	const custody = refArrayCellOp(arrT, AttachedOp.AttachedCustody);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
 		if (destroyHome != "") owner = destroyHome;
 		if (trace != null) owner = trace.modulePath;
+		else if (custody != null) owner = custody.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "" };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", custody };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
+	if (custody != null) markReferenced(custody, owner);
 }
 
 function markArcCell(pointee: Type, modulePath: string): void {
@@ -309,6 +316,7 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	}
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
+	const custody = getOpByKey(subject, AttachedOp.AttachedCustody);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
@@ -322,11 +330,12 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 		markObjectTypeInfo(base, modulePath);
 		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
+	if (custody != null) markReferenced(custody, owner);
 }
 
 function classBaseOf(subject: Type): Type | null {
@@ -879,7 +888,7 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	for (let i = 0; i < od.properties.length; i += 1) {
 		const prop = od.properties[i];
 		if (prop == null) return false;
-		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, fieldTypeView(owner, od.keys[i]))) {
 			if (prop.kind != NodeKind.BooleanLiteral) return false;
 			continue;
 		}

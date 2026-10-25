@@ -5,7 +5,7 @@
  * Scheduler polls actor mailboxes directly (no syscall, no pipe).
  * Scheduler 0 also runs msRunOnce() for I/O + timers + spawn.
  *
- * Lifecycle: msActorCreate → msActorSend/msActorCall → msActorProcess → msActorDestroy
+ * Lifecycle: msActorCreate → msActorSend → msActorProcess → msActorDestroy
  */
 
 #ifndef MS_ACTOR_H
@@ -102,6 +102,11 @@ typedef struct msActor {
     /* Phase 6 R1: out-of-band stop — supervisor can kill suspended actor without mailbox */
     _Atomic(bool) stopRequested;
     _Atomic(int32_t) stopReason;  /* written before the stopRequested acq_rel exchange */
+    /* The actor's cycle roots: the running thread's while a visit holds processing
+     * (msRootsSwap), so its cells keep their root entries when it changes threads. */
+    msCellSeq roots;
+    struct msActorJobs* jobs;  /* NULL until the actor first starts code that outlives a visit */
+    struct msActor* ctorPrev;  /* the constructing thread's actor, restored when the constructor returns */
 } msActor;
 
 /* ===== Batch Size ===== */
@@ -184,7 +189,7 @@ static inline int32_t msPidSlotClaim(void) {
         pthread_mutex_lock(&msPidSegLock);
         if (atomic_load_explicit(&msPidSegs[segI], memory_order_relaxed) == NULL) {
             atomic_store_explicit(&msPidSegs[segI],
-                (msPidSlot*)calloc(MS_PID_SEG_SIZE, sizeof(msPidSlot)), memory_order_release);
+                (msPidSlot*)msMemAllocN0(MS_PID_SEG_SIZE, sizeof(msPidSlot)), memory_order_release);
         }
         pthread_mutex_unlock(&msPidSegLock);
     }
@@ -194,7 +199,7 @@ static inline int32_t msPidSlotClaim(void) {
 static inline msHazardRec* msHazardEnsure(void) {
     msHazardRec* h = msMyHazard;
     if (h != NULL) return h;
-    h = (msHazardRec*)calloc(1, sizeof(msHazardRec));
+    h = (msHazardRec*)msMemAlloc0(sizeof(msHazardRec));
     msHazardRec* head = atomic_load_explicit(&msHazardHead, memory_order_relaxed);
     do {
         atomic_store_explicit(&h->next, head, memory_order_relaxed);
@@ -216,7 +221,9 @@ static inline void msHazardClear(void* p) {
     }
 }
 
+/* The fence pairs with the pin's seq_cst publish-then-revalidate: without it the scan can miss a pin that survived the pid release. */
 static inline bool msHazardScan(void* p) {
+    atomic_thread_fence(memory_order_seq_cst);
     for (msHazardRec* h = atomic_load_explicit(&msHazardHead, memory_order_acquire);
          h != NULL; h = atomic_load_explicit(&h->next, memory_order_acquire)) {
         for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
@@ -255,7 +262,7 @@ static inline void msPidRelease(msActor* a) {
 /* Pid → shell. Generation-validated + hazard-pinned; NULL for dead/reused slots.
  * The pin ends inside the runtime call the result flows into — msActorSend,
  * msActorSuspend, msActorStop, etc. all msHazardClear on every exit. */
-static inline msActor* msActorFromPid(int64_t pid) {
+static inline msActor* msActorFromPidSlot(int64_t pid, int* slotOut) {
     if (pid <= 0) return NULL;
     int32_t idx = (int32_t)((uint64_t)pid & MS_PID_SLOT_MASK);
     uint64_t g = ((uint64_t)pid >> MS_PID_SLOT_BITS) & MS_PID_GEN_MASK;
@@ -269,7 +276,11 @@ static inline msActor* msActorFromPid(int64_t pid) {
     for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
         if (atomic_load_explicit(&h->slot[i], memory_order_relaxed) == NULL) { k = i; break; }
     }
-    if (k < 0) return NULL;  /* both slots pinned (impossible by enumeration) — fail safe */
+    if (k < 0) {
+        fputs("internal: hazard slots exhausted\n", stderr);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
     atomic_store_explicit(&h->slot[k], p, memory_order_seq_cst);
     /* Re-validate after publish (hazard handshake vs. the reaper's gen bump). */
     if ((atomic_load_explicit(&s->gen, memory_order_seq_cst) & MS_PID_GEN_MASK) != g
@@ -277,7 +288,13 @@ static inline msActor* msActorFromPid(int64_t pid) {
         atomic_store_explicit(&h->slot[k], NULL, memory_order_release);
         return NULL;
     }
+    *slotOut = k;
     return (msActor*)p;
+}
+
+static inline msActor* msActorFromPid(int64_t pid) {
+    int k;
+    return msActorFromPidSlot(pid, &k);
 }
 
 /* Pin a live table slot by index (any generation) — CD's global iteration. */
@@ -291,7 +308,11 @@ static inline msActor* msPidPinSlot(int32_t idx) {
     for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
         if (atomic_load_explicit(&h->slot[i], memory_order_relaxed) == NULL) { k = i; break; }
     }
-    if (k < 0) return NULL;
+    if (k < 0) {
+        fputs("internal: hazard slots exhausted\n", stderr);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
     atomic_store_explicit(&h->slot[k], p, memory_order_seq_cst);
     if (atomic_load_explicit(&s->gen, memory_order_seq_cst) != g
             || atomic_load_explicit(&s->ptr, memory_order_relaxed) != p) {
@@ -322,7 +343,7 @@ static inline bool msActorHasFlag(msActor* a, uint8_t flag) {
 /* ===== Actor Lifecycle ===== */
 
 static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
-    msActor* a = (msActor*)calloc(1, sizeof(msActor));
+    msActor* a = (msActor*)msMemAlloc0(sizeof(msActor));
     msMpscInit(&a->mailbox);
     a->dispatch = dispatch;
     a->state = state;
@@ -348,6 +369,65 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
     atomic_store_explicit(&a->alive, true, memory_order_relaxed);
     msPidPublish(a);
     return a;
+}
+
+/* The constructor is the actor's first visit: it holds processing and runs over the
+ * actor's root set, so the cells it builds are the actor's from their first root entry. */
+static inline void msActorEnter(msActor* a) {
+    if (!atomic_load_explicit(&msActorEntered, memory_order_relaxed)) {
+        atomic_store_explicit(&msActorEntered, true, memory_order_relaxed);
+    }
+    msCurrentActor = a;
+}
+
+static inline void msActorCtorEnter(int64_t pid) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    bool expected = false;
+    while (!atomic_compare_exchange_weak_explicit(&a->processing, &expected, true,
+            memory_order_acquire, memory_order_relaxed)) {
+        expected = false;
+    }
+    msRootsSwap(&a->roots);
+    a->ctorPrev = msCurrentActor;
+    msActorEnter(a);
+    msHazardClear(a);
+}
+
+static inline void msActorCtorLeave(int64_t pid) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    msCurrentActor = a->ctorPrev;
+    msRootsSwap(&a->roots);
+    atomic_store_explicit(&a->processing, false, memory_order_release);
+    msHazardClear(a);
+}
+
+/* A nonisolated read pins its actor in one exact hazard slot for the whole access: the
+ * pin returns the slot, the read goes through msActorPinnedState, and the unpin clears
+ * only that slot. Teardown defers the state's destruction while any slot holds the actor. */
+static inline int32_t msActorPin(int64_t pid) {
+    int k;
+    if (msActorFromPidSlot(pid, &k) == NULL) {
+        fprintf(stderr, "Error: actor %lld has stopped, so its nonisolated field cannot be read\n", (long long)pid);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
+    return (int32_t)k;
+}
+
+static inline void* msActorPinnedState(int32_t slot) {
+    return ((msActor*)atomic_load_explicit(&msMyHazard->slot[slot], memory_order_relaxed))->state;
+}
+
+static inline void msActorUnpin(int32_t slot) {
+    atomic_store_explicit(&msMyHazard->slot[slot], NULL, memory_order_release);
+}
+
+/* An independent copy of a string field read under a pin: a heap payload is copied, never shared. */
+static inline msString msActorCopyString(msString s) {
+    msStringIncref(s);
+    return s;
 }
 
 /* Create actor and return its pid (for the typed pid field in the actor struct) */
@@ -511,12 +591,13 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
         else msPoolWakeWorker(sid);
         return;
     }
-    msActorClearFlag(a, MS_ACTOR_SUSPENDED);
+    /* Keep seq_cst: msActorVisitEnd drops the token then reads SUSPENDED (Dekker pair). */
+    atomic_fetch_and_explicit(&a->syncFlags, (uint8_t)~MS_ACTOR_SUSPENDED, memory_order_seq_cst);
     /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
      * closed until the visit owns the shell under processing). */
-    atomic_store_explicit(&a->scheduled, true, memory_order_release);
+    bool push = !atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst);
     msFutureDeferredRelease(implFut);
-    if (sid >= 0 && sid < msSchedulerCount) {
+    if (push && sid >= 0 && sid < msSchedulerCount) {
         msSchedRunPush(&msSchedulers[sid], a);
     }
     if (sid == 0) msActorWakeEventLoop();
@@ -553,7 +634,7 @@ extern pthread_mutex_t msNameRegistryLock;
 static inline void msNameRegistryEnsure(void) {
     if (msNameRegistry != NULL) return;
     msNameRegistryCap = MS_NAME_REGISTRY_INIT_CAP;
-    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAllocN0(msNameRegistryCap, sizeof(msNameEntry));
 }
 
 /* Grow and rehash when load factor exceeds 75%. Must hold lock. */
@@ -561,7 +642,7 @@ static inline void msNameRegistryGrow(void) {
     int oldCap = msNameRegistryCap;
     msNameEntry* oldTable = msNameRegistry;
     msNameRegistryCap = oldCap * 2;
-    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAllocN0(msNameRegistryCap, sizeof(msNameEntry));
     msNameRegistryCount = 0;
     /* Rehash all entries into new table */
     for (int i = 0; i < oldCap; i++) {
@@ -582,6 +663,19 @@ static inline void msNameRegistryGrow(void) {
 /* Hook: auto-unregister on destroy (stored in dispatch.c — shared across TUs) */
 extern void msSetActorDestroyHook(void (*hook)(void*));
 extern void msCallActorDestroyHook(void* actor);
+
+static inline void msActorScheduleEdge(msActor* a) {
+    if (atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst)) return;
+    int sid = a->schedulerID;
+    if (sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
+        if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
+                memory_order_acq_rel)) {
+            if (sid == 0) msActorWakeEventLoop();
+            else msPoolWakeWorker(sid);
+        }
+    }
+}
 
 /*
  * Send a message to an actor (any thread, wait-free).
@@ -615,34 +709,292 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
 #if MS_FUTURE_SUBMIT_REF
     if (msg->replyFuture != NULL) {
         msIncRef(msg->replyFuture);
-        ((msFutureBase*)msg->replyFuture)->crossThreadPublished = true;
+        msFuturePublishCrossThread(msg->replyFuture);
     }
 #endif
     bool wasEmpty = msMpscPush(&a->mailbox, msg);
     atomic_store_explicit(&a->hasWork, true, memory_order_release);
 
-    /* Pony messageq gate: schedule iff this push transitioned the mailbox empty→non-empty.
-     * wasEmpty is atomic with the processing thread's markEmpty, so exactly one party (this
-     * sender, or the processing thread's re-enqueue) schedules the actor — no stale-flag
-     * window (the old scheduled-CAS could observe scheduled=false mid-deschedule and push the
-     * actor onto a run queue while it was still being processed, so a popper popped it, failed
-     * the processing CAS, and dropped it = strand), and no double-enqueue (only the
-     * empty→non-empty edge pushes). A SUSPENDED actor is re-scheduled by its resume path. */
-    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
-        atomic_store_explicit(&a->scheduled, true, memory_order_release);
-        int sid = a->schedulerID;
-        if (sid >= 0 && sid < msSchedulerCount) {
-            msSchedRunPush(&msSchedulers[sid], a);
-            /* Amortized wake: skip the wake syscall if this scheduler was already woken since
-             * its last drain — O(schedulers) wakes instead of O(actors) at high send rates. */
-            if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
-                    memory_order_acq_rel)) {
-                if (sid == 0) msActorWakeEventLoop();
-                else msPoolWakeWorker(sid);
-            }
+    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) msActorScheduleEdge(a);
+    msHazardClear(a);
+}
+
+/* ===== Actor jobs (ULTRALOCK A4) =====
+ * A firing thread holds only a trampoline and posts the record; the env is the actor's
+ * and is run or dropped only under processing. */
+
+#define MS_ACTOR_MSG_JOB (-5)
+
+typedef struct msActorJob {
+    _Atomic(int32_t) refs;        /* live list + each trampoline + each queued post */
+    _Atomic(bool) cancelled;
+    _Atomic(bool) pending;        /* an interval keeps at most one tick queued */
+    bool periodic;
+    bool dropAfterRun;
+    bool envDone;                 /* processing only */
+    int64_t pid;
+    int64_t timerId;
+    msClosure cb;
+    void (*drop)(void*);
+    void* chain;                  /* the async env this continuation resumes */
+    struct msActorJob* liveNext;
+    struct msActorJob* livePrev;
+} msActorJob;
+
+typedef struct msActorLend {
+    void* fut;
+    void* chain;
+    bool watched;
+    bool joined;  /* the lender chain ran a step after the child settled */
+} msActorLend;
+
+/* Everything but `queue` is touched only under processing. */
+typedef struct msActorJobs {
+    msMpscQueue queue;
+    msActorJob* live;
+    msActorJob* running;
+    msActorJob** held;
+    int32_t heldLen;
+    int32_t heldCap;
+    msActorLend* lent;
+    int32_t lentLen;
+    int32_t lentCap;
+} msActorJobs;
+
+extern void msTimerCancelId(int64_t id);  /* dispatchFull.c */
+
+static inline void msActorJobUnref(msActorJob* r) {
+    if (atomic_fetch_sub_explicit(&r->refs, 1, memory_order_acq_rel) == 1) free(r);
+}
+
+static inline msActorJobs* msActorJobsEnsure(msActor* a) {
+    if (a->jobs == NULL) {
+        msActorJobs* j = (msActorJobs*)msMemAlloc0(sizeof(msActorJobs));
+        msMpscInit(&j->queue);
+        a->jobs = j;
+    }
+    return a->jobs;
+}
+
+static inline void msActorJobDropEnv(msActorJobs* j, msActorJob* r) {
+    if (r->envDone) return;
+    r->envDone = true;
+    if (r->livePrev != NULL) r->livePrev->liveNext = r->liveNext;
+    else j->live = r->liveNext;
+    if (r->liveNext != NULL) r->liveNext->livePrev = r->livePrev;
+    if (r->drop != NULL && r->cb.env != NULL) r->drop(r->cb.env);
+    msActorJobUnref(r);
+}
+
+static inline void msActorJobRun(msActorJobs* j, msActorJob* r) {
+    if (r->envDone) return;
+    if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) {
+        msActorJobDropEnv(j, r);
+        return;
+    }
+    if (r->periodic) {
+        atomic_store_explicit(&r->pending, false, memory_order_release);
+        j->running = r;
+        ((void(*)(void*))r->cb.fn)(r->cb.env);
+        j->running = NULL;
+        if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) msActorJobDropEnv(j, r);
+        return;
+    }
+    void (*drop)(void*) = r->dropAfterRun ? r->drop : NULL;
+    r->drop = NULL;
+    msActorJobDropEnv(j, r);
+    ((void(*)(void*))r->cb.fn)(r->cb.env);
+    if (drop != NULL && r->cb.env != NULL) drop(r->cb.env);
+}
+
+static inline void msActorJobsCancelTimer(msActorJobs* j, int64_t id) {
+    for (msActorJob* r = j->live; r != NULL; r = r->liveNext) {
+        if (r->timerId != id) continue;
+        atomic_store_explicit(&r->cancelled, true, memory_order_release);
+        if (r != j->running) msActorJobDropEnv(j, r);
+        return;
+    }
+}
+
+static inline void msActorPostJob(int64_t pid, msActorJob* r) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    msActorJobs* j = a->jobs;
+    if (j == NULL || !atomic_load_explicit(&a->alive, memory_order_acquire)) {
+        msHazardClear(a);
+        return;
+    }
+    if (r != NULL) atomic_fetch_add_explicit(&r->refs, 1, memory_order_relaxed);
+    msMessage* m = msMsgAllocSized(MS_ACTOR_MSG_JOB, NULL, 1);
+    msMsgSetPtr(m, 0, r);
+    bool wasEmpty = msMpscPush(&j->queue, m);
+    atomic_store_explicit(&a->hasWork, true, memory_order_release);
+    if (wasEmpty) msActorScheduleEdge(a);
+    msHazardClear(a);
+}
+
+static inline void msActorJobPost(msActorJob* r) {
+    if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) return;
+    if (r->periodic && atomic_exchange_explicit(&r->pending, true, memory_order_acq_rel)) return;
+    msActorPostJob(r->pid, r);
+}
+
+static inline void msActorLendWakeCb(void* pid) {
+    msActorPostJob((int64_t)(intptr_t)pid, NULL);
+}
+
+static inline bool msActorLendBusy(msActorJobs* j) {
+    int32_t k = 0;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        msActorLend l = j->lent[i];
+        if ((l.chain == NULL || l.joined)
+                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecref(l.fut);
+        else j->lent[k++] = l;
+    }
+    j->lentLen = k;
+    return k > 0;
+}
+
+static inline void msActorLendJoin(msActorJobs* j, void* chain) {
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].chain == chain
+                && atomic_load_explicit(&((msFutureBase*)j->lent[i].fut)->finished, memory_order_acquire)) {
+            j->lent[i].joined = true;
         }
     }
-    msHazardClear(a);
+}
+
+static inline bool msActorLendAllows(msActorJobs* j, msActorJob* r) {
+    if (r->chain == NULL) return false;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].chain == r->chain) return true;
+    }
+    return false;
+}
+
+static inline void msActorJobHold(msActor* a, msActorJobs* j, msActorJob* r) {
+    if (j->heldLen == j->heldCap) {
+        int32_t cap = j->heldCap > 0 ? j->heldCap * 2 : 8;
+        j->held = (msActorJob**)msRealloc(j->held, (size_t)j->heldCap * sizeof(msActorJob*), (size_t)cap * sizeof(msActorJob*));
+        j->heldCap = cap;
+    }
+    j->held[j->heldLen++] = r;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].watched) continue;
+        j->lent[i].watched = true;
+        msFutureAddCallback(j->lent[i].fut,
+            (msClosure){ .fn = (msClosureFn)msActorLendWakeCb, .env = (void*)(intptr_t)a->pid });
+    }
+}
+
+static inline void msActorLendNoteIn(msActor* a, void* fut, void* chain) {
+    msActorJobs* j = msActorJobsEnsure(a);
+    if (j->lentLen == j->lentCap) {
+        int32_t cap = j->lentCap > 0 ? j->lentCap * 2 : 4;
+        j->lent = (msActorLend*)msRealloc(j->lent, (size_t)j->lentCap * sizeof(msActorLend), (size_t)cap * sizeof(msActorLend));
+        j->lentCap = cap;
+    }
+    msIncRef(fut);
+    j->lent[j->lentLen++] = (msActorLend){ .fut = fut, .chain = chain, .watched = false, .joined = false };
+}
+
+static inline int msActorRunJobs(msActor* a, msActorJobs* j, int budget) {
+    int n = 0;
+    while (n < budget) {
+        bool busy = j->lentLen > 0 && msActorLendBusy(j);
+        msActorJob* r;
+        if (!busy && j->heldLen > 0) {
+            r = j->held[0];
+            j->heldLen--;
+            memmove(j->held, j->held + 1, (size_t)j->heldLen * sizeof(msActorJob*));
+            n++;
+        } else {
+            msMessage* m = msMpscPop(&j->queue);
+            if (m == NULL) break;
+            n++;
+            r = (msActorJob*)msMsgGetPtr(m, 0);
+            if (r == NULL) continue;
+            if (busy && !msActorLendAllows(j, r)) {
+                msActorJobHold(a, j, r);
+                continue;
+            }
+        }
+        void* chain = r->chain;
+        if (chain != NULL && j->lentLen > 0) msActorLendJoin(j, chain);
+        msActorJobRun(j, r);
+        if (chain != NULL && j->lentLen > 0) msActorLendJoin(j, chain);
+        msActorJobUnref(r);
+    }
+    return n;
+}
+
+static inline void msActorJobsDrain(msActorJobs* j) {
+    msMessage* m;
+    while ((m = msMpscPop(&j->queue)) != NULL) {
+        msActorJob* r = (msActorJob*)msMsgGetPtr(m, 0);
+        if (r != NULL) msActorJobUnref(r);
+    }
+    for (int32_t i = 0; i < j->heldLen; i++) msActorJobUnref(j->held[i]);
+    j->heldLen = 0;
+}
+
+static inline void msActorJobsTeardown(msActorJobs* j) {
+    while (j->live != NULL) {
+        msActorJob* r = j->live;
+        atomic_store_explicit(&r->cancelled, true, memory_order_release);
+        if (r->timerId != 0) msTimerCancelId(r->timerId);
+        msActorJobDropEnv(j, r);
+    }
+    msActorJobsDrain(j);
+    for (int32_t i = 0; i < j->lentLen; i++) msDecref(j->lent[i].fut);
+    j->lentLen = 0;
+}
+
+/* At shell free: no pin is left, so no poster can still push. */
+static inline void msActorJobsFree(msActor* a) {
+    msActorJobs* j = a->jobs;
+    if (j == NULL) return;
+    msActorJobsDrain(j);
+    msMpscDestroy(&j->queue);
+    free(j->held);
+    free(j->lent);
+    free(j);
+    a->jobs = NULL;
+}
+
+static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
+    /* Keep seq_cst: pairs with msActorScheduleEdge's exchange after a queue push (Dekker). */
+    atomic_store_explicit(&a->scheduled, false, memory_order_seq_cst);
+    atomic_thread_fence(memory_order_seq_cst);
+    bool work = false;
+    bool jobsIdle = true;
+    msActorJobs* j = a->jobs;
+    if (j != NULL) {
+        if (!msMpscMarkEmpty(&j->queue)) work = true;
+        else if (j->heldLen > 0) work = !(j->lentLen > 0 && msActorLendBusy(j));
+        jobsIdle = !work && j->heldLen == 0;
+    }
+    bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
+    if (!frozen) {
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL) {
+            work = true;
+        } else if (!msMpscMarkEmpty(&a->mailbox)) {
+            work = true;
+        } else if (jobsIdle) {
+            atomic_store_explicit(&a->hasWork, false, memory_order_release);
+        }
+    }
+    bool push = work && !atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst);
+    int sid = a->schedulerID;
+    msCurrentActor = prevActor;
+    msRootsSwap(&a->roots);
+    atomic_store_explicit(&a->processing, false, memory_order_release);
+    if (push && sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
+        if (sid == 0) msActorWakeEventLoop();
+        else msPoolWakeWorker(sid);
+    }
+    msFutureReleaseFlush();
 }
 
 /*
@@ -671,16 +1023,17 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     }
 
     msActor* prevActor = msCurrentActor;
-    msCurrentActor = a;
+    msActorEnter(a);
 
     /* Phase 5: check for pending suspension before draining mailbox */
     {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
             if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
-                msCurrentActor = prevActor;
-                atomic_store_explicit(&a->processing, false, memory_order_release);
-                return 0;
+                msRootsSwap(&a->roots);
+                int ran = a->jobs != NULL ? msActorRunJobs(a, a->jobs, maxBatch) : 0;
+                msActorVisitEnd(a, prevActor);
+                return ran;
             }
             /* Resumed: the resume callback completed the reply and released implFut.
              * Clear suspension state, fall through to mailbox drain. */
@@ -709,6 +1062,8 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         return 0;
     }
 
+    msRootsSwap(&a->roots);
+
     /* Clear BLOCKED — we're actively processing */
     msActorClearFlag(a, MS_ACTOR_BLOCKED);
 
@@ -717,7 +1072,9 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         a->lastActivityMs = msMonoTimeMs();
     }
 
+    int ran = a->jobs != NULL ? msActorRunJobs(a, a->jobs, maxBatch) : 0;
     int processed = 0;
+    bool parked = false;
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
@@ -735,48 +1092,18 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         processed++;
         if (atomic_load_explicit(&a->suspendedFut, memory_order_relaxed) != NULL
                 || (atomic_load_explicit(&a->syncFlags, memory_order_relaxed) & MS_ACTOR_SUSPENDED) != 0) {
-            atomic_store_explicit(&a->scheduled, false, memory_order_release);
-            msCurrentActor = prevActor;
-            atomic_store_explicit(&a->processing, false, memory_order_release);
-            msFutureReleaseFlush();
-            return processed;
+            parked = true;
+            break;
         }
     }
 
-    /* Scheduling decision, made WHILE HOLDING processing. BLOCKED (a heuristic) from the
-     * pre-check; markEmpty is the LAST mailbox op and runs under processing so it shares the
-     * single-consumer exclusion with msMpscPop (reading/CASing q->tail off-processing is the
-     * two-consumer race). BLOCKED slightly-stale on a racing late message is harmless. */
-    if (msMpscIsEmpty(&a->mailbox) && a->state != NULL && msHeader(a->state)->rc > 0) {
+    if (!parked && msMpscIsEmpty(&a->mailbox) && (a->jobs == NULL || a->jobs->live == NULL)
+            && a->state != NULL && msHeader(a->state)->rc > 0) {
         msActorSetFlag(a, MS_ACTOR_BLOCKED);
     }
 
-    /* markEmpty: the LAST consumer op, under processing.
-     *   TRUE  → truly empty → deschedule, NO re-push. A future sender's wasEmpty push
-     *           re-queues it (atomic with markEmpty, so exactly one party schedules) — Pony parity.
-     *   FALSE → a message is pending → re-enqueue, but DEFER the run-queue push to AFTER the
-     *           processing release below, so a concurrent popper acquires processing only once
-     *           we have let go (it wins the freed CAS, never drops). */
-    bool reEnqueue;
-    if (msMpscMarkEmpty(&a->mailbox)) {
-        atomic_store_explicit(&a->hasWork, false, memory_order_release);
-        atomic_store_explicit(&a->scheduled, false, memory_order_release);
-        reEnqueue = false;
-    } else {
-        reEnqueue = true;
-    }
-
-    msCurrentActor = prevActor;
-    atomic_store_explicit(&a->processing, false, memory_order_release);
-
-    if (reEnqueue && a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-        msSchedRunPush(&msSchedulers[a->schedulerID], a);
-        if (a->schedulerID == 0) msActorWakeEventLoop();
-        else msPoolWakeWorker(a->schedulerID);
-    }
-
-    msFutureReleaseFlush();
-    return processed;
+    msActorVisitEnd(a, prevActor);
+    return ran + processed;
 }
 
 /* ===== Message Accessors (for dispatch functions generated by compiler) ===== */
@@ -913,10 +1240,45 @@ static inline void msActorSetSystemMsgHandler(void* actor, void* fn) {
     msHazardClear(a);
 }
 
+/* I19: pin-aware retirement, owner thread only. The pid slot is long released, so no NEW pin
+ * can appear and pins only drain. A nonisolated read copies the state's fields under its pin,
+ * so the state's destruction, not only the shell's free, waits for every pin. A deferred
+ * actor with its state set still owes the state's teardown; with the state NULL only its shell. */
+static inline void msActorDeferRetire(msActor* a) {
+    int sidD = (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) ? a->schedulerID : 0;
+    atomic_store_explicit(&a->runNext, msSchedulers[sidD].deferredFree, memory_order_relaxed);
+    msSchedulers[sidD].deferredFree = a;
+}
+
+/* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
+ * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
+static inline void msActorRetireState(msActor* a) {
+    msRootsSwap(&a->roots);
+    if (a->state != NULL) {
+        const msTypeInfo* __st = msHeader(a->state)->type;
+        MS_DESTROY_DISPATCH(__st, a->state);
+        msDestroyAndDispose(a->state);
+        a->state = NULL;
+    }
+    msOrcCollect();
+    msRootsSwap(&a->roots);
+    msRootsAdopt(&a->roots);
+}
+
+static inline void msActorFreeShell(msActor* a) {
+    if (msHazardScan(a)) {
+        msActorDeferRetire(a);
+    } else {
+        msActorJobsFree(a);
+        free(a);
+    }
+}
+
 static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     /* Guard: prevent double-destroy (re-entrancy from link cascade or supervisor) */
     bool wasAlive = atomic_exchange_explicit(&a->alive, false, memory_order_acq_rel);
     if (!wasAlive) return;
+    msRootsSwap(&a->roots);
     /* I19: release the pid slot FIRST — no new lookup reaches a dying shell.
      * Sends to this pid from onTerminate onward are cleanly dropped. */
     msPidRelease(a);
@@ -975,6 +1337,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         }
     }
     msMpscDestroy(&a->mailbox);
+    if (a->jobs != NULL) msActorJobsTeardown(a->jobs);
     if (a->links != NULL) free(a->links);
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);
@@ -995,23 +1358,13 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     if (atomic_load_explicit(&a->stopRequested, memory_order_relaxed)) {
         atomic_fetch_sub(&msActorsStopPending, 1);
     }
-    /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
-     * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
-    if (a->state != NULL) {
-        const msTypeInfo* __st = msHeader(a->state)->type;
-        MS_DESTROY_DISPATCH(__st, a->state);
-        msDestroyAndDispose(a->state);
-        a->state = NULL;
+    msRootsSwap(&a->roots);
+    if (a->state != NULL && msHazardScan(a)) {
+        msActorDeferRetire(a);
+        return;
     }
-    /* I19: defer the free while any in-flight lookup still pins the shell. The
-     * pid slot is long released, so no NEW pin can appear — pins only drain. */
-    if (msHazardScan(a)) {
-        int sidD = (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) ? a->schedulerID : 0;
-        atomic_store_explicit(&a->runNext, msSchedulers[sidD].deferredFree, memory_order_relaxed);
-        msSchedulers[sidD].deferredFree = a;
-    } else {
-        free(a);
-    }
+    msActorRetireState(a);
+    msActorFreeShell(a);
 }
 
 static inline void msActorDestroy(msActor* a) {
@@ -1084,7 +1437,7 @@ static inline void msActorAddRef(msActor* from, msActor* to) {
     /* Grow on demand */
     if (from->refsCount >= from->refsCap) {
         int newCap = from->refsCap == 0 ? 4 : from->refsCap * 2;
-        from->refs = (int64_t*)realloc(from->refs, newCap * sizeof(int64_t));
+        from->refs = (int64_t*)msRealloc(from->refs, from->refsCap * sizeof(int64_t), newCap * sizeof(int64_t));
         from->refsCap = newCap;
     }
     from->refs[from->refsCount++] = toPid;
@@ -1100,7 +1453,7 @@ static inline void msActorAddLink(msActor* a, int64_t targetPid) {
     }
     if (a->linkCount >= a->linkCap) {
         int newCap = a->linkCap == 0 ? 4 : a->linkCap * 2;
-        a->links = (int64_t*)realloc(a->links, newCap * sizeof(int64_t));
+        a->links = (int64_t*)msRealloc(a->links, a->linkCap * sizeof(int64_t), newCap * sizeof(int64_t));
         a->linkCap = newCap;
     }
     a->links[a->linkCount++] = targetPid;
@@ -1190,8 +1543,8 @@ static inline int64_t msActorMonitorPid(int64_t watcherPid, int64_t targetPid) {
     /* Add watcher pid to target's monitor list */
     if (target->monitorCount >= target->monitorCap) {
         int newCap = target->monitorCap == 0 ? 4 : target->monitorCap * 2;
-        target->monitorWatchers = (int64_t*)realloc(target->monitorWatchers, newCap * sizeof(int64_t));
-        target->monitorRefs = (int64_t*)realloc(target->monitorRefs, newCap * sizeof(int64_t));
+        target->monitorWatchers = (int64_t*)msRealloc(target->monitorWatchers, target->monitorCap * sizeof(int64_t), newCap * sizeof(int64_t));
+        target->monitorRefs = (int64_t*)msRealloc(target->monitorRefs, target->monitorCap * sizeof(int64_t), newCap * sizeof(int64_t));
         target->monitorCap = newCap;
     }
     target->monitorWatchers[target->monitorCount] = watcherPid;
@@ -1379,7 +1732,7 @@ static inline bool msActorPollLocal(void);            /* defined below */
 static inline void msSchedActorsGrow(msSchedActors* sched, int needed) {
     int newCap = sched->cap == 0 ? MS_SCHED_INIT_CAP : sched->cap * 2;
     while (newCap < needed) newCap *= 2;
-    msActor** newArr = (msActor**)calloc(newCap, sizeof(msActor*));
+    msActor** newArr = (msActor**)msMemAllocN0(newCap, sizeof(msActor*));
     if (sched->actors != NULL) {
         memcpy(newArr, sched->actors, sched->cap * sizeof(msActor*));
         /* Old array intentionally NOT freed — CD may be reading it concurrently.
@@ -1403,18 +1756,23 @@ static inline bool msActorPollEventLoop(void) {
     return msActorPollLocal();
 }
 
+extern pthread_once_t msActorSystemOnce;
+extern _Atomic(bool) msActorSystemLive;
+
+static inline void msActorSystemInit(void) {
+    msEnsureWakePipe();
+    msActorClaimEventLoopScheduler();
+    msThreadPool* p = msPoolGet();
+    int count = (p != NULL ? p->workerCount : 0) + 1;
+    msSchedulerCount = count > MS_MAX_SCHEDULERS ? MS_MAX_SCHEDULERS : count;
+    msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
+    msCDInit();
+    msSetActorPollHook(msActorPollEventLoop);
+    atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
+}
+
 static inline void msActorRegister(msActor* a) {
-    if (msSchedulerCount == 0) {
-        msEnsureWakePipe();  /* wake pipe must exist before any actor send */
-        msActorClaimEventLoopScheduler();
-        msSetActorPollHook(msActorPollEventLoop);
-        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
-        msThreadPool* p = msPoolGet();
-        msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
-        if (msSchedulerCount > MS_MAX_SCHEDULERS) msSchedulerCount = MS_MAX_SCHEDULERS;
-        /* Create async cycle detector actor on scheduler 0 */
-        msCDInit();
-    }
+    pthread_once(&msActorSystemOnce, msActorSystemInit);
     /* Assignment: parent's sched → creator-thread's sched → RR fallback.
      * Pony-parity locality. Cross-thread IO completions (#88/#89) aren't wired
      * yet, so an actor accepted on thread A but running on B silently hangs
@@ -1518,17 +1876,15 @@ static inline bool msActorPollLocal(void) {
         for (int i = 0; i < cnt; i++) {
             msActor* sa = sched->actors[i];
             if (!atomic_load_explicit(&sa->stopRequested, memory_order_acquire)) continue;
-            /* Suspended-stopped lane ONLY. The latched SUSPENDED flag keeps
-             * senders off the wasEmpty edge, so no run-queue entry can exist —
-             * `scheduled` alone can't prove that (markEmpty/push overwrite race
-             * frees a live queue node → pop UAF). Awake/idle stops always get a
-             * STOP-msg visit whose gate reaps with the pop owned. */
+            /* Suspended-stopped lane ONLY: awake/idle stops always get a STOP-msg
+             * visit whose gate reaps with the pop owned. Taking the run token keeps
+             * a job post from queueing the shell this scan frees. */
             if (!msActorHasFlag(sa, MS_ACTOR_SUSPENDED)) continue;
             if (atomic_load_explicit(&sa->suspendedFut, memory_order_acquire) != NULL) continue;
             bool expP = false;
             if (!atomic_compare_exchange_strong_explicit(&sa->processing, &expP, true,
                     memory_order_acquire, memory_order_relaxed)) continue;
-            if (atomic_load_explicit(&sa->scheduled, memory_order_acquire)) {
+            if (atomic_exchange_explicit(&sa->scheduled, true, memory_order_seq_cst)) {
                 /* Queued — that visit's gate reaps; don't double-own. */
                 atomic_store_explicit(&sa->processing, false, memory_order_release);
                 continue;
@@ -1549,10 +1905,15 @@ static inline bool msActorPollLocal(void) {
         sched->deferredFree = NULL;
         while (d != NULL) {
             msActor* nx = atomic_load_explicit(&d->runNext, memory_order_relaxed);
-            if (msHazardScan(d)) {
+            if (d->state != NULL && !msHazardScan(d)) {
+                msActorRetireState(d);
+                didWork = true;
+            }
+            if (d->state != NULL || msHazardScan(d)) {
                 atomic_store_explicit(&d->runNext, sched->deferredFree, memory_order_relaxed);
                 sched->deferredFree = d;
             } else {
+                msActorJobsFree(d);
                 free(d);
                 didWork = true;
             }
@@ -1565,6 +1926,7 @@ static inline bool msActorPollLocal(void) {
 
 /* Exit-poll: drain ALL run queues. Called at program exit to flush remaining messages. */
 static inline bool msActorPollAll(void) {
+    if (!atomic_load_explicit(&msActorSystemLive, memory_order_acquire)) return false;
     bool didWork = false;
     for (int s = 0; s < msSchedulerCount; s++) {
         msActor* a;
@@ -1621,9 +1983,9 @@ static inline void msCDUnmarkReachable(msActor* a) {
     /* Iterative pid-walk: one child pinned at a time (recursion would pin per
      * depth and overflow the hazard slots). Reaped referents skip cleanly. */
     int cap = 64, top = 0;
-    int64_t* stack = (int64_t*)malloc(cap * sizeof(int64_t));
+    int64_t* stack = (int64_t*)msMemAlloc(cap * sizeof(int64_t));
     for (int r = 0; r < a->refsCount; r++) {
-        if (top >= cap) { cap *= 2; stack = (int64_t*)realloc(stack, cap * sizeof(int64_t)); }
+        if (top >= cap) { stack = (int64_t*)msRealloc(stack, cap * sizeof(int64_t), cap * 2 * sizeof(int64_t)); cap *= 2; }
         stack[top++] = a->refs[r];
     }
     while (top > 0) {
@@ -1632,7 +1994,7 @@ static inline void msCDUnmarkReachable(msActor* a) {
         if (msActorHasFlag(ref, MS_ACTOR_CYCLE_MARKED)) {
             msActorClearFlag(ref, MS_ACTOR_CYCLE_MARKED);
             for (int r = 0; r < ref->refsCount; r++) {
-                if (top >= cap) { cap *= 2; stack = (int64_t*)realloc(stack, cap * sizeof(int64_t)); }
+                if (top >= cap) { stack = (int64_t*)msRealloc(stack, cap * sizeof(int64_t), cap * 2 * sizeof(int64_t)); cap *= 2; }
                 stack[top++] = ref->refs[r];
             }
         }

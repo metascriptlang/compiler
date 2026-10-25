@@ -56,9 +56,7 @@ static int queuePush(struct msDeflateCtx* c, const uint8_t* data, size_t len) {
     if (needed > c->queueCap) {
         size_t newCap = c->queueCap == 0 ? 4096 : c->queueCap * 2;
         while (newCap < needed) newCap *= 2;
-        uint8_t* q = (uint8_t*)realloc(c->queue, newCap);
-        if (!q) return -1;
-        c->queue = q;
+        c->queue = (uint8_t*)msRealloc(c->queue, c->queueCap, newCap);
         c->queueCap = newCap;
     }
     memcpy(c->queue + c->queueLen, data, len);
@@ -97,8 +95,7 @@ int64_t msDeflateNew(int32_t format, int32_t level) {
     if (level < 0) level = 6;
     if (level > 10) level = 10;
 
-    struct msDeflateCtx* c = (struct msDeflateCtx*)calloc(1, sizeof(*c));
-    if (!c) return 0;
+    struct msDeflateCtx* c = (struct msDeflateCtx*)msMemAlloc0(sizeof(*c));
     c->format = format;
     c->crc32 = MZ_CRC32_INIT;
 

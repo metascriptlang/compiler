@@ -26,17 +26,17 @@ export function discriminator(this typeof Boxed): Discriminator {
 
 export struct BoxedAccounts {
 	owner: Signer;
-	@hasOne(owner) vault: Owned<Boxed>;
+	@hasOne(owner) vault: Owned<Boxed>; // GUARD-REFUSED
 }
 
 export struct FarKeptAccounts {
 	owner: Signer;
-	@hasOne(owner) vault: Owned<FarKeptChild>;
+	@hasOne(owner) vault: Owned<FarKeptChild>; // GUARD-REFUSED
 }
 
 function run(): Result<uint64, ProgramError> {
-	const x = try accounts<Guarded>();
-	const y = try accounts<FarDerived>();
+	const x = try accounts<Guarded>(); // GUARD-REFUSED
+	const y = try accounts<FarDerived>(); // GUARD-REFUSED
 	const z = try accounts<FarKeptAccounts>();
 	const boxed = try accounts<BoxedAccounts>();
 	return Result.ok(x.authority.lamports() + x.target.lamports() + y.owner.lamports() + z.vault.data().limit +

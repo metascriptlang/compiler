@@ -15,7 +15,7 @@
 // /trace-nim on substituteAllParamsWalk (checker/types.ms) and cfaAux
 // (transform/cycles.ms) for the named instance.
 //
-// GUARD-BALANCE-ORC TOTAL
+// GUARD-BALANCE TOTAL
 // GUARD-JS
 
 class Box<T> {

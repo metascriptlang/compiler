@@ -4,9 +4,9 @@
 // would create circular imports if left in declarations.ms or index.ms.
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
-import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
+import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention, DecoratedDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
+import { CEmissionFacts, CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { ensureDrcProto, procHeader } from "./types";
 import { mangledFunctionName } from "./names";
 import { placedInstanceOf } from "../../checker/instantiate";
@@ -17,7 +17,7 @@ import { placedInstanceOf } from "../../checker/instantiate";
 
 // On-demand cross-module function prototype emission.
 // Called from genCallExpr when a cross-module function is referenced.
-export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol | null): void {
+export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Readonly<Type | null>, sym: Readonly<Symbol | null>): void {
 	// Recovery path: re-exported symbols imported via a hub module (e.g.,
 	// `export { X } from "./source"`) can end up with Unknown symbolType in the
 	// caller's scope when the hub's collectExport runs before the source module's
@@ -30,7 +30,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		return;
 	}
 	if (sym != null && copiesInline(g, sym)) {
-		requestInlineCopy(g, calleeName, placedInstanceOf(sym));
+		requestInlineCopy(g, g.emissionFacts, calleeName, sym);
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;
@@ -41,30 +41,39 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, false) + ";");
 }
 
-export function copiesInline(g: CGen, sym: Symbol): boolean {
+export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
 	if (sym.symbolType == null || sym.symbolType.callConv != CallingConvention.CcInline) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return false;
 	return !g.emissionFacts.hcrModules.has(sym.modulePath);
 }
 
-export function inlineDeclOf(sym: Symbol): Node | null {
-	const decl = sym.declNode;
-	if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym != sym || decl.nodeType == null) return null;
-	if ((decl.data as FunctionDeclData).fnBody == null) return null;
-	return decl;
+export function factInlineDecls(facts: CEmissionFacts, program: Node): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let decl = stmt;
+		if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+		if (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+		if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.nodeType == null || (decl.data as FunctionDeclData).fnBody == null) continue;
+		const sym = decl.resolvedSym;
+		if (sym != null && sym.symbolType != null && sym.symbolType.callConv == CallingConvention.CcInline) facts.inlineDecls.set(sym!, decl);
+	}
 }
 
-function requestInlineCopy(g: CGen, calleeName: string, sym: Symbol): void {
+export function inlineDeclOf(facts: Readonly<CEmissionFacts>, sym: Readonly<Symbol>): Readonly<Node | null> {
+	return facts.inlineDecls.readonlyGet(sym);
+}
+
+function requestInlineCopy(g: CGen, facts: Readonly<CEmissionFacts>, calleeName: string, called: Readonly<Symbol>): void {
 	const key = "inline:" + calleeName;
 	if (nameSetHas(g.declaredProcs, key)) return;
 	nameSetAdd(g.declaredProcs, key);
-	const decl = inlineDeclOf(sym);
+	const sym = placedInstanceOf(facts.placedInstances!, called);
+	const decl = inlineDeclOf(facts, sym);
 	if (decl == null) {
 		addCGenError(g, `internal: @inline function '${sym.name}' has no declaration to copy into ${g.modulePath}`, 0, 0);
 		return;
 	}
 	const d = decl.data as FunctionDeclData;
-	if (mangledFunctionName(sym, d.fnName, sym.overloadIdx) != calleeName) {
+	if (mangledFunctionName(facts.moduleNameRoots!, sym, d.fnName, sym.overloadIdx) != calleeName) {
 		addCGenError(g, `internal: @inline function '${sym.name}' is called as '${calleeName}' in ${g.modulePath}`, 0, 0);
 		return;
 	}
@@ -78,13 +87,15 @@ import { createStruct, createFunction, createPrimitive } from "../../checker/typ
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
-import { createCGen, extract } from "./context";
+import { createAliveSet, createCGen, extract } from "./context";
 
 test "a function named like a lifecycle hook keeps the ordinary parameter ABI in its prototype" {
 	const num = createPrimitive(TypeKind.Float64);
 	const big = createStruct("Big", ["a", "b", "c", "d"], [num, num, num, num], true);
 	big.sym = makeSymbol("Big", SymbolKind.Struct, big, false);
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	ensureCrossModuleProto(g, "MakeCopy", createFunction([big], ["p"], num), null);
 	assert extract(sec(g, CSection.ProcHeaders)).contains("double MakeCopy(const Big*);");
 }

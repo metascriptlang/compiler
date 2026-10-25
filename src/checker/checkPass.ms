@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprS
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
-import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
@@ -33,6 +33,7 @@ import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseName
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
+import { runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
@@ -41,7 +42,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
-import { checkActorStaticField } from "./sendable";
+import { checkActorNonisolatedField, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -587,9 +588,8 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,
 			// users should bind and await. For fire-and-forget, use actor SEND.
-			// Suppress inside loops: legacy fire-and-forget pattern (to be migrated later).
 			if (d.expr.kind == NodeKind.CallExpr && d.expr.resolvedSym != null
-				&& d.expr.resolvedSym.builtinKind == "PromiseSpawn" && !ctx.inLoop) {
+				&& d.expr.resolvedSym.builtinKind == "PromiseSpawn") {
 				addError(ctx, "spawn result is discarded — every affine Promise must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
 			}
 		},
@@ -773,13 +773,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			addError(ctx, "cannot infer the element type of an empty array literal — annotate the variable type", d.nameLocation.line, d.nameLocation.column);
 		}
 	}
-	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a affine Promise-producing
-	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
 	if (declType != null && initType != null
 		&& isAwaitable(declType) && !isAffineAwaitable(declType) && isAffineAwaitable(initType)) {
-		addWarning(ctx,
-			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
-			d.nameLocation.line, d.nameLocation.column);
+		declType = initType;
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType != null && d.initializer != null) {
@@ -1731,6 +1727,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	for (const member of d.actorBody) {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 		checkActorStaticField(ctx, member);
+		checkActorNonisolatedField(ctx, sym, member);
 	}
 	ctx.currentActor = prevActor;
 	closeScope(ctx.table);
@@ -2081,7 +2078,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.whileBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2110,7 +2107,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2192,7 +2189,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 }
 
 function destructuresByPosition(t: Type): boolean {
@@ -2333,7 +2330,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forInBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
@@ -2349,7 +2346,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.doBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
@@ -2482,7 +2479,7 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
 	}
 	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
-	const sym = makeSymbol(d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
+	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
 	_forwardLocals.add(sym);
@@ -2642,15 +2639,9 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		if (ctx.matchExprDepth == 0 && returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, d.argument, returnExpected));
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
-	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
-	// Returning a affine Promise from a function lets its lifetime leak past the await,
-	// which breaks the borrow-safety guarantee that spawn children stay pinned to
-	// their parent's frame. Existing callers that need to pass around a promise
-	// should explicitly upcast: `return spawn(...) as Promise<T>` (Phase 2+ may forbid).
-	if (retType != null && isAffineAwaitable(retType)) {
-		addError(ctx,
-			"affine Promise cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
-			d.argument.location.line, d.argument.location.column);
+	if (retType != null && isAffineAwaitable(retType) && d.argument.kind == NodeKind.Identifier && d.argument.resolvedSym != null) {
+		markConsumedName(ctx.affineTracker, symbolConsumeKey(d.argument.resolvedSym!));
+		markConsumed(d.argument.resolvedSym!);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
 	// or a call to the runtime converter for the return type.
@@ -3019,7 +3010,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	restoreInitState(ctx.initTracker, initSnap);
 	ctx.initTracker.outParams = savedOutParams;
 	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
@@ -3915,6 +3906,7 @@ export function checkPreludeFromSource(stdPath: string, backendExt: string): Che
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
+	ctx.stdRoot = stdRoot;
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
@@ -4171,6 +4163,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
+	runDeferredEffectChecks(ctx);
 	checkViewBorrows(ctx, program);
 	checkPointerEscapes(ctx, program);
 	// Register this module's ctx so later cross-module generic instantiation can
@@ -4200,7 +4193,9 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 		_preludeCtxByKey.set(key, shared);
 	}
 	replayPreludeContributions(shared);
-	return packContentView(shared.ctx);
+	const view = packContentView(shared.ctx);
+	view.stdRoot = stdPath;
+	return view;
 }
 
 function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
@@ -5992,6 +5987,59 @@ test "phase 6: assignment narrow respects declared upper bound" {
 		+ "  return x.length;\n"
 		+ "}\n"
 	);
+}
+
+test "flow: a read after a loop narrows though a read inside it came first" {
+	assert checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { const y = x; x = 2; i = i + 1; } const z: number = x; return z; }");
+}
+
+test "flow: a narrowing before a loop holds after it" {
+	assert checkOk("function f(x: number | null, n: number): number { if (x == null) return 0; let i = 0; while (i < n) { i = i + 1; } return x + i; }");
+	assert checkOk("function f(x: number | string, n: number): number { let i: number = 0; if (typeof x === \"number\") { while (i < n) { let j = 0; while (j < n) { j = j + 1; } i = i + x; } return x; } return i; }");
+}
+
+test "flow: an assignment in a nested loop narrows after both loops" {
+	assert checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { let j = 0; while (j < 3) { x = 2; j = j + 1; } i = i + 1; } const z: number = x; return z; }");
+}
+
+test "flow: a function, class or enum name reads as its declared type" {
+	assert checkOk(
+		"function g(v: number): number { return v + 1; }\n"
+		+ "class Box { static n: number = 3; }\n"
+		+ "enum Color { Red, Green }\n"
+		+ "function f(): number {\n"
+		+ "  const h: (v: number) => number = g;\n"
+		+ "  if (Box.n > 0) { const c: Color = Color.Green; return h(Box.n); }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "flow: a condition on a function name does not narrow it" {
+	assert !checkOk(
+		"function g(v: number): number { return v + 1; }\n"
+		+ "function f(): void {\n"
+		+ "  if (typeof g === \"string\") { const s: boolean = g; }\n"
+		+ "}\n"
+	);
+}
+
+test "flow: a variable of function type still narrows" {
+	assert checkOk("function f(cb: ((v: number) => number) | null): number { if (cb != null) return cb(1); return 0; }");
+}
+
+test "flow: a compound assignment keeps the type read before it" {
+	assert checkOk("function f(): number { let x: number | string = 1; x += 1; const n: number = x; return n; }");
+	assert checkOk("function f(): string { let s: number | string = \"a\"; s += \"b\"; const t: string = s; return t; }");
+}
+
+test "flow: a destructuring assignment widens to the declared type" {
+	assert checkOk("function f(): number { let x: number | string = \"a\"; let y: number | string = 1; [x, y] = [y, x]; const u: number | string = x; return 0; }");
+}
+
+test "flow: an assignment in a loop joins with the type before the loop" {
+	assert !checkOk("function f(): number { let x: number | string = \"a\"; let i = 0; while (i < 3) { x = 2; i = i + 1; } const z: number = x; return z; }");
+	assert !checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { if (i == 1) { x = \"s\"; } i = i + 1; } const z: number = x; return 0; }");
 }
 
 test "phase 6: type predicate narrows in truthy branch" {

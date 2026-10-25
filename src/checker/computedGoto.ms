@@ -30,14 +30,19 @@ export function isRegisteredMark(ctx: CheckerContext, stmt: Node): boolean {
 	return false;
 }
 
-export function computedGotoDiscriminant(t: Type | null): Type | null {
+export function computedGotoDiscriminant(t: Type | null): Type | null;
+export function computedGotoDiscriminant(t: Readonly<Type | null>): Readonly<Type | null>;
+export function computedGotoDiscriminant(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
-	const peeled = peelThrough(t, PEEL_ALL) ?? t;
-	return peeled.kind == TypeKind.EnumLiteral && peeled.typeReturn != null ? peeled.typeReturn : peeled;
+	return enumLiteralBase(peelThrough(t, PEEL_ALL));
+}
+
+function enumLiteralBase(peeled: Readonly<Type | null>): Readonly<Type | null> {
+	return peeled != null && peeled.kind == TypeKind.EnumLiteral && peeled.typeReturn != null ? peeled.typeReturn : peeled;
 }
 
 // The number of table slots for a discriminant of this type, 0 when it has no table.
-export function computedGotoSize(t: Type | null): int32 {
+export function computedGotoSize(t: Readonly<Type | null>): int32 {
 	const d = computedGotoDiscriminant(t);
 	if (d == null) return 0;
 	if (d.kind == TypeKind.Enum) return d.typeNames.length;

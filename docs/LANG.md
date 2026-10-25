@@ -39,12 +39,12 @@ checker rejects it and names the alternative.
   a field of a class. Arrays and maps are out because only an object header names the
   destroy a type-erased release must run.
 - It owns what it holds: a store counts, a release goes through the header's type, and a
-  cycle through an `unknown` field is collected under `--gc=orc`.
+  cycle through an `unknown` field is collected by the cycle collector.
 - Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
   `base as Derived`: a wrong class stops the program with
   `Error: invalid object conversion: <runtime class> is not C`, exit 1, naming a value without a
   class (an object literal) `Object` on C, JS and the Raiser; `null` passes.
-  `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
+  `--danger` drops this test, as it drops bound checks, and `--mm=manual` has no type
   header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
   `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
   `instanceof` narrows an `unknown` on every backend and is never dropped.
@@ -109,7 +109,7 @@ already does the same job.
 Measured on tree `09e272c1`: corpus `643`–`648` on C drc/orc/danger, JS and ESM (SAN clean),
 `bug599`–`bug601`, guards `unknownFieldCycleCollects` and `handleKeepsObjectForC` (a real C
 file keeps the address; red with the retain or the release removed). Not measured: a
-`--gc=manual` build of a conversion. Not covered yet: C `extern class` values are not refused
+`--mm=manual` build of a conversion. Not covered yet: C `extern class` values are not refused
 into `unknown` (the checker cannot tell a C extern class from a JS one declared in a shared
 `.ms`), and the Raiser VM neither tests a conversion nor loads `std/ffi`.
 
@@ -2239,14 +2239,29 @@ const handle = spawn(() => heavyComputation());  // returns Promise<T>
 const result = await handle;                      // block until complete
 ```
 
-`spawn` returns a `Promise<T>` tagged as **affine + scope-bound** under the hood — it must be awaited exactly once before its scope exits. Surface type is `Promise<T>`; the affine semantics are attached via internal flags so the compiler can enforce safety without forcing users to learn a second type name:
+`spawn` returns a `Promise<T>` tagged as **affine** under the hood — it is consumed exactly once: awaited, or handed on. Surface type is `Promise<T>`; the affine semantics are attached via internal flags so the compiler can enforce safety without forcing users to learn a second type name:
 
 ```ms
 const h = spawn(() => 42);
-// COMPILE ERROR if h is never awaited (PARALOCK R1/E2)
+// COMPILE ERROR if h is never awaited or handed on (PARALOCK R1/E2)
 // COMPILE ERROR if h is awaited twice (PARALOCK R2/E3)
-// COMPILE ERROR if h is returned from a function (PARALOCK R3/E4)
 ```
+
+What the thunk captures decides how far the handle may go:
+
+```ms
+function isolated(m: Map<int32, Promise<int32>>, k: int32): void {
+    m.set(k, spawn(() => work(k)));   // OK: captures a copy; the task outlives this call
+}
+
+function borrowing(d: Data): Promise<int32> {
+    const h = spawn(() => read(d));   // reads `d`, which this scope lends to the task
+    return h;                         // COMPILE ERROR: the handle stays in this scope
+}
+```
+
+- **Isolated** — the thunk captures only copies (numbers, strings, plain structs), moved values, `Arc<T>` or `Locked<T>`. Its handle is an ordinary promise: it may be stored, passed and returned, nothing joins or cancels the task when the scope exits, and the program does not end before the task finishes. A failure nobody awaited is reported as an unhandled rejection at exit, exit code 1.
+- **Borrowing** — the thunk reads a reference the parent lends it. Every exit of the scope cancels the tasks no worker has started and waits for the rest, so the handle stays in that scope: returning it, storing it in a field, a module variable or an object, or passing it to a function or a constructor is a compile error. Keeping it in a local array or `Map` and passing it to `Promise.all` stays inside the scope and is accepted.
 
 The same `Promise<T>` produced by `async function`s, actor CALLs, and `spawn(...)` all interoperate: you can mix them in arrays, pass them through generic code, etc. When a spawn-origin `Promise<T>` flows into a context that drops the affine guarantee (mixed array, generic parameter, explicit upcast), the compiler emits a lint so the safety loss is visible.
 
@@ -2547,6 +2562,8 @@ const s = new Server();
 s.name;                           // OK: nonisolated, readonly
 await s.getConnections();         // OK: through mailbox
 ```
+
+A nonisolated field is read from other threads while the actor runs and while it stops, so the declaration must be `readonly` and of a value type: a number type, `bigint`, `boolean`, `string`, an enum, or a literal of one. Any other `@nonisolated` field is a compile error: `a nonisolated field is read from other threads, so it must be readonly and of a value type (number, bigint, boolean, string, enum)`. Each read returns an independent copy. Reading a nonisolated field of an actor that has stopped ends the program with `actor <pid> has stopped, so its nonisolated field cannot be read`.
 
 Without the import the name resolves to nothing and the field stays isolated:
 `Cannot find name 'nonisolated'`, followed by `cannot access actor field 'name'
@@ -2909,7 +2926,7 @@ the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 | Backend | `c`, `js`, `raiser`, plus `backend=c` |
 | Target OS | `macos`, `ios`, `android`, `linux`, `windows`, plus `os=macos` |
 | OS family (computed) | `posix`, `unix`, `bsd` |
-| Memory mode | `drc`, `orc`, `none`, `manual`, plus `gc=orc` |
+| Memory mode | `drc`, `none`, `manual`, plus `mm=drc` |
 | Build mode | `debug`, `release`, `danger`, plus `mode=release` |
 | Hot code reload | `hcr` under `--hcr` |
 | Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
@@ -3217,7 +3234,8 @@ its frame and closure environment; before, each left the frame and one
 environment undestroyed, on `0f1ecc06` as well. Corpus
 `928-stateMachineClosureShares` pins these under SAN.
 
-Not covered, still leaking under `--gc=drc` (collected under `--gc=orc`): a
+Not covered by the frame's own release, so only the cycle collector frees them (measured under
+`--gc=orc` on 2026-10-05, not re-measured in the one memory mode): a
 closure held in a `let` that is alive at a suspension, and a routine that
 captures a per-iteration binding of a suspending loop. Both are values the frame
 stores; the standard reference leaks the `let` case under ARC as well.
@@ -3371,7 +3389,7 @@ Every hook declares one of these parameter lists and returns nothing, except `on
 |---|---|---|---|
 | `onDestroy`, `onMoved` | none | nothing | the value dies; the moved-from side of a move |
 | `onCopy`, `onMove` | `y: T`, the receiver's own type | nothing | a copy; a move into a destination |
-| `onTrace` | `env: Ptr<void>` | nothing | the cycle collector, `--gc=orc`, for a type that can form a cycle |
+| `onTrace` | `env: Ptr<void>` | nothing | the cycle collector, for a type that can form a cycle |
 | `onClone` | none | `T` | a copy into a sink position (below) |
 
 Anything else is `signature for 'onDestroy' is wrong: it takes the receiver only, 2 parameters

@@ -1,6 +1,8 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 30
+// @maxatomics(darwin-arm64) 422
+// @maxatomics(linux-x86_64) 122
 // @stdout: PASS:actor-heapstr
 // @serial
 // @ledger-slack(Box) 1

@@ -343,13 +343,28 @@ function locateYieldArg(stmts: Node[], remove: boolean): Node {
 
 // Build the async stepper dispatch: instead of generatorLower's iterator result pattern,
 // emit msFutureAddCallback at yield points and msFutureComplete at return points.
-interface YieldFuture { state: number; sym: Symbol; }
+interface YieldFuture { state: number; sym: Symbol; park: Symbol; }
 
-function yieldFutureSym(yfs: YieldFuture[], state: number): Symbol {
+function yieldFuture(yfs: YieldFuture[], state: number): YieldFuture {
 	for (const yf of yfs) {
-		if (yf.state == state) return yf.sym;
+		if (yf.state == state) return yf;
 	}
 	throw new Error(`internal: async state ${state} resumes from a yield that holds no future`);
+}
+
+function yieldFutureSym(yfs: YieldFuture[], state: number): Symbol {
+	return yieldFuture(yfs, state).sym;
+}
+
+// The yielded operand is bound to a parked handle first: the frame suspends on it, so
+// the analyzer keeps an actor CALL's plain-ref arguments as borrows, as for a sync await.
+function storeYieldedFuture(yfs: YieldFuture[], state: number, yfType: Type, yieldArg: Node, loc: SourceLocation): Node[] {
+	const yf = yieldFuture(yfs, state);
+	const decl = makeVarDecl(yf.park.name, yieldArg, DeclKind.Const, loc);
+	decl.resolvedSym = yf.park;
+	decl.nodeType = yfType;
+	const assign = makeAssign(makeTypedIdentResolved(yf.sym, yfType, loc), makeTypedIdentResolved(yf.park, yfType, loc), loc);
+	return [decl, makeExprStmt(assign, loc)];
 }
 
 function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation): Node {
@@ -462,11 +477,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				// Save yielded future to a hoisted local (typed: Promise<T> from yield variable)
 				const yfSym = yieldFutureSym(yfs, i);
 				const yfType = promiseTypeFor(state.yieldVarType);
-				const futAssign = makeExprStmt(
-					makeAssign(makeTypedIdentResolved(yfSym, yfType, loc), yieldArg, loc),
-					loc,
-				);
-				stateStmts.push(futAssign);
+				for (const st of storeYieldedFuture(yfs, i, yfType, yieldArg, loc)) stateStmts.push(st);
 
 				// Set next state (reuse the state assign from splitStmts)
 				stateStmts.push(state.stmts[copyEnd - 2]); // $state = nextState
@@ -486,7 +497,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					// Append stepper pattern
 					const yfSym = yieldFutureSym(yfs, i);
 					const yfType = promiseTypeFor(state.yieldVarType);
-					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(yfSym, yfType, loc), yieldArg, loc), loc));
+					for (const st of storeYieldedFuture(yfs, i, yfType, yieldArg, loc)) stateStmts.push(st);
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.stateSym, null, loc), makeNumber(state.nextState, loc), loc), loc));
 					stateStmts.push(makeReturn(makeTypedIdentResolved(yfSym, yfType, loc), loc));
 				} else {
@@ -587,7 +598,9 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 			const yfFutType = promiseTypeFor(yfVarType);
 			const yfSym = mintSym(ctx, SymbolKind.Variable, yfName, yfFutType);
 			symSetAdd(lifted, yfSym);
-			yfs.push({ state: si, sym: yfSym });
+			const park = mintSym(ctx, SymbolKind.Variable, "$fut" + si, yfFutType);
+			setFlag(park, SymbolFlag.AwaitHandle);
+			yfs.push({ state: si, sym: yfSym, park });
 			varTypes.push({ varType: yfFutType, varSym: yfSym });
 		}
 	}

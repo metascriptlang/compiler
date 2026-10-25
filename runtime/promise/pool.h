@@ -59,12 +59,44 @@ void msPoolSubmit(struct msSpawnCtx* ctx);
 /* Shutdown pool — drain queue, join all workers. Called at process exit. */
 void msPoolShutdown(void);
 
-/* Phase 8: Help-first scheduling — try to dequeue one task from the global
- * queue and execute it inline. Returns true if a task was found and executed.
- * Called from all blocking wait points (msAwaitGroupBlocking, msWaitFor,
- * msWaitForReady) to let blocked workers drain queued work instead of parking.
- * Self-contained: caller needs no access to msSpawnCtx. */
-bool msPoolHelpOne(void);
+/* Registers a handler local to the calling thread. A pool worker runs its handlers
+ * as it exits, last registered first. */
+void msOnThreadDestruction(void (*handler)(void));
+
+/* A queued task's running ancestor that joins it: a task running on some thread,
+ * kept on that thread's stack until it returns, so after its joined descendants. */
+typedef struct msTaskFrame {
+	const void* target;                 /* the future, slot or group the task completes */
+	const struct msTaskFrame* parent;   /* the running task that joins this one, or NULL */
+} msTaskFrame;
+
+/* A blocked waiter runs one queued task its awaited target depends on and returns
+ * true, or returns false when none is queued. `awaited` is a future, an
+ * msAwaitGroup or an msAwaitSlot; with `follow`, a future's wait edges are followed
+ * (Promise.all / allSettled inputs, the future an async function is suspended on);
+ * with `descend`, a queued task a running task of the closure joins counts too. */
+bool msPoolRunEdge(const void* awaited, bool follow, bool descend);
+
+/* Sets the running task of this thread and returns the previous one. A callback runs
+ * under NULL: what it spawns has no joining ancestor. */
+const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame);
+
+/* The queued tasks this thread is running and the spares its waits started. A fault
+ * that unwinds past them hands the counts read before it to msPoolUnwound with the
+ * error that reports it: the runs never return, so each one's target fails with
+ * `error` (its awaiter would wait forever) and its pending count, which the exit drain
+ * waits on, is released; each spare is ended as its wait would have ended it. */
+int32_t msPoolRunningPeek(void);
+int32_t msPoolSparesPeek(void);
+void msPoolUnwound(int32_t running, int32_t spares, void* error);
+
+/* Called where a waiter on the future `awaited` would park. When its closure holds a
+ * leaf no spawn completes, tasks stay queued, no worker is idle and fewer than
+ * workerCount threads run, it wakes a spare or starts one (true: pair with
+ * msPoolCompensateEnd when the wait ends). At the thread limit it fails loud, naming
+ * `wait`. A group or slot wait never compensates: its own tasks are queued or running. */
+bool msPoolCompensate(const void* awaited, const char* wait);
+void msPoolCompensateEnd(void);
 
 /* busyCount signaling for wait paths. Workers decrement on entering wait
  * (msAwaitSlotWait, msWaitForReady) so shouldSend sees available capacity.

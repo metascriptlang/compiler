@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, numberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance } from "../../checker/types";
+import { skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -17,15 +17,14 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
 	isIndirectRef,
 } from "./context";
-import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
+import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
-import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
-import { newCanRaise } from "../../checker/raises";
-import { GcMode, dispatchOverridesFor, dispatchEntryFor, CheckerContext } from "../../checker/context";
-import { ctorFormalTypes } from "../../checker/ctorRoutine";
+import { createAliveSet, CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
+import { inferredCallRaises } from "../../checker/raises";
+import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
 
@@ -33,7 +32,7 @@ import { isRuntimeProcSym } from "../../transform/util";
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
 
-function isSolanaReadonlyDataConst(g: CGen, idSym: Symbol | null): boolean {
+function isSolanaReadonlyDataConst(g: CGen, idSym: Readonly<Symbol | null>): boolean {
 	if (g.checkerCtx == null || g.checkerCtx.targetOs != "solana") return false;
 	if (idSym == null) return false;
 	const decl = idSym.declNode;
@@ -43,9 +42,9 @@ function isSolanaReadonlyDataConst(g: CGen, idSym: Symbol | null): boolean {
 	return vd.declKind == DeclKind.Const && readonlyDataConstBinding(decl);
 }
 
-function classHasInitFn(innerType: Type): boolean {
+function classHasInitFn(innerType: Readonly<Type>): boolean {
 	if (innerType == null) return false;
-	let t: Type | null = innerType;
+	let t: Readonly<Type | null> = innerType;
 	if (innerType.kind == TypeKind.GenericInstance) {
 		const base = innerType.typeExtra;
 		t = base != null ? unwrapRefBase(base) : null;
@@ -66,7 +65,9 @@ function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void 
 }
 
 // Strip Sink/Lent ownership modifiers — codegen treats them as transparent wrappers.
-function resolveSinkLent(t: Type | null): Type | null {
+function resolveSinkLent(t: Type | null): Type | null;
+function resolveSinkLent(t: Readonly<Type | null>): Readonly<Type | null>;
+function resolveSinkLent(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) {
 		return t.typeReturn;
@@ -74,16 +75,21 @@ function resolveSinkLent(t: Type | null): Type | null {
 	return t;
 }
 
-function variantSlotAccess(u: Type, vi: number): string {
+function variantSlotAccess(u: Readonly<Type>, vi: number): string {
 	return inlineVariantStruct(u.typeChildren[vi]) != null ? "." : "->";
 }
 
-function strLitPayload(t: Type): Type | null {
-	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+function strLitPayload(t: Type): Type | null;
+function strLitPayload(t: Readonly<Type>): Readonly<Type | null>;
+function strLitPayload(t: Readonly<Type>): Readonly<Type | null> {
+	return isMaybeType(t) && t.typeReturn != null ? strLitOrNull(t.typeReturn) : strLitOrNull(t);
+}
+
+function strLitOrNull(payload: Readonly<Type>): Readonly<Type | null> {
 	return payload.kind != TypeKind.String && isStringLike(payload) ? payload : null;
 }
 
-function variantFailArgs(g: CGen, u: Type, slot: int32): string {
+function variantFailArgs(g: CGen, u: Readonly<Type>, slot: int32): string {
 	const labels: string[] = [];
 	for (const m of u.typeChildren) labels.push(unionMemberDisplay(m));
 	const unionName = u.sym != null && u.sym.name != "" ? u.sym.name : labels.join(" | ");
@@ -92,33 +98,36 @@ function variantFailArgs(g: CGen, u: Type, slot: int32): string {
 	return `${msStringPoolRef(internString(g.stringPool, head), cStringByteLen(head))}, ${msStringPoolRef(internString(g.stringPool, joined), cStringByteLen(joined))}`;
 }
 
-function litSetPayload(t: Type): Type | null {
-	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
-	return strLitPayload(payload) ?? (numberLiteralSet(payload) != null ? payload : null);
+function litSetPayload(t: Readonly<Type>): Readonly<Type | null> {
+	return strLitPayload(maybePayload(t)) ?? (isNumberLiteralSet(maybePayload(t)) ? maybePayload(t) : null);
 }
 
-function litSourceFits(from: Type, set: Type): boolean {
-	return isStringLike(set) ? isStringLike(from) : isNumeric(from) || numberLiteralSet(from) != null;
+function maybePayload(t: Readonly<Type>): Readonly<Type> {
+	return isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
 }
 
-function litConvCall(g: CGen, value: string, set: Type): string {
+function litSourceFits(from: Readonly<Type>, set: Readonly<Type>): boolean {
+	return isStringLike(set) ? isStringLike(from) : isNumeric(from) || isNumberLiteralSet(from);
+}
+
+function litConvCall(g: CGen, value: string, set: Readonly<Type>): string {
 	if (isStringLike(set)) return `msStrLitConv(${value}, ${strLitConvArgs(g, set)})`;
-	const members = numberLiteralSet(set)!;
 	const values: string[] = [];
-	for (const m of members) values.push(m.typeName);
-	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
-	return `((${getTypeDesc(g, set)})msNumLitConv((double)(${value}), (const double[]){${values.join(", ")}}, ${members.length}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}))`;
+	if (set.kind == TypeKind.NumberLiteral) values.push(set.typeName);
+	else for (const m of set.typeChildren) values.push(m.typeName);
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayNameUnprofiled(set);
+	return `((${getTypeDesc(g, set)})msNumLitConv((double)(${value}), (const double[]){${values.join(", ")}}, ${values.length}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}))`;
 }
 
-function strLitConvArgs(g: CGen, set: Type): string {
-	const literals: Type[] = set.kind == TypeKind.StringLiteral ? [set] : set.typeChildren;
+function strLitConvArgs(g: CGen, set: Readonly<Type>): string {
 	let members = "";
-	for (const lit of literals) members += `${lit.typeName.byteLength}:${lit.typeName}`;
-	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	if (set.kind == TypeKind.StringLiteral) members = `${set.typeName.byteLength}:${set.typeName}`;
+	else for (const lit of set.typeChildren) members += `${lit.typeName.byteLength}:${lit.typeName}`;
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayNameUnprofiled(set);
 	return `${msStringPoolRef(internString(g.stringPool, members), cStringByteLen(members))}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}`;
 }
 
-function literalDiscriminantOf(u: Type): string {
+function literalDiscriminantOf(u: Readonly<Type>): string {
 	if (isDiscriminatedUnion(u)) {
 		const dt = u.typeExtra;
 		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(u) : "";
@@ -132,23 +141,23 @@ function literalDiscriminantOf(u: Type): string {
 function unstoredLiteral(g: CGen, object: Readonly<Node>, property: string): string {
 	const owner = object.nodeType != null ? peelToStructOrUnion(object.nodeType) : null;
 	if (owner == null || owner.kind != TypeKind.Struct) return "";
-	const ft = getProperty(owner, property);
+	const ft = fieldTypeView(owner, property);
 	if (!storesNothing(owner, ft)) return "";
 	if (ft.kind == TypeKind.BooleanLiteral) return cBoolLiteral(booleanLiteralValue(ft));
 	if (ft.kind != TypeKind.EnumLiteral) return "";
 	const enumT = ft.typeReturn;
 	const member = enumT != null && ft.typeNames.length > 0 ? variantKeyMember(enumT, ft.typeNames[0]) : -1;
-	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayName(owner)}' names no member of its enum`);
+	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayNameUnprofiled(owner)}' names no member of its enum`);
 	return `${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[member])}`;
 }
 
-function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
+function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Readonly<Type>, disc: string, tagRead: string): string {
 	const lits: string[] = [];
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const lt = findFieldInVariant(u.typeChildren[vi], disc);
 		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? variantKeyMember(lt.typeReturn, lt.typeNames[0]) : -1;
 		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral && enumMember < 0)) {
-			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayNameUnprofiled(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return tagRead;
 		}
 		if (enumMember >= 0) {
@@ -161,7 +170,7 @@ function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, d
 }
 
 
-function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
+function enumTagMembers(g: CGen, node: Readonly<Node>, u: Readonly<Type>): string[] {
 	const enumT = u.typeExtra;
 	const members: string[] = [];
 	if (enumT == null || enumT.kind != TypeKind.Enum) return members;
@@ -170,7 +179,7 @@ function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
 		const key = vi + 1 < u.typeNames.length ? u.typeNames[vi + 1] : "";
 		const mi = variantKeyMember(enumT, key);
 		if (mi < 0) {
-			addCGenError(g, `internal: variant ${vi} of '${typeDisplayName(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			addCGenError(g, `internal: variant ${vi} of '${typeDisplayNameUnprofiled(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return [];
 		}
 		const mt = enumT.typeChildren != null && mi < enumT.typeChildren.length ? enumT.typeChildren[mi] : null;
@@ -181,7 +190,7 @@ function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
 	return identity ? [] : members;
 }
 
-function enumDiscriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, tagRead: string): string {
+function enumDiscriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Readonly<Type>, tagRead: string): string {
 	const members = enumTagMembers(g, node, u);
 	return members.length == 0 ? tagRead : tagToLiteral(p, members, tagRead);
 }
@@ -204,20 +213,19 @@ function tagToLiteral(p: CProc, lits: string[], tagRead: string): string {
 // underlying reference and read its symbol's declared type. The object's own
 // nodeType may be flow-narrowed (variant struct / sub-union) — the declared union
 // is the authoritative v<N> index space for tagged-union routing.
-function duDeclaredUnionOfObject(objNode: Readonly<Node>): Type | null {
-	let walk: Readonly<Node> | null = objNode;
-	while (walk != null && walk.kind == NodeKind.HiddenDeref) {
-		walk = (walk.data as ExprStmtData).expr;
-	}
-	if (walk == null || walk.resolvedSym == null) return null;
-	if (walk.kind != NodeKind.Identifier && walk.kind != NodeKind.MemberExpr) return null;
-	let declTy: Type | null = walk.resolvedSym.symbolType;
-	while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
-		declTy = declTy.typeReturn;
-	}
-	declTy = peelToStructOrUnion(declTy);
-	if (declTy == null || declTy.kind != TypeKind.Union || !isRealDiscriminatedUnion(declTy)) return null;
-	return declTy;
+function duDeclaredUnionOfObject(objNode: Readonly<Node | null>): Readonly<Type | null> {
+	if (objNode != null && objNode.kind == NodeKind.HiddenDeref) return duDeclaredUnionOfObject((objNode.data as ExprStmtData).expr);
+	if (objNode == null || objNode.resolvedSym == null) return null;
+	if (objNode.kind != NodeKind.Identifier && objNode.kind != NodeKind.MemberExpr) return null;
+	return realDiscriminatedUnionOrNull(peelToStructOrUnion(refBaseType(objNode.resolvedSym.symbolType)));
+}
+
+function refBaseType(t: Readonly<Type | null>): Readonly<Type | null> {
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? refBaseType(t.typeReturn) : t;
+}
+
+function realDiscriminatedUnionOrNull(t: Readonly<Type | null>): Readonly<Type | null> {
+	return t == null || t.kind != TypeKind.Union || !isRealDiscriminatedUnion(t) ? null : t;
 }
 
 // True if the Union should be lowered to a tagged union in C (`{_tag, v0, v1, ...}`)
@@ -236,7 +244,7 @@ function duDeclaredUnionOfObject(objNode: Readonly<Node>): Type | null {
 //      covers `NodeData`-style structural unions.
 //   4. Variants resolve to DISTINCT inner struct names — covers TS-style
 //      `Circle | Square` where each variant is `Ref<distinctClass>`.
-function isRealDiscriminatedUnion(t: Type): boolean {
+function isRealDiscriminatedUnion(t: Readonly<Type>): boolean {
 	if (t == null || t.kind != TypeKind.Union) return false;
 	if (t.typeChildren == null || t.typeChildren.length == 0) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
@@ -287,32 +295,32 @@ function isRealDiscriminatedUnion(t: Type): boolean {
 // another compilation unit — caller emits `NativeBuild _lit_` but the
 // importing .c file never receives that typedef. Caught by the discriminated-
 // union cross-file probe (consumer importing `BuildTarget` from types.ms).
-function variantStructCName(g: CGen, unionType: Type, varIdx: number, unionName: string): string {
+function variantStructCName(g: CGen, unionType: Readonly<Type>, varIdx: number, unionName: string): string {
 	if (unionType.typeChildren != null && varIdx < unionType.typeChildren.length) {
 		let v = unionType.typeChildren[varIdx];
 		if (v != null && (v.kind == TypeKind.Ref || v.kind == TypeKind.Ptr) && v.typeReturn != null) {
 			v = v.typeReturn;
 		}
 		if (v != null && v.kind == TypeKind.Struct) {
-			const cached = typeCacheGet(g.typeCache, typeKey(v));
+			const cached = typeCacheGet(g.typeCache, typeKeyIn(g.emissionFacts.moduleNameRoots!, v));
 			if (cached != "") return cached;
 		}
 	}
 	return `${unionName}_v${varIdx}`;}
 
-function genAllocCall(g: CGen, cType: string, infoType: Type | null, fn: string): string {
+function genAllocCall(g: CGen, cType: string, infoType: Readonly<Type | null>, fn: string): string {
 	return `(${cType}*)${fn}(sizeof(${cType}), ${typeInfoRef(g, infoType)})`;
 }
 
 // Safe default — header + payload zero-initialised. Matches Nim nimNewObj.
-function genAllocTyped(g: CGen, cType: string, infoType: Type | null): string {
+function genAllocTyped(g: CGen, cType: string, infoType: Readonly<Type | null>): string {
 	return genAllocCall(g, cType, infoType, "msAllocTyped");
 }
 
 // Uninit opt-in: payload stays dirty. Emit ONLY at sites that provably write
 // every payload byte before the next read (e.g. new T(args) with
 // args.length === typeNames.length). Mirrors Nim nimNewObjUninit.
-function genAllocTypedUninit(g: CGen, cType: string, infoType: Type | null): string {
+function genAllocTypedUninit(g: CGen, cType: string, infoType: Readonly<Type | null>): string {
 	return genAllocCall(g, cType, infoType, "msAllocTypedUninit");
 }
 
@@ -320,7 +328,7 @@ function genAllocTypedUninit(g: CGen, cType: string, infoType: Type | null): str
 // every field is written before the next read, (2) no inherited fields —
 // typeExtra !== null means the class inherits, and inherited fields are NOT
 // in typeNames so coverage can't be proved. Default to safe on any doubt.
-function pickAllocExpr(g: CGen, cType: string, innerType: Type | null, argsCoverAllFields: boolean): string {
+function pickAllocExpr(g: CGen, cType: string, innerType: Readonly<Type | null>, argsCoverAllFields: boolean): string {
 	const hasBase = innerType != null && innerType.typeExtra != null;
 	const safeUninit = !hasBase && argsCoverAllFields;
 	return safeUninit ? genAllocTypedUninit(g, cType, innerType) : genAllocTyped(g, cType, innerType);
@@ -363,7 +371,7 @@ function isPlainPath(s: string): boolean {
 	return true;
 }
 
-function genOpenArrayArgs(g: CGen, p: CProc, arg: string, formal: Type): string {
+function genOpenArrayArgs(g: CGen, p: CProc, arg: string, formal: Readonly<Type>): string {
 	let src = arg;
 	if (!isPlainPath(arg)) {
 		const tmp = getTemp(p, getTypeDesc(g, skipModifier(formal)));
@@ -376,7 +384,7 @@ function genOpenArrayArgs(g: CGen, p: CProc, arg: string, formal: Type): string 
 // Shared ABI shim for call arguments — reference parity: genArg
 // Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
 // mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
-export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Readonly<Node>, mutBits: int32, paramIdx: number, lentFirst: boolean = false): string {
+export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<Type>, argNode: Readonly<Node>, mutBits: int32, paramIdx: number, lentFirst: boolean = false): string {
 	const formal = unwrapVarargs(paramType);
 	if (formal != null && argNode.kind != NodeKind.HiddenAddr && isOpenArrayParam(formal)) {
 		return genOpenArrayArgs(g, p, arg, formal);
@@ -412,7 +420,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 	return arg;
 }
 
-export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Type): string {
+export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Readonly<Type>): string {
 	if (argNode.kind == NodeKind.Identifier && isIndirectRef(p, argNode.resolvedSym, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
@@ -487,7 +495,7 @@ function emitTaggedUnionWrapAddr(p: CProc, unionName: string, varIdx: number, va
 // compound literal (starts with '{'), hoist it to a temp variable first.
 // Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
-export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonly<Node>, paramType: Type | null): string {
+export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonly<Node>, paramType: Readonly<Type | null>): string {
 	if (snippet.byteLength> 0 && snippet.byteAt(0) == "{".code) {
 		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
@@ -503,7 +511,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 					// Fallback for unchecked nodes (transform-generated)
 					if (varIdx < 0) {
 						const keyArr: string[] = [];
-						const typeArr: Type[] = [];
+						const typeArr: Cursor<Readonly<Type>>[] = [];
 						for (let ki = 0; ki < od.keys.length; ki += 1) {
 							keyArr.push(od.keys[ki]);
 							if (ki < od.properties.length && od.properties[ki] != null && od.properties[ki].nodeType != null) {
@@ -528,7 +536,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 		// Try 2: paramType (pointer type → strip * to get pointee)
 		if ((cType == "" || cType == "void" || cType == "void*") && paramType != null) {
 			// Unwrap pointer/ownership modifiers to get inner type
-			let innerType: Type | null = paramType;
+			let innerType: Readonly<Type | null> = paramType;
 			if (paramType.kind == TypeKind.Ptr || paramType.kind == TypeKind.Ref
 				|| paramType.kind == TypeKind.Sink || paramType.kind == TypeKind.Lent) {
 				innerType = paramType.typeReturn;
@@ -542,7 +550,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 					let varIdx = stamped > 0 ? stamped - 1 : -1;
 					if (varIdx < 0) {
 						const keyArr: string[] = [];
-						const typeArr: Type[] = [];
+						const typeArr: Cursor<Readonly<Type>>[] = [];
 						for (let ki = 0; ki < od.keys.length; ki += 1) {
 							keyArr.push(od.keys[ki]);
 							if (ki < od.properties.length && od.properties[ki] != null && od.properties[ki].nodeType != null) {
@@ -605,7 +613,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 			let varIdx = stamped > 0 ? stamped - 1 : -1;
 			if (varIdx < 0) {
 				const keyArr: string[] = [];
-				const typeArr: Type[] = [];
+				const typeArr: Cursor<Readonly<Type>>[] = [];
 				for (let ki = 0; ki < od.keys.length; ki += 1) {
 					keyArr.push(od.keys[ki]);
 					if (ki < od.properties.length && od.properties[ki] != null && od.properties[ki].nodeType != null) {
@@ -686,67 +694,50 @@ class ObjLitShape {
 	cType: string;
 	isClassObj: boolean;
 	unionWrapName: string;
-	unionWrapType: Type | null;
 	unionWrapIdx: number;
 	isRefUnion: boolean;
-	fieldsType: Type | null;
+}
+
+// The literal's layout type, or with naming the form getTypeDesc names it by: a union peeled
+// from a Ref keeps its outer GenericInstance for the per-instance C name.
+function objLitLayoutType(node: Readonly<Node>, naming: boolean): Readonly<Type | null> {
+	return node.nodeType == null ? null : layoutTypeOf(unwrapRefNullUnion(node.nodeType) ?? node.nodeType, naming);
+}
+
+function layoutTypeOf(litType: Readonly<Type>, naming: boolean): Readonly<Type> {
+	return litType.kind != TypeKind.Ref && litType.kind != TypeKind.GenericInstance ? litType : unionLayoutOf(litType, peelToStructOrUnion(litType), naming);
+}
+
+function unionLayoutOf(litType: Readonly<Type>, inner: Readonly<Type | null>, naming: boolean): Readonly<Type> {
+	if (inner == null || inner.kind != TypeKind.Union) return litType;
+	if (!naming) return inner;
+	if (litType.kind != TypeKind.Ref) return litType;
+	return litType.typeReturn != null && litType.typeReturn.kind == TypeKind.GenericInstance ? litType.typeReturn : inner;
+}
+
+function objLitUnionWrapType(node: Readonly<Node>, unionWrapIdx: number): Readonly<Type | null> {
+	return unionWrapIdx >= 0 ? objLitLayoutType(node, true) : null;
+}
+
+function objLitFieldsType(node: Readonly<Node>, unionWrapIdx: number): Readonly<Type | null> {
+	return unionWrapIdx < 0 ? node.nodeType : variantOf(peelToStructOrUnion(objLitLayoutType(node, true)), unionWrapIdx);
+}
+
+function variantOf(u: Readonly<Type | null>, idx: number): Readonly<Type | null> {
+	return u != null && u.typeChildren != null && idx < u.typeChildren.length ? u.typeChildren[idx] : null;
 }
 
 function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShape {
 	const d = node.data as ObjectLiteralData;
-	let fieldsType: Type | null = node.nodeType;
 	let cType = "";
 	let isClassObj = false;
 	let unionWrapName = "";
-	let unionWrapType: Type | null = null;
 	let unionWrapIdx = -1;
 	let isRefUnion = false;
 	if (node.nodeType != null) {
-		// Unwrap Ref<Union> for discriminated union construction
-		let litType = node.nodeType;
-		// Union(Ref<T>, Null) — collapse to bare Ref<T> so the rest of the
-		// dispatch picks the Ref/heap-alloc path. The source-level union
-		// stays on node.nodeType for narrowing fidelity; we only override
-		// the local litType used for layout decisions here.
-		const refFromUnion = unwrapRefNullUnion(litType);
-		if (refFromUnion != null) {
-			litType = refFromUnion;
-		}
-		// Peel Ref/GenericInstance to reach the underlying Union body. Two
-		// shapes flow into the construction site:
-		//   - `R<T, E>` (GenericInstance over a Union body) — generic
-		//     match-type/TS-style DU; literal typed `{ok: true, ...}`.
-		//   - `Ref<R<T, E>>` (e.g. `type Result<T,E> = Ref<ResultData>`) —
-		//     heap-allocated wrapper; construction needs `msAlloc`.
-		//
-		// `namingType` keeps the form `getTypeDesc` should consult for
-		// the per-instance C name. The OUTER GenericInstance carries the
-		// monomorphized name (`R<int, string>` → `R__int_string`); the
-		// peeled inner Union body keeps the BASE name (`R`) and would
-		// otherwise emit a duplicate, base-named typedef that conflicts
-		// at the call site (`R*` vs `R__int_string*`). For `Ref<GI>` we
-		// strip the Ref but anchor naming on the GI; for bare `GI` the
-		// outer GI is already namingType.
-		let namingType = litType;
-		if (litType.kind == TypeKind.Ref || litType.kind == TypeKind.GenericInstance) {
-			const wasRef = litType.kind == TypeKind.Ref;
-			// Anchor naming: prefer the GI under any Ref wrapper so getTypeDesc
-			// flows through the mono-mangling path (codegen/c/types.ms:602-662).
-			let outerForName = litType;
-			if (wasRef && litType.typeReturn != null
-				&& litType.typeReturn.kind == TypeKind.GenericInstance) {
-				outerForName = litType.typeReturn;
-			}
-			const inner = peelToStructOrUnion(litType);
-			if (inner != null && inner.kind == TypeKind.Union) {
-				litType = inner;
-				if (wasRef) {
-					isRefUnion = true;
-					namingType = outerForName.kind == TypeKind.GenericInstance
-						? outerForName : inner;
-				}
-			}
-		}
+		const litType = objLitLayoutType(node, false)!;
+		const namingType = objLitLayoutType(node, true)!;
+		isRefUnion = litType.kind == TypeKind.Union && (unwrapRefNullUnion(node.nodeType) ?? node.nodeType).kind == TypeKind.Ref;
 		if (litType.kind == TypeKind.Union && d.keys.length > 0) {
 			const unionName = getTypeDesc(g, namingType);
 			// Discriminated union: use discriminant key to find variant
@@ -780,7 +771,6 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 				if (varIdx >= 0) {
 					cType = variantStructCName(g, litType, varIdx, unionName);
 					unionWrapName = unionName;
-					unionWrapType = namingType;
 					unionWrapIdx = varIdx;
 				}
 			} else {
@@ -791,7 +781,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 				// Fallback: re-match by field names + types (for nodes not checked, e.g. transforms)
 				if (varIdx < 0 && d.keys.length > 0) {
 					const keyArr: string[] = [];
-					const typeArr: Type[] = [];
+					const typeArr: Cursor<Readonly<Type>>[] = [];
 					for (let ki = 0; ki < d.keys.length; ki += 1) {
 						keyArr.push(d.keys[ki]);
 						if (ki < d.properties.length && d.properties[ki] != null && d.properties[ki].nodeType != null) {
@@ -807,7 +797,6 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 				if (varIdx >= 0) {
 					cType = variantStructCName(g, litType, varIdx, unionName);
 					unionWrapName = unionName;
-					unionWrapType = namingType;
 					unionWrapIdx = varIdx;
 				}
 			}
@@ -830,18 +819,14 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 			}
 		}
 	}
-	if (unionWrapIdx >= 0 && unionWrapType != null) {
-		const u = peelToStructOrUnion(unionWrapType);
-		fieldsType = u != null && u.typeChildren != null && unionWrapIdx < u.typeChildren.length ? u.typeChildren[unionWrapIdx] : null;
-	}
-	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, isRefUnion, fieldsType };
+	return { cType, isClassObj, unionWrapName, unionWrapIdx, isRefUnion };
 }
 
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
 
 interface ExprStackItem {
-	node: Readonly<Node>;
+	node: Cursor<Readonly<Node>>;
 	phase: number;       // 0 = Discover, 1 = Emit
 	childCount: number;  // results to pop during Emit
 	tag: number;         // sub-case dispatch (0 = default)
@@ -852,7 +837,7 @@ interface ExprStackItem {
 class ExprEvalCtx {
 	workStack: ExprStackItem[];
 	results: string[];
-	destNodes: Readonly<Node>[];
+	destNodes: Cursor<Readonly<Node>>[];
 	destNames: string[];
 }
 
@@ -863,8 +848,21 @@ function destOf(ctx: ExprEvalCtx, node: Readonly<Node>): string {
 	return "";
 }
 
-function objLitTarget(dest: string, shape: ObjLitShape): string {
+function objLitTarget(dest: string, shape: Readonly<ObjLitShape>): string {
 	return shape.unionWrapIdx >= 0 ? `${dest}.v${shape.unionWrapIdx}` : dest;
+}
+
+function claimFieldsInPlace(g: CGen, node: Readonly<Node>, fieldsType: Readonly<Type | null>, target: string, ctx: ExprEvalCtx): void {
+	if (fieldsType == null) return;
+	const d = node.data as ObjectLiteralData;
+	for (let i = 0; i < d.properties.length; i += 1) {
+		if (d.properties[i].kind != NodeKind.ObjectLiteral) continue;
+		const ft = fieldTypeView(fieldsType, d.keys[i]);
+		if (!isUnresolvedType(ft) && buildsInPlace(g, d.properties[i], getTypeDesc(g, ft))) {
+			ctx.destNodes.push(d.properties[i]);
+			ctx.destNames.push(`${target}.${mangleFieldName(d.keys[i])}`);
+		}
+	}
 }
 
 export function buildsInPlace(g: CGen, node: Readonly<Node>, destCType: string): boolean {
@@ -974,7 +972,7 @@ function runExpr(g: CGen, p: CProc, node: Readonly<Node>, dest: string): string 
 			discoverExpr(g, p, item.node, ctx);
 			if (item.node != null && item.node.kind == NodeKind.Identifier) viewImportedCArray(g, item.node, ctx);
 		} else {
-			emitExpr(g, p, item, ctx);
+			emitExpr(g, p, item.node, item, ctx);
 			if (item.node.kind == NodeKind.MemberExpr) viewImportedCArray(g, item.node, ctx);
 		}
 	}
@@ -1000,6 +998,15 @@ function viewImportedCArray(g: CGen, node: Readonly<Node>, ctx: ExprEvalCtx): vo
 }
 
 // ===== Discover phase: push leaf results or Emit + children =====
+
+function dispatchedName(g: CGen, facts: Readonly<CEmissionFacts>, idSym: Readonly<Symbol>, calleeName: string): string {
+	const dispatched = facts.dispatchOverrides;
+	if (dispatched == null) throw new Error(`internal: '${idSym.name}' is emitted before the dispatch table reached emission`);
+	const ovSyms = dispatched.readonlyGet(idSym);
+	if (ovSyms == null) return calleeName;
+	const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
+	return dn != "" ? dn : calleeName;
+}
 
 function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	if (node == null) {
@@ -1103,7 +1110,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			&& node.nodeType != null) {
 			// Use the module-qualified name so the extern matches the defining
 			// module's declaration at link time (both sides emit the same C symbol).
-			const sName = mangledGlobalName(idSym, referenceName(idSym, d.name));
+			const sName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name));
 			if (!nameSetHas(g.declaredGlobals, sName)) {
 				const cType = getTypeDesc(g, node.nodeType);
 				// The defining module emits a Solana rodata const as C `const`;
@@ -1120,25 +1127,13 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		} else if (idSym != null && idSym.symbolKind == SymbolKind.Function) {
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
-			const calleeName = mangledFunctionName(idSym, referenceName(idSym, d.name), idSym.overloadIdx);
+			const calleeName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name), idSym.overloadIdx);
 			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != ""
 					&& (idSym.modulePath != g.modulePath || copiesInline(g, idSym))) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
-			let emitted = calleeName;
-			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual) {
-				const de = dispatchEntryFor(idSym);
-				if (de != null && !de.overloaded) {
-					const ovs = dispatchOverridesFor(de.classSym, de.methodName);
-					if (ovs.length > 0) {
-						const ovSyms: Symbol[] = [];
-						for (const oe of ovs) { ovSyms.push(oe.sym); }
-						const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
-						if (dn != "") emitted = dn;
-					}
-				}
-			}
-			ctx.results.push(emitted);
+			const dispatches = g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch);
+			ctx.results.push(dispatches ? dispatchedName(g, g.emissionFacts, idSym, calleeName) : calleeName);
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
@@ -1159,7 +1154,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 					: (nt.kind == TypeKind.EnumLiteral && nt.typeReturn != null && nt.typeReturn.kind == TypeKind.Enum ? nt.typeReturn : null);
 				if (enumT != null && d.name.startsWith(enumT.typeName + "_")) {
 					const member = d.name.slice(enumT.typeName.length + 1, d.name.length);
-					cName = mangledTypeName(enumT.sym, enumT.typeName) + "_" + mangle(member);
+					cName = mangledTypeName(g.emissionFacts.moduleNameRoots!, enumT.sym, enumT.typeName) + "_" + mangle(member);
 				} else {
 					cName = safe;
 				}
@@ -1169,7 +1164,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				// cross-module extern block emits. isModuleGlobalVar already excludes
 				// enum members (they are SymbolKind.EnumMember, not Variable), so we
 				// don't need a nodeType-based guard here.
-				cName = mangledGlobalName(idSym, referenceName(idSym, d.name));
+				cName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name));
 				if (idSym != null && hasFlag(idSym, SymbolFlag.StaticLocal) && node.nodeType != null && !nameSetHas(g.declaredGlobals, cName)) {
 					addLine(sec(g, CSection.GlobalVars), `static ${getTypeDesc(g, node.nodeType)} ${cName};`);
 					nameSetAdd(g.declaredGlobals, cName);
@@ -1347,14 +1342,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			const target = objLitTarget(dest, shape);
 			if (shape.unionWrapIdx >= 0) emitStmtsLine(p, `${dest}._tag = ${shape.unionWrapIdx};`);
 			emitStmtsLine(p, `memset(&${target}, 0, sizeof(${shape.cType}));`);
-			for (let i = 0; i < n; i += 1) {
-				if (d.properties[i].kind != NodeKind.ObjectLiteral || shape.fieldsType == null) continue;
-				const ft = getProperty(shape.fieldsType, d.keys[i]);
-				if (!isUnresolvedType(ft) && buildsInPlace(g, d.properties[i], getTypeDesc(g, ft))) {
-					ctx.destNodes.push(d.properties[i]);
-					ctx.destNames.push(`${target}.${mangleFieldName(d.keys[i])}`);
-				}
-			}
+			claimFieldsInPlace(g, node, objLitFieldsType(node, shape.unionWrapIdx), target, ctx);
 		}
 		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
 		// Push children in reverse order
@@ -1393,19 +1381,14 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = classInitCName(cName);
-			const ctorChildren = ctorFormalTypes(node.resolvedSym);
+			const routineType: Readonly<Type | null> = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
+			const initType = routineType != null && routineType.kind == TypeKind.Function ? routineType : null;
 			const ctorProtoKey = "proto:" + initName;
-			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
+			if (initType != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
-				const initParams: Type[] = [node.nodeType];
-				const initNames: string[] = ["this"];
-				for (let cpi = 0; cpi < ctorChildren.length; cpi += 1) {
-					initParams.push(ctorChildren[cpi]);
-					initNames.push("p" + cpi.toString());
-				}
-				addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, createFunction(initParams, initNames, voidType()), null, 0, false) + ";");
+				addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, initType, null, 0, false) + ";");
 			}
-			if (ctorChildren == null && d.newArguments.length > 0) {
+			if (initType == null && d.newArguments.length > 0) {
 				addCGenError(g, `internal: the constructor of '${d.newCallee.resolvedSym.name}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			// The arguments are evaluated before the object exists, so one that raises leaves nothing to free.
@@ -1413,8 +1396,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
 				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
-				if (ctorChildren != null && ai < ctorChildren.length) {
-					argSnippet = shimCallArg(g, p, argSnippet, ctorChildren[ai], argNode, 0, ai);
+				if (initType != null && ai + 1 < initType.typeChildren.length) {
+					argSnippet = shimCallArg(g, p, argSnippet, initType.typeChildren[ai + 1], argNode, 0, ai);
 				}
 				initArgs = initArgs + ", " + argSnippet;
 			}
@@ -1424,7 +1407,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			initArgs = newTmp + initArgs;
 			emitStmtsLine(p, `${initName}(${initArgs});`);
-			if (!p.suppressRaiseCheck && newCanRaise(node)) {
+			if (!p.suppressRaiseCheck && inferredCallRaises(node)) {
 				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
 			}
 			ctx.results.push(newTmp);
@@ -1502,21 +1485,21 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			&& (cd.callee.data as IdentifierData).name == "super"
 			&& cd.callee.resolvedSym != null) {
 		const parentCtor = cd.callee.resolvedSym;
-		const parentChildren = ctorFormalTypes(parentCtor);
-		if (parentChildren == null) {
+		const parentType: Readonly<Type | null> = parentCtor.symbolType;
+		if (parentType == null || parentType.kind != TypeKind.Function) {
 			addCGenError(g, `internal: super() reached codegen without a parent constructor signature at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return;
 		}
-		const parentThis = parentCtor.symbolType.typeChildren[0];
+		const parentThis = parentType.typeChildren[0];
 		const parentName = getTypeDesc(g, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn : parentThis);
 		if (parentName != "") {
 			const parentInitName = classInitCName(parentName);
 			const parentProtoKey = "proto:" + parentInitName;
-			if (parentChildren != null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
+			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
 				let parentProtoParams = `${parentName}* this`;
-				for (let ppi = 0; ppi < parentChildren.length; ppi += 1) {
-					parentProtoParams = parentProtoParams + ", " + getTypeDesc(g, parentChildren[ppi]);
+				for (let ppi = 1; ppi < parentType.typeChildren.length; ppi += 1) {
+					parentProtoParams = parentProtoParams + ", " + getTypeDesc(g, parentType.typeChildren[ppi]);
 				}
 				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
 			}
@@ -1593,8 +1576,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 
 // ===== Emit phase: combine child results =====
 
-function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
-	const node = item.node;
+function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const kind = node.kind;
 	const cc = item.childCount;
 	const tag = item.tag;
@@ -1611,7 +1593,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const isEnumDiscWrite = ut != null && ut.kind == TypeKind.Union && isDiscriminatedUnion(ut) && getDiscriminantName(ut) == md.property
 				&& enumTagMembers(g, node, ut).length > 0;
 			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && (literalDiscriminantOf(ut) == md.property || isEnumDiscWrite)) {
-				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayNameUnprofiled(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 		}
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
@@ -1694,11 +1676,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == "instanceof") {
 			if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) {
-				addCGenError(g, "instanceof requires RTTI, unavailable under --gc=manual", 0, 0);
+				addCGenError(g, "instanceof requires RTTI, unavailable under --mm=manual", 0, 0);
 				ctx.results.push("false");
 				return;
 			}
-			let target: Type | null = d.right.resolvedSym != null ? d.right.resolvedSym.symbolType : d.right.nodeType;
+			let target: Readonly<Type | null> = d.right.resolvedSym != null ? d.right.resolvedSym.symbolType : d.right.nodeType;
 			if (target != null && target.kind == TypeKind.Ref && target.typeReturn != null) target = target.typeReturn;
 			if (target == null || target.kind != TypeKind.Struct) {
 				const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
@@ -1768,16 +1750,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Module) {
 			const nsSym = node.resolvedSym;
 			if (nsSym != null && nsSym.symbolKind == SymbolKind.Function) {
-				const fnName = mangledFunctionName(nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
+				const fnName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
 				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
 				ctx.results.push(fnName);
 			} else if (nsSym != null && isTypeSymbol(nsSym)) {
-				ctx.results.push(mangledGlobalName(nsSym, referenceName(nsSym, d.property)));
+				ctx.results.push(mangledGlobalName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property)));
 			} else if (nsSym != null) {
 				// Constants/variables: module-qualified name so the extern matches
 				// the defining module's declaration. Property name is the original
 				// identifier post-alias-unwrap (handled inside mangledGlobalName).
-				const sName = mangledGlobalName(nsSym, referenceName(nsSym, d.property));
+				const sName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property));
 				if (node.nodeType != null && !nameSetHas(g.declaredGlobals, sName)) {
 					const cType = getTypeDesc(g, node.nodeType);
 					addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -1792,7 +1774,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			const staticCName = staticFieldCName(node.resolvedSym);
+			const staticCName = staticFieldCName(g.emissionFacts.moduleNameRoots!, node.resolvedSym);
 			// Declared in every module that reads it. The owning module also defines
 			// it, and an extern next to the definition is legal C — so this needs no
 			// knowledge of which module we are in, which a prelude symbol cannot give.
@@ -1891,13 +1873,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// unique / same-offset shared fields, which the checker now enforces).
 			let varIdx = -1;
 			if (mainDeclTy != null && mainDeclTy != objType) {
-				const subIdx = findVariantByFieldName(objType, d.property);
+				const subIdx = findVariantByFieldNameUnprofiled(objType, d.property);
 				if (subIdx >= 0) varIdx = duVariantIndexOfType(mainDeclTy, objType.typeChildren[subIdx]);
 			}
 			if (varIdx < 0 && node.resolvedSym != null && node.resolvedSym.duVariantSlot > 0) {
 				varIdx = node.resolvedSym.duVariantSlot - 1;
 			}
-			if (varIdx < 0) varIdx = findVariantByFieldName(objType, d.property);
+			if (varIdx < 0) varIdx = findVariantByFieldNameUnprofiled(objType, d.property);
 			if (varIdx >= 0) {
 				ctx.results.push(`${obj}${acc}v${varIdx}${variantSlotAccess(mainDeclTy != null ? mainDeclTy : objType, varIdx)}${field}`);
 				return;
@@ -1917,7 +1899,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (walkObj != null && walkObj.resolvedSym != null
 				&& (walkObj.kind == NodeKind.Identifier || walkObj.kind == NodeKind.MemberExpr)) {
-			let declTy: Type | null = walkObj.resolvedSym.symbolType;
+			let declTy: Readonly<Type | null> = walkObj.resolvedSym.symbolType;
 			while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
 				declTy = declTy.typeReturn;
 			}
@@ -1934,9 +1916,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					declVarIdx = node.resolvedSym.duVariantSlot - 1;
 				}
 				if (declVarIdx < 0 && isLitDisc) {
-					addCGenError(g, `internal: discriminant '${d.property}' of '${typeDisplayName(declTy)}' read through a narrowed variant with no slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+					addCGenError(g, `internal: discriminant '${d.property}' of '${typeDisplayNameUnprofiled(declTy)}' read through a narrowed variant with no slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 				}
-				if (declVarIdx < 0 && !isLitDisc) declVarIdx = findVariantByFieldName(declTy, d.property);
+				if (declVarIdx < 0 && !isLitDisc) declVarIdx = findVariantByFieldNameUnprofiled(declTy, d.property);
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
@@ -1961,7 +1943,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					} else if (idSym != null && idSym.nativeName != "") {
 						cName = idSym.nativeName;
 					} else if (isModuleGlobalVar(idSym)) {
-						cName = mangledGlobalName(idSym, referenceName(idSym, rawName));
+						cName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, rawName));
 					} else {
 						const mapped = lookupLocalName(p, safe);
 						cName = mapped != "" ? mapped : safe;
@@ -2059,7 +2041,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${litConvCall(g, `${tmp}.value`, litTarget)}, .present=true} : (${targetC}){0})`);
 				return;
 			}
-			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayName(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayNameUnprofiled(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
 			ctx.results.push("MS_NIL");
 			return;
 		}
@@ -2101,13 +2083,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const unionName = getTypeDesc(g, unionType);
 			let varIdx = -1;
 			if (srcType != null && srcType.kind == TypeKind.Struct && srcType.typeNames != null) {
-				varIdx = findUnionVariant(unionType, srcType.typeNames, srcType.typeChildren != null ? srcType.typeChildren : []);
+				varIdx = srcType.typeChildren != null ? findUnionVariant(unionType, srcType.typeNames, srcType.typeChildren) : findUnionVariant(unionType, srcType.typeNames, []);
 			}
 			if (varIdx < 0 && d.asExpr != null && d.asExpr.kind == NodeKind.ObjectLiteral) {
 				const litData = d.asExpr.data as ObjectLiteralData;
 				if (litData.keys != null && litData.keys.length > 0) {
 					const keyArr: string[] = [];
-					const typeArr: Type[] = [];
+					const typeArr: Cursor<Readonly<Type>>[] = [];
 					for (let ki = 0; ki < litData.keys.length; ki += 1) {
 						keyArr.push(litData.keys[ki]);
 						if (ki < litData.properties.length && litData.properties[ki] != null && litData.properties[ki].nodeType != null) {
@@ -2151,7 +2133,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const fromCarrier = d.asExpr.nodeType;
 			if (isMaybeType(node.nodeType) && isMaybeType(fromCarrier) && node.nodeType.typeReturn != null && fromCarrier.typeReturn != null
 				&& getTypeDesc(g, node.nodeType.typeReturn) != getTypeDesc(g, fromCarrier.typeReturn)) {
-				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayName(fromCarrier) + " to " + typeDisplayName(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayNameUnprofiled(fromCarrier) + " to " + typeDisplayNameUnprofiled(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
 				ctx.results.push("MS_NIL");
 				return;
 			}
@@ -2326,7 +2308,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 	// CallExpr
 	if (kind == NodeKind.CallExpr) {
-		emitCallExpr(g, p, item, ctx);
+		emitCallExpr(g, p, node, item, ctx);
 		return;
 	}
 
@@ -2371,7 +2353,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const cType = shape.cType;
 			const isClassObj = shape.isClassObj;
 			const unionWrapName = shape.unionWrapName;
-			const unionWrapType = shape.unionWrapType;
 			const unionWrapIdx = shape.unionWrapIdx;
 			const isRefUnion = shape.isRefUnion;
 			if (cType != "") {
@@ -2404,11 +2385,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}
-				const owner = shape.fieldsType != null ? peelToStructOrUnion(shape.fieldsType) : null;
+				const owner = peelToStructOrUnion(objLitFieldsType(node, shape.unionWrapIdx));
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
-					if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, d.keys[i]))) {
+					if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, fieldTypeView(owner, d.keys[i]))) {
 						if (d.properties[i].kind != NodeKind.BooleanLiteral) emitStmtsLine(p, `(void)(${val});`);
 						i += 1;
 						continue;
@@ -2418,13 +2399,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
 					const slot = `${tmpName}${access}${mangleFieldName(d.keys[i])}`;
 					if (d.properties[i].kind != NodeKind.NullLiteral && val != slot) {
-						let assignVal = val;
-						const fieldU = litFieldPrimitiveUnion(node, d.keys[i]);
-						if (fieldU != null) {
-							const mIdx = primitiveUnionMemberIdx(fieldU, d.properties[i].nodeType);
-							if (mIdx >= 0) assignVal = wrapPrimitiveUnion(g, fieldU, mIdx, val);
-						}
-						emitStmtsLine(p, `${slot} = ${assignVal};`);
+						emitStmtsLine(p, `${slot} = ${wrapLitFieldValue(g, node, d.keys[i], d.properties[i].nodeType, val)};`);
 					}
 					i += 1;
 				}
@@ -2436,7 +2411,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), ${typeInfoRef(g, unionWrapType)});`);
+					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), ${typeInfoRef(g, objLitUnionWrapType(node, shape.unionWrapIdx))});`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
 					ctx.results.push(refTmp);
@@ -2503,7 +2478,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 // Member index in a primitive union for a value of type vt, matched by runtime
 // family (every numeric kind is one "number" member at runtime).
-function primitiveUnionMemberIdx(u: Type, vt: Type | null): number {
+function primitiveUnionMemberIdx(u: Readonly<Type>, vt: Readonly<Type | null>): number {
 	if (vt == null || u.typeChildren == null) return -1;
 	let i = 0;
 	while (i < u.typeChildren.length) {
@@ -2522,7 +2497,7 @@ function primitiveUnionMemberIdx(u: Type, vt: Type | null): number {
 
 // Wrap a C value expression into a tagged primitive-union compound literal.
 // Numeric payloads get an explicit cast (float64 literal → float member).
-function wrapPrimitiveUnion(g: CGen, u: Type, idx: number, valC: string): string {
+function wrapPrimitiveUnion(g: CGen, u: Readonly<Type>, idx: number, valC: string): string {
 	const unionName = getTypeDesc(g, u);
 	const member = u.typeChildren[idx];
 	let payload = valC;
@@ -2535,11 +2510,19 @@ function wrapPrimitiveUnion(g: CGen, u: Type, idx: number, valC: string): string
 // Declared union type of an object-literal field, or null when the field is
 // not primitive-union-typed. All-strlit unions are msString-carried (no _tag)
 // — they must NOT wrap.
-function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Type | null {
+function wrapLitFieldValue(g: CGen, node: Readonly<Node>, key: string, vt: Readonly<Type | null>, valC: string): string {
+	const u = litFieldPrimitiveUnion(node, key);
+	const mIdx = u != null ? primitiveUnionMemberIdx(u, vt) : -1;
+	return mIdx >= 0 ? wrapPrimitiveUnion(g, u!, mIdx, valC) : valC;
+}
+
+function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Readonly<Type | null> {
 	if (node.nodeType == null) return null;
-	const ft = getProperty(node.nodeType, key);
-	if (isTagCarriedUnion(ft)) return ft;
-	return null;
+	return tagCarriedOrNull(fieldTypeView(node.nodeType, key));
+}
+
+function tagCarriedOrNull(ft: Readonly<Type>): Readonly<Type | null> {
+	return isTagCarriedUnion(ft) ? ft : null;
 }
 
 // typeof runtime lowering. Primitive unions dispatch on _tag; Maybe adds a
@@ -2561,7 +2544,7 @@ function genTypeofExpr(g: CGen, opNode: Readonly<Node>, opC: string): string {
 	return typeofConst(g, t);
 }
 
-function typeofTagSwitch(g: CGen, u: Type, valC: string): string {
+function typeofTagSwitch(g: CGen, u: Readonly<Type>, valC: string): string {
 	let out = "";
 	let close = 0;
 	let i = 0;
@@ -2579,7 +2562,7 @@ function typeofTagSwitch(g: CGen, u: Type, valC: string): string {
 	return out;
 }
 
-function typeofConst(g: CGen, t: Type | null): string {
+function typeofConst(g: CGen, t: Readonly<Type | null>): string {
 	return typeofStr(g, typeofTagOf(t));
 }
 
@@ -2609,7 +2592,7 @@ function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
 	emitStmtsLine(p, `(void)(${arg});`);
 }
 
-function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
+function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Readonly<Type>, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
 	const fnExpr = callee + ".fn";
@@ -2665,7 +2648,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
-function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, t: Type, cType: string): string {
+function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, t: Readonly<Type>, cType: string): string {
 	const dest = destOf(ctx, node);
 	if (dest != "") return dest;
 	const tmp = getTemp(p, cType);
@@ -2673,7 +2656,7 @@ function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, t: Type, cTy
 	return tmp.snippet;
 }
 
-function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
+function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, calleeName: string, argsStr: string, retType: Readonly<Type | null>, funcType: Readonly<Type | null>): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
 		const slot = nrvoSlot(p, ctx, node, retType, getTypeDesc(g, retType));
 		let nrvoArgs = "&" + slot;
@@ -2693,18 +2676,17 @@ enum CallMagic {
 	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
 	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
+	OrcDisownValue,
 }
 
-function closureFunctionSym(node: Readonly<Node>): Symbol | null {
+function closureFunctionSym(node: Readonly<Node>): Readonly<Symbol | null> {
 	if (node.kind == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
-		const d = node.data as ObjectLiteralData;
-		return d.properties.length > 0 ? d.properties[0].resolvedSym : null;
+		return (node.data as ObjectLiteralData).properties.length > 0 ? (node.data as ObjectLiteralData).properties[0].resolvedSym : null;
 	}
-	const sym = node.resolvedSym;
-	return sym != null && sym.symbolKind == SymbolKind.Function ? sym : null;
+	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function ? node.resolvedSym : null;
 }
 
-function callMagicOf(sym: Symbol | null): CallMagic {
+function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 	if (sym == null || sym.builtinKind == "") return CallMagic.None;
 	return match (sym.builtinKind) {
 		"StringConcatArr" => CallMagic.StringConcatArr,
@@ -2722,12 +2704,12 @@ function callMagicOf(sym: Symbol | null): CallMagic {
 		"SpawnInto" => CallMagic.SpawnInto,
 		"WaitForStruct" => CallMagic.WaitForStruct,
 		"FutureThenBoxed" => CallMagic.FutureThenBoxed,
+		"OrcDisownValue" => CallMagic.OrcDisownValue,
 		_ => CallMagic.None,
 	};
 }
 
-function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
-	const node = item.node;
+function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const cd = node.data as CallExprData;
 	const cc = item.childCount;
 	const tag = item.tag;
@@ -2735,9 +2717,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	if (tag == TAG_CALL_OVERLOAD) {
 		// Overloaded: all cc children are args (no callee child).
-		const w = resolveOverloadWinner(sym!, cd.resolvedOverloadIdx);
-		const emitSym = w.winnerSym;
-		const emitIdx = w.winnerIdx;
+		const emitIdx = resolveOverloadWinner(sym!, cd.resolvedOverloadIdx);
+		const emitSym = overloadAt(sym!, emitIdx);
 		// ABI shim uses the EMITTED (impl) function type — that's the
 		// actual C function signature we're calling into.
 		let ovType = emitSym != null && emitSym.symbolType != null
@@ -2776,7 +2757,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			return;
 		}
 		const ovIdx = emitIdx >= 0 ? emitIdx : 0;
-		const ovCalleeName = mangledFunctionName(emitSym, emitSym.name, ovIdx);
+		const ovCalleeName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, emitSym, emitSym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, emitSym != null ? emitSym : sym);
 		const ovRet = (ovType != null && ovType.kind == TypeKind.Function) ? ovType.typeReturn : null;
@@ -2817,7 +2798,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
 	// whose nodeType is a struct). Fall back to getCalleeFuncType which
 	// peeks inside the closure pair's `fn` property's nodeType.
-	let calleeType = sym != null && sym.symbolType != null ? sym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
+	let calleeType: Readonly<Type | null> = sym != null && sym.symbolType != null ? sym.symbolType : cd.callee.nodeType;
 	if (calleeType == null || calleeType.kind != TypeKind.Function) {
 		const cpType = getCalleeFuncType(node);
 		if (cpType != null) calleeType = cpType;
@@ -2854,6 +2835,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Closure calls generate inline if/else dispatch on env != NULL.
 	// No forward declarations — closure is a self-contained struct value.
 	if (tag == TAG_CALL_CLOSURE) {
+		if (calleeType == null) throw new Error(`internal: closure call '${callee}' has no callee type`);
 		genClosureCall(g, p, callee, argsStr, calleeType, node, ctx);
 		return;
 	}
@@ -2907,6 +2889,12 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Ref<Array<T>> reference semantics. The cell's TypeInfo.destroyFn frees the
 	// array payload when rc hits 0; the DRC then frees the cell. The source value
 	// is neutralized (move) so the boxed payload has a single owner.
+	if (magic == CallMagic.OrcDisownValue && cd.arguments.length >= 1) {
+		const addrArg = argsStr.length > 0 && argsStr.charAt(0) == "&" ? argsStr : "&(" + argsStr + ")";
+		ctx.results.push(`msOrcDisownValue(${addrArg}, ${valueCustodyRef(g, cd.arguments[0].nodeType)})`);
+		return;
+	}
+
 	if (magic == CallMagic.BoxRefArray && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
@@ -3018,7 +3006,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
 		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
 		addLine(sec(g, CSection.Types), `#endif`);
-		ctx.results.push(`msSpawnInto(${argsStr}, sizeof(${innerC}), offsetof(${futStructName}, value))`);
+		ctx.results.push(`${callee}(${argsStr}, sizeof(${innerC}), offsetof(${futStructName}, value))`);
 		return;
 	}
 
@@ -3065,22 +3053,15 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// call emission. When the transform dispatched Promise.all to the typed variant
 	// `msPromiseAllFor_msFuture_<T>`, ensure the matching runtime instance is emitted
 	// in this translation unit. The #ifndef guard inside emitPromiseAllInstance
-	// dedups across repeat calls. The element type T is recovered from the argument's
-	// nodeType (`Promise<T>[]`) via its `typeReturn` (the element Promise<T>) and
-	// awaitedType.
+	// dedups across repeat calls.
 	let finalCallee = callee;
 	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType != null
 		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "PromiseAllFor") {
-		let argArrType = cd.arguments[0].nodeType!;
-		if (argArrType.kind == TypeKind.Ref && argArrType.typeReturn != null) argArrType = argArrType.typeReturn;
-		const elementPromise = argArrType.typeReturn;
-		if (elementPromise != null) {
-			const innerT = awaitedType(elementPromise);
-			if (innerT != null) {
-				const typedName = ensurePromiseAllInstance(g, innerT);
-				if (typedName != "") finalCallee = typedName;
-			}
-		}
+		let resultArr = node.nodeType != null ? awaitedType(node.nodeType) : null;
+		if (resultArr != null && resultArr.kind == TypeKind.Ref) resultArr = resultArr.typeReturn;
+		if (resultArr == null || resultArr.kind != TypeKind.Array) throw new Error(`internal: typed Promise.all call does not resolve to an array: ${typeDisplayNameUnprofiled(node.nodeType)}`);
+		const typedName = ensurePromiseAllInstance(g, resultArr);
+		if (typedName != "") finalCallee = typedName;
 	}
 
 	emitNrvoOrValueCall(g, p, ctx, node, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
@@ -3098,7 +3079,7 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 // if-chain, most-derived-first, falling through to the base implementation.
 // C emission is whole-program-fresh every build, so the chain always reflects
 // the complete override set even across modules.
-function ensureMethodDispatcher(g: CGen, baseSym: Symbol, calleeName: string, overrides: Symbol[]): string {
+function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: string, overrides: Readonly<Symbol[]>): string {
 	const ft = baseSym.symbolType;
 	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length == 0) return "";
 	const dispName = "msDisp_" + calleeName;
@@ -3121,7 +3102,7 @@ function ensureMethodDispatcher(g: CGen, baseSym: Symbol, calleeName: string, ov
 	addLine(s, `static ${retC} ${dispName}(${params}) {`);
 	for (const ov of overrides) {
 		if (ov.symbolType == null || ov.symbolType.typeChildren.length == 0) continue;
-		const ovName = mangledFunctionName(ov, ov.name, ov.overloadIdx);
+		const ovName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, ov, ov.name, ov.overloadIdx);
 		if (ov.modulePath != null && ov.modulePath != "" && ov.modulePath != g.modulePath) {
 			ensureCrossModuleProto(g, ovName, ov.symbolType, ov);
 		}
@@ -3178,7 +3159,7 @@ function mapBinaryOp(g: CGen, op: string): string {
 	return mapped;
 }
 
-function shiftOperandBits(t: Type | null): int32 {
+function shiftOperandBits(t: Readonly<Type | null>): int32 {
 	if (t == null) return 32;
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return shiftOperandBits(t.typeReturn);
 	return match (t.kind) {
@@ -3189,7 +3170,7 @@ function shiftOperandBits(t: Type | null): int32 {
 	};
 }
 
-function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, left: string, right: string): string {
+function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Readonly<Type | null>, left: string, right: string): string {
 	const bits = shiftOperandBits(leftType);
 	const unsignedType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
@@ -3198,7 +3179,7 @@ function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, lef
 
 // An 8- or 16-bit shift is computed in the promoted int, so it wraps at the
 // left operand's width before it widens to the result type.
-function atLeftWidth(g: CGen, leftType: Type | null, bits: int32, resultType: string): string {
+function atLeftWidth(g: CGen, leftType: Readonly<Type | null>, bits: int32, resultType: string): string {
 	if (bits >= 32) return "";
 	const lt = integerTypeOf(leftType);
 	if (lt == null) return "";
@@ -3206,21 +3187,23 @@ function atLeftWidth(g: CGen, leftType: Type | null, bits: int32, resultType: st
 	return leftC == resultType ? "" : `(${leftC})`;
 }
 
-function integerTypeOf(t: Type | null): Type | null {
+function integerTypeOf(t: Type | null): Type | null;
+function integerTypeOf(t: Readonly<Type | null>): Readonly<Type | null>;
+function integerTypeOf(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return integerTypeOf(t.typeReturn);
 	return isIntegerType(t) ? t : null;
 }
 
-function isShiftOperand(t: Type | null): boolean {
+function isShiftOperand(t: Readonly<Type | null>): boolean {
 	return t == null || integerTypeOf(t) != null;
 }
 
-function isUnsignedInteger(t: Type): boolean {
+function isUnsignedInteger(t: Readonly<Type>): boolean {
 	return t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64;
 }
 
-function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | null, left: string, right: string): string {
+function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Readonly<Type | null>, left: string, right: string): string {
 	const bits = shiftOperandBits(leftType);
 	const lt = integerTypeOf(leftType);
 	if (op == ">>" && lt != null && isUnsignedInteger(lt)) return genLogicalShr(g, node, leftType, left, right);
@@ -3230,7 +3213,7 @@ function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | nu
 	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
 }
 
-function genShiftAssign(op: string, leftType: Type | null, left: string, right: string): string {
+function genShiftAssign(op: string, leftType: Readonly<Type | null>, left: string, right: string): string {
 	const bits = shiftOperandBits(leftType);
 	const unsignedType = `uint${bits}_t`;
 	const count = `((${unsignedType})(${right}) & ${bits - 1})`;
@@ -3241,7 +3224,7 @@ function genShiftAssign(op: string, leftType: Type | null, left: string, right: 
 
 // The operands go unsigned so C's promotion to int cannot overflow (uint16 *
 // uint16), and the result wraps at its own width.
-function subIntTypeDesc(g: CGen, t: Type | null): string {
+function subIntTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 	const it = integerTypeOf(t);
 	if (it == null || shiftOperandBits(it) >= 32) return "";
 	return getTypeDesc(g, t);
@@ -3271,9 +3254,16 @@ function hasAddrPrefix(nativeName: string): boolean {
 	return nativeName.length > 0 && nativeName.charAt(0) == "&";
 }
 
-function nativeRefArrayReceiver(receiver: Readonly<Node>): Type | null {
-	let t = receiver.nodeType != null ? peelTransparentInstance(receiver.nodeType) : null;
-	if (t != null && t.kind == TypeKind.Union) t = unwrapRefNullUnion(t);
+function nativeRefArrayReceiver(receiver: Readonly<Node>): Readonly<Type | null> {
+	if (receiver.nodeType == null) return null;
+	return refArrayBehindUnion(peelTransparentInstance(receiver.nodeType));
+}
+
+function refArrayBehindUnion(t: Readonly<Type>): Readonly<Type | null> {
+	return t.kind == TypeKind.Union ? refArrayOrNull(unwrapRefNullUnion(t)) : refArrayOrNull(t);
+}
+
+function refArrayOrNull(t: Readonly<Type | null>): Readonly<Type | null> {
 	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null
 		&& t.typeReturn.kind == TypeKind.Array ? t : null;
 }
@@ -3282,7 +3272,7 @@ function nativeAddressReceiver(g: CGen, p: CProc, snippet: string, receiver: Rea
 	return nativeRefArrayReceiver(receiver) != null ? snippet : safeAddrOf(g, p, snippet, receiver, null);
 }
 
-function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<Node[]>, sym: Symbol): string {
+function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<Node[]>, sym: Readonly<Symbol>): string {
 	const needsAddr = hasAddrPrefix(nativeName);
 	let cName = stripAddrPrefix(nativeName);
 
@@ -3291,14 +3281,14 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 	// receiver to form that pointer; for a Ref the address-of and the implied deref
 	// cancel (the Ref IS the pointer), so pass the receiver through unchanged.
 	const refReceiver = args.length > 0 ? nativeRefArrayReceiver(args[0]) : null;
-	const recvT = refReceiver != null ? refReceiver
+	const recvT: Readonly<Type | null> = refReceiver != null ? refReceiver
 		: args.length > 0 && args[0].nodeType != null ? peelTransparentInstance(args[0].nodeType) : null;
 	const recvIsRefArray = refReceiver != null;
 
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
 	if (recvT != null) {
-		const recvType = recvIsRefArray ? recvT.typeReturn : recvT;
-		if (recvType.kind == TypeKind.Array) {
+		const recvType: Readonly<Type | null> = recvIsRefArray ? recvT.typeReturn : recvT;
+		if (recvType != null && recvType.kind == TypeKind.Array) {
 			if (cName.length >= 9 && cName.slice(0, 9) == "ms_array_") {
 				if (recvType.typeReturn != null) {
 					const ek = recvType.typeReturn.kind;
@@ -3401,8 +3391,10 @@ function exprSnippet(input: string): string {
 	const stmt = pd.programStmts[0];
 	if (stmt.kind != NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
-	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", voidType());
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
+	const p = createProc("test", "void", true);
 	return genExpr(g, p, es.expr);
 }
 
@@ -3476,8 +3468,10 @@ test "a new expression whose type did not resolve is refused, not given a TypeIn
 	assert pr.ok;
 	if (!pr.ok) return;
 	const stmt = (pr.value.data as ProgramData).programStmts[0];
-	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", voidType());
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
+	const p = createProc("test", "void", true);
 	genExpr(g, p, (stmt.data as ExprStmtData).expr);
 	assert g.errors.length == 1;
 	assert g.errors[0].message.contains("TypeInfo");
@@ -3558,8 +3552,10 @@ function exprErrors(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR";
 	const pd = pr.value.data as ProgramData;
 	const es = pd.programStmts[0].data as ExprStmtData;
-	const g = createCGen(null as unknown as CheckerContext, "");
-	genExpr(g, createProc("test", voidType()), es.expr);
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
+	genExpr(g, createProc("test", "void", true), es.expr);
 	let messages = "";
 	for (const e of g.errors) messages = messages + e.message + "\n";
 	return messages;
@@ -3588,8 +3584,10 @@ function lastNewRunsInit(input: string): boolean {
 	if (last.kind != NodeKind.ExprStmt) return false;
 	const newExpr = (last.data as ExprStmtData).expr;
 	if (newExpr.kind != NodeKind.NewExpr) return false;
-	const p = createProc("test", voidType());
-	const tmp = genExpr(createCGen(ctx, "owner.ms"), p, newExpr);
+	const p = createProc("test", "void", true);
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const tmp = genExpr(createCGen(ctx, "owner.ms", alive, facts), p, newExpr);
 	return readProcStmts(p).contains(`_init(${tmp});`);
 }
 

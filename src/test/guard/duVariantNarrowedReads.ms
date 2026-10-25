@@ -3,7 +3,7 @@
 // rejected at check time (pinned in checkPass "string DU subset field outside
 // if is rejected"); this guard pins the runtime side — if/match/chained-member
 // narrowing must return the active variant's value, never reinterpreted bytes.
-// GUARD-JS: narrowing is checker-level; both backends must agree.
+// GUARD-JS
 
 interface RectD { r: int32; w: int32; }
 interface CircD { rad: int32; }

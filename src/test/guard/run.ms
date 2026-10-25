@@ -9,19 +9,28 @@
 //
 // Directives in a probe's header comments (optional):
 //   // GUARD-BALANCE <MangledType>       assert alloc==destroy for that type at exit
-//   // GUARD-BALANCE-ORC <MangledType>   same, but under orc only (cycle leaks are by-design under drc/ARC)
 //   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
 //   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
+//   <code> // GUARD-REFUSED              with GUARD-CHECK-FAIL, at the end of each refused line: an error must be
+//                                        located on that line, so one shape that starts compiling turns the
+//                                        guard red while the others still fail; `// GUARD-WARNED` likewise for a
+//                                        warning. A probe whose errors sit on two or more lines must mark them;
+//                                        GUARD_RECORD_SITES=1 prints the lines each build reports
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
-//   // GUARD-TSAN                        also build --gc=drc --sanitize=thread --cc=clang + run; pass = exit 0 +
+//   // GUARD-TSAN                        also build --sanitize=thread --cc=clang + run; pass = exit 0 +
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
 //   // GUARD-ASAN                        with GUARD-OS bare: also build --sanitize=address --cc=clang and run on the
 //                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
-// The double-destroy abort needs no directive — it is name-agnostic.
+// Any other `// GUARD-<word>` in a probe is red, so a misspelt or unimplemented directive cannot pass silently.
+// The double-destroy abort needs no directive — it is name-agnostic. A balance holds only over a
+// type the probe allocated: a type with no ledger row proves nothing and is red.
 //
-// Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
+// Env: MSC=<path to msc> (default: ./msc, else installed msc); GUARD_ONLY=<name,...> runs those
+// probes only. GUARD_SELFTEST=1 runs selftest/*.ms instead: each fixture breaks one checking rule
+// and names the red it must produce (`// SELFTEST-RED <substr>`); a fixture that stays green, or
+// goes red for another reason, fails the run, because a check that cannot go red checks nothing.
 import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, rename, symlink } from "std/fs";
 
@@ -79,6 +88,7 @@ const HAS_NODE = cmdExists("node");
 
 let fails = 0;
 let passes = 0;
+const failReasons: string[] = [];
 const unscoredOs: string[] = [];
 const unscoredSkips: string[] = [];
 const unscoredTsan: string[] = [];
@@ -91,6 +101,7 @@ function ok(tag: string): void {
 
 function fail(tag: string, why: string): void {
 	fails = fails + 1;
+	failReasons.push(why);
 	console.log(`FAIL ${tag}: ${why}`);
 }
 
@@ -111,6 +122,12 @@ function succeeded(r: ExecFileResult): boolean {
 function status(r: ExecFileResult): string {
 	if (!r.started) return "did not start";
 	return r.signal != 0 ? `signal=${r.signal}` : `exit=${r.exitCode}`;
+}
+
+// A probe that prints GUARD-FAIL names its broken invariant; the bare exit status does not.
+function statusWithReasons(r: ExecFileResult): string {
+	const reasons = lines(r.output).filter((l) => l.startsWith("GUARD-FAIL")).slice(0, 3).map((l) => l.slice("GUARD-FAIL".length, l.length).trim());
+	return reasons.length == 0 ? status(r) : `${status(r)}: ${reasons.join(" | ")}`;
 }
 
 function firstErrorLines(log: string): string {
@@ -159,7 +176,7 @@ function ledgerImbalance(text: string, typeName: string): string {
 			dump = [];
 		}
 	}
-	if (lastDump.length == 0) return `${typeName} alloc=? destroy=?`;
+	if (lastDump.length == 0) return `${typeName} has no ledger row: it was never allocated or its name moved, so its balance proves nothing`;
 	for (const line of lastDump) {
 		const a = fieldOf(line, "alloc=");
 		const d = fieldOf(line, "destroy=");
@@ -174,15 +191,20 @@ interface Probe {
 	name: string;
 	path: string;
 	balance: string[];
-	balanceOrc: string[];
 	testBalance: string[];
 	checkfails: string[];
+	refusedLines: int32[];
+	warnedLines: int32[];
 	wantJs: boolean;
 	wantTsan: boolean;
 	wantAsan: boolean;
 	os: string;
 	osArgs: string[];
+	selftestRed: string;
+	unknownDirectives: string[];
 }
+
+const KNOWN_DIRECTIVES = ["GUARD-BALANCE", "GUARD-TEST-BALANCE", "GUARD-CHECK-FAIL", "GUARD-REFUSED", "GUARD-WARNED", "GUARD-JS", "GUARD-TSAN", "GUARD-OS", "GUARD-ASAN"];
 
 function firstWord(s: string): string {
 	const w = s.trim();
@@ -191,26 +213,33 @@ function firstWord(s: string): string {
 }
 
 function parseDirectives(probe: Probe, src: string): void {
-	const ORC = "// GUARD-BALANCE-ORC";
 	const TEST = "// GUARD-TEST-BALANCE";
 	const BAL = "// GUARD-BALANCE";
 	const CHECK = "// GUARD-CHECK-FAIL ";
 	const OS = "// GUARD-OS ";
-	for (const line of lines(src)) {
-		const orcAt = line.indexOf(ORC);
+	const all = lines(src);
+	for (let i = 0; i < all.length; i++) {
+		const line = all[i];
+		if (!line.trim().startsWith("//")) {
+			if (line.contains("// GUARD-REFUSED")) probe.refusedLines.push((i + 1) as int32);
+			if (line.contains("// GUARD-WARNED")) probe.warnedLines.push((i + 1) as int32);
+		}
 		const testAt = line.indexOf(TEST);
 		const balAt = line.indexOf(BAL);
-		if (orcAt >= 0) {
-			const tok = firstWord(line.slice(orcAt + ORC.length, line.length));
-			if (tok != "") probe.balanceOrc.push(tok);
-		} else if (testAt >= 0) {
+		if (testAt >= 0) {
 			const tok = firstWord(line.slice(testAt + TEST.length, line.length));
 			if (tok != "") probe.testBalance.push(tok);
 		} else if (balAt >= 0) {
 			const tok = firstWord(line.slice(balAt + BAL.length, line.length));
 			if (tok != "") probe.balance.push(tok);
 		}
+		const marker = line.indexOf("// GUARD-");
+		if (marker >= 0) {
+			const word = firstWord(line.slice(marker + 3, line.length));
+			if (!KNOWN_DIRECTIVES.includes(word)) probe.unknownDirectives.push(`${word} at line ${i + 1}`);
+		}
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
+		if (line.startsWith("// SELFTEST-RED ")) probe.selftestRed = line.slice("// SELFTEST-RED ".length, line.length).trim();
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
 		if (line.startsWith("// GUARD-ASAN")) probe.wantAsan = true;
@@ -229,18 +258,21 @@ function readFileOr(path: string, dflt: string): string {
 	return r.ok ? r.value : dflt;
 }
 
-function discoverProbes(): Probe[] {
+function discoverProbes(dir: string): Probe[] {
+	const only = envOr("GUARD_ONLY", "");
+	const wanted = only == "" ? [] : only.split(",");
 	const names: string[] = [];
-	for (const e of readDir(GUARD_DIR)) {
+	for (const e of readDir(dir)) {
 		if (e.endsWith("/") || !e.endsWith(".ms") || e == "run.ms") continue;
-		names.push(e.slice(0, e.length - 3));
+		const name = e.slice(0, e.length - 3);
+		if (wanted.length == 0 || wanted.includes(name)) names.push(name);
 	}
 	names.sort();
 	const probes: Probe[] = [];
 	for (const name of names) {
 		const probe: Probe = {
-			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
+			name, path: `${dir}/${name}.ms`,
+			balance: [], testBalance: [], checkfails: [], refusedLines: [], warnedLines: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [], selftestRed: "", unknownDirectives: [],
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -278,22 +310,77 @@ function binExecutable(binPath: string): string {
 	return "";
 }
 
-function checkDiagnostics(tag: string, log: string, wants: string[]): void {
+function stripAnsi(text: string): string {
+	let out = "";
+	let i = 0;
+	while (i < text.length) {
+		if (text.charCodeAt(i) == 27) {
+			while (i < text.length && text.charAt(i) != "m") i += 1;
+			i += 1;
+			continue;
+		}
+		out = out + text.charAt(i);
+		i += 1;
+	}
+	return out;
+}
+
+// The source lines of `path` that the build reports a diagnostic of `severity` on.
+function diagnosticLines(log: string, path: string, severity: string): int32[] {
+	const out: int32[] = [];
+	let current = "";
+	const marker = `--> ${path}:`;
+	for (const line of lines(stripAnsi(log))) {
+		const t = line.trim();
+		if (t.startsWith("error")) current = "error";
+		else if (t.startsWith("warning")) current = "warning";
+		const at = t.indexOf(marker);
+		if (at < 0 || current != severity) continue;
+		const rest = t.slice(at + marker.length, t.length);
+		const colon = rest.indexOf(":");
+		const n = (colon < 0 ? rest : rest.slice(0, colon)).parseInt() as int32;
+		if (!out.includes(n)) out.push(n);
+	}
+	return out;
+}
+
+const RECORD_SITES = envOr("GUARD_RECORD_SITES", "") == "1";
+
+function checkDiagnostics(probe: Probe, lane: string, tag: string, log: string): void {
 	let good = true;
-	for (const want of wants) {
+	for (const want of probe.checkfails) {
 		if (want != "" && !log.contains(want)) {
 			fail(tag, `missing diagnostic: ${want}`);
 			good = false;
 		}
 	}
+	const errorsAt = diagnosticLines(log, probe.path, "error");
+	const warningsAt = diagnosticLines(log, probe.path, "warning");
+	if (RECORD_SITES) console.log(`     record ${probe.name} [${lane}]: errors at ${errorsAt.join(" ")}; warnings at ${warningsAt.join(" ")}`);
+	for (const n of probe.refusedLines) {
+		if (!errorsAt.includes(n)) {
+			fail(tag, `line ${n} is marked GUARD-REFUSED but the build reports no error there: that shape compiles`);
+			good = false;
+		}
+	}
+	for (const n of probe.warnedLines) {
+		if (!warningsAt.includes(n)) {
+			fail(tag, `line ${n} is marked GUARD-WARNED but the build reports no warning there`);
+			good = false;
+		}
+	}
+	if (probe.refusedLines.length == 0 && probe.warnedLines.length == 0 && errorsAt.length > 1) {
+		fail(tag, `errors on ${errorsAt.length} lines (${errorsAt.join(", ")}) and none marked GUARD-REFUSED: a shape that starts compiling would go unnoticed`);
+		good = false;
+	}
 	if (good) ok(tag);
 }
 
-function runGcLane(probe: Probe, gc: string): void {
-	const tag = `${probe.name} [${gc}]`;
-	const bin = `${BIN_DIR}/${probe.name}.${gc}`;
-	const buildLog = `${LOG_DIR}/${probe.name}.${gc}.build`;
-	const b = buildProbe(probe, gc, ["build", probe.path, `--gc=${gc}`, "--passC=-DMS_DRC_LEDGER", `--output=${bin}`], buildLog);
+function runDrcLane(probe: Probe): void {
+	const tag = `${probe.name} [drc]`;
+	const bin = `${BIN_DIR}/${probe.name}.drc`;
+	const buildLog = `${LOG_DIR}/${probe.name}.drc.build`;
+	const b = buildProbe(probe, "drc", ["build", probe.path, "--passC=-DMS_DRC_LEDGER", `--output=${bin}`], buildLog);
 
 	if (probe.checkfails.length > 0) {
 		// Compiling clean means a checker rule was silently dropped.
@@ -301,7 +388,7 @@ function runGcLane(probe: Probe, gc: string): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, "drc", tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -315,8 +402,8 @@ function runGcLane(probe: Probe, gc: string): void {
 		return;
 	}
 	const run = execFileResult(exe, []);
-	writeFile(`${LOG_DIR}/${probe.name}.${gc}.out`, run.output);
-	writeFile(`${LOG_DIR}/${probe.name}.${gc}.err`, run.errorOutput);
+	writeFile(`${LOG_DIR}/${probe.name}.drc.out`, run.output);
+	writeFile(`${LOG_DIR}/${probe.name}.drc.err`, run.errorOutput);
 	const skipped = firstLineContaining(run.output, "GUARD-SKIP");
 	if (succeeded(run) && skipped != "") {
 		unscoredSkips.push(tag);
@@ -325,17 +412,12 @@ function runGcLane(probe: Probe, gc: string): void {
 	}
 	const dd = firstLineContaining(run.errorOutput, "DOUBLE-DESTROY");
 	if (!succeeded(run) || dd != "") {
-		fail(tag, dd != "" ? dd : status(run));
+		fail(tag, dd != "" ? dd : statusWithReasons(run));
 		console.log("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
 		return;
 	}
-	const eff: string[] = [];
-	for (const ty of probe.balance) eff.push(ty);
-	if (gc == "orc") {
-		for (const ty of probe.balanceOrc) eff.push(ty);
-	}
 	let good = true;
-	for (const ty of eff) {
+	for (const ty of probe.balance) {
 		const why = ledgerImbalance(run.errorOutput, ty);
 		if (why != "") {
 			fail(tag, `imbalance ${why}`);
@@ -352,7 +434,7 @@ function runOsLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os}]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}`;
 	const buildLog = `${LOG_DIR}/${probe.name}.${probe.os}.build`;
-	if (probe.balance.length > 0 || probe.balanceOrc.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
+	if (probe.balance.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
 		fail(tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-TEST-BALANCE/GUARD-JS");
 		return;
 	}
@@ -374,7 +456,7 @@ function runOsLane(probe: Probe): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, probe.os, tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -428,7 +510,7 @@ function runOsAsanLane(probe: Probe): void {
 	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
 	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
 	if (report != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
-		fail(tag, report != "" ? report : status(run));
+		fail(tag, report != "" ? report : statusWithReasons(run));
 		return;
 	}
 	ok(tag);
@@ -445,7 +527,7 @@ function runJsLane(probe: Probe): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, "js", tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -472,7 +554,7 @@ function tsanToolchain(): boolean {
 	if (tsanProbed == 0) {
 		const src = `${WORK}/tsanHello.ms`;
 		writeFile(src, `console.log("hi");\n`);
-		const r = execFileResult(MSC, ["build", src, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
+		const r = execFileResult(MSC, ["build", src, "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
 		tsanProbed = succeeded(r) ? 1 : 2;
 	}
 	return tsanProbed == 1;
@@ -481,7 +563,7 @@ function tsanToolchain(): boolean {
 function runTsanLane(probe: Probe): void {
 	const tag = `${probe.name} [tsan]`;
 	const bin = `${BIN_DIR}/${probe.name}.tsan`;
-	const b = buildProbe(probe, "tsan", ["build", probe.path, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
+	const b = buildProbe(probe, "tsan", ["build", probe.path, "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
 	if (!succeeded(b)) {
 		if (!tsanToolchain()) {
 			unscoredTsan.push(tag);
@@ -501,7 +583,7 @@ function runTsanLane(probe: Probe): void {
 	writeFile(`${LOG_DIR}/${probe.name}.tsan.out`, merged);
 	const race = firstLineContaining(merged, "WARNING: ThreadSanitizer");
 	if (race != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
-		fail(tag, race != "" ? race : status(run));
+		fail(tag, race != "" ? race : statusWithReasons(run));
 		return;
 	}
 	ok(tag);
@@ -545,7 +627,7 @@ function helloEmitClean(): void {
 	const tag = "helloEmitClean";
 	const dir = freshDir("emit");
 	writeFile(`${dir}/hello_emit.ms`, "console.log(\"hi\");\n");
-	const b = execFileResult(MSC, ["build", "hello_emit.ms", "--gc=drc", `--output=${dir}/hello_emit_bin`], dir);
+	const b = execFileResult(MSC, ["build", "hello_emit.ms", `--output=${dir}/hello_emit_bin`], dir);
 	if (!succeeded(b)) {
 		fail(tag, "build error");
 		return;
@@ -580,7 +662,7 @@ console.log(`${readValue()}`);
 ");
 	// The second build is the one the project cache answers.
 	for (let i = 0; i < 2; i += 1) {
-		const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`], dir);
+		const b = execFileResult(MSC, ["build", "main.ms", `--output=${dir}/main_bin`], dir);
 		if (!succeeded(b)) {
 			fail(tag, "build error");
 			return;
@@ -591,7 +673,7 @@ console.log(`${readValue()}`);
 			if (f.endsWith(".c")) remove(`${dir}/out/debug/${f}`);
 		}
 	}
-	const e = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`, "--emit=c"], dir);
+	const e = execFileResult(MSC, ["build", "main.ms", `--output=${dir}/main_bin`, "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(e));
 	let wrote = 0;
 	if (exists(`${dir}/out/debug`)) {
@@ -632,7 +714,7 @@ function deadFrameEmitsNoHooks(): void {
 		+ "export function* deadGen(label: string): Iterator<string> { const s = label + \"?\"; yield s; yield s; }\n"
 		+ "export function liveClosure(label: string): () => string { let s = label; return (): string => { s = s + \"+\"; return s; }; }\n");
 	writeFile(`${dir}/main.ms`, "import { used, liveClosure } from \"./lib\";\nconst f = liveClosure(\"a\");\nconsole.log(`${used()} ${f()} ${f()}`);\n");
-	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
 	if (!succeeded(b)) {
 		fail(tag, "emit error");
@@ -654,7 +736,7 @@ function deadFrameEmitsNoHooks(): void {
 		fail(tag, "the frame hooks of liveClosure, which main calls, are missing");
 		return;
 	}
-	const r = execFileResult(MSC, ["run", "--gc=drc", "main.ms"], dir);
+	const r = execFileResult(MSC, ["run", "main.ms"], dir);
 	if (!succeeded(r) || !r.output.contains("1 a+ a++")) {
 		fail(tag, `liveClosure printed '${r.output.trim()}', expected '1 a+ a++'`);
 		return;
@@ -670,7 +752,7 @@ function fieldNameKeepsNoRoutine(): void {
 	const sentinel = "routine-named-like-a-field";
 	writeFile(`${dir}/lib.ms`, `export function used(): int32 { return 1; }\nexport function label(): string { return "${sentinel}"; }\n`);
 	writeFile(`${dir}/main.ms`, "import { used } from \"./lib\";\ninterface Tag { label: string; }\nfunction show(t: Tag): string { return t.label; }\nconsole.log(show({ label: \"x\" }) + String(used()));\n");
-	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
 	if (!succeeded(b)) {
 		fail(tag, "emit error");
@@ -683,6 +765,133 @@ function fieldNameKeepsNoRoutine(): void {
 			fail(tag, `${f} emits label() though only a field is named label`);
 			return;
 		}
+	}
+	ok(tag);
+}
+
+function routineBody(text: string, name: string): string {
+	let at = text.indexOf(`int32_t ${name}__`, 0);
+	while (at >= 0 && text.charAt(text.indexOf("\n", at) - 1) != "{") at = text.indexOf(`int32_t ${name}__`, at + 1);
+	if (at < 0) return "";
+	const end = text.indexOf("\nMS_LIB_PRIVATE ", at);
+	return text.slice(at, end < 0 ? text.length : end);
+}
+
+function destroyHelper(text: string, typeInfoLine: string): string {
+	const field = ".destroyFn = ";
+	const at = typeInfoLine.indexOf(field, 0);
+	if (at < 0) return "";
+	const start = at + field.length;
+	const end = typeInfoLine.indexOf(",", start);
+	const slot = typeInfoLine.slice(start, end < 0 ? typeInfoLine.length : end).replace("(msDestroyProc)", "");
+	const adapter = `${slot}(void* dest) { `;
+	const body = text.indexOf(adapter, 0);
+	if (body < 0) return slot;
+	const call = body + adapter.length;
+	return text.slice(call, text.indexOf("(", call));
+}
+
+function refArrayAcyclicEmitsPlainRelease(): void {
+	const tag = "refArrayAcyclicEmitsPlainRelease";
+	const dir = freshDir("refarrayfamily");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/refArrayElementFamily.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	let leafOps = "";
+	let linkOps = "";
+	let acyclicCell = false;
+	let cyclicCell = false;
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		if (leafOps == "") leafOps = routineBody(text, "leafOps");
+		if (linkOps == "") linkOps = routineBody(text, "linkOps");
+		for (const line of lines(text)) {
+			if (!line.contains("RefCellTypeInfo = {")) continue;
+			const helper = destroyHelper(text, line);
+			if (helper == "msAcyclicRefArrayDestroy") acyclicCell = true;
+			if (helper == "msRefArrayDestroy") {
+				if (!line.contains(".isCyclic = MS_TRUE")) {
+					fail(tag, `an acyclic array cell is released by the cyclic helper: ${line.trim()}`);
+					return;
+				}
+				cyclicCell = true;
+			}
+		}
+	}
+	if (!acyclicCell || !cyclicCell) {
+		fail(tag, `array cells: acyclic helper ${acyclicCell}, cyclic helper ${cyclicCell}; both expected`);
+		return;
+	}
+	for (const banned of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
+		if (leafOps.contains(banned)) {
+			fail(tag, `leafOps, over an acyclic class, calls ${banned}`);
+			return;
+		}
+	}
+	for (const want of ["msAcyclicRefArraySetLen(", "msAcyclicRefArraySplice3("]) {
+		if (!leafOps.contains(want)) {
+			fail(tag, `leafOps, over an acyclic class, never calls ${want}`);
+			return;
+		}
+	}
+	for (const want of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
+		if (!linkOps.contains(want)) {
+			fail(tag, `linkOps, over a cyclic class, never calls ${want}`);
+			return;
+		}
+	}
+	ok(tag);
+}
+
+// M7: a value another thread can reach is counted before the call that publishes it. Over the
+// emitted C of the actorArcPublishRaceFree guard, every routine that sends an actor message sets
+// its Arc argument with msMsgSetPtrShared first, and every routine that submits a Promise.all task
+// has taken the group's future with msAwaitGroupSetDoneFut first.
+function publishCountsBeforeVisible(): void {
+	const tag = "publishCountsBeforeVisible";
+	const dir = freshDir("publishcount");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/actorArcPublishRaceFree.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSend("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
+	const seen: int32[] = [0, 0];
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		let name = "";
+		let body = "";
+		for (const line of lines(text)) {
+			if (name == "") {
+				if (line.endsWith(") {") && !line.startsWith(" ") && !line.startsWith("\t")) { name = line; body = ""; }
+				continue;
+			}
+			if (line != "}") { body = body + line + "\n"; continue; }
+			for (let k = 0; k < pairs.length; k += 1) {
+				const publish = body.indexOf(pairs[k][1], 0);
+				if (publish < 0) continue;
+				if (k == 0 && !name.contains("Sink_")) continue;
+				seen[k] += 1;
+				const count = body.indexOf(pairs[k][0], 0);
+				if (count < 0 || count > publish) {
+					fail(tag, `${name.trim()} calls ${pairs[k][1]}) before ${pairs[k][0]})`);
+					return;
+				}
+			}
+			name = "";
+		}
+	}
+	if (seen[0] < 2 || seen[1] < 1) {
+		fail(tag, `publication sites found: ${seen[0]} actor sends, ${seen[1]} group submits; expected 2 and 1`);
+		return;
 	}
 	ok(tag);
 }
@@ -767,6 +976,49 @@ function buildMsTargetDecides(): void {
 	}
 }
 
+function runProbe(probe: Probe): void {
+	if (probe.unknownDirectives.length > 0) {
+		fail(probe.name, `unknown directive ${probe.unknownDirectives.join(", ")}: the runner would ignore it and the guard would assert less than it says`);
+	} else if (probe.os != "") {
+		runOsLane(probe);
+	} else {
+		runDrcLane(probe);
+		if (probe.wantJs) runJsLane(probe);
+		if (probe.wantTsan) runTsanLane(probe);
+		if (probe.testBalance.length > 0) runTestLane(probe);
+	}
+}
+
+// Each fixture breaks one check on purpose; a check that cannot go red here passes hollow guards.
+function selftest(): void {
+	let bad = 0;
+	const fixtures = discoverProbes(`${GUARD_DIR}/selftest`);
+	for (const probe of fixtures) {
+		const before = failReasons.length;
+		runProbe(probe);
+		const reasons = failReasons.slice(before);
+		const tag = `selftest ${probe.name}`;
+		if (probe.selftestRed == "") {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: no // SELFTEST-RED line`);
+		} else if (reasons.length == 0) {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: stayed green, the check it breaks is hollow`);
+		} else if (!reasons.some((r) => r.contains(probe.selftestRed))) {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: red for another reason, wanted '${probe.selftestRed}'`);
+		} else {
+			console.log(`red  ${tag}: as declared`);
+		}
+	}
+	if (fixtures.length == 0) {
+		bad = bad + 1;
+		console.log(`BAD  selftest: no fixtures under ${GUARD_DIR}/selftest`);
+	}
+	console.log(bad == 0 ? `nim-guard selftest: ALL RED AS DECLARED (${fixtures.length} fixtures)` : `nim-guard selftest: ${bad} fixture(s) wrong`);
+	if (bad > 0) exit(1);
+}
+
 function main(): void {
 	if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
 		console.log(`nim-guard: GUARD_SHARD must be <index>/<count> with 0 <= index < count, got '${envOr("GUARD_SHARD", "")}'`);
@@ -775,30 +1027,23 @@ function main(): void {
 	ensureDir(WORK);
 	ensureDir(BIN_DIR);
 	ensureDir(LOG_DIR);
-	const modes: string[] = [];
-	for (const m of envOr("GUARD_GC", "drc orc").split(" ")) {
-		if (m != "") modes.push(m);
-	}
 	console.log(`nim-guard: compiler under test = ${MSC}`);
 	if (!HAS_NODE) {
 		console.log("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target, but their GUARD-OK run is unscored on this host");
 	}
 
-	const probes = discoverProbes();
+	if (envOr("GUARD_SELFTEST", "") == "1") {
+		selftest();
+		return;
+	}
+	const probes = discoverProbes(GUARD_DIR);
 	for (let i = 0; i < probes.length; i++) {
 		const probe = probes[i];
 		if (!claimProbe(probe, i)) continue;
-		if (probe.os != "") {
-			runOsLane(probe);
-		} else {
-			for (const gc of modes) runGcLane(probe, gc);
-			if (probe.wantJs) runJsLane(probe);
-			if (probe.wantTsan) runTsanLane(probe);
-			if (probe.testBalance.length > 0) runTestLane(probe);
-		}
+		runProbe(probe);
 		if (CLAIMS != "") writeFile(`${CLAIMS}/done/${probe.name}`, "");
 	}
-	if (SHARD_INDEX > 0) {
+	if (SHARD_INDEX > 0 || envOr("GUARD_ONLY", "") != "") {
 		console.log(fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`);
 		if (fails > 0) exit(1);
 		return;
@@ -808,6 +1053,8 @@ function main(): void {
 	emitCAfterBuild();
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
+	refArrayAcyclicEmitsPlainRelease();
+	publishCountsBeforeVisible();
 	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");

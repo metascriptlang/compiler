@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, isLiteralSet, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, matchUnionBehindInstance, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
@@ -29,7 +29,7 @@ function projectNarrowedRead(node: Node): Node {
 
 function unnestProjection(outer: Node): Node {
 	const d = outer.data as HiddenStdConvData;
-	if (matchUnionBehindInstance(d.convType).kind == TypeKind.Union) return outer;
+	if (instantiatedUnionBehind(d.convType).kind == TypeKind.Union) return outer;
 	let leaf: Node = d.convExpr;
 	while (leaf != null && leaf.kind == NodeKind.TypeAssertion) leaf = (leaf.data as TypeAssertionData).asExpr;
 	if (leaf == null || leaf.kind != NodeKind.HiddenSubConv || leaf.variantSlot != outer.variantSlot) return outer;
@@ -80,7 +80,7 @@ function lowerUnionInstanceof(node: Node): Node {
 function checkedProjectionSource(n: Node, anySource: boolean = false): Type | null {
 	if (n == null || n.kind != NodeKind.HiddenSubConv || n.variantSlot <= 0) return null;
 	const d = n.data as HiddenStdConvData;
-	if ((matchUnionBehindInstance(d.convType).kind == TypeKind.Union && !isLiteralSet(d.convType)) || isMaybeType(d.convType)) return null;
+	if ((instantiatedUnionBehind(d.convType).kind == TypeKind.Union && !isLiteralSet(d.convType)) || isMaybeType(d.convType)) return null;
 	const ut = d.convExpr.nodeType;
 	if (ut == null || isMaybeType(ut) || !isSlotUnion(ut) || (!anySource && !isLocation(d.convExpr))) return null;
 	return ut;

@@ -30,8 +30,8 @@ function takeExact(s: GuardAnonExact): void { console.log(s.b); }
 
 function main(): void {
     const t = { a: 1, b: "x" };
-    takeIface(t);
+    takeIface(t); // GUARD-REFUSED
     const wide = { a: 1, b: "x", c: 9 };
-    takeExact(wide);
+    takeExact(wide); // GUARD-REFUSED
 }
 main();

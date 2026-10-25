@@ -137,17 +137,17 @@ for (const c of cases) {
 	ensureDir(dir);
 	for (const f of c.files) writeFile(`${dir}/${f.path}`, f.text);
 	if (c.emitsC) {
-		const r = execFileResult(msc, ["build", `${dir}/main.ms`, "--gc=drc", "--emit=c", `--output=${dir}/main.c`]);
+		const r = execFileResult(msc, ["build", `${dir}/main.ms`, "--emit=c", `--output=${dir}/main.c`]);
 		const out = `${r.output}${r.errorOutput}`;
 		if (r.exitCode == 0) report(`[c] ${c.name}: accepted`);
 		else if (!out.includes(c.refused)) report(`[c] ${c.name}: refused without the rule named (${c.refused}): ${out}`);
 		continue;
 	}
 	if (c.runs != "") {
-		const r = execFileResult(msc, ["run", "--gc=orc", `${dir}/main.ms`]);
+		const r = execFileResult(msc, ["run", `${dir}/main.ms`]);
 		const out = `${r.output}${r.errorOutput}`;
-		if (r.exitCode != 0) report(`[orc] ${c.name}: did not build and run: ${out}`);
-		else if (!out.includes(c.runs)) report(`[orc] ${c.name}: the hook never printed '${c.runs}': ${out}`);
+		if (r.exitCode != 0) report(`[run] ${c.name}: did not build and run: ${out}`);
+		else if (!out.includes(c.runs)) report(`[run] ${c.name}: the hook never printed '${c.runs}': ${out}`);
 		continue;
 	}
 	for (const target of ["c", "js"]) {

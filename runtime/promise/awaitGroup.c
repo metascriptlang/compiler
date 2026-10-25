@@ -17,8 +17,9 @@
  * which satisfies the contract that msAwaitGroupBlocking's caller may
  * safely read results[] after the wait returns.
  */
+#include "runtime/core/system.h"  /* msDecref for a losing slot's error */
 #include "awaitGroup.h"
-#include "pool.h"    /* Phase 8: msPoolHelpOne for help-first scheduling */
+#include "pool.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,7 +30,6 @@ extern int64_t msMonoTimeMs(void);
 /* Phase 4: route doneFut completion through MPSC queue to dispatcher thread.
  * Worker sets finished directly (for blocking waiters), then pushes to
  * the completion queue so callbacks fire on the dispatcher thread. */
-extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 extern void msNotifyFutureComplete(void);
 /* Minimal forward declaration: msFutureBase.finished is the first field (_Atomic(bool)).
@@ -40,8 +40,7 @@ typedef struct { _Atomic(bool) finished; } msFutureBaseMinimal;
 msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	if (n < 0) n = 0;
 
-	msAwaitGroup* g = (msAwaitGroup*)calloc(1, sizeof(msAwaitGroup));
-	if (g == NULL) return NULL;
+	msAwaitGroup* g = (msAwaitGroup*)msMemAlloc0(sizeof(msAwaitGroup));
 
 	g->size = n;
 	atomic_store_explicit(&g->pending, n, memory_order_relaxed);
@@ -49,16 +48,11 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	atomic_store_explicit(&g->cancelled, false, memory_order_relaxed);
 	atomic_store_explicit(&g->finishDone, (n == 0), memory_order_relaxed);
 	g->error = NULL;
-	g->deadlineMs = 0;
 	g->timedOut = false;
 	atomic_store_explicit(&g->doneFut, NULL, memory_order_relaxed);
 
 	if (n > 0) {
-		g->results = (void**)calloc((size_t)n, sizeof(void*));
-		if (g->results == NULL) {
-			free(g);
-			return NULL;
-		}
+		g->results = (void**)msMemAllocN0((size_t)n, sizeof(void*));
 	} else {
 		g->results = NULL;
 	}
@@ -75,8 +69,6 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 }
 
 void msAwaitGroupFree(msAwaitGroup* g) {
-	if (g == NULL) return;
-
 	/* Wait for the last worker to fully exit finishSlot.
 	 * Without this, the caller (who saw pending==0 via help-first or
 	 * fast-path) could free the group while a worker is still accessing
@@ -85,6 +77,9 @@ void msAwaitGroupFree(msAwaitGroup* g) {
 	while (!atomic_load_explicit(&g->finishDone, memory_order_acquire)) {
 		/* yield to avoid burning CPU — sched_yield or just spin */
 	}
+	/* A failure no await consumed (a timed-out group's late child) is the exit
+	 * join's to report: an unhandled rejection at program end. */
+	if (g->error != NULL) msNoteOrphanError(g->error);
 
 #ifdef _WIN32
 	DeleteCriticalSection(&g->cs);
@@ -136,25 +131,25 @@ static void finishSlot(msAwaitGroup* g) {
 }
 
 void msAwaitGroupCompleteSlot(msAwaitGroup* g, int32_t slot, void* value) {
-	if (g == NULL) return;
 	if (slot < 0 || slot >= g->size) return;
 	g->results[slot] = value;
 	finishSlot(g);
 }
 
 void msAwaitGroupCheckFailed(msAwaitGroup* g) {
-	if (g == NULL || !atomic_load_explicit(&g->failed, memory_order_acquire)) return;
+	if (!atomic_load_explicit(&g->failed, memory_order_acquire)) return;
 	void* err = g->error;
+	g->error = NULL;
 	msAwaitGroupFree(g);
 	msRaiseAwaitedError(err);
 }
 
 void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
-	if (g == NULL) return;
 	if (slot < 0 || slot >= g->size) return;
 
 	/* First failure wins. Use compare_exchange to atomically claim the
-	 * "failed" state; the loser drops its error payload silently. */
+	 * "failed" state; the loser's error is handled by the group, as a
+	 * second rejection is by Promise.all, so this task destroys it. */
 	bool expected = false;
 	if (atomic_compare_exchange_strong_explicit(
 			&g->failed, &expected, true,
@@ -168,6 +163,8 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 		g->error = error;
 		pthread_mutex_unlock(&g->mutex);
 #endif
+	} else {
+		msDecref(error);
 	}
 
 	/* Still decrement pending so waiters unblock even on failure. */
@@ -176,17 +173,15 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 }
 
 void msAwaitGroupBlocking(msAwaitGroup* g) {
-	if (g == NULL) return;
-
 	/* Fast path: everyone already done (including the n==0 case). */
 	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
 		return;
 	}
 
 	/* Dual-path wait, same split as msWaitFor / msAwaitSlotWait (dispatchFull.c,
-	 * awaitGroup.h): a pool worker helps and parks on the group condvar; the
-	 * LOOP thread must keep pumping its event loop while it waits. Helping
-	 * alone is not enough - a spawn child can be blocked on something only the
+	 * awaitGroup.h): a pool worker runs the group's queued tasks and parks on the
+	 * group condvar; the LOOP thread must keep pumping its event loop while it
+	 * waits. Running them is not enough - a spawn child can be blocked on something only the
 	 * loop can complete (a timer armed by sleepAsync, a cross-thread
 	 * completion posted to the loop's port), and nobody else will ever run it
 	 * while the loop thread waits here. Proven 2026-09-05 by corpus 422.
@@ -195,30 +190,28 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	 * the count saturates at 0 and an unconditional Inc drifts it upward. */
 	bool worker = msIsPoolWorker;
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	bool queued = true;  /* every task is submitted before the wait: once none is queued, none will be */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msPoolHelpOne()) continue;
+			if (queued && msPoolRunEdge(g, false, true)) continue;
+			queued = false;
 			/* Same 5ms active-wait cadence as msWaitFor (MS_ACTIVE_WAIT_MS) -
 			 * bounded slice so the deadline variant re-checks on time. */
 			msRunOnce(5);
 		}
 	} else {
-	/* Phase 8: Help-first scheduling - before parking on the condvar, try
-	 * to dequeue and execute tasks from the global pool queue inline. This
-	 * prevents deadlock when all pool workers are blocked in await groups
-	 * while their child tasks sit in the global queue.
-	 *
-	 * Lock ordering: we never hold both group mutex and pool mutex at once.
-	 * Drop group lock, msPoolHelpOne (acquires/releases pool lock internally),
+	/* Lock ordering: we never hold both group mutex and pool mutex at once.
+	 * Drop group lock, msPoolRunEdge (it takes the pool lock),
 	 * re-acquire group lock. */
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			LeaveCriticalSection(&g->cs);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false, true)) {
 				EnterCriticalSection(&g->cs);
 				continue;
 			}
+			queued = false;
 			EnterCriticalSection(&g->cs);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 				SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
@@ -229,10 +222,11 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			pthread_mutex_unlock(&g->mutex);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false, true)) {
 				pthread_mutex_lock(&g->mutex);
 				continue;
 			}
+			queued = false;
 			pthread_mutex_lock(&g->mutex);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 				pthread_cond_wait(&g->cv, &g->mutex);
@@ -244,10 +238,14 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	if (dec) msPoolBusyInc();  /* back to own work */
 }
 
-void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
-	if (g == NULL) return;
-	g->deadlineMs = deadlineMs;
+static bool msAwaitGroupExpired(msAwaitGroup* g, int64_t deadlineMs) {
+	if (msMonoTimeMs() < deadlineMs) return false;
+	g->timedOut = true;
+	atomic_store_explicit(&g->cancelled, true, memory_order_release);
+	return true;
+}
 
+void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	/* Fast path: already done. */
 	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
 		return;
@@ -257,39 +255,38 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	 * there): loop thread pumps, worker parks on the group condvar. */
 	bool worker = msIsPoolWorker;
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	bool queued = true;  /* every task is submitted before the wait: once none is queued, none will be */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			/* Deadline BEFORE help: msPoolHelpOne executes a whole child
-			 * inline, and a deadline must not be pushed past that. Measured
-			 * 2026-09-05 (corpus 422): a 300ms task under a 60ms deadline
-			 * returned its value instead of throwing whenever help won the
-			 * race and ran the child itself. */
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
+			/* Deadline before and after help: msPoolRunEdge executes a whole
+			 * child inline, and a deadline must not be pushed past that.
+			 * Measured 2026-09-05 (corpus 422): a 300ms task under a 60ms
+			 * deadline returned its value instead of throwing whenever help
+			 * won the race and ran the child itself. */
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
+			if (queued && msPoolRunEdge(g, false, false)) {
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
+				continue;
 			}
-			if (msPoolHelpOne()) continue;
+			queued = false;
 			int64_t remain = deadlineMs - msMonoTimeMs();
 			msRunOnce(remain > 5 ? 5 : (int)remain);
 		}
 	} else {
-	/* Phase 8: same help-first pattern as msAwaitGroupBlocking, with
-	 * deadline check at the top of every iteration (see the non-worker arm
-	 * for why the check must precede help). */
+	/* Same pattern as msAwaitGroupBlocking, with the deadline checked at the
+	 * top of every iteration (see the non-worker arm for why the check must
+	 * precede running a task). */
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
-			}
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			LeaveCriticalSection(&g->cs);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false, false)) {
 				EnterCriticalSection(&g->cs);
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
+			queued = false;
 			EnterCriticalSection(&g->cs);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
 			int64_t remainMs = deadlineMs - msMonoTimeMs();
@@ -300,16 +297,14 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 #else
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
-			}
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			pthread_mutex_unlock(&g->mutex);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false, false)) {
 				pthread_mutex_lock(&g->mutex);
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
+			queued = false;
 			pthread_mutex_lock(&g->mutex);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
 			/* Convert remaining time to absolute CLOCK_REALTIME timespec.
@@ -334,11 +329,6 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 #endif
 	}
 	if (dec) msPoolBusyInc();  /* back to own work */
-}
-
-void msAwaitGroupCancel(msAwaitGroup* g) {
-	if (g == NULL) return;
-	atomic_store_explicit(&g->cancelled, true, memory_order_release);
 }
 
 /* ===== msAwaitSlot — Thread-Local Pool with Heap Fallback ===== */
@@ -366,10 +356,11 @@ void* msAwaitSlotCreate(int32_t n) {
 		s = &msSlotPool[msSlotPoolIdx++];
 	} else {
 		/* Heap fallback for deep recursion + work stealing (24 bytes) */
-		s = (msAwaitSlot*)malloc(sizeof(msAwaitSlot));
+		s = (msAwaitSlot*)msMemAlloc(sizeof(msAwaitSlot));
 	}
 	atomic_store_explicit(&s->pending, n, memory_order_relaxed);
 	atomic_store_explicit(&s->failed, false, memory_order_relaxed);
+	atomic_store_explicit(&s->cancelled, false, memory_order_relaxed);
 	s->error = NULL;
 	s->result = NULL;
 	return (void*)s;

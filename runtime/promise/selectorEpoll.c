@@ -29,7 +29,7 @@ static void growUserData(msSelector* sel, int fd) {
 	if (fd < sel->userDataCap) return;
 	int newCap = sel->userDataCap;
 	while (newCap <= fd) newCap *= 2;
-	sel->userData = (void**)realloc(sel->userData, newCap * sizeof(void*));
+	sel->userData = (void**)msRealloc(sel->userData, sel->userDataCap * sizeof(void*), newCap * sizeof(void*));
 	memset(sel->userData + sel->userDataCap, 0, (newCap - sel->userDataCap) * sizeof(void*));
 	sel->userDataCap = newCap;
 }
@@ -37,10 +37,10 @@ static void growUserData(msSelector* sel, int fd) {
 msSelector* msSelectorCreate(void) {
 	int epfd = epoll_create1(0);
 	if (epfd < 0) return NULL;
-	msSelector* sel = (msSelector*)calloc(1, sizeof(msSelector));
+	msSelector* sel = (msSelector*)msMemAlloc0(sizeof(msSelector));
 	sel->epfd = epfd;
 	sel->userDataCap = EPOLL_INIT_CAP;
-	sel->userData = (void**)calloc(EPOLL_INIT_CAP, sizeof(void*));
+	sel->userData = (void**)msMemAllocN0(EPOLL_INIT_CAP, sizeof(void*));
 	/* Cross-thread wake (msSelectorWake): a self-resetting eventfd watched by this
 	 * epoll. One write wakes one epoll_wait; the poll drains + skips it. */
 	sel->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -72,6 +72,7 @@ static uint32_t msEventsToEpoll(uint32_t events) {
 	uint32_t ep = 0;
 	if (events & MS_EVENT_READ)  ep |= EPOLLIN;
 	if (events & MS_EVENT_WRITE) ep |= EPOLLOUT;
+	if (events & MS_EVENT_EXCLUSIVE) ep |= EPOLLEXCLUSIVE;
 	return ep;
 }
 

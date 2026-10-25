@@ -3,12 +3,13 @@
 // Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
-import { Node, Type, Symbol } from "../../ast/node";
+import { Node, Type, Symbol, SymbolKind } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { headerIncludes } from "../../module/cimport/emit";
+import { ModuleNameRoots } from "./names";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -103,7 +104,7 @@ export interface CLoc {
 	storage: CStorageLoc;
 	snippet: string;       // C code fragment ("x", "a->b", "T1_")
 	isIndirect: boolean;   // Implementation parity: backend introduced a pointer
-	locType: Type | null;  // MetaScript type (for RC decisions, type mapping); null until populated
+	locType: Cursor<Readonly<Type>> | null;  // MetaScript type (for RC decisions, type mapping); null until populated
 }
 
 export function initLoc(kind: CLocKind, storage: CStorageLoc): CLoc {
@@ -163,7 +164,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 }
 
 export interface CTryEntry {
-	fin: Readonly<Node> | null;
+	fin: Cursor<Readonly<Node>> | null;
 	label: string;
 	inFlightException: string;
 }
@@ -172,7 +173,8 @@ export interface CTryEntry {
 
 export class CProc {
 	name: string;          // mangled C name
-	returnType: Type | null;      // MetaScript return type (null = void/inferred)
+	returnDesc: string;    // C type of the MetaScript return type ("" = inferred)
+	returnsVoid: boolean;
 	isNrvo: boolean;       // true if function uses NRVO (out-param calling convention)
 	labels: number;        // unique temp counter (T1_, T2_, ...)
 	blocks: CBlock[];      // nested block stack (blocks[0] = top-level)
@@ -181,12 +183,14 @@ export class CProc {
 	params: string[];      // parameter names (mangled)
 	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
-	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams
+	indirectItemModules: int32[];  // the symbols of indirectParams, as (itemModule, item)
+	indirectItems: int32[];
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
-	localSyms: Cursor<Symbol>[];
+	localItemModules: int32[];  // parallel to localSymNames: each local's (itemModule, item)
+	localItems: int32[];
 	localSymNames: string[];
 	// Fallback name map for DRC-generated identifiers without resolvedSym.
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
@@ -196,7 +200,7 @@ export class CProc {
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
-export function isIndirectParam(p: CProc, name: string): boolean {
+export function isIndirectParam(p: Readonly<CProc>, name: string): boolean {
 	if (p == null) return false;
 	for (const param of p.indirectParams) {
 		if (param == name) return true;
@@ -205,22 +209,33 @@ export function isIndirectParam(p: CProc, name: string): boolean {
 }
 
 // A reference that carries its symbol is indirect only when that binding is.
-export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boolean {
+export function isIndirectRef(p: Readonly<CProc>, sym: Readonly<Symbol | null>, name: string): boolean {
 	if (p == null) return false;
 	if (sym == null) return isIndirectParam(p, name);
-	for (const s of p.indirectSyms) {
-		if (s == sym) return true;
+	for (let i = 0; i < p.indirectItems.length; i += 1) {
+		if (p.indirectItems[i] == sym.item && p.indirectItemModules[i] == sym.itemModule) return true;
 	}
 	return false;
 }
 
-export function createProc(name: string, returnType: Type | null): CProc {
+function requireItem(p: Readonly<CProc>, sym: Readonly<Symbol>): void {
+	if (sym.item <= 0) throw new Error(`internal: ${sym.symbolKind} '${sym.name}' of '${p.name}' was created without an item, so the frame cannot key it`);
+}
+
+export function addIndirectSym(p: CProc, sym: Readonly<Symbol>): void {
+	requireItem(p, sym);
+	p.indirectItemModules.push(sym.itemModule);
+	p.indirectItems.push(sym.item);
+}
+
+export function createProc(name: string, returnDesc: string = "", returnsVoid: boolean = false): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
 	blocks.push(topBlock);
 	return {
 		name,
-		returnType,
+		returnDesc,
+		returnsVoid,
 		isNrvo: false,
 		labels: 0,
 		blocks,
@@ -229,33 +244,37 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		params: [],
 		hoistedTemps: [],
 		indirectParams: [],
-		indirectSyms: [],
+		indirectItemModules: [],
+		indirectItems: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
 		sigConflicts: [],
-		localSyms: [],
+		localItemModules: [],
+		localItems: [],
 		localSymNames: [],
 		localNameMap: [],
 		reemitting: false,
 	};
 }
 
-export function setLocalSymName(p: CProc, sym: Symbol, name: string): void {
-	for (let i = 0; i < p.localSyms.length; i += 1) {
-		if (p.localSyms[i] == sym) {
+export function setLocalSymName(p: CProc, sym: Readonly<Symbol>, name: string): void {
+	requireItem(p, sym);
+	for (let i = 0; i < p.localItems.length; i += 1) {
+		if (p.localItems[i] == sym.item && p.localItemModules[i] == sym.itemModule) {
 			p.localSymNames[i] = name;
 			return;
 		}
 	}
-	p.localSyms.push(sym);
+	p.localItemModules.push(sym.itemModule);
+	p.localItems.push(sym.item);
 	p.localSymNames.push(name);
 }
 
-export function lookupLocalSymName(p: CProc, sym: Symbol | null): string {
+export function lookupLocalSymName(p: Readonly<CProc>, sym: Readonly<Symbol | null>): string {
 	if (p == null || sym == null) return "";
-	for (let i = p.localSyms.length - 1; i >= 0; i -= 1) {
-		if (p.localSyms[i] == sym) return p.localSymNames[i];
+	for (let i = p.localItems.length - 1; i >= 0; i -= 1) {
+		if (p.localItems[i] == sym.item && p.localItemModules[i] == sym.itemModule) return p.localSymNames[i];
 	}
 	return "";
 }
@@ -591,6 +610,7 @@ export class CTypeInfoDemand {
 	destroy: Symbol | null;
 	trace: Symbol | null = null;
 	baseKey: string = "";
+	custody: Symbol | null = null;
 }
 
 export class AliveSet {
@@ -619,7 +639,7 @@ export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boole
 	return aliveSet._syms.has(sym);
 }
 
-export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Symbol | null, declName: string): boolean {
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Readonly<Symbol | null>, declName: string): boolean {
 	if (sym == null) throw new Error(`internal: declaration '${declName}' has no symbol, so its aliveness is unknown`);
 	return aliveSet._syms.has(sym);
 }
@@ -660,6 +680,12 @@ export class CEmissionFacts {
 	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
 	trace: string = "";
 	writes: string[] | null = null;
+	dispatchOverrides: HashMap<Symbol, Symbol[]> | null = null;
+	moduleNameRoots: ModuleNameRoots | null = null;
+	hookOps: HashMap<string, Symbol> | null = null;
+	placedInstances: HashMap<Symbol, Symbol> | null = null;
+	inlineDecls: HashMap<Symbol, Node> = new HashMap<Symbol, Node>();
+	headerIncludes: HashMap<string, string[]> | null = null;
 }
 
 function noteFactWrite(facts: CEmissionFacts, write: string): void {
@@ -697,7 +723,7 @@ export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();
 	for (const info of aliveSet.typeInfos) {
-		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}`);
+		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}\t${info.custody != null ? aliveSymKey(info.custody) : ""}`);
 	}
 	const joined = entries.join("\n");
 	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;
@@ -709,15 +735,15 @@ export interface DeferredStructDef {
 }
 
 export interface DeferredElement {
-	elem: Type;
+	elem: Cursor<Readonly<Type>>;
 	contentName: string;
 }
 
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
-	emissionFacts: Readonly<CEmissionFacts>;
-	preparationFacts: CEmissionFacts | null;
+	emissionFacts: Cursor<Readonly<CEmissionFacts>>;
+	preparationFacts: Cursor<CEmissionFacts> | null;
 	errors: CheckerError[];
 	preparingDeclarations: boolean;
 	emittedInstances: HashSet<string>;
@@ -729,13 +755,13 @@ export class CGen {
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
 	includes: string[];
-	checkerCtx: Readonly<CheckerContext>;
+	checkerCtx: Cursor<Readonly<CheckerContext>>;
 	target: TargetInfo;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
 	deinitProc: CProc;
-	aliveSet: Readonly<AliveSet>;        // global DCE reachability set (empty = no filtering)
+	aliveSet: Cursor<Readonly<AliveSet>>;        // global DCE reachability set (empty = no filtering)
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
 	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
@@ -746,7 +772,7 @@ export class CGen {
 	typesBeingDefined: string[];
 	unionsInProgress: string[];
 	deferredStructs: DeferredStructDef[];
-	inlineCopies: Symbol[];
+	inlineCopies: Cursor<Readonly<Symbol>>[];
 	deferredElements: DeferredElement[];
 }
 
@@ -755,7 +781,7 @@ export interface TestEntry {
 	funcName: string;   // C function name (__ms_test_0, __ms_test_1, ...)
 }
 
-export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): CGen {
+export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>): CGen {
 	const sections: Builder[] = [];
 	for (let i = 0; i < 11; i += 1) {
 		const b = createBuilder();
@@ -763,7 +789,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 	}
 	return {
 		sections,
-		emissionFacts: new CEmissionFacts(),
+		emissionFacts: facts,
 		preparationFacts: null,
 		errors: [],
 		preparingDeclarations: false,
@@ -779,9 +805,9 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 		target: ctx != null ? ctx.targetInfo : hostTargetInfo(),
 		modulePath,
 		labels: 0,
-		initProc: createProc("__init000", null),
-		deinitProc: createProc("__deinit000", null),
-		aliveSet: createAliveSet(),
+		initProc: createProc("__init000"),
+		deinitProc: createProc("__deinit000"),
+		aliveSet,
 		isTestBuild: false,
 		isHcr: false,
 		testEntries: [],
@@ -858,7 +884,7 @@ export function assembleOutput(g: CGen): string {
 // Moved from forward.ms to break circular import: types.ms ↔ forward.ms.
 // Only depends on CGen/CSection/Symbol — no type-mapping logic.
 
-export function useHeader(g: CGen, sym: Symbol): void {
+export function useHeader(g: CGen, sym: Readonly<Symbol>): void {
 	if (sym == null || sym.headerPath == "") return;
 	emitIncludeDirectives(g, sym.headerPath);
 }
@@ -890,23 +916,21 @@ function emitOneInclude(g: CGen, header: string): void {
 
 // A header another included header already includes is not included again: a header without
 // an include guard would declare everything twice.
-export function emitIncludes(g: CGen): void {
+export function emitIncludes(g: CGen, facts: Readonly<CEmissionFacts>): void {
 	for (const header of g.includes) {
 		let covered = false;
 		for (const other of g.includes) {
-			if (other != header && headerIncludes(other).includes(header) && !headerIncludes(header).includes(other)) covered = true;
+			if (other != header && headerIncludes(facts.headerIncludes!, other).includes(header) && !headerIncludes(facts.headerIncludes!, header).includes(other)) covered = true;
 		}
 		if (!covered) addLine(sec(g, CSection.Headers), `#include "${header}"`);
 	}
 	g.includes = [];
 }
 
-const PLATFORM_MACROS = ["LANGUAGE_C", "MIPSEB", "MIPSEL", "PPC", "R3000", "R4000", "i386", "linux", "mips", "near", "far", "powerpc", "unix"];
-
 // windows.h defines `near` and `far` empty and GNU-mode compilers predefine `linux`, `unix`
 // and `i386`: undefine them after the module's last #include, never before it.
 export function undefPlatformMacros(g: CGen): void {
-	for (const name of PLATFORM_MACROS) addLine(sec(g, CSection.Headers), `#undef ${name}`);
+	for (const name of ["LANGUAGE_C", "MIPSEB", "MIPSEL", "PPC", "R3000", "R4000", "i386", "linux", "mips", "near", "far", "powerpc", "unix"]) addLine(sec(g, CSection.Headers), `#undef ${name}`);
 }
 
 // ===== Tests =====
@@ -952,14 +976,39 @@ test "rdLoc indirect" {
 }
 
 test "create proc" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	assert p.name == "test_fn";
 	assert p.labels == 0;
 	assert p.blocks.length == 1;
 }
 
+test "a frame keys its locals by item, so two same-named locals keep their own names" {
+	const p = createProc("test_fn");
+	const outer = makeSymbol("x", SymbolKind.Variable, null, false);
+	const inner = makeSymbol("x", SymbolKind.Variable, null, false);
+	outer.itemModule = 2; outer.item = 7;
+	inner.itemModule = 2; inner.item = 8;
+	setLocalSymName(p, outer, "x");
+	setLocalSymName(p, inner, "x_1");
+	addIndirectSym(p, inner);
+	assert lookupLocalSymName(p, outer) == "x" && lookupLocalSymName(p, inner) == "x_1";
+	assert !isIndirectRef(p, outer, "x") && isIndirectRef(p, inner, "x_1");
+}
+
+test "a local without an item is an internal error naming it and its frame" {
+	const p = createProc("test_fn");
+	const bare = makeSymbol("tmp", SymbolKind.Variable, null, false);
+	let refused = "";
+	try {
+		setLocalSymName(p, bare, "tmp");
+	} catch (e) {
+		refused = (e as Error).message;
+	}
+	assert refused.includes("internal:") && refused.includes("'tmp' of 'test_fn'"), refused;
+}
+
 test "getTemp" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	const t1 = getTemp(p, "int32_t");
 	assert t1.snippet == "T1_";
 	assert t1.kind == CLocKind.Temp;
@@ -970,7 +1019,7 @@ test "getTemp" {
 }
 
 test "push and pop block" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	pushBlock(p, true);
 	assert p.blocks.length == 2;
 	assert p.withinLoop == 1;
@@ -983,7 +1032,7 @@ test "push and pop block" {
 }
 
 test "nested blocks" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	emitStmts(p, "outer;\n");
 	pushBlock(p, false);
 	emitStmts(p, "inner;\n");
@@ -1061,12 +1110,16 @@ test "no duplicates" {
 }
 
 test "create with 11 sections" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	assert g.sections.length == 11;
 }
 
 test "section accessor" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	assert extract(sec(g, CSection.Headers)) == "#include <stdint.h>\n";
@@ -1074,7 +1127,9 @@ test "section accessor" {
 }
 
 test "assembleOutput" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	const output = assembleOutput(g);
@@ -1082,7 +1137,9 @@ test "assembleOutput" {
 }
 
 test "moduleTemp" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	const t1 = moduleTemp(g);
 	const t2 = moduleTemp(g);
 	assert t1 == "TM1_";

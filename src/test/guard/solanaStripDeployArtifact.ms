@@ -104,8 +104,8 @@ function size(path: string): int64 {
 	return r.ok ? r.value.length as int64 : -1;
 }
 
-const hostDefault = build(["hello.ms", "--gc=drc", `--output=${dir}/hostDefault`]);
-const hostStripped = build(["hello.ms", "--gc=drc", "--strip", `--output=${dir}/hostStripped`]);
+const hostDefault = build(["hello.ms", `--output=${dir}/hostDefault`]);
+const hostStripped = build(["hello.ms", "--strip", `--output=${dir}/hostStripped`]);
 if (hostDefault.exitCode != 0 || hostStripped.exitCode != 0) {
 	report(`host build failed: ${hostDefault.errorOutput}${hostStripped.errorOutput}`);
 } else if (size(`${dir}/hostStripped`) >= size(`${dir}/hostDefault`)) {

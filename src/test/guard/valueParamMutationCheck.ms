@@ -24,9 +24,9 @@
 
 struct GPt { x: number; }
 
-function mVec(a: Vec<uint8>): void { a[0] = 9; }
-function mSized(s: uint8[3]): void { s[0] = 9; }
-function mStruct(p: GPt): void { p.x = 9; }
+function mVec(a: Vec<uint8>): void { a[0] = 9; } // GUARD-REFUSED
+function mSized(s: uint8[3]): void { s[0] = 9; } // GUARD-REFUSED
+function mStruct(p: GPt): void { p.x = 9; } // GUARD-REFUSED
 
 const v: Vec<uint8> = [1, 2, 3];
 mVec(v);

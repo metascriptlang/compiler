@@ -50,8 +50,7 @@ static inline msString msReadBytes(double n) {
 	int64_t count = (int64_t)n;
 	if (count <= 0) return MS_EMPTY_STRING;
 	if (count > 1048576) count = 1048576;
-	char* buf = (char*)malloc(count + 1);
-	if (!buf) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc(count + 1);
 	size_t total = 0;
 	while (total < (size_t)count) {
 		size_t nread = fread(buf + total, 1, count - total, stdin);

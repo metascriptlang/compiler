@@ -17,7 +17,7 @@ import { isArray, needsCopy } from "std/typetraits";
 
 // ===== Concurrent-access guard (Go writing-flag model) =====
 @builtin("MapFatal")
-extern function msMapFatal(msg: string): void;
+extern function msMapFatal(msg: string): never;
 
 function hashMapEndWrite<K, V>(m: HashMap<K, V>): void { if (!m.writing) { msMapFatal("concurrent map writes"); } m.writing = false; }
 function hashSetEndWrite<T>(s: HashSet<T>): void { if (!s.writing) { msMapFatal("concurrent map writes"); } s.writing = false; }
@@ -62,13 +62,152 @@ export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 }
 
 // ===== Hash Functions =====
-// hashFarm over the string's bytes (runtime/core/string.c; the Raiser reaches the same
-// code through the host table). An empty Map/Set slot holds hcode 0, so a key that
-// hashes to 0 takes the 314159265 sentinel.
+// An empty Map/Set slot holds hcode 0, so a key that hashes to 0 takes the 314159265 sentinel.
 
-@include("runtime/core/string.h");
+@builtin("LoadLE64")
+extern function msLoadLE64(b: Readonly<Span<uint8>>, o: int64): uint64;
+@builtin("LoadLE32")
+extern function msLoadLE32(b: Readonly<Span<uint8>>, o: int64): uint64;
 
-export extern function hashFarm(s: string): int64 from "msStringHashFarm";
+@inline function farmRotR(v: uint64, bits: uint64): uint64 {
+	return (v >> bits) | (v << ((64 as uint64) - bits));
+}
+
+@inline function farmShiftMix(v: uint64): uint64 {
+	return v ^ (v >> (47 as uint64));
+}
+
+@inline function farmLen16(u: uint64, v: uint64, mul: uint64): uint64 {
+	let a = (u ^ v) * mul;
+	a = a ^ (a >> (47 as uint64));
+	let b = (v ^ a) * mul;
+	b = b ^ (b >> (47 as uint64));
+	return b * mul;
+}
+
+@inline function farmLen0To16(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k0 = 0xc3a5c85c97cb3127 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const n = len as uint64;
+	if (len >= 8) {
+		const mul = k2 + n * (2 as uint64);
+		const a = msLoadLE64(b, 0) + k2;
+		const c = msLoadLE64(b, len - 8);
+		return farmLen16(farmRotR(c, 37) * mul + a, (farmRotR(a, 25) + c) * mul, mul);
+	}
+	if (len >= 4) {
+		const mul = k2 + n * (2 as uint64);
+		return farmLen16(n + (msLoadLE32(b, 0) << (3 as uint64)), msLoadLE32(b, len - 4), mul);
+	}
+	if (len > 0) {
+		const y = (b[0] as uint64) + ((b[len >> 1] as uint64) << (8 as uint64));
+		const z = n + ((b[len - 1] as uint64) << (2 as uint64));
+		return farmShiftMix(y * k2 ^ z * k0) * k2;
+	}
+	return k2;
+}
+
+@inline function farmLen17To32(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k1 = 0xb492b66fbe98f273 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const mul = k2 + (len as uint64) * (2 as uint64);
+	const a = msLoadLE64(b, 0) * k1;
+	const c = msLoadLE64(b, 8);
+	const d = msLoadLE64(b, len - 8) * mul;
+	const e = msLoadLE64(b, len - 16) * k2;
+	return farmLen16(
+		farmRotR(a + c, 43) + farmRotR(d, 30) + e,
+		a + farmRotR(c + k2, 18) + d,
+		mul,
+	);
+}
+
+@inline function farmLen33To64(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const mul = k2 + (len as uint64) * (2 as uint64);
+	const a = msLoadLE64(b, 0) * k2;
+	const c = msLoadLE64(b, 8);
+	const d = msLoadLE64(b, len - 8) * mul;
+	const e = msLoadLE64(b, len - 16) * k2;
+	const y = farmRotR(a + c, 43) + farmRotR(d, 30) + e;
+	const z = farmLen16(y, a + farmRotR(c + k2, 18) + d, mul);
+	const f = msLoadLE64(b, 16) * mul;
+	const g = msLoadLE64(b, 24);
+	const h = (y + msLoadLE64(b, len - 32)) * mul;
+	const i = (z + msLoadLE64(b, len - 24)) * mul;
+	return farmLen16(farmRotR(f + g, 43) + farmRotR(h, 30) + i, f + farmRotR(g + a, 18) + h, mul);
+}
+
+@inline function farmWeakLen32(
+	b: Readonly<Span<uint8>>,
+	o: int64,
+	seedA: uint64,
+	seedB: uint64,
+): [uint64, uint64] {
+	const z = msLoadLE64(b, o + 24);
+	let a = seedA + msLoadLE64(b, o);
+	let c = farmRotR(seedB + a + z, 21);
+	const first = a;
+	a = a + msLoadLE64(b, o + 8) + msLoadLE64(b, o + 16);
+	c = c + farmRotR(a, 44);
+	return [a + z, c + first];
+}
+
+function farmLong(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const last = b[len - 64..len];
+	const k0 = 0xc3a5c85c97cb3127 as uint64;
+	const k1 = 0xb492b66fbe98f273 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	let y = (81 as uint64) * k1 + (113 as uint64);
+	let z = farmShiftMix(y * k2 + (113 as uint64)) * k2;
+	let x = (81 as uint64) * k2 + msLoadLE64(b, 0);
+	let v: [uint64, uint64] = [0 as uint64, 0 as uint64];
+	let w: [uint64, uint64] = [0 as uint64, 0 as uint64];
+	let rest = b;
+	while (rest.length > 64) {
+		const block = rest[0..64];
+		x = farmRotR(x + y + v[0] + msLoadLE64(block, 8), 37) * k1;
+		y = farmRotR(y + v[1] + msLoadLE64(block, 48), 42) * k1;
+		x = x ^ w[1];
+		y = y + v[0] + msLoadLE64(block, 40);
+		z = farmRotR(z + w[0], 33) * k1;
+		v = farmWeakLen32(block, 0, v[1] * k1, x + w[0]);
+		w = farmWeakLen32(block, 32, z + w[1], y + msLoadLE64(block, 16));
+		const t = z;
+		z = x;
+		x = t;
+		rest = rest[64..rest.length];
+	}
+	const mul = k1 + ((z & (0xff as uint64)) << (1 as uint64));
+	const w0 = w[0] + (((len - 1) & 63) as uint64);
+	const v0 = v[0] + w0;
+	const w0Mixed = w0 + v0;
+	x = farmRotR(x + y + v0 + msLoadLE64(last, 8), 37) * mul;
+	y = farmRotR(y + v[1] + msLoadLE64(last, 48), 42) * mul;
+	x = x ^ w[1] * (9 as uint64);
+	y = y + v0 * (9 as uint64) + msLoadLE64(last, 40);
+	z = farmRotR(z + w0Mixed, 33) * mul;
+	v = farmWeakLen32(last, 0, v[1] * mul, x + w0Mixed);
+	w = farmWeakLen32(last, 32, z + w[1], y + msLoadLE64(last, 16));
+	return farmLen16(
+		farmLen16(v[0], w[0], mul) + farmShiftMix(y) * k0 + x,
+		farmLen16(v[1], w[1], mul) + z,
+		mul,
+	);
+}
+
+export function hashFarm(s: string): int64 {
+	const b = s.asBytes();
+	const len = b.length as int64;
+	if (len <= 16) return int64Bits(farmLen0To16(b));
+	if (len <= 32) return int64Bits(farmLen17To32(b));
+	if (len <= 64) return int64Bits(farmLen33To64(b));
+	return int64Bits(farmLong(b));
+}
 
 export function hashString(s: string): int64 {
 	const h = hashFarm(s);
@@ -97,7 +236,7 @@ export function hashWangYi1(x: uint64): int64 {
 }
 
 @builtin("PtrBits")
-extern function msPtrBits(p: Ptr<void>): uint64;
+extern function msPtrBits(p: Readonly<Ptr<void>>): uint64;
 @builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
@@ -106,7 +245,7 @@ export function hashNumber(n: number): int64 {
 	return hashWangYi1(msFloat64Bits(n + 0.0));
 }
 
-export function hashPointer(p: Ptr<void>): int64 {
+export function hashPointer(p: Readonly<Ptr<void>>): int64 {
 	return hashWangYi1(msPtrBits(p));
 }
 
@@ -172,18 +311,19 @@ export function hash(this i: uint8): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
-export function hash(this u: unknown): int64 { return hashPointer(u as Ptr<void>); }
+export function hash(this u: Readonly<unknown>): int64 { return hashPointer(u as Readonly<Ptr<void>>); }
 
 function sameKey<T>(a: T, b: T): boolean { return a == b; }
 function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
 
-function keyHash<K>(key: K): int64 {
+function keyHash<K>(key: Readonly<K>): int64 {
 	when (isArray<K>() && !needsCopy<K>()) {
-		return hashPointer(key as Ptr<void>);
+		return hashPointer(key as Readonly<Ptr<void>>);
 	} else {
-		return key.hash();
+		const h = key.hash();
+		return h == (0 as int64) ? 314159265 as int64 : h;
 	}
 }
 
@@ -248,9 +388,9 @@ export class HashMap<K, V> {
 	writing: boolean;
 }
 
-function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
+function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: Readonly<K>): int32 {
 	if (m.data.length == 0) return -1;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
@@ -263,7 +403,7 @@ function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 }
 
 function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
-	const oldData = m.data;
+	let oldData = move m.data;
 	const newCap = oldData.length * 2;
 	const newData: Vec<HashMapEntry<K, V>> = new Array(newCap);
 	m.data = newData;
@@ -274,8 +414,8 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (m.data[j].hcode != 0) { j = (j + 1) & mask; }
 			m.data[j].hcode = oldData[i].hcode;
-			m.data[j].key = oldData[i].key;
-			m.data[j].value = oldData[i].value;
+			m.data[j].key = move oldData[i].key;
+			m.data[j].value = move oldData[i].value;
 		}
 		i = i + 1;
 	}
@@ -289,7 +429,7 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) {
 		m.data[idx].value = value;
@@ -307,26 +447,26 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	}
 }
 
-export function get<K, V>(this m: HashMap<K, V>, key: K): V | null {
+export function get<K, V>(this m: HashMap<K, V>, key: Readonly<K>): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) return m.data[idx].value;
 	return null;
 }
 
-export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: K): Readonly<V> | null {
+export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): Readonly<V | null> {
 	if (m.writing) { msMapFatal("map read during write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx < 0) return null;
 	return m.data[idx].value;
 }
 
-export function has<K, V>(this m: Readonly<HashMap<K, V>>, key: K): boolean {
+export function has<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashMapRawGet(m, key) >= 0;
 }
 
-export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
+export function delete<K, V>(this m: HashMap<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer hashMapEndWrite(m);
@@ -450,9 +590,9 @@ export class HashSet<T> {
 	}
 }
 
-function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
+function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: Readonly<T>): int32 {
 	if (s.data.length == 0) return -1;
-	const hc = keyHash(key);
+	const hc = keyHash<T>(key);
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
@@ -465,7 +605,7 @@ function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 }
 
 function hashSetEnlarge<T>(s: HashSet<T>): void {
-	const oldData = s.data;
+	let oldData = move s.data;
 	const newCap = oldData.length * 2;
 	const newData: Vec<HashSetEntry<T>> = new Array(newCap);
 	s.data = newData;
@@ -476,7 +616,7 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (s.data[j].hcode != 0) { j = (j + 1) & mask; }
 			s.data[j].hcode = oldData[i].hcode;
-			s.data[j].key = oldData[i].key;
+			s.data[j].key = move oldData[i].key;
 		}
 		i = i + 1;
 	}
@@ -489,7 +629,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	if (s.data.length == 0) { s.data = new Array(INITIAL_CAPACITY); }
 	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	if (s.data.length < (s.size + s.size / 2) || (s.data.length - s.size) < MIN_EMPTY_SLOTS) {
 		hashSetEnlarge(s);
 	}
@@ -501,12 +641,12 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Readonly<HashSet<T>>, value: T): boolean {
+export function has<T>(this s: Readonly<HashSet<T>>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashSetRawGet(s, value) >= 0;
 }
 
-export function delete<T>(this s: HashSet<T>, value: T): boolean {
+export function delete<T>(this s: HashSet<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer hashSetEndWrite(s);
@@ -592,7 +732,7 @@ function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
 	while (k < cap) { m.indices[k] = -1; k = k + 1; }
 }
 
-function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
+function orderedMapRawGet<K, V>(m: Readonly<Map<K, V>>, key: Readonly<K>, hc: int64): int32 {
 	if (m.indices.length == 0) return -1;
 	const mask: int32 = m.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -605,9 +745,8 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
 		}
 		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
-		} else {
-			const e = m.entries[slot];
-			if (e.hcode == hc && sameKey(e.key, key)) return h;
+		} else if (m.entries[slot].hcode == hc && sameKey(m.entries[slot].key, key)) {
+			return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -620,9 +759,8 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < m.entries.length) {
-		const e = m.entries[i];
-		if (e.hcode != 0) {
-			let h: int32 = (e.hcode & (mask as int64)) as int32;
+		if (m.entries[i].hcode != 0) {
+			let h: int32 = (m.entries[i].hcode & (mask as int64)) as int32;
 			while (m.indices[h] != -1) { h = (h + 1) & mask; }
 			m.indices[h] = i;
 		}
@@ -631,12 +769,17 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 }
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
-	const oldEntries = m.entries;
+	let oldEntries = move m.entries;
 	let newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
-			newEntries.push(oldEntries[i]);
+			const e: OrderedMapEntry<K, V> = {
+				hcode: oldEntries[i].hcode,
+				key: move oldEntries[i].key,
+				value: move oldEntries[i].value,
+			};
+			newEntries.push(e);
 		}
 		i = i + 1;
 	}
@@ -661,7 +804,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) {
 		const entryIdx = m.indices[slot];
@@ -689,28 +832,36 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.size = m.size + 1;
 }
 
-export function get<K, V>(this m: Map<K, V>, key: K): V | null {
+export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return null;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
 	return null;
 }
 
-export function has<K, V>(this m: Map<K, V>, key: K): boolean {
+export function readonlyGet<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): Readonly<V | null> {
+	if (m.writing) { msMapFatal("map read during write"); }
+	if (m.indices.length == 0) return null;
+	const slot = orderedMapRawGet(m, key, keyHash<K>(key));
+	if (slot < 0) return null;
+	return m.entries[m.indices[slot]].value;
+}
+
+export function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return false;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
 
-export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
+export function delete<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) return false;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot < 0) return false;
 	const entryIdx = m.indices[slot];
@@ -837,7 +988,7 @@ function orderedSetInitIndices<T>(s: Set<T>, cap: int32): void {
 	while (k < cap) { s.indices[k] = -1; k = k + 1; }
 }
 
-function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
+function orderedSetRawGet<T>(s: Set<T>, key: Readonly<T>, hc: int64): int32 {
 	if (s.indices.length == 0) return -1;
 	const mask: int32 = s.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -850,9 +1001,8 @@ function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
 		}
 		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
-		} else {
-			const e = s.entries[slot];
-			if (e.hcode == hc && sameKey(e.key, key)) return h;
+		} else if (s.entries[slot].hcode == hc && sameKey(s.entries[slot].key, key)) {
+			return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -865,9 +1015,8 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < s.entries.length) {
-		const e = s.entries[i];
-		if (e.hcode != 0) {
-			let h: int32 = (e.hcode & (mask as int64)) as int32;
+		if (s.entries[i].hcode != 0) {
+			let h: int32 = (s.entries[i].hcode & (mask as int64)) as int32;
 			while (s.indices[h] != -1) { h = (h + 1) & mask; }
 			s.indices[h] = i;
 		}
@@ -876,15 +1025,14 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 }
 
 function orderedSetCompact<T>(s: Set<T>): void {
-	const oldEntries = s.entries;
+	let oldEntries = move s.entries;
 	let newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
-			// See orderedMapCompact comment: explicit field copy so DRC incref correctly.
 			const e: OrderedSetEntry<T> = {
 				hcode: oldEntries[i].hcode,
-				key: oldEntries[i].key,
+				key: move oldEntries[i].key,
 			};
 			newEntries.push(e);
 		}
@@ -911,7 +1059,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot >= 0) return;
 	if (s.indices.length < (s.size + s.size / 2) || (s.indices.length - s.size - s.tombstones) < MIN_EMPTY_SLOTS) {
@@ -935,19 +1083,19 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Set<T>, value: T): boolean {
+export function has<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length == 0) return false;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
 
-export function delete<T>(this s: Set<T>, value: T): boolean {
+export function delete<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) return false;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot < 0) return false;
 	const entryIdx = s.indices[slot];

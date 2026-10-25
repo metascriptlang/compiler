@@ -35,7 +35,7 @@ tools/smith/campaign.sh tools/smith/campaign.txt out/smith/r3        # the matri
 `cov` needs a coverage-instrumented compiler and the commit it was built from beside it:
 
 ```bash
-msc build src/index.ms --gc=drc --release --cc=clang --lto=off \
+msc build src/index.ms --release --cc=clang --lto=off \
   --passC="-fprofile-instr-generate -fcoverage-mapping" --passL="-fprofile-instr-generate" \
   --output=out/smith/cov/msc-cov && git rev-parse HEAD > out/smith/cov/msc-cov.src
 ```

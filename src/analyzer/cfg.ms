@@ -8,6 +8,7 @@
 
 import { Node, NodeKind, ProgramData, Symbol, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { flowTally } from "../compiler/flows";
 import { AliasKind, aliases, getRootSym } from "./alias";
 
 import { makeIdentResolved } from "../transform/util";
@@ -564,17 +565,26 @@ export function clearCfgCache(cache: CfgCache): void {
 
 
 function getCachedCfg(cache: CfgCache, rootSym: Symbol): Cfg {
+	let scanned = 0;
 	for (const entry of cache.entries) {
-		if (entry.sym == rootSym) return entry.cfg;
+		scanned += 1;
+		if (entry.sym == rootSym) {
+			flowTally("cfg.cacheScan", scanned);
+			return entry.cfg;
+		}
 	}
+	flowTally("cfg.cacheScan", scanned);
 	return null as unknown as Cfg;
 }
 
 export function isLastReadCfgNodeCached(rootSym: Symbol, queryNode: Node, funcBody: Node, cache: CfgCache): boolean {
 	if (rootSym == null || queryNode == null || funcBody == null) return false;
 	let cfg = getCachedCfg(cache, rootSym);
+	flowTally("cfg.query", 1);
 	if (cfg == null) {
 		cfg = buildCfgForSym(funcBody, rootSym);
+		flowTally("cfg.build", 1);
+		flowTally("cfg.buildInstrs", cfg.instrs.length);
 		const entry: CfgCacheEntry = { sym: rootSym, cfg };
 		cache.entries.push(entry);
 	}

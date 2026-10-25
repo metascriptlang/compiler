@@ -3,7 +3,7 @@
 // Every programs/*.ms (or programs/*/main.ms) is a standalone program whose
 // contract lives in its directive head:
 //
-//   // @maxrss: <MB>       -> RSS cells: build+run under --gc=drc AND --gc=orc,
+//   // @maxrss: <MB>       -> RSS cells: build+run on the c and danger lanes,
 //                             /usr/bin/time -l, assert exit + signal + peak RSS;
 //                             plus a js cell (unless @skip-js) — same
 //                             build+run+byte-compare as a parity cell, only
@@ -12,10 +12,20 @@
 //   // @stdout: <substr>   -> merged output must contain <substr>; every @stdout
 //                             line is checked (parity programs mostly omit it)
 //   // @exit: <n>          -> expected exit code (default 0)
-//   // @xfail(<lane>): why -> known-fail for that lane; XPASS is reported LOUD
+//   // @xfail(<lane>): why -> known-fail for that lane; an XPASS is a red, so the directive goes as soon as the lane passes
 //   // @serial             -> contention-sensitive (actor/spawn): its run cells
 //                             execute alone, after the parallel drain
 //   // @skip-js: why       -> no JS lane; the skip list is the JS backend worklist
+//   // @maxrcops: <n>    -> SAN cell: rc helper calls (inc + dec, owner and SHARE)
+//                             stay at or under <n>; the cell detail prints the counts
+//   // @maxroots: <n>    -> SAN cell: cycle-root registrations stay at or under <n>
+//   // @maxatomics(<host>) <n> -> danger cell: atomic instructions in the binary
+//                             (objdump) stay at or under <n> on that host
+//                             (`darwin-arm64`, `linux-x86_64`); a budgeted
+//                             program without one for this host fails; record
+//                             with MSCORPUS_ATOMICS_RECORD=1 (atomics/<host>/*.tsv);
+//                             a toolchain change moves the count: re-record, and
+//                             the tsv diff names the functions that moved
 //
 // Programs WITHOUT @maxrss are parity programs: run through C, Raiser and (unless
 // @skip-js) JS-on-node, outputs byte-compared. No golden files.
@@ -40,6 +50,17 @@
 //   MSCORPUS_BUILD_JOBS=N  # parallel builds     (default: CPU count)
 //   MSCORPUS_JOBS=N        # parallel run slots  (default: 4, unchanged)
 //
+// MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
+// directive on purpose and names the red it must produce (`// @selftest-red <substr>`
+// on one of its FAIL lines); a fixture that stays green, or that is red for another
+// reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/,
+// with MSCORPUS_TSAN=1 every fixture in selftest-tsan/ (no threaded list).
+//
+// MSCORPUS_TSAN=1 runs the TSan lane: each program the last MSCORPUS_SAN=1 run of the
+// same candidate saw start a pool thread (out/corpus/threaded.txt, keyed to the
+// compiler's path and checksum and the program selection; any other list fails loud),
+// built --sanitize=thread and run; pass = exit + @stdout + no ThreadSanitizer report.
+//
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
 // no ASan report + no DOUBLE-DESTROY + per-type ledger balance. Balance
@@ -55,7 +76,8 @@ import { writeStderr } from "std/io";
 import { isNotFound } from "std/io/errors";
 import { sleepAsync } from "std/core/promise";
 
-const PROG_DIR = "src/test/corpus/programs/";
+const SELFTEST = envOr("MSCORPUS_SELFTEST", "") == "1";
+const PROG_DIR = !SELFTEST ? "src/test/corpus/programs/" : envOr("MSCORPUS_SAN", "") == "1" ? "src/test/corpus/selftest-san/" : envOr("MSCORPUS_TSAN", "") == "1" ? "src/test/corpus/selftest-tsan/" : "src/test/corpus/selftest/";
 const OUT_DIR = "out/corpus/";
 
 // Windows has no POSIX shell, so every place this runner reaches for one is a
@@ -151,6 +173,9 @@ const BUILD_SLOTS = slotDefault("MSCORPUS_BUILD_JOBS", CPUS, CPUS);
 const RUN_SLOTS = slotDefault("MSCORPUS_JOBS", 4, CPUS);
 const FREE_RUN_SLOTS: int32 = BUILD_SLOTS / 2 > RUN_SLOTS ? BUILD_SLOTS / 2 : RUN_SLOTS;
 const SAN = envOr("MSCORPUS_SAN", "") == "1";
+const TSAN = envOr("MSCORPUS_TSAN", "") == "1";
+// One cell per program and no parity: the SAN and TSan lanes.
+const SOLO = SAN || TSAN;
 // 8M ledger-set entries: ASan quarantines freed addresses (no reuse), so the
 // finalized-pointer set degrades to append-only under slab-off — the default
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
@@ -262,7 +287,7 @@ const EXIT_SAN_HOST_BLOCKED = 77;
 
 function sanBuildCmd(entry: string, bin: string): string {
 	const extra = SAN_WIN != "" ? " " + SAN_WIN : "";
-	return MSC_CMD + " build " + entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
+	return MSC_CMD + " build " + entry + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
 }
 
 function asanLinkGap(): string {
@@ -298,6 +323,12 @@ interface Spec {
 	skipRaiser: boolean;
 	slackTypes: string[];
 	slackNs: int32[];
+	atomicHosts: string[];
+	atomicMax: int32[];
+	selftestRed: string;
+	maxRcOps: int32;
+	maxRoots: int32;
+	unknownDirectives: string[];
 }
 
 interface Cell {
@@ -311,6 +342,7 @@ interface Cell {
 	finished: boolean;
 	pass: boolean;
 	detail: string;
+	sanLibs: string;
 }
 
 interface RunOut { exitCode: int32; signal: int32; output: string; }
@@ -326,6 +358,14 @@ function runCapture(cmd: string): RunOut {
 
 function progress(line: string): void {
 	writeStderr(line + "\n");
+}
+
+// Main thread only: build workers print through progress, and module state stays on this thread.
+const redLines: string[] = [];
+
+function progressRed(line: string): void {
+	redLines.push(line);
+	progress(line);
 }
 
 function readFileOr(path: string, dflt: string): string {
@@ -404,7 +444,7 @@ function stalenessWarning(): string {
 }
 
 function laneUniverse(spec: Spec): string[] {
-	const lanes: string[] = spec.maxRssMb >= 0.0 ? ["drc", "orc", "danger", "san"] : ["c", "orc", "danger", "san"];
+	const lanes: string[] = ["c", "danger", "san", "tsan"];
 	if (!spec.skipRaiser) { lanes.push("raiser"); }
 	if (!spec.skipJs) { lanes.push("js"); lanes.push("esm"); }
 	return lanes;
@@ -430,13 +470,14 @@ function commaList(text: string): string[] {
 const ONLY: string[] = commaList(envOr("MSCORPUS_ONLY", ""));
 const LANES: string[] = commaList(envOr("MSCORPUS_LANES", ""));
 const RAISER = envOr("MSCORPUS_RAISER", "") == "1" || listHas(LANES, "raiser");
-const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm", "raiser"];
+const PARITY_LANES: string[] = ["c", "danger", "js", "esm", "raiser"];
 
 function narrowingError(specs: Spec[]): string {
 	for (const lane of LANES) {
 		if (!listHas(PARITY_LANES, lane)) { return "MSCORPUS_LANES names '" + lane + "'; the parity lanes are " + joinWith(PARITY_LANES, "/"); }
 	}
-	if (SAN && LANES.length > 0) { return "MSCORPUS_LANES narrows the parity run; the SAN lane builds one cell per program"; }
+	if (SAN && TSAN) { return "MSCORPUS_SAN and MSCORPUS_TSAN are separate runs: the TSan lane reads the list the SAN run writes"; }
+	if (SOLO && LANES.length > 0) { return "MSCORPUS_LANES narrows the parity run; the SAN and TSan lanes build one cell per program"; }
 	for (const name of ONLY) {
 		let found = false;
 		for (const spec of specs) { if (spec.name == name) { found = true; } }
@@ -453,15 +494,19 @@ function keepChosenLanes(jobs: BuildJob[]): BuildJob[] {
 }
 
 // A directive that cannot apply is a lie the runner used to keep (T9):
-// @xfail naming an impossible lane fails loud. @skip-js applies to every
+// @xfail naming an impossible lane fails loud, and so does a `// @` line the runner does not parse. @skip-js applies to every
 // program — @maxrss ones included, since they get a js cell alongside the
 // RSS cells (2026-09-01 audit) — so it is never inert anymore.
 function validateDirectives(specs: Spec[], t: Tally): void {
 	for (const spec of specs) {
+		for (const line of spec.unknownDirectives) {
+			progressRed("  ✗ " + spec.name + " [directives] — unknown directive '" + line + "': the runner would ignore it");
+			t.fails = t.fails + 1;
+		}
 		const lanes = laneUniverse(spec);
 		for (const lane of spec.xfailLanes) {
 			if (!listHas(lanes, lane)) {
-				progress("  ✗ " + spec.name + " [directives] — @xfail(" + lane + ") can never fire; this program's lanes are " + joinWith(lanes, "/"));
+				progressRed("  ✗ " + spec.name + " [directives] — @xfail(" + lane + ") can never fire; this program's lanes are " + joinWith(lanes, "/"));
 				t.fails = t.fails + 1;
 			}
 		}
@@ -476,12 +521,30 @@ function directiveValue(line: string, key: string): string {
 	return "";
 }
 
+const VALUE_DIRECTIVES = ["@maxrss:", "@stdout:", "@maxrcops:", "@maxroots:", "@exit:"];
+const LANE_DIRECTIVES = ["@xfail(", "@ledger-slack(", "@maxatomics("];
+const FLAG_DIRECTIVES = ["@serial", "@skip-js", "@skip-raiser", "@selftest-red"];
+
+function knownDirective(line: string): boolean {
+	const body = line.slice(3, line.length);
+	for (const d of VALUE_DIRECTIVES) { if (body.indexOf(d) == 0) { return true; } }
+	for (const d of LANE_DIRECTIVES) { if (body.indexOf(d) == 0) { return true; } }
+	for (const d of FLAG_DIRECTIVES) {
+		if (body.indexOf(d) != 0) { continue; }
+		const next = body.length > d.length ? body.charCodeAt(d.length) : 32;
+		if (next == 32 || next == 58) { return true; }
+	}
+	return false;
+}
+
 function parseSpec(name: string, entry: string): Spec {
 	const spec: Spec = {
 		name, entry,
 		maxRssMb: -1.0, stdoutSubs: [], expectExit: 0,
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
+		atomicHosts: [], atomicMax: [], selftestRed: "",
+		maxRcOps: -1, maxRoots: -1, unknownDirectives: [],
 	};
 	const src = readFileOr(entry, "");
 	const lines = src.split("\n");
@@ -492,9 +555,15 @@ function parseSpec(name: string, entry: string): Spec {
 		if (rss != "") { spec.maxRssMb = rss.parseInt() as float64; }
 		const sub = directiveValue(t, "@stdout");
 		if (sub != "") { spec.stdoutSubs.push(sub); }
+		const rcOps = directiveValue(t, "@maxrcops");
+		if (rcOps != "") { spec.maxRcOps = rcOps.parseInt() as int32; }
+		const roots = directiveValue(t, "@maxroots");
+		if (roots != "") { spec.maxRoots = roots.parseInt() as int32; }
 		const ec = directiveValue(t, "@exit");
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
+		if (t.indexOf("// @") == 0 && !knownDirective(t)) { spec.unknownDirectives.push(t); }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
+		if (t.indexOf("// @selftest-red ") == 0) { spec.selftestRed = t.slice(17, t.length).trim(); }
 		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
 		if (t.indexOf("// @skip-raiser") == 0) { spec.skipRaiser = true; }
 		if (t.indexOf("// @xfail(") == 0) {
@@ -506,6 +575,13 @@ function parseSpec(name: string, entry: string): Spec {
 			if (close > 17) {
 				spec.slackTypes.push(t.slice(17, close));
 				spec.slackNs.push(t.slice(close + 2, t.length).trim().parseInt() as int32);
+			}
+		}
+		if (t.indexOf("// @maxatomics(") == 0) {
+			const close = t.indexOf(")");
+			if (close > 15) {
+				spec.atomicHosts.push(t.slice(15, close));
+				spec.atomicMax.push(t.slice(close + 2, t.length).trim().parseInt() as int32);
 			}
 		}
 	}
@@ -577,7 +653,7 @@ function discoverSpecs(): Spec[] {
 
 function makeCell(spec: Spec, lane: string, bin: string): Cell {
 	const dir = OUT_DIR + "cells/" + spec.name + "." + lane + "/";
-	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, pid: "", finished: false, pass: false, detail: "" };
+	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, pid: "", finished: false, pass: false, detail: "", sanLibs: SAN_WIN_LIBS };
 }
 
 function isXfail(c: Cell): boolean {
@@ -585,10 +661,13 @@ function isXfail(c: Cell): boolean {
 	return false;
 }
 
-// parse peak RSS (MB) from `/usr/bin/time -l` output (macOS prints BYTES)
+// parse peak RSS (MB) from `/usr/bin/time -l` output (macOS prints BYTES) or GNU `time -v` (KILOBYTES)
 function parseRssMB(output: string): float64 {
 	const lines = output.split("\n");
 	for (const line of lines) {
+		if (line.contains("Maximum resident set size (kbytes):")) {
+			return (line.slice(line.indexOf(":") + 1, line.length).trim().parseInt() as float64) / 1024.0;
+		}
 		if (line.contains("maximum resident set size")) {
 			const idx = line.indexOf("maximum");
 			const numStr = line.slice(0, idx).trim();
@@ -643,9 +722,12 @@ function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 		// Windows: `VAR=v cmd` is sh syntax — inside the cell .bat it must be a
 		// `set` line, else cmd.exe treats ASAN_OPTIONS as the command (exit 9009).
 		if (IS_WIN) {
-			return (SAN_WIN_LIBS == "" ? "" : "set \"PATH=" + winPath(SAN_WIN_LIBS) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+			return (c.sanLibs == "" ? "" : "set \"PATH=" + winPath(c.sanLibs) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+	}
+	if (c.lane == "tsan") {
+		return bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.lane == "js") {
 		return "node " + bin + " > " + q(c.dir + "out.log") + " 2>&1";
@@ -658,7 +740,7 @@ function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
-		const timer = IS_WIN ? q(WINTIME) + " " : "/usr/bin/time -l ";
+		const timer = IS_WIN ? q(WINTIME) + " " : platform == "linux" ? "/usr/bin/time -v " : "/usr/bin/time -l ";
 		return timer + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "time.log");
 	}
 	return bin + " > " + q(c.dir + "out.log") + " 2>&1";
@@ -871,6 +953,20 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 	return "";
 }
 
+function finishTsanCell(c: Cell): void {
+	const rawExit = readExit(c);
+	const errLog = readFileOr(c.dir + "err.log", "");
+	const missing = missingStdoutLines(c.spec, readFileOr(c.dir + "stdout.log", "") + errLog);
+	const race = firstLineContaining(errLog, "WARNING: ThreadSanitizer");
+	let detail = "exit=" + rawExit;
+	if (rawExit != c.spec.expectExit) { detail = detail + " [exit≠" + c.spec.expectExit + "]"; }
+	if (missing.length > 0) { detail = detail + " [stdout missing " + quotedList(missing) + "]"; }
+	if (race != "") { detail = detail + " [" + race + "]"; }
+	c.pass = rawExit == c.spec.expectExit && missing.length == 0 && race == "";
+	c.detail = detail;
+	c.finished = true;
+}
+
 function finishSanCell(c: Cell): void {
 	const rawExit = readExit(c);
 	const stdoutLog = readFileOr(c.dir + "stdout.log", "");
@@ -891,17 +987,166 @@ function finishSanCell(c: Cell): void {
 	if (asanLine != "") { detail = detail + " [" + asanLine + "]"; }
 	if (doubleLine != "") { detail = detail + " [" + doubleLine + "]"; }
 	if (imbalance != "") { detail = detail + " [ledger " + imbalance + "]"; }
-	c.pass = exitOk && outOk && asanLine == "" && doubleLine == "" && imbalance == "" && ledgerLive;
+	const overCounts = ledgerCountsOver(c.spec, errLog);
+	if (overCounts != "") { detail = detail + " [" + overCounts + "]"; }
+	const counts = lastLineContaining(errLog, "LEDGER COUNTS ");
+	if (counts != "") { detail = detail + " " + counts.slice(counts.indexOf("LEDGER COUNTS ") + 14, counts.length); }
+	c.pass = exitOk && outOk && asanLine == "" && doubleLine == "" && imbalance == "" && overCounts == "" && ledgerLive;
 	c.detail = detail;
 	c.finished = true;
 }
 
+function lastLineContaining(text: string, needle: string): string {
+	let found = "";
+	for (const line of text.split("\n")) { if (line.contains(needle)) { found = line.trim(); } }
+	return found;
+}
+
+function ledgerCount(line: string, key: string): int32 {
+	const at = line.indexOf(" " + key + "=");
+	if (at < 0) { return -1; }
+	const rest = line.slice(at + key.length + 2, line.length);
+	const end = rest.indexOf(" ");
+	return (end < 0 ? rest : rest.slice(0, end)).parseInt() as int32;
+}
+
+// The ledger counts every rc helper call and root registration the program made; a
+// budget bounds them, so an op the optimizer used to remove comes back as a red.
+function ledgerCountsOver(spec: Spec, errLog: string): string {
+	if (spec.maxRcOps < 0 && spec.maxRoots < 0) { return ""; }
+	const line = lastLineContaining(errLog, "LEDGER COUNTS ");
+	if (line == "") { return "no LEDGER COUNTS line, so @maxrcops/@maxroots cannot be checked"; }
+	const over: string[] = [];
+	const rcOps = ledgerCount(line, "rc_inc") + ledgerCount(line, "rc_dec") + ledgerCount(line, "share_inc") + ledgerCount(line, "share_dec");
+	if (spec.maxRcOps >= 0 && rcOps > spec.maxRcOps) { over.push("rc ops " + rcOps + ">" + spec.maxRcOps); }
+	const roots = ledgerCount(line, "root_reg");
+	if (spec.maxRoots >= 0 && roots > spec.maxRoots) { over.push("root registrations " + roots + ">" + spec.maxRoots); }
+	return joinWith(over, ", ");
+}
+
 function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
+	if (c.lane == "tsan") { finishTsanCell(c); return; }
 	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
-	if (isRssCell(c)) { finishRssCell(c); return; }
-	finishParityCell(c);
+	if (isRssCell(c)) { finishRssCell(c); } else { finishParityCell(c); }
+	if (c.pass && c.lane == "danger" && c.spec.atomicHosts.length > 0) { checkAtomics(c); }
+}
+
+// ---- atomic budget (danger lane) ----
+
+// What counts as an atomic instruction depends on the instruction set, so a budget is
+// per host. The tsv beside it names the functions of the recorded count, for the red
+// detail only: mangled names carry path hashes that differ between checkouts.
+const ATOMIC_HOST = IS_WIN ? "windows" : platform + "-" + runCapture("uname -m").output.trim();
+const ATOMICS_DIR = "src/test/corpus/atomics/";
+const ATOMICS_RECORD = envOr("MSCORPUS_ATOMICS_RECORD", "") == "1";
+const ARM64_ATOMIC_OPS: string[] = ["ldadd", "ldclr", "ldeor", "ldset", "ldsmax", "ldsmin", "ldumax", "ldumin", "swp", "cas", "ldxr", "ldaxr", "stxr", "stlxr", "ldxp", "ldaxp", "stxp", "stlxp", "ldar", "ldapr", "stlr"];
+
+function checkAtomics(c: Cell): void {
+	const counts = countAtomics(c.bin);
+	if (counts == null) {
+		c.pass = false;
+		c.detail = c.detail + " [atomics: objdump could not read " + c.bin + "]";
+		return;
+	}
+	let total = 0;
+	for (const n of counts.values()) { total += n; }
+	const budgetFile = ATOMICS_DIR + ATOMIC_HOST + "/" + c.spec.name + ".tsv";
+	if (ATOMICS_RECORD) {
+		ensureDir(ATOMICS_DIR + ATOMIC_HOST);
+		writeFile(budgetFile, atomicsTsv(counts));
+		c.detail = c.detail + ` [atomics recorded: // @maxatomics(${ATOMIC_HOST}) ${total}]`;
+		return;
+	}
+	const at = c.spec.atomicHosts.indexOf(ATOMIC_HOST);
+	if (at < 0) {
+		c.pass = false;
+		c.detail = c.detail + ` [atomics=${total}, no @maxatomics(${ATOMIC_HOST}); record with MSCORPUS_ATOMICS_RECORD=1]`;
+		return;
+	}
+	const max = c.spec.atomicMax[at];
+	if (total <= max) {
+		c.detail = c.detail + ` atomics=${total}`;
+		return;
+	}
+	c.pass = false;
+	c.detail = c.detail + ` [atomics ${total}>${max}: ${atomicsOverBudget(counts, readFileOr(budgetFile, ""))}]`;
+}
+
+function countAtomics(bin: string): Map<string, int32> | null {
+	const r = execFileCapture("objdump", ["-d", "--no-show-raw-insn", bin]);
+	if (!r.ok) { return null; }
+	const counts = new Map<string, int32>();
+	let fn = "";
+	for (const line of r.value.split("\n")) {
+		if (line.endsWith(">:")) {
+			fn = stableFunctionName(line.slice(line.indexOf("<") + 1, line.length - 2));
+			continue;
+		}
+		const colon = line.indexOf(":");
+		if (colon < 0 || fn == "") { continue; }
+		if (isAtomicInstruction(line.slice(colon + 1, line.length).trim())) {
+			counts.set(fn, (counts.get(fn) ?? 0) + 1);
+		}
+	}
+	return counts;
+}
+
+function isAtomicInstruction(text: string): boolean {
+	let end = 0;
+	while (end < text.length && text.charAt(end) != " " && text.charAt(end) != "\t") { end += 1; }
+	const op = text.slice(0, end);
+	if (op == "lock" || op == "mfence") { return true; }
+	if (op.startsWith("xchg")) { return text.contains("("); }
+	for (const prefix of ARM64_ATOMIC_OPS) {
+		if (op.startsWith(prefix)) { return true; }
+	}
+	return false;
+}
+
+function stableFunctionName(raw: string): string {
+	const llvm = raw.indexOf(".llvm.");
+	const name = llvm >= 0 ? raw.slice(0, llvm) : raw;
+	const parts: string[] = [];
+	for (const part of name.split("_")) { parts.push(isPathHash(part) ? "H" : part); }
+	return parts.join("_");
+}
+
+function isPathHash(part: string): boolean {
+	if (part.length < 5 || part.length > 8) { return false; }
+	let digits = 0;
+	for (let i = 0; i < part.length; i += 1) {
+		const ch = part.charAt(i);
+		if (ch >= "0" && ch <= "9") { digits += 1; } else if (ch < "a" || ch > "z") { return false; }
+	}
+	return digits > 0;
+}
+
+function atomicsTsv(counts: Map<string, int32>): string {
+	const lines: string[] = [];
+	for (const [fn, n] of counts) { lines.push(`${n}\t${fn}`); }
+	lines.sort();
+	return lines.join("\n") + "\n";
+}
+
+interface AtomicGrowth { fn: string; by: int32; }
+
+function atomicsOverBudget(counts: Map<string, int32>, recorded: string): string {
+	const before = new Map<string, int32>();
+	for (const line of recorded.split("\n")) {
+		const tab = line.indexOf("\t");
+		if (tab > 0) { before.set(line.slice(tab + 1, line.length), line.slice(0, tab).parseInt() as int32); }
+	}
+	const grown: AtomicGrowth[] = [];
+	for (const [fn, n] of counts) {
+		const was = before.get(fn) ?? 0;
+		if (n > was) { grown.push({ fn, by: n - was }); }
+	}
+	grown.sort((a: AtomicGrowth, b: AtomicGrowth): number => b.by - a.by);
+	if (grown.length == 0) { return "no function grew against " + (recorded == "" ? "a missing tsv" : "the tsv"); }
+	const named = grown.slice(0, 8).map((g: AtomicGrowth): string => `${g.fn} +${g.by}`);
+	return named.join(", ") + (grown.length > 8 ? `, and ${grown.length - 8} more` : "");
 }
 
 // ---- reporting ----
@@ -909,11 +1154,15 @@ function finishCell(c: Cell): void {
 function reportCell(c: Cell, t: Tally): void {
 	const tag = c.spec.name + " [" + c.lane + "]";
 	if (isXfail(c)) {
-		if (c.pass) { t.xpasses = t.xpasses + 1; progress("  ? XPASS " + tag + " — " + c.detail); }
+		if (c.pass) {
+			t.xpasses = t.xpasses + 1;
+			t.fails = t.fails + 1;
+			progressRed("  ✗ FAIL " + tag + " — XPASS: the known-fail passes, delete its @xfail(" + c.lane + ") — " + c.detail);
+		}
 		else { t.xfails = t.xfails + 1; progress("  ▷ xfail " + tag); }
 	} else {
 		if (c.pass) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + c.detail); }
-		else { t.fails = t.fails + 1; progress("  ✗ FAIL " + tag + " — " + c.detail); }
+		else { t.fails = t.fails + 1; progressRed("  ✗ FAIL " + tag + " — " + c.detail); }
 	}
 }
 
@@ -965,7 +1214,7 @@ function compareParityGroup(group: Cell[], t: Tally): void {
 	for (const c of cells) { lanes = lanes == "" ? c.lane : lanes + "↔" + c.lane; }
 	const tag = base.spec.name + " [parity]";
 	if (same) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + lanes + " identical"); }
-	else { t.fails = t.fails + 1; progress("  ✗ FAIL " + tag + " — " + base.lane + " vs " + other + " outputs differ"); }
+	else { t.fails = t.fails + 1; progressRed("  ✗ FAIL " + tag + " — " + base.lane + " vs " + other + " outputs differ"); }
 }
 
 // ---- build plan ----
@@ -975,47 +1224,31 @@ interface BuildJob { spec: Spec; lane: string; cmd: string; cell: Cell; }
 function planJobs(specs: Spec[]): BuildJob[] {
 	const jobs: BuildJob[] = [];
 	for (const spec of specs) {
+		if (TSAN) {
+			const bin = OUT_DIR + "bin/" + spec.name + ".tsan";
+			jobs.push({ spec, lane: "tsan", cmd: MSC_CMD + " build " + spec.entry + " --sanitize=thread --cc=clang --output=" + bin, cell: makeCell(spec, "tsan", bin) });
+			continue;
+		}
 		if (SAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".san";
 			jobs.push({ spec, lane: "san", cmd: sanBuildCmd(spec.entry, bin), cell: makeCell(spec, "san", bin) });
 			continue;
 		}
-		if (spec.maxRssMb >= 0.0) {
-			const modes: string[] = ["drc", "orc"];
-			for (const gc of modes) {
-				const bin = OUT_DIR + "bin/" + spec.name + "." + gc;
-				jobs.push({ spec, lane: gc, cmd: MSC_CMD + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
-			}
+		const cbin = OUT_DIR + "bin/" + spec.name + ".c";
+		jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 		const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-		// js cell rides along since the 2026-09-01 audit: same
-		// build+run+byte-compare as a parity js cell. finishCell routes it
-		// to the parity verdict — the RSS bound stays native-only.
+		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+		// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
+		// include js (so @xfail(js) keeps validating), only this host
+		// cannot execute the cell.
 		if (!spec.skipJs && HAS_NODE) {
 			const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
 			jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+			// Same program through the module tree: the bundle collapses
+			// every module into one scope, so it cannot see a name the
+			// declaring and referencing sides spell differently.
 			const esmdir = OUT_DIR + "esm/" + spec.name;
 			jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
-		}
-	} else {
-			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
-			jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
-			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
-			jobs.push({ spec, lane: "orc", cmd: MSC_CMD + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
-			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-			// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
-			// include js (so @xfail(js) keeps validating), only this host
-			// cannot execute the cell.
-			if (!spec.skipJs && HAS_NODE) {
-				const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
-				jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
-				// Same program through the module tree: the bundle collapses
-				// every module into one scope, so it cannot see a name the
-				// declaring and referencing sides spell differently.
-				const esmdir = OUT_DIR + "esm/" + spec.name;
-				jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
-			}
 		}
 		if (RAISER && !spec.skipRaiser) { jobs.push({ spec, lane: "raiser", cmd: "", cell: makeCell(spec, "raiser", spec.entry) }); }
 	}
@@ -1078,6 +1311,11 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32, stride: int32): n
 		built = built + 1;
 	}
 	return built;
+}
+
+function workerCopy(j: Readonly<BuildJob>): BuildJob {
+	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs], atomicHosts: [...j.spec.atomicHosts], atomicMax: [...j.spec.atomicMax], unknownDirectives: [...j.spec.unknownDirectives] };
+	return { spec, lane: j.lane, cmd: j.cmd, cell: { ...j.cell, spec } };
 }
 
 function builtText(job: BuildJob): string {
@@ -1186,7 +1424,7 @@ function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 
 function settleCell(c: Cell, t: Tally, parityDone: Cell[]): void {
 	finishCell(c);
-	if (SAN) { reportCell(c, t); return; }
+	if (SOLO) { reportCell(c, t); return; }
 	if (!isXfail(c)) { reportCell(c, t); }
 	parityDone.push(c);
 }
@@ -1222,13 +1460,14 @@ function main(): void {
 	// that describe the harness rather than the compiler.
 	if (!ensureWintime()) { exit(1); }
 
-	const specs = discoverSpecs();
-	const narrowing = narrowingError(specs);
+	const discovered = discoverSpecs();
+	const narrowing = narrowingError(discovered);
 	if (narrowing != "") { progress("  ✗ " + narrowing); exit(1); }
+	const specs = TSAN ? threadedSpecs(discovered) : discovered;
 	const jobs = keepChosenLanes(planJobs(specs));
 
 	progress("");
-	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
+	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : TSAN ? "TSan lane (programs the SAN run saw start a thread)" : "parity + RSS lanes";
 	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", build slots=" + BUILD_SLOTS + ", run slots=" + RUN_SLOTS + " measured + " + FREE_RUN_SLOTS + " unmeasured)");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
@@ -1240,8 +1479,8 @@ function main(): void {
 	if (!HAS_CLANG) {
 		progress("  !! clang missing, or present but unable to compile a hello world here — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
 	}
-	if (!HAS_NODE && !SAN) {
-		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (drc/orc/danger), so C↔JS backend divergence is not covered");
+	if (!HAS_NODE && !SOLO) {
+		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (c/danger), so C↔JS backend divergence is not covered");
 	}
 
 	if (ONLY.length > 0) {
@@ -1250,7 +1489,7 @@ function main(): void {
 	if (LANES.length > 0) {
 		progress("  !! MSCORPUS_LANES — only " + joinWith(LANES, "/") + " cells are built; parity compares those lanes alone");
 	}
-	if (!RAISER && !SAN) {
+	if (!RAISER && !SOLO) {
 		progress("  !! raiser lane off — no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on");
 	}
 
@@ -1291,10 +1530,12 @@ function main(): void {
 	// a success, not a failure (unchanged reruns hit it on every native cell)
 	clearBuiltMarkers(jobs);
 	const slots: int32 = BUILD_SLOTS < jobs.length ? BUILD_SLOTS : jobs.length as int32;
+	const workerJobs: BuildJob[] = [];
+	for (const j of jobs) { workerJobs.push(workerCopy(j)); }
 	const workers: Promise<number>[] = [];
 	for (let w: int32 = 0; w < slots; w += 1) {
 		const first = w;
-		workers.push(spawn(() => buildWorker(jobs, first, slots)));
+		workers.push(spawn(() => buildWorker(workerJobs, first, slots)));
 	}
 	let ci = 0;
 	while (ci < jobs.length) {
@@ -1347,7 +1588,7 @@ function main(): void {
 
 	// parity byte-compare per program (all lanes finished by now)
 	for (const spec of specs) {
-		if (SAN) { continue; }
+		if (SOLO) { continue; }
 		const mine: Cell[] = [];
 		for (const c of parityDone) { if (c.spec.name == spec.name) { mine.push(c); } }
 		compareParityGroup(mine, t);
@@ -1358,10 +1599,69 @@ function main(): void {
 	const summary = t.passes + " pass · " + t.fails + " fail · " + t.xfails + " xfail · " + t.xpasses + " xpass";
 	progress("  " + summary);
 	console.log(summary);
-	if (t.xpasses > 0) {
-		console.log("NOTE: XPASS = a known-fail now passes — clear its @xfail directive");
-	}
+	if (SELFTEST) { exit(judgeSelftest(specs)); }
+	if (SAN) { writeThreaded(jobs); }
 	if (t.fails > 0) { exit(1); }
+}
+
+// ---- TSan selection: the programs the SAN run saw start a pool thread ----
+
+// Pool workers are the only threads that run program code; hcr's log pump runs none.
+const THREADED_FILE = OUT_DIR + "threaded.txt";
+const TSAN_EXCLUDED: string[] = ["rootFreedOutsideItsExecutorFailsLoud"];
+const TSAN_EXCLUDED_WHY = "frees a root from its own pthread on purpose to prove the M1 abort, a race by design";
+
+// A list belongs to one candidate and one program selection; any other is stale.
+function threadedKey(): string {
+	return "msc=" + MSC + " cksum=" + runCapture("cksum " + MSC).output.trim().split(" ").slice(0, 2).join(" ") + " only=" + envOr("MSCORPUS_ONLY", "") + " filter=" + FILTER;
+}
+
+function writeThreaded(jobs: BuildJob[]): void {
+	const names: string[] = [];
+	for (const j of jobs) {
+		const counts = lastLineContaining(readFileOr(j.cell.dir + "err.log", ""), "LEDGER COUNTS ");
+		if (ledgerCount(counts, "thread_start") > 0) { names.push(j.spec.name); }
+	}
+	writeFile(THREADED_FILE, threadedKey() + "\n" + names.join("\n") + "\n");
+	progress("  " + names.length + " program(s) started a thread → " + THREADED_FILE);
+}
+
+function threadedSpecs(all: Spec[]): Spec[] {
+	if (SELFTEST) { return all; }
+	const text = readFileOr(THREADED_FILE, "");
+	if (text == "") {
+		progress("  ✗ TSan lane: no " + THREADED_FILE + "; run MSCORPUS_SAN=1 with this candidate first");
+		exit(1);
+	}
+	const rows = text.split("\n");
+	if (rows[0] != threadedKey()) {
+		progress("  ✗ TSan lane: " + THREADED_FILE + " was written for '" + rows[0] + "', not '" + threadedKey() + "'; rerun MSCORPUS_SAN=1 with this candidate");
+		exit(1);
+	}
+	const picked: Spec[] = [];
+	for (const spec of all) {
+		if (!rows.slice(1).includes(spec.name)) { continue; }
+		if (TSAN_EXCLUDED.includes(spec.name)) { progress("  !! TSan lane skips " + spec.name + ": " + TSAN_EXCLUDED_WHY); continue; }
+		picked.push(spec);
+	}
+	return picked;
+}
+
+// A directive whose check cannot go red here passes every program that carries it.
+function judgeSelftest(specs: Spec[]): int32 {
+	let bad = 0;
+	for (const spec of specs) {
+		const mine = redLines.filter((l: string): boolean => l.contains(" " + spec.name + " ["));
+		let verdict = "red as declared";
+		if (spec.selftestRed == "") { verdict = "no // @selftest-red line"; }
+		else if (mine.length == 0) { verdict = "stayed green, the directive it breaks is hollow"; }
+		else if (!mine.some((l: string): boolean => l.contains(spec.selftestRed))) { verdict = "red for another reason, wanted '" + spec.selftestRed + "'"; }
+		if (verdict != "red as declared") { bad = bad + 1; }
+		console.log((verdict == "red as declared" ? "red  " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
+	}
+	if (specs.length == 0) { bad = bad + 1; console.log("BAD  selftest: no fixtures under " + PROG_DIR); }
+	console.log(bad == 0 ? "corpus selftest: ALL RED AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
+	return bad == 0 ? 0 : 1;
 }
 
 main();

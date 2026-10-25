@@ -52,37 +52,37 @@ export function discriminator(this typeof Safe): Discriminator {
 }
 
 export struct TwoSeeds {
-	@seeds("a") @seeds("b") @bump(safe.bump) safe: Mutable<Safe>;
+	@seeds("a") @seeds("b") @bump(safe.bump) safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct NoBump {
-	@seeds("a") safe: Mutable<Safe>;
+	@seeds("a") safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct NoSeeds {
-	@bump(safe.bump) safe: Mutable<Safe>;
+	@bump(safe.bump) safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct Ghost {
-	@hasOne(ghost) safe: Mutable<Safe>;
+	@hasOne(ghost) safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct Plain {
-	@hasOne(wallet) wallet: Signer;
+	@hasOne(wallet) wallet: Signer; // GUARD-REFUSED
 }
 
 export struct Unknown {
-	@label safe: Mutable<Safe>;
+	@label safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct Third {
 	mint: External<Mint>;
-	@associated(mint, mint, mint) token: ExternalMutable<TokenAccount>;
+	@associated(mint, mint, mint) token: ExternalMutable<TokenAccount>; // GUARD-REFUSED
 }
 
 export struct PubkeyMint {
 	safe: Mutable<Safe>;
-	@associated(safe.owner, safe) token: ExternalMutable<TokenAccount>;
+	@associated(safe.owner, safe) token: ExternalMutable<TokenAccount>; // GUARD-REFUSED
 }
 
 export struct Unpinned {
@@ -90,15 +90,15 @@ export struct Unpinned {
 }
 
 export struct NotToken {
-	@tokenMint(wallet) wallet: Signer;
+	@tokenMint(wallet) wallet: Signer; // GUARD-REFUSED
 }
 
 export struct NotAKey {
-	@address(7) safe: Mutable<Safe>;
+	@address(7) safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 export struct Closure {
-	@address(() => 1) safe: Mutable<Safe>;
+	@address(() => 1) safe: Mutable<Safe>; // GUARD-REFUSED
 }
 
 function run(): Result<uint64, ProgramError> {
@@ -113,7 +113,7 @@ function run(): Result<uint64, ProgramError> {
 	const i = try accounts<Closure>();
 	const j = try accounts<NotAKey>();
 	const k = try accounts<PubkeyMint>();
-	const l = try accounts<Unpinned>();
+	const l = try accounts<Unpinned>(); // GUARD-REFUSED
 	return Result.ok(0);
 }
 

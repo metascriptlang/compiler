@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
-import { matchUnionBehindInstance, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
+import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, reportTransformError } from "../context";
@@ -80,7 +80,7 @@ function lowerConversion(node: Node, ctx: TransformContext): Node {
 
 function buildArm(node: Node, ctx: TransformContext): void {
 	const d = node.data as HiddenStdConvData;
-	const union = d.convType == null ? null : matchUnionBehindInstance(d.convType);
+	const union = d.convType == null ? null : instantiatedUnionBehind(d.convType);
 	const from = d.convExpr.nodeType;
 	if (union == null || !isTagCarriedUnion(union) || from == null || node.variantSlot > union.typeChildren.length) return;
 	const slot = node.variantSlot - 1;

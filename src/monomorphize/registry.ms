@@ -8,7 +8,7 @@ import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBra
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
 // surface syntax) cannot recurse forever.
-function monoStructuralKey(t: Type): string {
+function monoStructuralKey(t: Readonly<Type>): string {
 	let key = "";
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		if (i > 0) key = key + ",";
@@ -18,7 +18,7 @@ function monoStructuralKey(t: Type): string {
 	return key;
 }
 
-function monoOwnerPath(t: Type): string {
+function monoOwnerPath(t: Readonly<Type>): string {
 	if (t.sym != null) return t.sym.modulePath;
 	if (t.typeName == "") return "";
 	if (t.kind == TypeKind.Struct && t.typeNames.length > 0 && !hasTypeIdentity(t)) return "";
@@ -30,8 +30,8 @@ function monoOwnerPath(t: Type): string {
 // itself carries no symbol (it is built structurally), but its `typeExtra` still
 // points at the declared base type, which the collect pass stamped with the
 // declaring symbol — the same identity monoOwnerPath reads for a named struct.
-function monoGenericOwner(gi: Type): string {
-	let base: Type | null = gi.typeExtra;
+function monoGenericOwner(gi: Readonly<Type>): string {
+	let base: Readonly<Type | null> = gi.typeExtra;
 	let hops = 0;
 	while (base != null && hops < 8
 			&& (base.kind == TypeKind.Ref || base.kind == TypeKind.Ptr || base.kind == TypeKind.GenericInstance)) {
@@ -63,27 +63,27 @@ export function monoRoutineBaseName(baseName: string, ownerPath: string, disamb:
 // One spelling of "the name of this generic instance", shared by checker,
 // analyzer, transform and codegen so the struct, its hooks and every call site
 // cannot drift apart.
-export function monoInstanceName(gi: Type): string {
+export function monoInstanceName(gi: Readonly<Type>): string {
 	return monoInstanceNameOf(gi.typeName, monoGenericOwner(gi), gi.typeChildren);
 }
 
-export function monoInstanceNameOf(genericName: string, ownerPath: string, typeArgs: Type[]): string {
+export function monoInstanceNameOf(genericName: string, ownerPath: string, typeArgs: Readonly<Type[]>): string {
 	return mangleMonoName(monoBaseName(genericName, ownerPath), typeArgs);
 }
 
 // Output spelling only; checked type arguments decide instance identity.
-export function monoTypeKey(t: Type | null): string {
+export function monoTypeKey(t: Readonly<Type | null>): string {
 	if (t == null) return "null";
 	const key = monoTypeKeyBody(t);
 	return t.typeFlags.has(TypeFlag.IsReadonly) ? "ro_" + key : key;
 }
 
-function monoDeclaredName(t: Type): string {
+function monoDeclaredName(t: Readonly<Type>): string {
 	const disamb = t.sym != null ? t.sym.disamb : 0;
 	return disamb == 0 ? t.typeName : t.typeName + "_u" + String(disamb);
 }
 
-function monoTypeKeyBody(t: Type): string {
+function monoTypeKeyBody(t: Readonly<Type>): string {
 	return match (t.kind) {
 		TypeKind.Number => "float64",
 		TypeKind.String => "string",
@@ -93,7 +93,7 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => "int64",
+		TypeKind.Int64 => t.sym != null && t.sym.symbolKind == SymbolKind.Actor ? monoTypeKey(t.sym.symbolType) : "int64",
 		TypeKind.Uint8 => "uint8",
 		TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32",
@@ -185,12 +185,12 @@ function monoTypeKeyBody(t: Type): string {
 
 // identity<number>     → "identity__number"
 // pair<number, string> → "pair__number_string"
-export function mangleMonoName(baseName: string, concreteTypes: Type[]): string {
+export function mangleMonoName(baseName: string, concreteTypes: Readonly<Type[]>): string {
 	return baseName + "__" + buildTypeArgKeys(concreteTypes).join("_");
 }
 
 // Build typeArgKeys from concrete types
-export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
+export function buildTypeArgKeys(concreteTypes: Readonly<Type[]>): string[] {
 	const keys: string[] = [];
 	for (let i = 0; i < concreteTypes.length; i += 1) {
 		keys.push(monoTypeKey(concreteTypes[i]));

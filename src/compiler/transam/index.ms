@@ -48,6 +48,7 @@ import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
+import { RoutineDecls, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import { macroCompileCount, macroPreprocessCount } from "../meta/expand";
 import { boundHandleCount } from "../meta/bridge"; // also registers the expandMacroInvocation callback
@@ -152,6 +153,7 @@ export class TransAmDb {
 	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
 	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
 	bound: HashMap<string, BoundCheck>;         // bound and not finished: in progress, or bound on demand from an import cycle
+	routineDecls: RoutineDecls;
 	globalImports: TaGlobalImport[];            // the project's build.ms globalImports, resolved, in build.ms order
 	globalClosures: TaGlobalImportClosures;
 	globalLayers: TaGlobalImportsLayer[];       // [k - 1]: the names of the first k global imports
@@ -209,6 +211,7 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
 		bound: new HashMap<string, BoundCheck>(),
+		routineDecls: createRoutineDecls(),
 		globalImports: [],
 		globalClosures: { revision: -1, closures: [], modules: [] },
 		globalLayers: [],
@@ -1076,7 +1079,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	recordDependency(db.depStack, ckKey, ckEntry != null ? ckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
-	const analyzed = analyzeProgram(transformed, checkerCtx);
+	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(db.routineDecls, []));
 	db.trees.set(analyzeNodeKey(fileId), analyzed);
 	const analyzeHash = transAmHashNode(analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, analyzeHash, true);

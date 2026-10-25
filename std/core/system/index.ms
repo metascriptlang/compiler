@@ -1,6 +1,9 @@
 @include("runtime/core/system.h");
 @compile("runtime/core/system.c");
 @compile("runtime/drc.c");
+when (mscKeepsRootsWithOwner) {
+	@passC("-DMS_ROOT_OWNER_AT_FREE");
+}
 
 export class console {
 	/**
@@ -130,6 +133,9 @@ extern function msGenericArrayPush(arr: Ptr<void>, sink value: Ptr<void>): void 
 @compilerFunc @builtin("SpawnInto")
 extern function msSpawnInto(sink fut: Ptr<void>, fn: Ptr<void>): Ptr<void>;
 
+@compilerFunc @builtin("SpawnInto")
+extern function msSpawnIntoHeldSubmit(sink fut: Ptr<void>, fn: Ptr<void>, hp: Ptr<void>): Ptr<void>;
+
 @compilerFunc @builtin("FutureCreateInline")
 extern function msFutureCreateInline(): Ptr<void>;
 
@@ -219,13 +225,65 @@ extern function msMaybeGet(v: Ptr<void>, head: string, labels: string): Ptr<void
 @compilerFunc
 extern function msClosureSame(a: () => void, b: () => void): boolean;
 
+class AbortListener {
+	fn: () => void;
+	next: AbortListener | null = null;
+	constructor(fn: () => void) { this.fn = fn; }
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
+	private abortListeners: AbortListener | null;
 
 	constructor() {
 		this.aborted = false;
 		this.reason = "";
+		this.abortListeners = null;
+	}
+
+	addEventListener(type: string, listener: () => void): void {
+		if (!msStringEquals(type, "abort")) return;
+		if (this.abortListeners == null) {
+			this.abortListeners = new AbortListener(listener);
+			return;
+		}
+		let at = this.abortListeners!;
+		while (true) {
+			if (at.fn === listener) return;
+			if (at.next == null) break;
+			at = at.next!;
+		}
+		at.next = new AbortListener(listener);
+	}
+
+	removeEventListener(type: string, listener: () => void): void {
+		if (!msStringEquals(type, "abort") || this.abortListeners == null) return;
+		if (this.abortListeners!.fn === listener) {
+			this.abortListeners = this.abortListeners!.next;
+			return;
+		}
+		let at = this.abortListeners!;
+		while (at.next != null) {
+			if (at.next!.fn === listener) {
+				at.next = at.next!.next;
+				return;
+			}
+			at = at.next!;
+		}
+	}
+
+	dispatchAbort(reason: string): void {
+		if (this.aborted) return;
+		this.aborted = true;
+		this.reason = reason;
+		let at = this.abortListeners;
+		this.abortListeners = null;
+		while (at != null) {
+			const fn = at.fn;
+			at = at.next;
+			fn();
+		}
 	}
 
 	throwIfAborted(): void {
@@ -250,10 +308,7 @@ export class AbortController {
 	}
 
 	abort(reason: string): void {
-		if (!this.signal.aborted) {
-			this.signal.aborted = true;
-			this.signal.reason = reason;
-		}
+		this.signal.dispatchAbort(reason);
 	}
 }
 
@@ -286,6 +341,12 @@ when (mscDeclaresRuntime) {
 	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
 
 	@compilerFunc
+	extern function msOrcDisown(p: Ptr<void>): void;
+
+	@compilerFunc @builtin("OrcDisownValue")
+	extern function msOrcDisownValue(value: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msAtomicIncref(p: Ptr<void>): void;
 
 	@compilerFunc
@@ -301,13 +362,13 @@ when (mscDeclaresRuntime) {
 	extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msOrcBeginTeardown(): void;
-
-	@compilerFunc
-	extern function msOrcEndTeardown(): void;
-
-	@compilerFunc
 	extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msHeldCount(p: Ptr<void>): int64;
+
+	@compilerFunc
+	extern function msDestroyLeftNoRef(p: Ptr<void>, held: int64): void;
 
 	@compilerFunc
 	extern function msStringDecref(s: string): void;
@@ -427,6 +488,9 @@ when (mscDeclaresRuntime) {
 	extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msArrayCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
@@ -445,6 +509,9 @@ when (mscDeclaresRuntime) {
 	extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
@@ -452,6 +519,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msArrayStringSink(d: Ptr<void>, v: Ptr<void>): void;
@@ -478,6 +548,9 @@ when (mscDeclaresRuntime) {
 	extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 	@compilerFunc
@@ -493,6 +566,9 @@ when (mscDeclaresRuntime) {
 	extern function msAtomicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 	@compilerFunc
+	extern function msAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+	@compilerFunc
 	extern function msRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
 
 	@compilerFunc
@@ -503,6 +579,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msAtomicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msSliceLen(start: int64, end: int64, len: int64): int64;
@@ -524,6 +603,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msClosureTrace(c: () => void, env: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msClosureDisown(c: () => void): void;
 
 	@compilerFunc
 	extern function msSetCard32(v: uint32): int32;
@@ -841,6 +923,9 @@ when (mscDeclaresRuntime) {
 	extern function msUnboxInt32(p: Ptr<void>): int32;
 
 	@compilerFunc
+	extern function msUnboxInt64(p: Ptr<void>): int64;
+
+	@compilerFunc
 	extern function msUnboxBool(p: Ptr<void>): boolean;
 
 	@compilerFunc
@@ -881,6 +966,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msFutureSetValueDrop(fp: Ptr<void>, drop: () => void): void;
+
+	@compilerFunc
+	extern function msFutureDropUnread(sink fp: Ptr<void>, drop: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureTakeRaw(fp: Ptr<void>): Ptr<void>;
@@ -1015,9 +1103,6 @@ when (mscDeclaresRuntime) {
 	extern function msAwaitGroupBlocking(g: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msAwaitGroupCancel(g: Ptr<void>): void;
-
-	@compilerFunc
 	extern function msAwaitGroupFree(g: Ptr<void>): void;
 
 	@compilerFunc
@@ -1042,16 +1127,49 @@ when (mscDeclaresRuntime) {
 	extern function msAwaitSlotWait(sp: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msAwaitSlotSettle(sp: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msSpawnHeldCreate(): Ptr<void>;
+
+	@compilerFunc
+	extern function msSpawnHeldSubmit(hp: Ptr<void>, fn: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msSpawnHeldSettle(hp: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>): int64;
 
 	@compilerFunc
 	extern function msActorFromPid(pid: int64): Ptr<void>;
 
 	@compilerFunc
+	extern function msActorPin(pid: int64): int32;
+
+	@compilerFunc
+	extern function msActorPinnedState(slot: int32): Ptr<void>;
+
+	@compilerFunc
+	extern function msActorUnpin(slot: int32): void;
+
+	@compilerFunc
+	extern function msActorCopyString(s: string): string;
+
+	@compilerFunc
+	extern function msBigIntClone(a: bigint): bigint;
+
+	@compilerFunc
 	extern function msActorPollAll(): boolean;
 
 	@compilerFunc
 	extern function msActorRegister(a: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msActorCtorEnter(pid: int64): void;
+
+	@compilerFunc
+	extern function msActorCtorLeave(pid: int64): void;
 
 	@compilerFunc
 	extern function msActorSend(a: Ptr<void>, msg: Ptr<void>): void;

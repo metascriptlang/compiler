@@ -14,7 +14,7 @@ import { TypeKind } from "../../ast/node";
 import { inferredType, noneType, isUnknownType, isPointerShapedForUnknown, typeDisplayName, numberType } from "../../checker/types";
 import { isAssignable, typeRelation, TypeRelation } from "../../checker/compat";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
-import { createCGen } from "../../codegen/c/context";
+import { CEmissionFacts, createAliveSet, createCGen } from "../../codegen/c/context";
 import { checkSource } from "./helpers";
 import { resolveSimpleTypeStr } from "../../transform/util";
 import { createTransformContextWithChecker, freshTempSym } from "../../transform/context";
@@ -65,7 +65,9 @@ test "Inferred at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	// reaching emission is a compiler bug (tyInferred never arrives raw at cgen).
 	const ctx = checkSource("function main(): void { }");
 	assert ctx != null;
-	const g = createCGen(ctx, "gate.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(ctx, "gate.ms", alive, facts);
 	getTypeDesc(g, inferredType());
 	assert g.errors.length > 0 && g.errors[0].message.contains("internal: unresolved type"), "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
 }

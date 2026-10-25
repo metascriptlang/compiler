@@ -117,14 +117,15 @@ or without a pass (card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
 
 ### `lsp` — editor-only target
 
-`lsp: { os, gc }` tells the language server which target to judge against; `msc build` ignores it
-entirely. `os` defaults to the host; `gc` is inferred from it (`bare`/`solana` ⇒ `manual`, else
-`orc`). Its one measurable effect: when the effective gc is `manual` and the open file is not
-under `std/`, every async site gets FREESTANDING E01 as a *warning* — measured (2026-09-06, real
-stdio LSP): `lsp = { os: "bare" }` → 3 warnings on a 3-async-site file; no `lsp` section, or
+`lsp: { os, mm }` tells the language server which target to judge against; `msc build` ignores it
+entirely. `os` defaults to the host; `mm` resolves as a build's `--mm` does (`targetMemoryMode`:
+`solana` ⇒ `manual`, `bare` ⇒ `manual` unless `mm` is given, else `drc`). Its one measurable
+effect: when the effective mode is `manual` and the open file is not under `std/`, every async
+site gets FREESTANDING E01 as a *warning* — measured (2026-09-06, real stdio LSP, when the key was
+`gc`): `lsp = { os: "bare" }` → 3 warnings on a 3-async-site file; no `lsp` section, or
 `gc: "drc"` → 0. A project that declares nothing keeps exactly the diagnostics it had. Unknown
-`os`/`gc` values are reported when the editor opens `build.ms` itself (`validateBuildConfig`,
-LSP-only).
+`os`/`mm` values, and the old `gc` key ("lsp.gc is gone: write lsp.mm (drc, manual or none)"),
+are reported when the editor opens `build.ms` itself (`validateBuildConfig`, LSP-only).
 
 ### Declared but not wired — do not rely on these yet
 

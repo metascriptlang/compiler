@@ -3,18 +3,22 @@
 // @stdout: worker chain 1000000 sum 499999500000
 // @stdout: worker tags 300000 in order
 // note: a spawned task runs on a pool thread whose stack is smaller than the main thread's; dropping a 1 000 000-link list there, and a 300 000-link list whose struct hooks must run deepest first, finishes without overflowing that stack
+import { lockedUpdate, lockedRead } from "std/core/promise";
+
 class Link {
 	next: Link | null = null;
 	v: number = 0;
 }
 
-let seen: number = 0;
-let bad: number = 0;
+struct Order { seen: number; bad: number; }
+const order = new Locked<Order>({ seen: 0, bad: 0 });
 
 struct Tag { id: number; }
 function onDestroy(this t: Tag): void {
-	if (t.id != seen) bad += 1;
-	seen += 1;
+	const id = t.id;
+	lockedUpdate(order, (o: Order): Order => {
+		return { seen: o.seen + 1, bad: id != o.seen ? o.bad + 1 : o.bad };
+	});
 }
 
 class Node {
@@ -47,10 +51,10 @@ function tags(n: number): string {
 		x.next = h;
 		h = x;
 	}
-	seen = 0;
-	bad = 0;
+	lockedUpdate(order, (o: Order): Order => { return { seen: 0, bad: 0 }; });
 	h = null;
-	return seen == n && bad == 0 ? "in order" : `seen ${seen} bad ${bad}`;
+	const o = lockedRead(order, (o: Order): Order => { return o; });
+	return o.seen == n && o.bad == 0 ? "in order" : `seen ${o.seen} bad ${o.bad}`;
 }
 
 const s = await spawn(() => chain(1000000));

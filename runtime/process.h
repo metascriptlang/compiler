@@ -290,7 +290,7 @@ static inline msString msProcessArgvAt(double index) {
 	/* Convert wide string to UTF-8 */
 	int needed = WideCharToMultiByte(CP_UTF8, 0, _msWargv[idx], -1, NULL, 0, NULL, NULL);
 	if (needed <= 0) return MS_EMPTY_STRING;
-	char* buf = (char*)malloc(needed);
+	char* buf = (char*)msMemAlloc(needed);
 	WideCharToMultiByte(CP_UTF8, 0, _msWargv[idx], -1, buf, needed, NULL, NULL);
 	msString result = msStringFromCStr(buf);
 	free(buf);
@@ -366,8 +366,7 @@ static inline msString msProcessReadFile(msString path) {
 	long size = ftell(f);
 	fseek(f, 0, SEEK_SET);
 	if (size <= 0) { fclose(f); return MS_EMPTY_STRING; }
-	char* buf = (char*)malloc(size + 1);
-	if (!buf) { fclose(f); return MS_EMPTY_STRING; }
+	char* buf = (char*)msMemAlloc(size + 1);
 	size_t nread = fread(buf, 1, size, f);
 	fclose(f);
 	buf[nread] = '\0';
@@ -414,8 +413,9 @@ static inline void _msAppendWinArg(char** buf, size_t* len, size_t* cap, const c
 	/* Ensure room for worst case: 2 quotes + doubled escapes + terminator. */
 	size_t needExtra = strlen(arg) * 2 + 4;
 	if (*len + needExtra > *cap) {
+		size_t oldCap = *cap;
 		*cap = (*len + needExtra) * 2;
-		*buf = (char*)realloc(*buf, *cap);
+		*buf = (char*)msRealloc(*buf, oldCap, *cap);
 	}
 	char* out = *buf + *len;
 	int hasSpecial = 0;
@@ -493,7 +493,7 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	_msAppendWinArg(&cmdLine, &len, &cap, pathStr);
 	if (args != NULL && args->p != NULL) {
 		for (int64_t i = 0; i < args->len; i++) {
-			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
+			if (len + 2 > cap) { cmdLine = (char*)msRealloc(cmdLine, cap, cap * 2); cap *= 2; }
 			cmdLine[len++] = ' ';
 			const char* a = msStringToCString(args->p->data[i]);
 			_msAppendWinArg(&cmdLine, &len, &cap, a);
@@ -1049,7 +1049,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	free(exeNorm);
 	if (args != NULL && args->p != NULL) {
 		for (int64_t i = 0; i < args->len; i++) {
-			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
+			if (len + 2 > cap) { cmdLine = (char*)msRealloc(cmdLine, cap, cap * 2); cap *= 2; }
 			cmdLine[len++] = ' ';
 			const char* a = msStringToCString(args->p->data[i]);
 			_msAppendWinArg(&cmdLine, &len, &cap, a);
@@ -1380,7 +1380,7 @@ static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* arg
 	free(exeNorm);
 	if (args != NULL && args->p != NULL) {
 		for (int64_t i = 0; i < args->len; i++) {
-			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
+			if (len + 2 > cap) { cmdLine = (char*)msRealloc(cmdLine, cap, cap * 2); cap *= 2; }
 			cmdLine[len++] = ' ';
 			_msAppendWinArg(&cmdLine, &len, &cap, msStringToCString(args->p->data[i]));
 		}

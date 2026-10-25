@@ -9,7 +9,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
 import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, isFrameValue, ScopeKind } from "./symbol";
-import { CheckerContext, findExportedSymbol, macroPreludeKind } from "./context";
+import { CheckerContext, findExportedSymbol, macroPreludeKind, stampItem } from "./context";
 
 class BindScope {
 	names: Map<string, Symbol> = new Map<string, Symbol>();
@@ -353,8 +353,8 @@ export function releaseNames(ctx: CheckerContext, keys: Node[]): void {
 
 export function paramSymbol(ctx: CheckerContext, body: Node, index: int32, name: string, kind: SymbolKind, symType: Type | null): Symbol {
 	const bound = ctx.adoptedParams.get(body);
-	if (bound == null || index >= bound.length) return makeSymbol(name, kind, symType, false);
-	const sym = bound[index];
-	initSymbol(sym, name, kind, symType, false, SymbolState.Hollow);
+	const sym = bound != null && index < bound.length ? bound[index] : makeSymbol(name, kind, symType, false);
+	if (bound != null && index < bound.length) initSymbol(sym, name, kind, symType, false, SymbolState.Hollow);
+	stampItem(ctx, sym);
 	return sym;
 }

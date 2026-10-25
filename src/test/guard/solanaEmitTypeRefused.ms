@@ -30,16 +30,16 @@ function run(): Result<uint64, ProgramError> {
 	const tipped: PaidWithTip = { amount: 4, tip: 5 };
 	const amount: uint64 = 6;
 	emit<Paid>(paid);
-	emit<Paid>(refund);
-	emit<Paid>(twin);
-	emit<Paid>(tipped);
-	emit<Paid>(amount);
+	emit<Paid>(refund); // GUARD-REFUSED
+	emit<Paid>(twin); // GUARD-REFUSED
+	emit<Paid>(tipped); // GUARD-REFUSED
+	emit<Paid>(amount); // GUARD-REFUSED
 	const held = try owned<Paid>(0);
 	const kept = held.data();
 	emit<Paid>(kept);
 	const other = try owned<Refunded>(1);
 	const stored = other.data();
-	emit<Paid>(stored);
+	emit<Paid>(stored); // GUARD-REFUSED
 	return Result.ok(0);
 }
 

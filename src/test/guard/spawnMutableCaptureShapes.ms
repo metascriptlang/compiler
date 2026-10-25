@@ -46,7 +46,7 @@ function sq(n: number): number { return n * n; }
 // Shape 1 — read through a HiddenStdConv wrapper (int32 argument → number param).
 function hiddenConvRead(): number {
 	let mk: int32 = 3;
-	const h = spawn(() => sq(mk));
+	const h = spawn(() => sq(mk)); // GUARD-REFUSED
 	mk = 100;
 	return await h;
 }
@@ -54,7 +54,7 @@ function hiddenConvRead(): number {
 // Shape 2 — write-back from the worker into the parent's env slot.
 function updateWriteBack(): int32 {
 	let mu = 1;
-	const h = spawn(() => { mu++; return 0; });
+	const h = spawn(() => { mu++; return 0; }); // GUARD-REFUSED
 	const r = await h;
 	return mu + r;
 }
@@ -64,7 +64,7 @@ function loopBodyRead(): int32 {
 	let mb: MBox = { n: 1 };
 	const h = spawn(() => {
 		let s = 0;
-		for (let i = 0; i < 10; i++) { s = s + mb.n; }
+		for (let i = 0; i < 10; i++) { s = s + mb.n; } // GUARD-REFUSED
 		return s;
 	});
 	mb.n = 2;

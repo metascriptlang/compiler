@@ -26,10 +26,10 @@ function main(): void {
 	const pair: Pair = { left: 1, right: 2 };
 	const count: int32 = 3;
 	const program = pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
-	const byInteger = findProgramAddress(["pet", id]);
-	const byBoolean = programAddress([flag]);
-	const byStruct = findProgramAddress(["pet", pair]);
-	const bySigned = programAddressOf(program, ["pet", [1], count]);
+	const byInteger = findProgramAddress(["pet", id]); // GUARD-REFUSED
+	const byBoolean = programAddress([flag]); // GUARD-REFUSED
+	const byStruct = findProgramAddress(["pet", pair]); // GUARD-REFUSED
+	const bySigned = programAddressOf(program, ["pet", [1], count]); // GUARD-REFUSED
 	if (!byInteger.ok) { failWith(byInteger.error); }
 	if (!byBoolean.ok) { failWith(byBoolean.error); }
 	if (!byStruct.ok) { failWith(byStruct.error); }
