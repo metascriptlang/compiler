@@ -143,6 +143,7 @@ import "./readonlyPtrView";
 import "./exportStarIdentity";
 import "./delegateBase";
 import "./bindSymGeneric";
+import "./macroScopeByWrittenName";
 import "./macroInternalTypeNames";
 import "./macroNamedLikeDirective";
 import "./compileTimeNameUse";
