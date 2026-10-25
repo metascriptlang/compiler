@@ -2,7 +2,6 @@
 @include("stdint.h");
 
 extern function newString(length: int64): string from "msStringNewLen";
-extern function isUnallocatedOrLiteral(value: string): boolean from "msIsLiteral";
 extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
 extern const stringLengthMax: uint64 from "MS_LEN_MAX";
 
@@ -14,17 +13,10 @@ function rejectEncodingLength(): void {
 	throw new RangeError("encoding output length exceeds native string capacity");
 }
 
-@noinline
-function rejectEncodingAllocation(): void {
-	throw new Error("encoding output allocation failed");
-}
-
 @inline
 export function newEncodingOutput(length: int64): string {
 	if ((length as uint64) > stringLengthMax) rejectEncodingLength();
-	const result = newString(length);
-	if (length > 0 && isUnallocatedOrLiteral(result)) rejectEncodingAllocation();
-	return result;
+	return newString(length);
 }
 
 @inline
