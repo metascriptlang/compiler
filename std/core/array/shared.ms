@@ -19,29 +19,26 @@ export function lastIndexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = -1
 }
 
 export function findIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): number {
-	let i = 0;
-	while (i < arr.length) {
+	const n = arr.length;
+	for (let i = 0; i < n && i < arr.length; i += 1) {
 		if (fn(arr[i], i)) return i;
-		i = i + 1;
 	}
 	return -1;
 }
 
 export function findLastIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): number {
-	let i = arr.length - 1;
-	while (i >= 0) {
-		if (fn(arr[i], i)) return i;
-		i = i - 1;
+	for (let i = arr.length - 1; i >= 0; i -= 1) {
+		if (i < arr.length && fn(arr[i], i)) return i;
 	}
 	return -1;
 }
 
 export function filter<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T[] {
 	const out: T[] = [];
-	let i = 0;
-	while (i < arr.length) {
-		if (fn(arr[i], i)) out.push(arr[i]);
-		i = i + 1;
+	const n = arr.length;
+	for (let i = 0; i < n && i < arr.length; i += 1) {
+		const x = arr[i];
+		if (fn(x, i)) out.push(x);
 	}
 	return out;
 }
@@ -51,8 +48,12 @@ export function some<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boo
 }
 
 export function find<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T | null {
-	const i = arr.findIndex(fn);
-	return i >= 0 ? arr[i] : null;
+	const n = arr.length;
+	for (let i = 0; i < n && i < arr.length; i += 1) {
+		const x = arr[i];
+		if (fn(x, i)) return x;
+	}
+	return null;
 }
 
 export function spliceStart(start: number, n: int64): int64 {
