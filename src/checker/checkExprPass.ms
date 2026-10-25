@@ -3655,7 +3655,7 @@ function yieldsInferred(sym: Symbol | null): boolean {
 
 export function returnsFromAsyncBody(ctx: CheckerContext): boolean {
 	const fn = ctx.currentFunction;
-	return fn != null && hasFlag(fn, SymbolFlag.Async) && routineFlags(fn.declNode).indexOf("generator") < 0;
+	return fn != null && hasFlag(fn, SymbolFlag.Async) && !routineFlagSet(routineFlags(fn.declNode)).has(RoutineFlag.Generator);
 }
 
 function declaredReturnOf(sym: Symbol): Type | null {

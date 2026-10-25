@@ -5,7 +5,7 @@ import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, Bi
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
-import { SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf } from "./symbol";
+import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
 import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -172,7 +172,7 @@ export function routineBody(decl: Node | null): Node | null {
 }
 
 function declaredExtern(flags: string): boolean {
-	return flags.indexOf("extern", 0) >= 0;
+	return routineFlagSet(flags).has(RoutineFlag.Extern);
 }
 
 function routineParams(decl: Node): string[] {

@@ -44,7 +44,7 @@ import { lowerDefer } from "./deferLower";
 import { createPtr, createPrimitive, awaitedType, booleanType, closureStorageType } from "../../checker/types";
 import { TypeKind, AttachedOp, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { RoutineFlag, routineFlagSet, setFlag, SymbolFlag } from "../../checker/symbol";
 import { Symbol } from "../../ast/node";
 
 // ===== Scoped Deferred → msAwaitSlot (Change 1) =====
@@ -743,7 +743,7 @@ function joinHeldInRoutine(fn: Node, ctx: TransformContext): void {
 	const saved = _heldFrame;
 	const savedUsed = _heldUsed;
 	const loc = body.location;
-	const isAsync = routineFlags(fn).indexOf("async") >= 0;
+	const isAsync = routineFlagSet(routineFlags(fn)).has(RoutineFlag.Async);
 	const held = freshTempSym(ctx, "held", VOID_PTR_TYPE);
 	_heldFrame = { held, awaitOnly: isAsync ? null : awaitOnlyHandles(fn) };
 	_heldUsed = false;

@@ -7,7 +7,7 @@
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, CallingConvention, ExportDeclData, FunctionDeclData, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
-import { hasFlag, SymbolFlag } from "../checker/symbol";
+import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode, dispatchEntryFor, nextDisamb } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope } from "./scope";
@@ -46,7 +46,7 @@ function callbackReader(w: WriteEffects, stmt: Node): Node | null {
 	const sym = decl.resolvedSym;
 	const d = decl.data as FunctionDeclData;
 	if (sym == null || sym.symbolKind != SymbolKind.Function || sym.modulePath != w.unit) return null;
-	if (d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt || d.fnFlags.indexOf("gen:") >= 0 || d.fnFlags.indexOf("extern") >= 0) return null;
+	if (d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt || routineFlagSet(d.fnFlags).has(RoutineFlag.Generic) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern)) return null;
 	if (sym.overloads.length > 0 || sym.overloadIdx != 0 || sym.exportName != "" || sym.nativeName != "" || dispatchEntryFor(sym) != null) return null;
 	if (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow) || hasFlag(sym, SymbolFlag.CompileTime)) return null;
 	if (sym.symbolType == null || sym.symbolType.callConv == CallingConvention.CcInline || isGeneratorBody(d.fnBody)) return null;
