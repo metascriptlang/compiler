@@ -59,6 +59,16 @@ export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
 }
 
+type EngineStdSymbolFn = (name: string) => Symbol | null;
+let engineStdSymbolFn: EngineStdSymbolFn = (name: string): Symbol | null => null;
+// The std declaration the engine checks a macro program against, which is not the prelude of the module the macro was written in.
+export function engineStdSymbol(name: string): Symbol | null {
+	return engineStdSymbolFn(name);
+}
+export function registerEngineStdSymbol(fn: EngineStdSymbolFn): void {
+	engineStdSymbolFn = fn;
+}
+
 let _engineCompileDepth: int32 = 0;
 
 export function enterEngineCompile(): void {
