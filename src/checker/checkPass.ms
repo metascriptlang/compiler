@@ -3906,6 +3906,7 @@ export function checkPreludeFromSource(stdPath: string, backendExt: string): Che
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
+	ctx.stdRoot = stdRoot;
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
@@ -4192,7 +4193,9 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 		_preludeCtxByKey.set(key, shared);
 	}
 	replayPreludeContributions(shared);
-	return packContentView(shared.ctx);
+	const view = packContentView(shared.ctx);
+	view.stdRoot = stdPath;
+	return view;
 }
 
 function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {

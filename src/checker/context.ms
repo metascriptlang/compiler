@@ -1356,6 +1356,7 @@ export class CheckerContext {
 	                               // Cross-compile detected via `targetOs !== platform`.
 	targetInfo: TargetInfo;
 	appMode: string;
+	stdRoot: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActor: Symbol | null;
 	staticBlockClass: Symbol | null;
@@ -1451,6 +1452,7 @@ export function createContext(): CheckerContext {
 		targetOs: platform,
 		targetInfo: hostTargetInfo(),
 		appMode: "console",
+		stdRoot: "",
 		currentFunction: null,
 		currentActor: null,
 		staticBlockClass: null,
@@ -1572,6 +1574,11 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;
+}
+
+export function isOutsideResolvedStd(ctx: CheckerContext, path: string): boolean {
+	const root = ctx.preludeCtx != null ? ctx.preludeCtx.stdRoot : ctx.stdRoot;
+	return root != "" && !path.startsWith(root.endsWith("/") ? root : root + "/");
 }
 
 // Create context with a shared IdentCache (one cache per compilation).

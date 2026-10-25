@@ -677,8 +677,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 }
 
 function isStdBuiltinWritingNothing(sym: Symbol): boolean {
-	const home = "std/core/struct.";
-	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind) && (sym.modulePath.startsWith(home) || sym.modulePath.indexOf("/" + home) >= 0);
+	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind);
 }
 
 function constReadEffect(call: Node): EffectCause | null {

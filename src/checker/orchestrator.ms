@@ -146,6 +146,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.gcMode = gcMode;
 	baseCtx.strictNullChecks = strictNullChecks;
 	baseCtx.appMode = appMode;
+	baseCtx.stdRoot = resolverConfig.stdPath;
 	lastPreludeCtx = baseCtx;
 
 	const _tb0 = performance.now();

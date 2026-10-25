@@ -5,7 +5,7 @@ import { inferredType, noneType, createModuleNamespace, emptyType, createStruct,
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd } from "./context";
 import { isGlobalImport } from "./prelude";
 import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
@@ -158,7 +158,8 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			if (sym != null) {
 				const info = extractDecoratorInfo(node);
 				if (info.nativeName != "" && sym.nativeName == "") sym.nativeName = formatExternName(ctx, "declaration", sym.name, info.nativeName, node.location);
-				if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
+				const kind = stdBuiltinKind(ctx, info.builtinKind, node);
+				if (kind != "") sym.builtinKind = kind;
 			}
 		},
 		NodeKind.VariableDecl => {
@@ -293,7 +294,8 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const info = extractDecoratorInfo(node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
-	if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
+	const kind = stdBuiltinKind(ctx, info.builtinKind, node);
+	if (kind != "") sym.builtinKind = kind;
 	if (exportName != "") sym.exportName = exportName;
 	if (info.throws) setFlag(sym, SymbolFlag.Throws);
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
@@ -309,6 +311,12 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@acyclic applies to a class, not to '${declName}'`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.Acyclic);
 	}
+}
+
+function stdBuiltinKind(ctx: CheckerContext, kind: string, decl: Node): string {
+	if (kind == "" || ctx.modulePath == "" || !isOutsideResolvedStd(ctx, ctx.modulePath)) return kind;
+	addError(ctx, `@builtin("${kind}") is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`, decl.location.line, decl.location.column);
+	return "";
 }
 
 function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
@@ -859,7 +867,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.MethodDecl) {
 			methodNode = dd.decoratedNode;
 			const info = extractDecoratorInfo(member);
-			builtinKind = info.builtinKind;
+			builtinKind = stdBuiltinKind(ctx, info.builtinKind, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
 			acceptsInline(ctx, dd);

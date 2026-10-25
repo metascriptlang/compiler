@@ -2,7 +2,7 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError, addWarning } from "./context";
+import { CheckerContext, addError, addWarning, isOutsideResolvedStd } from "./context";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
@@ -765,10 +765,10 @@ function routineParamsAndBody(closure: Node): RoutineParts {
 	return { params: [], body: null };
 }
 
-function isLockedSection(sym: Symbol | null): boolean {
+function isLockedSection(ctx: CheckerContext, sym: Symbol | null): boolean {
 	const origin = sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 	return origin != null && origin.symbolKind == SymbolKind.Function && (origin.name == "lockedUpdate" || origin.name == "lockedRead")
-		&& origin.modulePath.indexOf("std/core/promise/index.") >= 0;
+		&& !isOutsideResolvedStd(ctx, origin.modulePath);
 }
 
 function lockCallbackEffect(fn: Node): EffectCause | null {
@@ -784,7 +784,7 @@ function lockCallbackEffect(fn: Node): EffectCause | null {
 }
 
 export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): void {
-	if (call.kind != NodeKind.CallExpr || !isLockedSection(call.resolvedSym)) return;
+	if (call.kind != NodeKind.CallExpr || !isLockedSection(ctx, call.resolvedSym)) return;
 	const args = (call.data as CallExprData).arguments;
 	if (args.length != 2) return;
 	const name = call.resolvedSym!.instantiatedFrom != null ? call.resolvedSym!.instantiatedFrom!.name : call.resolvedSym!.name;
