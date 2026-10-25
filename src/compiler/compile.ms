@@ -1991,12 +1991,15 @@ test "HCR core image takes the target's shared-library extension, not the output
 	assert hcrCoreImagePath("out/libapp.so", "android") == "out/libapp.core.so";
 }
 
-function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
+function linkHcrImage(objects: string[], coreInput: string, externalInputs: string[], image: string, flags: string, opts: CliOptions): boolean {
 	if (isLinkCached(objects, externalInputs, flags, image, image)) {
 		_hcrWarmLinks.push({ image, flags });
-		return;
+		return false;
 	}
-	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
+	const inputs: string[] = [];
+	for (const oFile of objects) inputs.push(oFile);
+	if (coreInput != "") inputs.push(coreInput);
+	const linked = linkObjects(inputs, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linked.ok) {
 		recordError(`link failed for HCR image ${image} (exit ${linked.error.exitCode})`);
 		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
@@ -2004,6 +2007,7 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 		throw new Error(BUILD_STOPPED);
 	}
 	writeLinkCache(objects, externalInputs, flags, image, image);
+	return true;
 }
 
 function linkInputs(opts: CliOptions): string[] {
@@ -2027,7 +2031,7 @@ function linkHcrImages(
 	outBinary: string,
 	allFlags: string,
 	opts: CliOptions,
-): void {
+): string[] {
 	let linkFlags = cliLinkFlags(allFlags, opts);
 	for (const flag of globalLinkFlags()) linkFlags = appendFlag(linkFlags, flag);
 	const externalInputs = linkInputs(opts);
@@ -2060,8 +2064,9 @@ function linkHcrImages(
 	}
 	for (const oFile of oSlots[coreSlot]) coreObjects.push(oFile);
 	for (const obj of externalInputs) coreObjects.push(obj);
-	linkHcrImage(coreObjects, externalInputs, core, coreFlags, opts);
+	linkHcrImage(coreObjects, "", externalInputs, core, coreFlags, opts);
 
+	const relinked: string[] = [];
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
 		const moduleId = hcrModules[i].moduleId;
 		if (moduleId == "core") {
@@ -2077,12 +2082,12 @@ function linkHcrImages(
 		for (const oFile of oSlots[moduleSlots[j]]) objects.push(oFile);
 		for (const oFile of oSlots[moduleSlots[j] + 1]) objects.push(oFile);
 		for (const oFile of oSlots[imageSlots[i]]) objects.push(oFile);
-		objects.push(coreInput);
 		const image = hcrModulePaths[i] == entryPath ? outBinary : hcrImagePath(outBinary, moduleId);
 		let flags = imageFlags;
 		if (opts.targetOs == "windows") flags = appendFlag(flags, quoteCcArg(`-Wl,--out-implib,${cacheDir()}/hcr-${hashContent(image)}.lib`));
-		linkHcrImage(objects, externalInputs, image, flags, opts);
+		if (linkHcrImage(objects, coreInput, externalInputs, image, flags, opts)) relinked.push(hcrModulePaths[i]);
 	}
+	return relinked;
 }
 
 function hcrTypeLayoutKeys(layouts: HcrTypeLayout[]): string[] {
@@ -3568,8 +3573,8 @@ resetLiftedOps();
 		const jobPaths: string[] = [];
 		for (const job of emissionJobs) jobPaths.push(job.modPath);
 		const tLink = performance.now();
-		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
-		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
+		const relinkedPaths = linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
+		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, relinkedPaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);

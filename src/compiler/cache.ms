@@ -1416,6 +1416,16 @@ function objectListKey(oFiles: string[]): string {
 	return hashContent(identity);
 }
 
+function imageObjectsKey(oFiles: string[]): string {
+	let identity = "";
+	for (const path of oFiles) identity = `${identity}${hashFile(path)}\n`;
+	return hashContent(identity);
+}
+
+function linkObjectsKey(oFiles: string[], image: string): string {
+	return image == "" ? objectListKey(oFiles) : imageObjectsKey(oFiles);
+}
+
 function externalInputKey(paths: string[]): string {
 	let identity = "";
 	for (const path of paths) identity = `${identity}${path.length}:${path}:${hashFile(path)}`;
@@ -1449,7 +1459,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	}
 
 	if (storedCmd != linkFlags) return false;
-	if (storedOFiles != objectListKey(oFiles)) return false;
+	if (storedOFiles != linkObjectsKey(oFiles, image)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
 	if (!outputMatches(storedOutputHash, outputFile)) return false;
 	settleOutputLine(cFile, lines, storedOutputHash, outputFile);
@@ -1459,7 +1469,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 // Write link cache after successful link step.
 export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
-	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
+	content = content + `${PRE_OFILES}${linkObjectsKey(oFiles, image)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(image), content);
@@ -1682,6 +1692,21 @@ test "a link output rewritten to the same size at once is not taken as cached" {
 	assert !isLinkCached([], [], "-flags", output, output);
 	remove(output);
 	remove(linkCacheFile(output));
+}
+
+test "an HCR image link is keyed by its objects' bytes, not their paths" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const stem = `${base}/msc-image-objects-${performance.now()}`;
+	const image = `${stem}.dylib`;
+	writeFile(image, "image");
+	writeFile(`${stem}.a.o`, "object");
+	writeFile(`${stem}.b.o`, "object");
+	writeLinkCache([`${stem}.a.o`], [], "-flags", image, image);
+	assert isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	writeFile(`${stem}.b.o`, "changed");
+	assert !isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	for (const path of [image, `${stem}.a.o`, `${stem}.b.o`]) remove(path);
+	remove(linkCacheFile(image));
 }
 
 test "a link output recorded inside the settle window is identified by its content" {
