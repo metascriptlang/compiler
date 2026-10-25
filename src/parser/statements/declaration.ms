@@ -2137,6 +2137,30 @@ test "import star as data" {
 	assert d.importSource == "./lib";
 }
 
+test "import specifier keeps the alias position next to the name position" {
+	const d = stmtAt("import { f as gg, h } from \"./lib\";", 0).data as ImportDeclData;
+	assert d.nameLocations[0].column == 10;
+	assert d.aliasLocations[0].column == 15;
+	assert d.nameLocations[1].column == 19;
+	assert d.aliasLocations[1].column == d.nameLocations[1].column;
+}
+
+test "import specifier alias on its own line has its own line" {
+	const d = stmtAt("import {\n\tf as\n\t\tgg,\n\ti as j,\n} from \"./lib\";", 0).data as ImportDeclData;
+	assert d.nameLocations[0].line == 2;
+	assert d.aliasLocations[0].line == 3;
+	assert d.aliasLocations[0].column == 3;
+	assert d.aliasLocations[1].line == 4;
+	assert d.aliasLocations[1].column == 7;
+}
+
+test "re-export specifier keeps the alias position" {
+	const ex = stmtAt("export { f as gg } from \"./lib\";", 0).data as ExportDeclData;
+	const imp = ex.exportedDecl.data as ImportDeclData;
+	assert imp.nameLocations[0].column == 10;
+	assert imp.aliasLocations[0].column == 15;
+}
+
 test "export star" { assert programOk("export * from \"./lib\";"); }
 
 test "export star is ExportDecl" { assert stmtKind("export * from \"./lib\";") == NodeKind.ExportDecl; }
