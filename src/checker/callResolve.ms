@@ -202,7 +202,8 @@ export function adoptExpansionResult(node: Node, value: Node): void {
 	node.nodeType = null as unknown as Type;
 	const carried = symbolCarried(value);
 	node.resolvedSym = carried != null ? carried : null as unknown as Symbol;
-	node.flags = (carried != null && value.flags.has(NodeFlag.BoundSym) ? NodeFlag.BoundSym : 0) as BitSet<NodeFlag>;
+	const none = 0 as BitSet<NodeFlag>;
+	node.flags = carried != null && value.flags.has(NodeFlag.BoundSym) ? none.incl(NodeFlag.BoundSym) : none;
 	if (value.flags.has(NodeFlag.FromTemplate)) node.flags = node.flags.incl(NodeFlag.FromTemplate);
 	node.variantSlot = 0;
 }
