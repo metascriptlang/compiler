@@ -33,7 +33,7 @@ MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; rec
 MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms
 
 msc run src/index.ms                              # build + run natively
-msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
+msc build examples/actorSpawnBasic.ms --target=c
 
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
 msc build src/index.ms --gc=drc --danger --output=msc
@@ -89,14 +89,16 @@ Architecture detail: [`docs/PIPELINE.md`](docs/PIPELINE.md). File tree + pattern
 
 ## Writing MetaScript
 
-Before writing or reviewing `.ms`, follow the canonical
-[`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md). Use [`docs/LANG.md`](docs/LANG.md) for
-language behavior the style guide does not cover.
+When writing or reviewing `.ms`, read the relevant sections of
+[`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md), this repository's official authoring
+standard, so one source decides style, ownership idioms and boundary practice. It supersedes
+older workspace authoring guidance for this repository; an unrelated task does not require a
+whole-file reread. Use [`docs/LANG.md`](docs/LANG.md) for detailed language contracts.
 
 ## Entry points
 
 - Nothing auto-calls `main`; the program is the entry module's top-level code. CLI and
-  test-target call sites follow [`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md) §9.
+  test-target call sites follow [`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md#program-entry-tests-and-shutdown).
 - Exit means the event loop is empty. `msDrainUntilIdle()` finishes pending work and
   `msReportOrphanFailures()` turns unhandled rejections into exit 1; `process.exit()` skips both.
 - For `--app=lib` hosts, call the entry module's init functions rather than the program-wide
