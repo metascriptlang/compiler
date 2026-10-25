@@ -23,8 +23,9 @@ const GATED_FEATURES = [
 	"function f(s: string): int32 {\n\tswitch (s) {\n\t\tcase \"a\": return 1;\n\t\tcase \"b\": return 2;\n\t\tdefault: return 3;\n\t}\n}\n",
 	"function g(): void {}\nfunction f(): int32 { defer g(); return 1; }\n",
 	"function f(xs: int32[]): int32[] { return [...xs, 1]; }\n",
-	"async function g(): Promise<int32> { return 1; }\nasync function f(): Promise<int32> { const v = await g(); return v + 1; }\n",
 ];
+
+const ASYNC_AWAIT = "async function g(): Promise<int32> { return 1; }\nasync function f(): Promise<int32> { const v = await g(); return v + 1; }\n";
 
 function skips(rows: string, pass: string): number {
 	for (const line of rows.split("\n")) {
@@ -75,4 +76,10 @@ test "MSC_FACTS_CHECK finds no gated pass skipping a module that holds its featu
 		assert js.ok, js.ok ? src : js.error;
 		assert cMisses == 0 && jsMisses == 0, src;
 	}
+	factsCheckEnable(true);
+	const c = compileToC(ASYNC_AWAIT);
+	const misses = factsCheckMisses();
+	factsCheckEnable(false);
+	assert c.ok, c.ok ? "" : c.error;
+	assert misses == 0;
 }
