@@ -1185,6 +1185,14 @@ export function peelHidden(n: Node): Node {
 	return cur;
 }
 
+export function isCurrentActorRef(n: Node): boolean {
+	const p = peelHidden(n);
+	if (p == null || p.kind != NodeKind.Identifier) return false;
+	if (isThisIdent(p)) return true;
+	const init = constBindingInitializer(p.resolvedSym);
+	return init != null && isCurrentActorRef(init);
+}
+
 function isThisIdent(n: Node): boolean {
 	const p = peelHidden(n);
 	if (p == null) return false;
