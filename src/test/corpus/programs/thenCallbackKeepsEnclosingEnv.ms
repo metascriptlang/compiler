@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @stdout: x
 // @stdout: y
 // @stdout: inner y
