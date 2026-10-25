@@ -36,31 +36,22 @@ export const EOL: string = "\n";
 when (windows) {
 	@include("windows.h");
 
-	extern const CP_UTF8: uint32;
-	extern function GetTempPathW(room: uint32, path: Ptr<uint16>): uint32;
-	extern function WideCharToMultiByte(codePage: uint32, flags: uint32, wide: Ptr<uint16>, length: int32, text: Ptr<uint8> | null, room: int32, fallback: Ptr<void> | null, usedFallback: Ptr<void> | null): int32;
-	extern function cMallocWide(size: uint64): Ptr<uint16> | null from "malloc";
-	extern function cFreeWide(p: Ptr<uint16>): void from "free";
-	extern function cMallocBytes(size: uint64): Ptr<uint8> | null from "malloc";
-	extern function cFreeBytes(p: Ptr<uint8>): void from "free";
-	extern function msStringNew(data: cstring, length: int64): string;
+	import { allocWide, freeWide, utf8Of } from "../fs/widePath";
+
+	extern function GetTempPathW(room: uint32, path: Ptr<uint16> | null): uint32;
 
 	const HOME_VARIABLE = "USERPROFILE";
 	const TEMP_FALLBACK = "C:\\Temp";
-	const TEMP_PATH_UNITS: uint32 = 261;
 
 	function tmpDirKernel(): string {
-		const wide = cMallocWide((TEMP_PATH_UNITS as uint64) * 2);
+		const units = GetTempPathW(0, null);
+		if (units == 0) return TEMP_FALLBACK;
+		const wide = allocWide(units as uint64);
 		if (wide == null) return TEMP_FALLBACK;
-		const length = GetTempPathW(TEMP_PATH_UNITS, wide);
-		const room = length > 0 && length < TEMP_PATH_UNITS ? WideCharToMultiByte(CP_UTF8, 0, wide, -1, null, 0, null, null) : 0;
-		const bytes = room > 0 ? cMallocBytes(room as uint64) : null;
-		if (bytes != null) WideCharToMultiByte(CP_UTF8, 0, wide, -1, bytes, room, null, null);
-		cFreeWide(wide);
-		if (bytes == null) return TEMP_FALLBACK;
-		const text = msStringNew(bytes as cstring, (room - 1) as int64);
-		cFreeBytes(bytes);
-		return text;
+		const written = GetTempPathW(units, wide);
+		const text = written > 0 && written < units ? utf8Of(wide) : "";
+		freeWide(wide);
+		return text != "" ? text : TEMP_FALLBACK;
 	}
 } else {
 	const HOME_VARIABLE = "HOME";
