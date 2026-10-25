@@ -51,6 +51,8 @@ export enum TokenKind {
 	JsxTagStart, JsxClose, JsxText,
 	// `**=` — appended to preserve ordinals.
 	StarStarEq,
+	// Logical assignment `&&=` `||=` `??=` — appended to preserve ordinals.
+	AmpAmpEq, PipePipeEq, QuestionQuestionEq,
 }
 
 export interface Token {
