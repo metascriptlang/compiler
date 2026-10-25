@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
@@ -3062,6 +3062,72 @@ test "finally-protected var blocks move in isLastReadSafe" {
 	assert isLastReadSafe(s, read, 0, stmts, dctx);
 	dctx.finallyProtectedVars = [s];
 	assert !isLastReadSafe(s, read, 0, stmts, dctx);
+}
+
+test "finally-protected root blocks field move in isLastReadFieldSafe" {
+	const dctx = testDrcContext("interface Obj { f: string; } const exemplar: Obj = { f: \"\" };");
+	const exemplar = lookupSymbol(dctx.ctx.checkerCtx.table, "exemplar");
+	assert exemplar != null;
+	assert exemplar.symbolType != null;
+	const s = testVarSym("s");
+	s.symbolType = exemplar.symbolType;
+	const loc = testLoc();
+	const root = makeIdentResolved(s, loc);
+	root.nodeType = s.symbolType;
+	const read = makeMember(root, "f", loc);
+	read.nodeType = createPrimitive(TypeKind.String);
+	const stmts = [makeExprStmt(read, loc)];
+	dctx.currentFuncBody = makeBlock(stmts, loc);
+	assert isAnalysableFieldAccess(read);
+	assert getRootSym(read) == s;
+	assert isLastReadFieldSafe(read, 0, stmts, dctx);
+	dctx.finallyProtectedVars = [s];
+	assert !isLastReadFieldSafe(read, 0, stmts, dctx);
+}
+
+test "routine finally collection protects returned sources in plain and nested tries" {
+	const bodies = [
+		"return source;",
+		"try { return source; } finally { source; }",
+		"try { try { return source; } finally { source; } } finally { }",
+	];
+	for (let i = 0; i < bodies.length; i += 1) {
+		const copied = i != 0;
+		const dctx = testDrcContext(
+			"function f(sink source: string): string { " + bodies[i] + " }",
+		);
+		assert dctx.ctx.checkerCtx.errors.length == 0;
+		const fn = lookupSymbol(dctx.ctx.checkerCtx.table, "f");
+		assert fn != null;
+		assert fn.symbolType != null;
+		assert fn.declNode != null;
+		const decl = fn.declNode;
+		assert decl.kind == NodeKind.FunctionDecl;
+		assert decl.paramSyms != null;
+		assert decl.paramSyms.length == 1;
+		const source = decl.paramSyms[0];
+		const data = decl.data as FunctionDeclData;
+		const rc = classifyRc(fn.symbolType.typeReturn, dctx);
+		assert rc.copyFn != null;
+		assert rc.wasMovedFn != null;
+		const processed = processFuncBodyWithParams(
+			data.fnBody, fn, data.fnName, data.params, decl.paramSyms,
+			dctx, decl.location, fn.symbolType,
+		);
+		assert dctx.ctx.checkerCtx.errors.length == 0;
+		const usesSourceOp = (op: Symbol): boolean => anyDescendant(processed, (n: Node): Visit => {
+			if (n.kind != NodeKind.CallExpr) return Visit.Descend;
+			const call = n.data as CallExprData;
+			if (call.callee.resolvedSym != op || call.arguments.length == 0) return Visit.Descend;
+			const arg = call.arguments[call.arguments.length - 1];
+			return anyDescendant(arg, (a: Node): Visit =>
+				a.kind == NodeKind.Identifier &&
+					a.resolvedSym == source ? Visit.Hit : Visit.Descend,
+			) ? Visit.Hit : Visit.Descend;
+		});
+		assert usesSourceOp(rc.copyFn) == copied;
+		assert usesSourceOp(rc.wasMovedFn) == !copied;
+	}
 }
 
 test "clearPendingForVar clears by symbol identity" {
