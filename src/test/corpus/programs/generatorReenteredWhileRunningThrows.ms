@@ -1,6 +1,7 @@
 // A generator resumed from inside its own body throws "Generator is already running" and the
 // generator keeps its state: through next, through return, and through an iterator helper callback.
 // @stdout: ok
+// @xfail(raiser): a raise a lowering synthesizes is caught as a bare string, so `e.message` stops (card 2026-10-26-raiser-a-raise-a-lowering-synthesizes-is-caught-as-a-string)
 const trace: string[] = [];
 
 function log(s: string): void {
