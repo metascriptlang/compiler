@@ -399,7 +399,7 @@ function borrowMisuse(ctx: CheckerContext, dd: DecoratedDeclData): string {
 // A `@compilerFunc` declaration is the one place a synthesized call can read its
 // callee from: `runtimeProcSym` holds only the name it is about to emit.
 function registerCompilerFunc(ctx: CheckerContext, sym: Symbol): void {
-	const key = sym.nativeName != "" ? sym.nativeName : sym.name;
+	const key = sym.nativeName != "" && !isNativePattern(sym.nativeName) ? sym.nativeName : sym.name;
 	if (key == "") return;
 	const existing = ctx.compilerFuncs.get(key);
 	if (existing != null && existing != sym) {

@@ -555,6 +555,7 @@ export function* toPairs<K, V>(this m: HashMap<K, V>): Iterator<[K, V]> {
 }
 
 // Bulk-construction helper for HashMap (unordered counterpart of mapFromPairs).
+@compilerFunc
 export function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> {
 	const m = new HashMap<K, V>();
 	let i: int32 = 0;
@@ -1015,6 +1016,7 @@ export function* toPairs<K, V>(this m: Readonly<Map<K, V>>): Iterator<[Readonly<
 // Used by the index-signature literal lowering — `{ "k": v, ... }` assigned
 // to a Map<K,V> target is rewritten to mapFromPairs([keys], [values]).
 // Returns the ordered Map so the lowering preserves the JS object literal's key order.
+@compilerFunc
 export function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> {
 	const m = new Map<K, V>();
 	let i: int32 = 0;
