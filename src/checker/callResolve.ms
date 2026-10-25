@@ -781,7 +781,7 @@ function fitPositionalArgs(ctx: CheckerContext, args: Node[], fields: Type | nul
 }
 
 function typeNewCallee(ctx: CheckerContext, callee: Node): void {
-	const sym = lookupSymbol(ctx.table, (callee.data as IdentifierData).name);
+	const sym = resolveCalleeIdent(ctx, callee);
 	if (sym == null) return;
 	callee.resolvedSym = sym;
 	callee.nodeType = sym.symbolType;
@@ -1008,12 +1008,12 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
-		if (isStdPromise(lookupSymbol(ctx.table, id.name))) return checkPromiseConstruction(ctx, node, expected);
+		const newSym = resolveCalleeIdent(ctx, d.newCallee);
+		if (isStdPromise(newSym)) return checkPromiseConstruction(ctx, node, expected);
 		// new Arc(value): atomic-refcounted shared box. Pointee type is the explicit
 		// <T> if present, else inferred from the single argument. Represented as a
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.
-		const newSym = lookupSymbol(ctx.table, id.name);
-		const head = newSym != null && !isTypeSymbol(newSym) ? "" : builtinTypeHead(ctx, id.name);
+		const head = newSym != null ? (isTypeSymbol(newSym) ? newSym.builtinKind : "") : builtinTypeHead(ctx, id.name);
 		if (head == "Arc" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
