@@ -93,11 +93,7 @@ MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
 
 /* Set by the first thread to enter an actor; a thread whose msCurrentActor is set has
  * set it itself, so a relaxed read is enough and a program without actors reads no TLS. */
-#if defined(_WIN32)
 extern _Atomic(bool) msActorEntered;
-#else
-extern __attribute__((visibility("hidden"))) _Atomic(bool) msActorEntered;
-#endif
 MS_ACTOR_JOB_PATH msActor* msActorCurrentNoHoist(void);
 
 static inline bool msActorMaybeCurrent(void) {
