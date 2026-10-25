@@ -196,6 +196,8 @@ export function stampCallSite(stmt: Node, loc: SourceLocation): void {
 export function adoptExpansionResult(node: Node, value: Node): void {
 	node.kind = value.kind;
 	node.data = value.data;
+	node.typeArg = value.typeArg;
+	node.typeExprs = value.typeExprs;
 	if (value.location != null) node.location = value.location;
 	node.nodeType = null as unknown as Type;
 	const carried = symbolCarried(value);
@@ -1995,7 +1997,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			adoptExpansionResult(node, expandedValue);
-			node.typeArg = expandedValue.typeArg;
 			node.nodeType = null as unknown as Type;
 			keepFoldedType(node, expandedValue);
 			// Re-check the mutated node so its nodeType is set. This drives correct

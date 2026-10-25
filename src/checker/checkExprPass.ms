@@ -1013,7 +1013,6 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (expandedValue == null) { node.nodeType = errorType(); return; }
 	}
 	adoptExpansionResult(node, expandedValue);
-	node.typeArg = expandedValue.typeArg;
 	if (!hoists) keepComptimeNominalType(node, staticType);
 	const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
 		|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
@@ -3416,7 +3415,6 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 			}
 		}
 		adoptExpansionResult(node, expandedValue);
-		node.typeArg = expandedValue.typeArg;
 		keepFoldedType(node, expandedValue);
 		if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 		checkExpr(ctx, node, expectedType);

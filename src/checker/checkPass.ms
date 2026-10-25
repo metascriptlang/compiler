@@ -3420,15 +3420,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		}
 	} else {
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
-		call.kind = expanded.kind;
-		call.data = expanded.data;
-		call.typeArg = expanded.typeArg;
-		call.typeExprs = expanded.typeExprs;
-		if (expanded.location != null) call.location = expanded.location;
-		call.nodeType = null as unknown as Type;
-		call.resolvedSym = null;
-		call.flags = 0 as BitSet<NodeFlag>;
-		call.variantSlot = 0;
+		adoptExpansionResult(call, expanded);
 		expandCollectStmt(ctx, stmt, out, emitted);
 	}
 	ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
