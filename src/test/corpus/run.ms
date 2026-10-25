@@ -874,12 +874,19 @@ function quotedList(items: string[]): string {
 	return joinWith(quoted, ", ");
 }
 
+const GOT_EXCERPT_BYTES = 400;
+
+function gotExcerpt(seen: string): string {
+	const head = seen.length > GOT_EXCERPT_BYTES ? seen.slice(0, GOT_EXCERPT_BYTES) + "…" : seen;
+	return "got '" + head.split("\n").join("⏎") + "'";
+}
+
 function missingStdout(missing: string[], path: string, seen: string): string {
 	const again = readFileOr(path, "");
 	let found = 0;
 	for (const sub of missing) { if (again.contains(sub)) { found = found + 1; } }
 	const note = found > 0 ? `, which has ${found} of ${missing.length}` : "";
-	return ` [stdout missing ${quotedList(missing)}; read ${seen.length} bytes of ${path}, a re-read ${again.length}${note}]`;
+	return ` [stdout missing ${quotedList(missing)}; read ${seen.length} bytes of ${path}, a re-read ${again.length}${note}; ${gotExcerpt(seen)}]`;
 }
 
 function finishParityCell(c: Cell): void {
@@ -983,7 +990,7 @@ function finishSanCell(c: Cell): void {
 	let detail = "exit=" + rawExit;
 	if (!ledgerLive) { detail = detail + " [no LEDGER output — instrumentation dropped?]"; }
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + "]"; }
-	if (!outOk) { detail = detail + " [stdout missing " + quotedList(missing) + "]"; }
+	if (!outOk) { detail = detail + " [stdout missing " + quotedList(missing) + "; " + gotExcerpt(stdoutLog) + "]"; }
 	if (asanLine != "") { detail = detail + " [" + asanLine + "]"; }
 	if (doubleLine != "") { detail = detail + " [" + doubleLine + "]"; }
 	if (imbalance != "") { detail = detail + " [ledger " + imbalance + "]"; }
