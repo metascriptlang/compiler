@@ -9,9 +9,12 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
 #include <libproc.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#endif
 #elif defined(__linux__)
 #include <linux/perf_event.h>
 #include <string.h>
@@ -52,7 +55,7 @@ double msTimeMonotonic(void) {
 }
 
 double msCpuInstructions(void) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_OSX
 	struct rusage_info_v4 ri;
 	if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&ri) != 0) return -1.0;
 	return (double)ri.ri_instructions;
