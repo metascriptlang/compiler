@@ -15,6 +15,7 @@ import { hasFlag } from "../../checker/symbol";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
+import { Spiller, lowerAssign } from "./operandOrder";
 import {
 	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt,
 	extractBodyStmts, boolToDeclKind, makeNull, makeAssign,
@@ -212,6 +213,12 @@ function inlineStmt(node: Node, st: InlineState): Node {
 			const stored = assignsLocal(e);
 			const call = stored ? (e.data as BinaryExprData).right : e;
 			const consumer = matchConsumer(call, st);
+			if (consumer != null && stored && (e.data as BinaryExprData).operator != "=") {
+				const pre: Node[] = [];
+				lowerAssign(consumerSpiller(call, consumer, st), e, pre);
+				pre.push(node);
+				return makeBlock(pre, node.location);
+			}
 			if (consumer != null) {
 				const r = expandConsumer(consumer, call.nodeType, st, node.location);
 				if (stored && r.result != null) {
@@ -247,7 +254,23 @@ function inlineStmt(node: Node, st: InlineState): Node {
 function assignsLocal(e: Node): boolean {
 	if (e.kind != NodeKind.BinaryExpr) return false;
 	const b = e.data as BinaryExprData;
-	return b.operator == "=" && b.left.kind == NodeKind.Identifier;
+	const conditional = b.operator == "&&=" || b.operator == "||=" || b.operator == "??=";
+	return isAssignOp(b.operator) && !conditional && b.left.kind == NodeKind.Identifier;
+}
+
+function consumerSpiller(call: Node, consumer: InlineCall, st: InlineState): Spiller {
+	return {
+		ctx: st.ctx,
+		has: (n: Node): boolean => n == call,
+		lower: (n: Node, pre: Node[]): Node => {
+			if (n != call) return n;
+			const r = expandConsumer(consumer, call.nodeType, st, n.location);
+			const res = r.result;
+			if (res == null) throw new Error("internal: a compound assignment from a consumer with no result");
+			for (const s of r.stmts) { pre.push(s); }
+			return makeIdentResolved(res, n.location);
+		},
+	};
 }
 
 function spliceConsumerDecls(stmts: Node[], st: InlineState): Node[] {
@@ -1040,6 +1063,11 @@ test "a consumer of a generator call declared with its result is expanded in pla
 test "a consumer of a generator call is expanded in place when returned or assigned" {
 	assert lastStmtCalls(sumSrc + "function f(): int32 { return total(count(3)); }") == 0;
 	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 0; s = total(count(3)); return s; }") == 0;
+}
+
+test "a consumer assigned with a compound operator is expanded in place" {
+	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 1; s += total(count(3)); return s; }") == 0;
+	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 1; s *= total(count(3)); return s; }") == 0;
 }
 
 test "a consumer of a stored iterator stays a call" {
