@@ -1,5 +1,6 @@
 import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, NewExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
+import { isRoutineNode } from "../../ast/shape";
 import { TransformContext, freshTempSym } from "../context";
 import { addError } from "../../checker/context";
 import { peelTransparentInstance, unknownType } from "../../checker/types";
@@ -44,9 +45,7 @@ function holdPlaces(node: Node, temps: Node[], ctx: TransformContext): void {
 	if (node == null) return;
 	forEachChild(node, (c: Node): void => {
 		if (c == null) return;
-		const k = c.kind;
-		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr || k == NodeKind.FunctionDecl
-			|| k == NodeKind.MethodDecl || k == NodeKind.ConstructorDecl || k == NodeKind.BlockStmt) return;
+		if (isRoutineNode(c) || c.kind == NodeKind.BlockStmt) return;
 		holdPlaces(c, temps, ctx);
 	});
 	if (node.kind == NodeKind.BinaryExpr) {

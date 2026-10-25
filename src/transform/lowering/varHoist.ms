@@ -20,7 +20,7 @@ import {
 	ExportDeclData, ClassDeclData, DecoratedDeclData, Symbol,
 } from "../../ast/node";
 import { TransformContext } from "../context";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, isFuncBoundary } from "../../ast/visitor";
 import { makeVarDecl, makeTypedIdentResolved, makeNull, makeAssign, makeExprStmt, makeBlock } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, checkedFnBodyCount } from "../testUtil";
 
@@ -34,7 +34,7 @@ function varSymOf(decl: Node): Symbol {
 
 function collectVarDecls(node: Node | null, out: Node[]): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) return;
+	if (isFuncBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declKind == DeclKind.Var) out.push(node);
 	forEachChild(node, (c: Node): void => { collectVarDecls(c, out); });
 }
