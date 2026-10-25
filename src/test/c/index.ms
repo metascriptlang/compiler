@@ -67,6 +67,7 @@ import "./finallyScaffoldEmit";
 import "./computedGoto";
 import "./dispatcherMain";
 import "./moduleBindingTdz";
+import "./moduleFacts";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";

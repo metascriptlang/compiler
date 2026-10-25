@@ -6,6 +6,7 @@ import { Node, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { mapChildren } from "../walker";
 import { TransformContext, ModuleFact } from "../context";
 import { factsOf } from "../moduleFacts";
+import { parseInput, makeCtx } from "../testUtil";
 
 const ERASE_MAX_DEPTH: int32 = 8;
 
@@ -45,4 +46,45 @@ export function eraseBrandTypes(program: Node, ctx: TransformContext): Node {
 	ctx.facts = ctx.facts.union(seenFacts);
 	ctx.factsCollected = true;
 	return erased;
+}
+
+function scannedFacts(src: string): BitSet<ModuleFact> {
+	const parsed = parseInput(src);
+	const ctx = makeCtx();
+	if (parsed.ok) eraseBrandTypes(parsed.value, ctx);
+	return ctx.facts;
+}
+
+function scansAs(src: string, f: ModuleFact): boolean {
+	const facts = scannedFacts(src);
+	return facts.has(f) && facts.size() == 1;
+}
+
+test "a module without a gated feature collects no fact" {
+	const src = "const a = 1; function f(x: int32): int32 { return x > a ? x : a; }";
+	assert parseInput(src).ok;
+	assert scannedFacts(src).isEmpty();
+}
+
+test "the brand-erasure walk collects each gated feature wherever it sits" {
+	assert scansAs("async function f(): Promise<void> {}", ModuleFact.Async);
+	assert scansAs("const h = async () => 1;", ModuleFact.Async);
+	assert scansAs("class C { async m(): Promise<void> {} }", ModuleFact.Async);
+	assert scansAs("function* g() { yield 1; }", ModuleFact.Generator);
+	assert scansAs("const g = function* () { yield 1; };", ModuleFact.Generator);
+	assert scansAs("function f() { defer g(); }", ModuleFact.Defer);
+	assert scansAs("const h = () => { defer { g(); } };", ModuleFact.Defer);
+	assert scansAs("a?.b;", ModuleFact.OptionalChain);
+	assert scansAs("function f() { return g(a.b?.c); }", ModuleFact.OptionalChain);
+	assert scansAs("x ?? 1;", ModuleFact.Nullish);
+	assert scansAs("class C { v = g() ?? 1; }", ModuleFact.Nullish);
+	assert scansAs("f([...xs]);", ModuleFact.Spread);
+	assert scansAs("const o = { ...p, a: 1 };", ModuleFact.Spread);
+	assert scansAs("switch (x) { case 1: f(); }", ModuleFact.Switch);
+	assert scansAs("function f() { while (c) { switch (x) { default: g(); } } }", ModuleFact.Switch);
+}
+
+test "an await collects both the await and its async routine" {
+	const facts = scannedFacts("async function f() { await g(); }");
+	assert facts.has(ModuleFact.Async) && facts.has(ModuleFact.Await) && facts.size() == 2;
 }

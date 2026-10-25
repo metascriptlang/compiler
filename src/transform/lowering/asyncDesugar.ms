@@ -16,7 +16,7 @@ import { isGenericFn, routineKindFlag } from "../../checker/context";
 import { TransformContext, ModuleFact, noteFact } from "../context";
 import { syntheticToken, makeReturn } from "../util";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
 // ===== Await → Yield Rewriting =====
 // Walk a function body, replacing AwaitExpr nodes with YieldExpr nodes.
@@ -108,3 +108,25 @@ test "async flag cleared" { assert firstStmtKindAfter("async function f() { awai
 test "async arrow unchanged count" { assert stmtCountAfter("const f = async () => await x;", lowerAsync) == 1; }
 
 test "non-async function preserved" { assert stmtCountAfter("function f() { return 1; }", lowerAsync) == 1; }
+
+test "desugaring an async routine notes the generator it leaves for lowerGenerator" {
+	for (const input of ["async function f() { await x; }", "const f = async () => await x;", "class C { async m() { await x; } }", "function g() { const h = async function () { await x; }; }"]) {
+		const parsed = parseInput(input);
+		assert parsed.ok, input;
+		if (parsed.ok) {
+			const ctx = makeCtx();
+			lowerAsync(parsed.value, ctx);
+			assert ctx.facts.has(ModuleFact.Generator), input;
+		}
+	}
+}
+
+test "a module without an async routine notes no generator" {
+	const parsed = parseInput("function f() { return 1; }");
+	assert parsed.ok;
+	if (parsed.ok) {
+		const ctx = makeCtx();
+		lowerAsync(parsed.value, ctx);
+		assert !ctx.facts.has(ModuleFact.Generator);
+	}
+}
