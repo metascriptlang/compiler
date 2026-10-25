@@ -147,6 +147,44 @@ function bindPattern(b: NameBinder, pattern: Node): void {
 	}
 }
 
+function patternNames(pattern: Node, out: string[]): void {
+	if (pattern.kind == NodeKind.ArrayPattern) {
+		for (const elem of (pattern.data as ArrayPatternData).patternElements) {
+			const target = elem.kind == NodeKind.SpreadExpr ? (elem.data as SpreadExprData).spreadArg : elem;
+			if (target.kind == NodeKind.Identifier && (target.data as IdentifierData).name != "_") out.push((target.data as IdentifierData).name);
+		}
+	} else if (pattern.kind == NodeKind.ObjectPattern) {
+		for (const prop of (pattern.data as ObjectPatternData).patternProps) {
+			if (prop.kind == NodeKind.SpreadExpr) {
+				const arg = (prop.data as SpreadExprData).spreadArg;
+				if (arg.kind == NodeKind.Identifier) out.push((arg.data as IdentifierData).name);
+			} else if (prop.kind == NodeKind.ObjectPatternProp) {
+				const alias = (prop.data as ObjectPatternPropData).propAlias;
+				if (alias != null && alias.kind == NodeKind.Identifier) out.push((alias.data as IdentifierData).name);
+			}
+		}
+	}
+}
+
+export function declaredNames(node: Node | null, out: string[]): void {
+	if (node == null) return;
+	match (node.kind) {
+		NodeKind.VariableDecl => out.push((node.data as VariableDeclData).declName),
+		NodeKind.DestructuringDecl => patternNames((node.data as DestructuringDeclData).destrPattern, out),
+		NodeKind.FunctionDecl => out.push((node.data as FunctionDeclData).fnName),
+		NodeKind.ClassDecl => out.push((node.data as ClassDeclData).className),
+		NodeKind.EnumDecl => out.push((node.data as EnumDeclData).enumName),
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			if (d.forOfPattern != null) patternNames(d.forOfPattern, out);
+			else out.push(d.forOfBinding);
+		},
+		NodeKind.ForInStmt => out.push((node.data as ForInStmtData).forInBinding),
+		NodeKind.ForStmt => declaredNames((node.data as ForStmtData).forInit, out),
+		_ => {},
+	};
+}
+
 function bindBlockLike(b: NameBinder, node: Node): void {
 	openBindScope(b);
 	if (b.metaBound != null && node.kind == NodeKind.BlockStmt) {
