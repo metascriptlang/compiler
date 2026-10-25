@@ -1774,6 +1774,27 @@ function coreConstant(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function staticField(): void {
+	const tag = "hcrStaticField";
+	const dir = freshDir(`${TMP}/staticField`);
+	for (const f of ["app.ms", "counter.ms", "counterEdit.ms"]) copy(`${FIXTURES}/staticField/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-SF ")) seen.push(line);
+	}
+	const want = [
+		"HCR-SF start 7 7 6 6 c 42",
+		"HCR-SF reloaded counter",
+		"HCR-SF after 9 9 7 7 d 42",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a static field of an image did not link, lost its state across a reload, or a readonly edit did not reach its readers");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function macroHelper(): void {
 	const tag = "hcrMacroHelper";
 	for (const variant of ["base", "second"]) {
@@ -2316,6 +2337,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrStdFirstUse", run: stdFirstUse },
 	{ name: "hcrCompileTimeHelper", run: compileTimeHelper },
 	{ name: "hcrSpanParamForward", run: spanParamForward },
+	{ name: "hcrStaticField", run: staticField },
 	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrStepJoinCrash", run: stepJoinCrash },
