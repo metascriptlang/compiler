@@ -197,7 +197,6 @@ export enum SymbolFlag {
 	Exported,       // symbol is exported
 	Mutable,        // let/var/mutable
 	Forward,        // forward declaration (body not yet seen)
-	NoSideEffect,  // @pure — no side effects
 	Global,        // module-level variable
 	ImportC,       // extern declaration (extern ... from)
 	CompileTime,  // @comptime
