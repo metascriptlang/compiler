@@ -615,9 +615,13 @@ export function declaredTypeSym(t: Type): Symbol | null {
 	return null;
 }
 
+export function hookReceiverFormal(recv: Type): Type {
+	return addressed(withoutReadonlyView(recv));
+}
+
 export function hookReceiverSym(recv: Type): Symbol | null {
-	const formal = addressed(withoutReadonlyView(recv));
-	if (formal.kind == TypeKind.GenericInstance || hasGenericParams(formal)) return null;
+	const formal = hookReceiverFormal(recv);
+	if (formal.kind != TypeKind.GenericInstance && hasGenericParams(formal)) return null;
 	return declaredTypeSym(formal);
 }
 

@@ -949,8 +949,9 @@ function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void 
 function getUserDefinedHookSym(type: Type, op: AttachedOp, lctx: LiftCtx): Symbol | null {
 	const instHook = lookupInstanceHook(type, op);
 	if (instHook != null) return instHook;
-	const declSym = unwrapRef(type).sym;
-	if (declSym == null || lctx.checkerCtx == null) return null;
+	const declared = unwrapRef(type);
+	const declSym = declared.sym;
+	if (declSym == null || declared.kind == TypeKind.GenericInstance || declSym.instantiatedFrom != null || lctx.checkerCtx == null) return null;
 	return getAttachedOp(unwrapRef(declSym.symbolType), op);
 }
 

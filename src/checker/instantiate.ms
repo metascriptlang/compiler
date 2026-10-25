@@ -8,15 +8,15 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
-import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
+import { getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
+import { ensureShaped, registerTypeInstanceHooks, registerGenericTypeHook, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -174,7 +174,7 @@ export function resetInstantiationState(): void {
 	resetCtorRoutines();
 	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
-	_hookScannedInstances = new HashMap<Symbol, Type[][]>();
+	_hookScannedInstances = new HashMap<Symbol, Type[]>();
 }
 
 interface InstanceHook {
@@ -184,7 +184,7 @@ interface InstanceHook {
 }
 
 let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
-let _hookScannedInstances: HashMap<Symbol, Type[][]> = new HashMap<Symbol, Type[][]>();
+let _hookScannedInstances: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
 
 export function instanceArgsOf(sym: Symbol): Type[] {
 	if (sym.instanceArgs == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
@@ -259,44 +259,52 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 	}
 }
 
-function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
-	const registry = pickBodyCtx(genericSym.modulePath, ctx, genericSym).extensionRegistry;
-	if (registry == null) return true;
-	let settled = true;
-	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (instanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName)) != null) continue;
-		if (!hasExtensionByName(registry, hookName)) continue;
-		for (const m of findAllExtensionsByName(registry, hookName)) {
-			const hookSym = m.sym;
-			if (m.isStatic || hookSym == null || hookSym.modulePath != genericSym.modulePath) continue;
-			if (hookSym.declNode == null || hookSym.declNode.kind != NodeKind.FunctionDecl) continue;
-			if (hookSym.state == SymbolState.Shaping) {
-				settled = false;
-				continue;
-			}
-			ensureShaped(hookSym, ctx);
-			const fnType = hookSym.symbolType;
-			if (fnType == null || fnType.typeChildren.length == 0) {
-				settled = false;
-				continue;
-			}
-			let formal = fnType.typeChildren[0];
-			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
-			if (formal.kind != TypeKind.GenericInstance || nominalTypeSym(formal) != genericSym) continue;
-			if (!hasGenericParams(formal)) {
-				if (!sameInstanceType(formal, instType)) continue;
-				recordInstanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName), hookSym);
-				break;
-			}
-			const bindings = createUnifyBindings();
-			unifyType(formal, instType, bindings);
-			if (bindings.names.length == 0) continue;
-			const inst = instantiateGenericFunction(hookSym, bindings.params, bindings.types, ctx, loc);
-			if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName), inst);
-			break;
-		}
+function instantiateBoundHooks(genericSym: Symbol, instType: Type, ctx: CheckerContext, loc: SourceLocation): void {
+	const slot = unwrapRef(genericSym.symbolType);
+	for (let i = 0; i < slot.attachedOps.length; i += 1) {
+		const hookSym = slot.attachedOps[i];
+		const op = i as AttachedOp;
+		if (hookSym == null || instanceHook(genericSym, instType.typeChildren, op) != null) continue;
+		instantiateBoundHook(genericSym, instType, op, hookSym, ctx, loc);
 	}
-	return settled;
+}
+
+function instantiateBoundHook(genericSym: Symbol, instType: Type, op: AttachedOp, hookSym: Symbol, ctx: CheckerContext, loc: SourceLocation): void {
+	if (hookSym.declNode == null || hookSym.declNode.kind != NodeKind.FunctionDecl) return;
+	const fnType = hookSym.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) throw new Error(`internal: hook '${hookSym.name}' of '${genericSym.name}' is bound before its signature is resolved`);
+	const formal = hookReceiverFormal(fnType.typeChildren[0]);
+	const bindings = createUnifyBindings();
+	unifyType(formal, instType, bindings);
+	if (bindings.names.length == 0) return;
+	const inst = instantiateGenericFunction(hookSym, bindings.params, bindings.types, ctx, loc);
+	if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, op, inst);
+}
+
+function bindGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void {
+	const genericSym = hookReceiverSym(receiver);
+	const formal = hookReceiverFormal(receiver);
+	if (genericSym == null || formal.kind != TypeKind.GenericInstance) throw new Error(`internal: hook '${hook}' binds to a generic type, but its receiver is no generic instance`);
+	const op = lifecycleHookOp(hook);
+	const slot = unwrapRef(genericSym.symbolType);
+	const ofEveryInstance = hasGenericParams(formal);
+	const prev = getAttachedOp(slot, op) ?? (ofEveryInstance ? null : instanceHook(genericSym, formal.typeChildren, op));
+	if (prev == hookSym) return;
+	if (prev != null) {
+		addError(ctx, "cannot bind another '" + hook + "' to '" + (ofEveryInstance ? genericSym.name : typeDisplayName(formal)) + "': previous declaration at line " + prev.location.line.toString(), at.line, at.column);
+		return;
+	}
+	if (!ofEveryInstance) {
+		recordInstanceHook(genericSym, formal.typeChildren, op, hookSym);
+		return;
+	}
+	setAttachedOp(slot, op, hookSym);
+	const seen = _hookScannedInstances.get(genericSym);
+	if (seen == null) return;
+	for (const instType of seen) {
+		if (instanceHook(genericSym, instType.typeChildren, op) == null) instantiateBoundHook(genericSym, instType, op, hookSym, ctx, at);
+		markInstanceHookType(instType, genericSym);
+	}
 }
 
 function markInstanceHookType(t: Type, owner: Symbol): void {
@@ -330,16 +338,15 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 		scanned = [];
 		_hookScannedInstances.set(owner, scanned);
 	}
-	for (const args of scanned) {
-		if (sameInstanceArgs(args, t.typeChildren)) {
+	for (const seen of scanned) {
+		if (sameInstanceArgs(seen.typeChildren, t.typeChildren)) {
 			markInstanceHookType(t, owner);
 			return;
 		}
 	}
-	const at = scanned.length;
-	scanned.push(t.typeChildren);
+	scanned.push(t);
 	for (const arg of t.typeChildren) instantiateHooksInType(arg, ctx, loc, depth + 1);
-	const settled = instantiateExtensionHooks(owner, t, ctx, loc);
+	instantiateBoundHooks(owner, t, ctx, loc);
 	if (t.typeReturn == null) {
 		const params = genericParamsOf(t);
 		if (params != "") instantiateGenericBody(t, params);
@@ -349,7 +356,6 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 		for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
 	}
 	markInstanceHookType(t, owner);
-	if (!settled) scanned.splice(at, 1);
 }
 
 export function instanceGenericOf(node: Node): Symbol | null {
@@ -1462,6 +1468,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 // Register callback at module load time
 registerInstantiateGeneric((sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, params, concreteTypes, ctx, callLoc); });
 registerTypeInstanceHooks((instType: Type, ctx: CheckerContext, line: int32, col: int32): void => { instantiateHooksInType(instType, ctx, makeLoc(line, col), 0); });
+registerGenericTypeHook(bindGenericTypeHook);
 
 test "an instantiation past the depth limit is an error naming the generic" {
 	const ctx = createContext();
