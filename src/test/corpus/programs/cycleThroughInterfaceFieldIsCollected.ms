@@ -1,4 +1,5 @@
 // @stdout: reclaimed interface true array true record true generic true extended true
+// @xfail(raiser): the Raiser VM runs no user lifecycle hooks, so onDestroy never runs
 // @skip-js: onDestroy does not run on JS
 // A cycle that closes through a slot typed by an interface, an array of one, an unnamed record
 // type, a generic over one, or an extended class is registered and freed: onDestroy runs for
