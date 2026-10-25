@@ -3351,7 +3351,7 @@ function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
 	let sym: Symbol | null = null;
 	if (call.kind == NodeKind.CallExpr) {
 		const callee = (call.data as CallExprData).callee;
-		if (callee.kind != NodeKind.Identifier) return null;
+		if (callee == null || callee.kind != NodeKind.Identifier) return null;
 		name = (callee.data as IdentifierData).name;
 		sym = resolveCalleeIdent(ctx, callee);
 	} else if (call.kind == NodeKind.MacroInvocation) {

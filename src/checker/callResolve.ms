@@ -1653,6 +1653,10 @@ let _cceCount: float64 = 0;
 export function checkCallExprProfile(): float64[] { return [_cceCount]; }
 export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	_cceCount = _cceCount + 1;
+	if (node.kind == NodeKind.CallExpr && (node.data as CallExprData).callee == null) {
+		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
+		return errorType();
+	}
 	const tracker = ctx.initTracker;
 	const identsFrom = tracker.argIdents.length;
 	const readsFrom = tracker.pendingReads.length;
@@ -1843,10 +1847,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	const d = node.data as CallExprData;
 	if (d.callee != null && isImportKeyword(d.callee)) return checkImportCall(ctx, node);
 	if (!lowerTypedCallee(ctx, node, d)) return errorType();
-	if (d.callee == null) {
-		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
-		return errorType();
-	}
 	const prevCallee = ctx.calleeExpr;
 	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
