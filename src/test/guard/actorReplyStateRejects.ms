@@ -10,12 +10,12 @@
 // RED MEANS: one of the shapes compiled. Accepted neighbours: actorReplyCopiesRun.ms.
 //
 // GUARD-JS
-// GUARD-CHECK-FAIL actor method 'root' replies with 'this.top', which this actor still reaches
-// GUARD-CHECK-FAIL actor method 'maybe' replies with 'this.last', which this actor still reaches
-// GUARD-CHECK-FAIL actor method 'all' replies with 'this.hits', which this actor still reaches
-// GUARD-CHECK-FAIL actor method 'pick' replies with a value, which this actor still reaches
-// GUARD-CHECK-FAIL cannot move 'r': it is not the sole owner
-// GUARD-CHECK-FAIL cannot move 'n': it is not the sole owner
+// GUARD-CHECK-FAIL the reply of 'root' may cross to the caller while the actor still reaches it — it replies with 'this.top', which stays in the actor; reply with a copy
+// GUARD-CHECK-FAIL the reply of 'maybe' may cross to the caller while the actor still reaches it — it replies with 'this.last'
+// GUARD-CHECK-FAIL the reply of 'all' may cross to the caller while the actor still reaches it — it replies with 'this.hits'
+// GUARD-CHECK-FAIL the reply of 'pick' may cross to the caller while the actor still reaches it — it replies with a value
+// GUARD-CHECK-FAIL the reply of 'alias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
+// GUARD-CHECK-FAIL the reply of 'kept' may cross to the caller while the actor still reaches it — 'n' is not the sole owner
 
 import { stop, ExitReason } from "std/actor";
 

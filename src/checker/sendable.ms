@@ -154,35 +154,63 @@ const REPLY_SCOPE: FreshScope = {
 	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
 };
 
-function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node): Node | null {
+function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, method: string): Node | null {
 	if (n == null) return null;
 	const p = peelView(n);
 	if (crossesAsReply(p.nodeType)) return null;
 	return match (p.kind) {
-		NodeKind.ArrayLiteral => firstSharedReplyPart(ctx, (p.data as ArrayLiteralData).elements, result),
-		NodeKind.ObjectLiteral => firstSharedReplyPart(ctx, (p.data as ObjectLiteralData).properties, result),
+		NodeKind.ArrayLiteral => firstSharedReplyPart(ctx, (p.data as ArrayLiteralData).elements, result, method),
+		NodeKind.ObjectLiteral => firstSharedReplyPart(ctx, (p.data as ObjectLiteralData).properties, result, method),
 		NodeKind.SpreadExpr => {
 			const arg = (p.data as SpreadExprData).spreadArg;
 			const t = arg.nodeType != null ? peelThrough(arg.nodeType!, PEEL_ALIAS) : null;
 			if (t != null && t.kind == TypeKind.Array && crossesAsReply(t.typeReturn)) return null;
-			return sharedReplyPart(ctx, arg, result);
+			return sharedReplyPart(ctx, arg, result, method);
 		},
 		NodeKind.ConditionalExpr => {
 			const d = p.data as ConditionalExprData;
-			const a = sharedReplyPart(ctx, d.ternaryConsequent, result);
-			return a != null ? a : sharedReplyPart(ctx, d.ternaryAlternate, result);
+			const a = sharedReplyPart(ctx, d.ternaryConsequent, result, method);
+			return a != null ? a : sharedReplyPart(ctx, d.ternaryAlternate, result, method);
 		},
 		NodeKind.Identifier when (p.resolvedSym != null && p.resolvedSym!.name != "this") => {
-			checkMoveSoleOwner(ctx, p.resolvedSym!, [], result, p.location);
+			checkReplyBindingSoleOwner(ctx, p.resolvedSym!, result, p.location, method);
 			return null;
 		},
 		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
 	};
 }
 
-function firstSharedReplyPart(ctx: CheckerContext, nodes: Node[], result: Node): Node | null {
+function replyHead(method: string): string {
+	return `the reply of '${method}' may cross to the caller while the actor still reaches it`;
+}
+
+const REPLY_CHOICE = "reply with a copy (a number, string or plain struct), a fresh value nothing in the actor keeps (a literal, `new`, or a local built for the reply), or an Arc<T>";
+
+function rewordSoleOwnerAsReply(ctx: CheckerContext, name: string, method: string, at: SourceLocation): void {
+	const prefix = "cannot move '" + name + "': ";
+	for (let i = 0; i < ctx.errors.length; i += 1) {
+		const m = ctx.errors[i].message;
+		if (ctx.errors[i].line != at.line || ctx.errors[i].column != at.column || !m.startsWith(prefix) || !m.endsWith(SOLE_OWNER_TAG)) continue;
+		let why = m.substring(prefix.length, m.length - SOLE_OWNER_TAG.length);
+		const tail = why.indexOf("; only a binding");
+		if (tail >= 0) why = why.substring(0, tail);
+		else {
+			const advice = why.indexOf(" — ");
+			if (advice >= 0) why = why.substring(0, advice);
+		}
+		ctx.errors[i].message = `${replyHead(method)} — '${name}' ${why.startsWith("it ") ? why.substring(3) : why}; ${REPLY_CHOICE}`;
+	}
+}
+
+function checkReplyBindingSoleOwner(ctx: CheckerContext, sym: Symbol, result: Node, at: SourceLocation, method: string): void {
+	checkMoveSoleOwner(ctx, sym, [], result, at);
+	rewordSoleOwnerAsReply(ctx, sym.name, method, at);
+	deferEffectCheck(result, "replyWording", (late: CheckerContext): void => rewordSoleOwnerAsReply(late, sym.name, method, at));
+}
+
+function firstSharedReplyPart(ctx: CheckerContext, nodes: Node[], result: Node, method: string): Node | null {
 	for (const n of nodes) {
-		const s = sharedReplyPart(ctx, n, result);
+		const s = sharedReplyPart(ctx, n, result, method);
 		if (s != null) return s;
 	}
 	return null;
@@ -199,10 +227,10 @@ export function checkActorReplies(ctx: CheckerContext, raw: Node): void {
 	const here = ctx.currentFunction;
 	ctx.currentFunction = member.resolvedSym;
 	for (const r of results) {
-		const shared = sharedReplyPart(ctx, r, r);
+		const shared = sharedReplyPart(ctx, r, r, d.methodName);
 		if (shared == null) continue;
 		const name = describeExpr(shared);
-		addError(ctx, `actor method '${d.methodName}' replies with ${name == "an expression" ? "a value" : "'" + name + "'"}, which this actor still reaches; a reply crosses to the caller's thread, so it must be a copy (a number, string or plain struct), a fresh value nothing in the actor keeps (a literal, \`new\`, or a local built for the reply), or an Arc<T> — build a copy of what the caller needs, or keep the shared value in an Arc<T>`,
+		addError(ctx, `${replyHead(d.methodName)} — it replies with ${name == "an expression" ? "a value" : "'" + name + "'"}, which stays in the actor; ${REPLY_CHOICE}`,
 			shared.location.line, shared.location.column);
 	}
 	ctx.currentFunction = here;
