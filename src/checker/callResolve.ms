@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable } from "./compat";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, stampOwner, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, stampOwner, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol } from "./context";
 import { comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
@@ -24,7 +24,7 @@ import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppli
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, lookupStd } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
@@ -827,7 +827,7 @@ function thenableAdoption(ctx: CheckerContext, operand: Node, site: string): The
 	if (passesReject) {
 		const onRejected = functionSlotOf(then.typeChildren[1]);
 		const reason = onRejected != null && onRejected.typeChildren.length > 0 ? onRejected.typeChildren[0] : null;
-		const errorSym = lookupStd(ctx.table, "Error");
+		const errorSym = stdSymbol(ctx, "Error");
 		if (reason == null || errorSym == null || !derivesFromClass(reason, errorSym)) {
 			const got = reason != null ? `, not '${typeDisplayName(reason)}'` : "";
 			refuseThenable(ctx, site, operand, `the second parameter of '${owner}.then' must be a callback taking an Error${got}, the reason an awaited promise rejects with`);
@@ -874,7 +874,7 @@ export function raisedOperand(ctx: CheckerContext, operand: Node): Node | null {
 	callCheckExpr(ctx, operand, null);
 	const argType = operand.nodeType;
 	if (argType == null || argType.kind == TypeKind.Error || isUnresolvedType(argType) || hasGenericParams(argType)) return operand;
-	const errSym = lookupStd(ctx.table, "Error");
+	const errSym = stdSymbol(ctx, "Error");
 	if (errSym == null || errSym.symbolType == null) {
 		addError(ctx, "throw needs the std 'Error' class in scope", operand.location.line, operand.location.column);
 		return null;
@@ -4667,7 +4667,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 
 function builtinTextFor(ctx: CheckerContext, name: string, baseArgs: Type[], ret: Type | null): Symbol | null {
 	if (name != "toString" || baseArgs.length != 1 || ret == null || !isStringLike(ret)) return null;
-	const text = lookupStd(ctx.table, "String");
+	const text = stdSymbol(ctx, "String");
 	return text != null && text.builtinKind == "ToString" ? text : null;
 }
 

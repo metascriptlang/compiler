@@ -53,13 +53,13 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, stdSymbol } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, lookupSymbolInDefiningScope, lookupStd, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
@@ -1278,7 +1278,7 @@ function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 // `console` as the std declaration, so a user binding of the name cannot capture the warning's log call.
 function consoleIdent(loc: SourceLocation): Node {
 	const id = createNodeAt(NodeKind.Identifier, { name: "console" }, loc);
-	const sym = _metaScope == null ? null : lookupStd(_metaScope!.table, "console");
+	const sym = _metaScope == null ? null : stdSymbol(_metaScope!, "console");
 	if (sym == null) throw new Error("internal: warning() has no std console declaration to log through");
 	id.resolvedSym = sym;
 	id.flags = id.flags.incl(NodeFlag.BoundSym);

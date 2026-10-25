@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, AttachedOp } from "../ast/node";
@@ -86,6 +86,13 @@ export function macroPreludeSym(ctx: CheckerContext, name: string): Symbol | nul
 
 export function macroPreludeKind(ctx: CheckerContext, name: string): string {
 	return macroPreludeSym(ctx, name)?.builtinKind ?? "";
+}
+
+// The std scope is the injected prelude, except where std's prelude is itself being checked:
+// there nothing is injected, or a prelude module is not injected into itself.
+export function stdSymbol(ctx: CheckerContext, name: string): Symbol | null {
+	const checkingStd = ctx.preludeCtx == null || (ctx.currentModule != null && ctx.currentModule.stdPrelude);
+	return lookupStd(ctx.table, name) ?? (checkingStd ? lookupSymbol(ctx.table, name) : null);
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
