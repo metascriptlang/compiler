@@ -25,10 +25,12 @@ import {
 	FunctionDeclData,
 	MoveExprData, SpreadExprData, NewExprData,
 	ExportDeclData, ProgramData,
-	TypeAssertionData, HiddenStdConvData,
+	TypeAssertionData, HiddenStdConvData, AttachedOp,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
+import { getAttachedOp, unwrapRef } from "../checker/types";
+import { lookupInstanceHook } from "../checker/instantiate";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
@@ -354,13 +356,9 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
 		| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral => {},
 
-		// Conversions: recurse into inner expression
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			destMightOwn(p, destIdx, (src.data as HiddenStdConvData).convExpr);
-		},
-		NodeKind.TypeAssertion => {
-			destMightOwn(p, destIdx, (src.data as TypeAssertionData).asExpr);
-		},
+		// Conversions
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => convMightOwn(p, destIdx, src, (src.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => convMightOwn(p, destIdx, src, (src.data as TypeAssertionData).asExpr),
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
@@ -447,6 +445,23 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 // ===== Pass 1: computeLiveRanges =====
 // Walk AST to register variables and compute alive ranges.
 // Must traverse in the same order as pass 2 for consistent abstractTime.
+
+function destroyHookOf(t: Type | null): Symbol | null {
+	if (t == null) return null;
+	const instance = lookupInstanceHook(t, AttachedOp.AttachedDestructor);
+	if (instance != null) return instance;
+	const declared = unwrapRef(t);
+	return declared.sym != null ? getAttachedOp(unwrapRef(declared.sym.symbolType), AttachedOp.AttachedDestructor) : null;
+}
+
+function convMightOwn(p: Partitions, destIdx: int32, conv: Node, operand: Node): void {
+	const made = destroyHookOf(conv.nodeType);
+	if (made != null && made != destroyHookOf(operand != null ? operand.nodeType : null)) {
+		p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+		return;
+	}
+	destMightOwn(p, destIdx, operand);
+}
 
 function markReassigned(p: Partitions, vid: int32): void {
 	p.vars[vid].flags = p.vars[vid].flags | VF_IS_REASSIGNED;
@@ -1794,4 +1809,12 @@ test "receiver push of a borrow from the same array keeps the call's graph mutat
 test "a value-typed local root keeps the call's graph mutation" {
 	const body = inferredNamed(DOCS + "function f(o: Doc): void { const w: Wrap = { d: o }; const t = w.d; touch(w); use(t.value); }", "f");
 	assert !isCursorNamed(body, "t");
+}
+
+test "a cast into a type whose destroy hook its operand lacks owns the value it makes" {
+	const body = inferredNamed("type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\n"
+		+ "function f(n: int32, g: Fd): void { const lit = 7 as Fd; let fromParam = n as Fd; const same = g as Fd; }", "f");
+	assert !isCursorNamed(body, "lit");
+	assert !isCursorNamed(body, "fromParam");
+	assert isCursorNamed(body, "same");
 }
