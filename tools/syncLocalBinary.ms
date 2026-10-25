@@ -351,7 +351,7 @@ if (syncBinary) {
 	const installed = `${DEST}/bin/msc${EXE}`;
 	const foreign = foreignBuildRoot(built);
 	if (foreign != "") {
-		const fix = `rebuild it from this checkout: cd ${SRC} && ./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`;
+		const fix = `rebuild it from this checkout: cd ${SRC} && ./msc build src/index.ms --danger --cc=clang --output=msc`;
 		if (check) {
 			console.log(`note: a sync now would refuse: ${foreign}\n${fix}`);
 		} else {
