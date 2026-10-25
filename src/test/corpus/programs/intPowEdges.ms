@@ -4,7 +4,6 @@
 // @stdout: u64 1 1 1 1099511627776 18446744073709551615 0
 // @stdout: narrow 64 255 127 -128 16 9 81 6561
 // @stdout: assign 81 -32 0 4 125 2 232
-// @xfail(raiser): the Raiser computes an integer power in doubles: int64 (-1) ** 9223372036854775807 is 1 and a uint64 exponent past int64 is a range error
 // note: integer `**` on int32, int64, uint32 and uint64 keeps the value at the edges: 0 ** 0 is 1, 1 ** huge is 1, (-1) ** odd is -1 and ** even is 1, a power that lands on a bound is kept; `**=` on an own-width int8, uint8 and an effectful element index gives the same results.
 
 function p32(a: int32, b: int32): int32 { return a ** b; }
