@@ -751,18 +751,13 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 
 // Check if a statement is a side-effecting top-level statement (not a declaration)
 function isTopLevelStatement(node: Node): boolean {
-	const k = node.kind;
-	if (k == NodeKind.ExprStmt) return true;
-	if (k == NodeKind.IfStmt) return true;
-	if (k == NodeKind.WhileStmt) return true;
-	if (k == NodeKind.ForStmt) return true;
-	if (k == NodeKind.ForOfStmt) return true;
-	if (k == NodeKind.TryCatchStmt) return true;
-	if (k == NodeKind.ThrowStmt) return true;
-	if (k == NodeKind.BlockStmt) return true;
-	if (k == NodeKind.AssertStmt) return true;
-	if (k == NodeKind.VariableDecl) return varDeclNeedsRuntimeInit(node);
-	return false;
+	return match (node.kind) {
+		NodeKind.ExprStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt
+			| NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.SwitchStmt | NodeKind.MatchStmt | NodeKind.TryCatchStmt
+			| NodeKind.ThrowStmt | NodeKind.BlockStmt | NodeKind.AssertStmt | NodeKind.DeferStmt => true,
+		NodeKind.VariableDecl => varDeclNeedsRuntimeInit(node),
+		_ => false,
+	};
 }
 
 function isBuiltinDirectiveStmt(node: Node): boolean {
