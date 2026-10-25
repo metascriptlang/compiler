@@ -1554,7 +1554,9 @@ function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[],
 	if (d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
 		const lhs = makeIdentResolved(hoistSym, loc);
 		if (stmt.nodeType != null) { lhs.nodeType = stmt.nodeType; }
-		body.push(makeExprStmt(makeAssign(lhs, d.initializer, loc), loc));
+		const assign = makeAssign(lhs, d.initializer, loc);
+		assign.flags = assign.flags.incl(NodeFlag.FirstWrite);
+		body.push(makeExprStmt(assign, loc));
 	}
 	return true;
 }
