@@ -549,7 +549,7 @@ const MAX_CALL_DEPTH = 1024;
 const INT64_LOW: int64 = -9223372036854775807 - 1;
 const INT64_HIGH: int64 = 9223372036854775807;
 
-function mulOverflowsI64(a: int64, b: int64): boolean {
+export function mulOverflowsI64(a: int64, b: int64): boolean {
 	if (a == 0 || b == 0) return false;
 	if (a == -1) return b == INT64_LOW;
 	if (b == -1) return a == INT64_LOW;

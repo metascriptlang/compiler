@@ -871,6 +871,55 @@ function _bridgeTrunc(args: RaiserValue[]): RaiserValue { return boxFloat(Math.t
 function _bridgeSqrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sqrt(unboxFloat(args[0]))); }
 function _bridgeCbrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cbrt(unboxFloat(args[0]))); }
 function _bridgePow(args: RaiserValue[]): RaiserValue { return boxFloat(Math.pow(unboxFloat(args[0]), unboxFloat(args[1]))); }
+
+function _powOverflow(): RaiserValue {
+	raiseFromHost("over- or underflow", true);
+	return raiserInt(0);
+}
+
+function _bridgePowSigned(args: RaiserValue[], exponentMax: int64): RaiserValue {
+	const exponent = args[1].intVal;
+	if (exponent < 0) {
+		raiseFromHost(`value ${exponent} not in range 0 .. ${exponentMax}`, true);
+		return raiserInt(0);
+	}
+	let result: int64 = 1;
+	let base = args[0].intVal;
+	let rest = exponent;
+	while (true) {
+		if ((rest & 1) != 0) {
+			if (mulOverflowsI64(result, base)) return _powOverflow();
+			result = int64Bits((result as uint64) * (base as uint64));
+		}
+		rest = rest >> 1;
+		if (rest == 0) return raiserInt(result);
+		if (mulOverflowsI64(base, base)) return _powOverflow();
+		base = int64Bits((base as uint64) * (base as uint64));
+	}
+}
+
+function _bridgeMsPowI64(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 9223372036854775807); }
+function _bridgeMsPowI32(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 2147483647); }
+
+function _bridgePowUnsigned(args: RaiserValue[], max: uint64): RaiserValue {
+	let result: uint64 = 1;
+	let base = args[0].intVal as uint64;
+	let rest = args[1].intVal as uint64;
+	while (true) {
+		if ((rest & 1) != 0) {
+			if (result != 0 && base > max / result) return _powOverflow();
+			result = result * base;
+		}
+		rest = rest >> 1;
+		if (rest == 0) return raiserInt(int64Bits(result));
+		if (base != 0 && base > max / base) return _powOverflow();
+		base = base * base;
+	}
+}
+
+function _bridgeMsPowU64(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 18446744073709551615); }
+function _bridgeMsPowU32(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 4294967295); }
+
 function _bridgeExp(args: RaiserValue[]): RaiserValue { return boxFloat(Math.exp(unboxFloat(args[0]))); }
 function _bridgeExpm1(args: RaiserValue[]): RaiserValue { return boxFloat(Math.expm1(unboxFloat(args[0]))); }
 function _bridgeLog(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log(unboxFloat(args[0]))); }
@@ -1370,6 +1419,10 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
 	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
 	registerHostFn("msPowF64", _bridgePow, HostCapability.Pure);
+	registerHostFn("msPowI64", _bridgeMsPowI64, HostCapability.Pure);
+	registerHostFn("msPowI32", _bridgeMsPowI32, HostCapability.Pure);
+	registerHostFn("msPowU64", _bridgeMsPowU64, HostCapability.Pure);
+	registerHostFn("msPowU32", _bridgeMsPowU32, HostCapability.Pure);
 	registerHostFn("exp",   _bridgeExp, HostCapability.Pure);
 	registerHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
 	registerHostFn("log",   _bridgeLog, HostCapability.Pure);
@@ -1399,6 +1452,7 @@ export function ensureHostTableLoaded(): void {
 import { raiserInt, raiserFloat, raiserConstString, RaiserValueKind } from "../../raiser/value";
 import { lookupHost, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
 import { int64Bits } from "../../utils/stdBackport";
+import { mulOverflowsI64 } from "../../raiser/vm";
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();

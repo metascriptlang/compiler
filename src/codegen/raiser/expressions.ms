@@ -397,6 +397,10 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
 		return;
 	}
+	if (base == "**" && intPowBridge(target.nodeType) != "") {
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitIntPow(s, lhs, rhs, target.nodeType), 0));
+		return;
+	}
 	if (base == "**") {
 		const power = emitHostPair(s, "pow", lhs, rhs);
 		const cls = convClassOf(target.nodeType);
@@ -423,6 +427,28 @@ const FLOAT_PAIR_CALL: RaiserRegClass[] = [RaiserRegClass.Float, RaiserRegClass.
 function floatOperand(s: RaiserCompState, reg: int32): int32 {
 	if (classOfReg(s, reg) != RaiserRegClass.Word) return reg;
 	return emitConvTo(s, reg, RaiserConvClass.F64 as int32, RaiserConvClass.I64 as int32);
+}
+
+function intPowBridge(t: Type | null): string {
+	if (t == null) return "";
+	return match (peelDistinct(t).kind) {
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 => "msPowI32",
+		TypeKind.Int64 => "msPowI64",
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => "msPowU32",
+		TypeKind.Uint64 => "msPowU64",
+		_ => "",
+	};
+}
+
+const WORD_PAIR_CALL: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Word];
+
+function emitIntPow(s: RaiserCompState, lhs: int32, rhs: int32, t: Type | null): int32 {
+	const out = allocBlock(s, WORD_PAIR_CALL);
+	emitInst(s, raiserABC(RaiserOpcode.Move, out + 1, lhs, 0));
+	emitInst(s, raiserABC(RaiserOpcode.Move, out + 2, rhs, 0));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserConstString(intPowBridge(t))), 2));
+	emitAtWidth(s, out, t);
+	return out;
 }
 
 function emitHostPair(s: RaiserCompState, name: string, lhs: int32, rhs: int32): int32 {
@@ -1181,6 +1207,8 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const useFloat = isArithmeticOp(op)
 		? isFloatExpr(node)
 		: (isFloatExpr(d.left) || isFloatExpr(d.right));
+	const intPow = !bitwise && op == "**" && intPowBridge(node.nodeType) != "";
+	if (intPow) return emitIntPow(s, lReg, rReg, node.nodeType);
 	const hostCall = !bitwise && (op == "**" || (op == "%" && useFloat));
 	const dest = hostCall ? allocBlock(s, FLOAT_PAIR_CALL) : useFloat && isArithmeticOp(op) ? allocFloat(s) : allocWord(s);
 
