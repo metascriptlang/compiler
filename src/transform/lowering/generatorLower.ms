@@ -28,7 +28,7 @@ import {
 import { isScopeBoundary } from "../../ast/shape";
 import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
@@ -452,11 +452,6 @@ export function allocState(sc: StateCollector): number {
 	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarSym: null, yieldVarType: null, excLanding: -1 };
 	sc.items.push(st);
 	return idx;
-}
-
-function isGeneratorFlag(flags: string): boolean {
-	if (flags == "generator" || flags == "async_generator") return true;
-	return flags.indexOf("generator") >= 0;
 }
 
 // ===== Yield Detection =====
@@ -1139,7 +1134,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 			const d = node.data as FunctionDeclData;
 			if (isGenericFn(d.fnFlags)) return;
 			walkGenerators(d.fnBody, ctx);
-			if (isGeneratorFlag(d.fnFlags)) {
+			if (routineFlagSet(d.fnFlags).has(RoutineFlag.Generator)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
 				// Generic templates have unresolved type params that produce void in C.
 				const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
@@ -1168,7 +1163,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 			if (isGenericFn(d.methodFlags)) return;
 			walkGenerators(d.methodBody, ctx);
 			const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
-			if (d.methodBody != null && isGeneratorFlag(d.methodFlags) && (fnType == null || !hasGenericParams(fnType))) {
+			if (d.methodBody != null && routineFlagSet(d.methodFlags).has(RoutineFlag.Generator) && (fnType == null || !hasGenericParams(fnType))) {
 				d.methodBody = transformGeneratorFn(
 					d.methodParams, d.methodParamTypes, d.methodBody,
 					d.methodFlags, d.methodReturnType, fnType != null ? fnType.typeReturn : null, ctx, node.location,
@@ -1193,7 +1188,7 @@ function walkCheckFuncExpr(node: Node, ctx: TransformContext): void {
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		walkGenerators(d.funcExprBody, ctx);
-		if (isGeneratorFlag(d.funcExprFlags)) {
+		if (routineFlagSet(d.funcExprFlags).has(RoutineFlag.Generator)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
 				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,

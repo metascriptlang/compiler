@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, CallExprData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, OverloadWinner } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner } from "../../codegen/c/types";
@@ -46,7 +46,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 		if (fn == null || !functionDeclIsAlive(aliveSet, modulePath, fn)) continue;
 		const d = fn.data as FunctionDeclData;
 		const sym = fn.resolvedSym;
-		if (d.fnBody == null || d.fnFlags.indexOf("extern", 0) >= 0 || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
+		if (d.fnBody == null || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
 		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.CompileTime))) continue;
 		const symbol = mangledFunctionName(sym, d.fnName, sym != null ? sym.overloadIdx : 0);
 		if (facts.genericOwners.has(symbol) && facts.genericOwners.readonlyGet(symbol) != modulePath) continue;

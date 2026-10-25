@@ -20,7 +20,8 @@ import {
 } from "../ast/node";
 import { Type, TypeKind, TypeFlag, Symbol } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError, isGenericFn } from "./context";
+import { CheckerContext, addError } from "./context";
+import { RoutineFlag, routineFlagSet } from "./symbol";
 import { splitTopLevel, parseIntStr } from "../utils/string";
 
 // ===== Public Entry Point =====
@@ -50,7 +51,8 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 	if (sym == null || d.fnBody == null) return;
-	if (d.fnFlags.indexOf("overload", 0) >= 0 || d.fnFlags.indexOf("extern", 0) >= 0) return;
+	const routine = routineFlagSet(d.fnFlags);
+	if (routine.has(RoutineFlag.Overload) || routine.has(RoutineFlag.Extern)) return;
 
 	// Recurse into nested functions first
 	scanNestedFunctions(d.fnBody, ctx);
@@ -58,7 +60,7 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	if (d.params.length == 0) return;
 	const paramSyms = node.paramSyms;
 	if (paramSyms == null || paramSyms.length != d.params.length) {
-		if (isGenericFn(d.fnFlags)) return;
+		if (routine.has(RoutineFlag.Generic)) return;
 		addError(ctx, `internal: function '${d.fnName}' has no checked parameter symbols for mutation analysis`, node.location.line, node.location.column);
 		return;
 	}
@@ -77,7 +79,7 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	sym.mutatedParams = bits;
 
 	// Cross-check: readonly params must not be mutated
-	if (bits != 0 && d.fnFlags != "" && d.fnFlags.indexOf("rdonly:") >= 0) {
+	if (bits != 0 && routine.has(RoutineFlag.ReadonlyParams)) {
 		const flagParts = splitTopLevel(d.fnFlags, "|");
 		for (const fp of flagParts) {
 			const trimFp = fp.trim();

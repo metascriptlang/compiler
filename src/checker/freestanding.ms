@@ -19,20 +19,13 @@
 
 import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { makeSymbol, hasFlag, setFlag, SymbolFlag } from "./symbol";
+import { makeSymbol, hasFlag, setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
 export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher, no thread pool, no await slots (FREESTANDING E01)";
 export const WRITABLE_MODULE_LET_MSG: string = "a module-level 'let' needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata. Keep the state in an account, or make it a 'const' with a compile-time initializer (FREESTANDING E02)";
 export const WRITABLE_MODULE_CONST_MSG: string = "the initializer of this module-level 'const' is not a compile-time constant, so the binding needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata (FREESTANDING E02)";
-
-// Mirrors checkExprPass's isAsync test (fnFlags is a free-form flag string,
-// "async" / "async_generator" / combinations).
-function flagsAreAsync(flags: string): boolean {
-	if (flags == "") return false;
-	return flags.indexOf("async") >= 0;
-}
 
 // Function-like nodes own a scope for the one-diagnostic-per-body rule.
 export function isFunctionLike(node: Node): boolean {
@@ -45,10 +38,10 @@ export function isFunctionLike(node: Node): boolean {
 // `async` on the declaration itself.
 export function isAsyncFunctionNode(node: Node): boolean {
 	if (node == null) return false;
-	if (node.kind == NodeKind.FunctionDecl) return flagsAreAsync((node.data as FunctionDeclData).fnFlags);
-	if (node.kind == NodeKind.FunctionExpr) return flagsAreAsync((node.data as FunctionExprData).funcExprFlags);
-	if (node.kind == NodeKind.ArrowFunction) return flagsAreAsync((node.data as ArrowFunctionData).arrowFlags);
-	if (node.kind == NodeKind.MethodDecl) return flagsAreAsync((node.data as MethodDeclData).methodFlags);
+	if (node.kind == NodeKind.FunctionDecl) return routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Async);
+	if (node.kind == NodeKind.FunctionExpr) return routineFlagSet((node.data as FunctionExprData).funcExprFlags).has(RoutineFlag.Async);
+	if (node.kind == NodeKind.ArrowFunction) return routineFlagSet((node.data as ArrowFunctionData).arrowFlags).has(RoutineFlag.Async);
+	if (node.kind == NodeKind.MethodDecl) return routineFlagSet((node.data as MethodDeclData).methodFlags).has(RoutineFlag.Async);
 	return false;
 }
 

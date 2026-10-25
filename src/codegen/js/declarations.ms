@@ -12,7 +12,7 @@ import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 
 // ===== Function Declaration =====
 
@@ -43,17 +43,6 @@ function receiverSafeJsName(name: string): string {
 	return name == "this" ? "$this" : safeJsName(name);
 }
 
-// Check if fnFlags contains "extern" (may also have gen:/ext: segments)
-function isExternFlag(flags: string): boolean {
-	if (flags == "extern") return true;
-	if (flags.length < 6) return false;
-	// Check for "extern|..." or "...|extern|..." or "...|extern"
-	if (flags.startsWith("extern|")) return true;
-	if (flags.indexOf("|extern|") >= 0) return true;
-	if (flags.endsWith("|extern")) return true;
-	return false;
-}
-
 function isGenericRoutine(node: Node, flags: string): boolean {
 	return isGenericFn(flags) || (node.nodeType != null && hasGenericParams(node.nodeType));
 }
@@ -79,7 +68,7 @@ function classEmitsShell(node: Node): boolean {
 
 function emittableFunctionDecl(node: Node): boolean {
 	const d = node.data as FunctionDeclData;
-	if (isExternFlag(d.fnFlags) || d.fnFlags.indexOf("overload", 0) >= 0 || isGenericFn(d.fnFlags)) return false;
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) || routineFlagSet(d.fnFlags).has(RoutineFlag.Overload) || isGenericFn(d.fnFlags)) return false;
 	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return false;
 	return node.nodeType == null || !hasGenericParams(node.nodeType);
 }
@@ -277,8 +266,8 @@ export function emitDeferredClassValue(gen: JSGenerator, node: Node): void {
 
 function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
 	const d = member.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags)) return;
-	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern)) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return;
 	if (isGenericRoutine(member, d.methodFlags)) return;
 	emitIndent(gen);
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
@@ -359,8 +348,8 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 
 function emitMethodDeclNamed(gen: JSGenerator, node: Node, memberName: string): void {
 	const d = node.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags)) return;
-	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern)) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return;
 	if (isGenericRoutine(node, d.methodFlags)) return;
 	emitIndent(gen);
 	if (d.methodIsStatic) { emit(gen, "static "); }
@@ -381,7 +370,7 @@ function emitMethodDeclNamed(gen: JSGenerator, node: Node, memberName: string): 
 
 function isActorMessage(node: Node): boolean {
 	const d = node.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags) || d.methodFlags.indexOf("overload", 0) >= 0) return false;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern) || routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return false;
 	return d.methodName != "onTerminate" && d.methodName != "onExit" && d.methodName != "onDown" && d.methodName != "onIdle";
 }
 

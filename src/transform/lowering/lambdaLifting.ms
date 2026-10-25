@@ -32,6 +32,7 @@ import {
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
+import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx, checkedFnBodyStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import {
@@ -584,7 +585,7 @@ function walkLift(node: Node, state: LiftState): void {
 			// Generic template: never lifted. Monomorphization (instantiate.ms strips the `gen:`
 			// flag) emits concrete instances, which ARE lifted. Lifting the T-unbound template only
 			// manufactures orphan closures (void* env, unlowered methods) that codegen later drops.
-			if (d.fnFlags.indexOf("gen:") >= 0) return;
+			if (routineFlagSet(d.fnFlags).has(RoutineFlag.Generic)) return;
 			const savedName = state.currentFnName;
 			if (d.fnName != "") {
 				state.currentFnName = d.fnName;
@@ -759,7 +760,7 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			if (d.methodFlags.indexOf("gen:") >= 0) return;
+			if (routineFlagSet(d.methodFlags).has(RoutineFlag.Generic)) return;
 			pushFuncBoundary(state.ss);
 			defineParams(state.ss, node.paramSyms, d.methodParams);
 			walkLiftBody(d.methodBody, state);

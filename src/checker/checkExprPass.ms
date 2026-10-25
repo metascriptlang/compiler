@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag,
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope } from "./symbol";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
@@ -3727,7 +3727,9 @@ export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Nod
 }
 
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
-	const isAsync = fnFlags == "async" || fnFlags == "async_generator" || (fnFlags != "" && fnFlags.indexOf("async") >= 0);
+	const routine = routineFlagSet(fnFlags);
+	const isAsync = routine.has(RoutineFlag.Async);
+	const isGenerator = routine.has(RoutineFlag.Generator);
 	if (params.length > 0 && params[0] == "this") {
 		const thisLoc = paramLocs != null && paramLocs.length > 0 && paramLocs[0] != null ? paramLocs[0] : fnNode.location;
 		addError(ctx, "a 'this' parameter is only valid as the receiver of a class method", thisLoc.line, thisLoc.column);
@@ -3791,7 +3793,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		&& fnExpected.typeReturn != null
 		&& !isUnresolvedType(fnExpected.typeReturn)
 		&& !hasGenericParams(fnExpected.typeReturn)) {
-		explicitReturnType = isAsync && fnFlags.indexOf("generator") < 0 && promisesContext(fnExpected.typeReturn)
+		explicitReturnType = isAsync && !isGenerator && promisesContext(fnExpected.typeReturn)
 			? createPromise(fnExpected.typeReturn)
 			: fnExpected.typeReturn;
 	}
@@ -3817,7 +3819,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		ctx.pendingSpawnThunk = false;
 		ctx.readonlyBoundary = ctx.table.current;
 	}
-	const suspends = isAsync || fnFlags.indexOf("generator") >= 0;
+	const suspends = isAsync || isGenerator;
 	const paramSyms: Symbol[] = [];
 	const paramValueTypes: Type[] = [];
 	let pi = 0;
@@ -3847,7 +3849,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 		if (explicitReturnType != null) {
-			refuseFallingOffEnd(ctx, name, body, explicitReturnType, isAsync, fnFlags.indexOf("generator") >= 0, fnNode.location);
+			refuseFallingOffEnd(ctx, name, body, explicitReturnType, isAsync, isGenerator, fnNode.location);
 		}
 	} else {
 		let bodyExpected = explicitReturnType;
@@ -3876,11 +3878,11 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
 
-	const inferredRet = explicitReturnType == null && returnTypeAnnotation == "" && isSyncGeneratorFlags(fnFlags)
+	const inferredRet = explicitReturnType == null && returnTypeAnnotation == "" && isGenerator && !isAsync
 		? settleYields(ctx, name, fnNode.location)
 		: closureStorageType(ctx.inferredReturn);
 	if (body.kind == NodeKind.BlockStmt && explicitReturnType == null && returnTypeAnnotation == "" && !isUnresolvedType(inferredRet)) {
-		refuseFallingOffEnd(ctx, name, body, inferredRet, false, fnFlags.indexOf("generator") >= 0, fnNode.location);
+		refuseFallingOffEnd(ctx, name, body, inferredRet, false, isGenerator, fnNode.location);
 	}
 	for (const rs of ctx.inferredReturnStmts) {
 		const rsd = rs.data as ReturnStmtData;
@@ -3933,7 +3935,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
 	}
 	if (!isUnresolvedType(inferredRet)) {
-		if (isAsync && fnFlags.indexOf("generator") < 0 && isAwaitable(inferredRet)) refuseReturnedPromise(ctx, name == "<arrow>" ? "an async arrow function" : "an async function expression", inferredRet, body.location);
+		if (isAsync && !isGenerator && isAwaitable(inferredRet)) refuseReturnedPromise(ctx, name == "<arrow>" ? "an async arrow function" : "an async function expression", inferredRet, body.location);
 		const retT = isAsync && !isAwaitable(inferredRet) ? createPromise(inferredRet) : inferredRet;
 		return createClosureType(types, params, retT);
 	}

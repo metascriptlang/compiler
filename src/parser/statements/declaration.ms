@@ -2066,10 +2066,12 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 }
 
 function parseRuntimeConverterDecl(state: ParserState): NodeResult {
+	const nameAt = peek(state, 1).kind == TokenKind.Star ? 2 : 1;
+	const generic = peek(state, nameAt + 1).kind == TokenKind.Lt;
 	const decl = try parseFunctionDecl(state);
 	const fd = decl.data as FunctionDeclData;
 	const where = `at line ${fd.nameLocation.line}`;
-	if (fd.fnFlags.indexOf("gen:", 0) >= 0) {
+	if (generic) {
 		return Result.err(`converter '${fd.fnName}' cannot be generic ${where}`);
 	}
 	if (fd.params.length != 1) {

@@ -21,6 +21,7 @@ import {
 	Type, TypeKind, Symbol, createNodeAt, NodeFlag,
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
+import { RoutineFlag, routineFlagSet } from "./symbol";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType, boundSlot, bindParam } from "./types";
 import { isAssignable, unmetConstraint, foldTypeParamCandidates } from "./compat";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
@@ -33,7 +34,7 @@ export function isTemplateSym(sym: Symbol): boolean {
 	if (sym == null || sym.declNode == null) return false;
 	if (sym.declNode.kind != NodeKind.FunctionDecl) return false;
 	const flags = (sym.declNode.data as FunctionDeclData).fnFlags;
-	return flags.indexOf("template", 0) >= 0;
+	return routineFlagSet(flags).has(RoutineFlag.Template);
 }
 
 let _templateDepth: int32 = 0;

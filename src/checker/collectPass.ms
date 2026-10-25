@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
-import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
+import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName } from "./context";
@@ -321,7 +321,7 @@ function inlineMisuse(md: MacroInvocationData, dd: DecoratedDeclData): string {
 	const fn = exportedFunctionOf(dd.decoratedNode);
 	if (fn == null) return "@inline applies to a module-level function";
 	const fd = fn.data as FunctionDeclData;
-	if (fd.fnFlags.indexOf("extern", 0) >= 0 || fd.fnBody == null) return "@inline needs a function with a body";
+	if (routineFlagSet(fd.fnFlags).has(RoutineFlag.Extern) || fd.fnBody == null) return "@inline needs a function with a body";
 	if (exportNameDecorator(dd.decorators) != null || reloadHandlerDecorator(dd.decorators) != null) {
 		return "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
 	}
@@ -359,8 +359,8 @@ function borrowMisuse(dd: DecoratedDeclData): string {
 	if (decl.kind == NodeKind.TypeAliasDecl) return "";
 	if (decl.kind != NodeKind.FunctionDecl) return "@delegate applies to a function or a distinct type";
 	const fd = decl.data as FunctionDeclData;
-	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@delegate cannot bind an extern function; it takes the implementation of its base function";
-	if (fd.fnFlags.indexOf("overload", 0) < 0) return `@delegate takes the body of the base function: declare '${fd.fnName}' without one`;
+	if (routineFlagSet(fd.fnFlags).has(RoutineFlag.Extern)) return "@delegate cannot bind an extern function; it takes the implementation of its base function";
+	if (!routineFlagSet(fd.fnFlags).has(RoutineFlag.Overload)) return `@delegate takes the body of the base function: declare '${fd.fnName}' without one`;
 	return "";
 }
 
@@ -398,7 +398,7 @@ function reloadHandlerMisuse(md: MacroInvocationData, dd: DecoratedDeclData, sym
 	const fn = exportedFunctionOf(dd.decoratedNode);
 	if (fn == null) return `${name} applies to a module-level function`;
 	const fd = fn.data as FunctionDeclData;
-	if (fd.fnFlags.indexOf("extern", 0) >= 0 || fd.fnBody == null) return `${name} needs a function with a body`;
+	if (routineFlagSet(fd.fnFlags).has(RoutineFlag.Extern) || fd.fnBody == null) return `${name} needs a function with a body`;
 	if (isGenericFn(fd.fnFlags)) return `${name} needs one C definition; a generic function has one per instantiation`;
 	if (fd.params.length > 0) return `${name} handlers take no parameters`;
 	if (fd.fnReturnType != "" && fd.fnReturnType != "void") return `${name} handlers return void`;
@@ -422,7 +422,7 @@ function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
 	const fn = exportedFunctionOf(decorated);
 	if (fn == null) return "@exportName applies to a module-level function";
 	const fd = fn.data as FunctionDeclData;
-	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@exportName defines a C symbol; an extern function binds one, name the import with `from \"c_name\"`";
+	if (routineFlagSet(fd.fnFlags).has(RoutineFlag.Extern)) return "@exportName defines a C symbol; an extern function binds one, name the import with `from \"c_name\"`";
 	if (isGenericFn(fd.fnFlags)) return "@exportName needs one C definition; a generic function has one per instantiation";
 	if (fd.fnBody == null) return "@exportName needs a function body";
 	return "";
@@ -569,7 +569,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.fnName, SymbolKind.Function, inferredType(), false);
 	sym.symbolType.sym = sym;
 	// Tier 1: overload signature (body-less) — typecheck-only, codegen skips emission
-	if (d.fnFlags.indexOf("overload", 0) >= 0) {
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Overload)) {
 		setFlag(sym, SymbolFlag.OverloadSig);
 	}
 	if (node.flags.has(NodeFlag.Converter)) {
@@ -577,7 +577,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 		addRuntimeConverter(ctx, sym);
 	}
 	// Extern functions: mark as C import (export requires explicit `export` keyword)
-	if (d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Extern)) {
 		setFlag(sym, SymbolFlag.ImportC);
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName != null && d.nativeName != "") {
@@ -801,7 +801,7 @@ function methodDeclOfMember(member: Node): Node | null {
 
 function methodDefinesRoutine(md: MethodDeclData): boolean {
 	if (md.methodBody == null) return false;
-	if (md.methodFlags.indexOf("overload", 0) >= 0) return false;
+	if (routineFlagSet(md.methodFlags).has(RoutineFlag.Overload)) return false;
 	if (md.nativeName != null && md.nativeName != "") return false;
 	if (md.methodBody.kind != NodeKind.BlockStmt) return true;
 	return (md.methodBody.data as BlockStmtData).statements.length > 0;

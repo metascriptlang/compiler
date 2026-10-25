@@ -8,7 +8,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -554,7 +554,7 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			if (node.flags.has(NodeFlag.Converter) && fdLocal) {
 				const fd = node.data as FunctionDeclData;
 				addError(ctx, "converter '" + fd.fnName + "' is only allowed at module level", fd.nameLocation.line, fd.nameLocation.column);
-			} else if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
+			} else if (routineFlagSet(fdFlags).has(RoutineFlag.Extern) && fdLocal) {
 				checkExternFunctionStmt(ctx, node);
 			} else if (fdLocal && isGenericFn(fdFlags)) {
 				collectFunction(ctx, node);
@@ -1020,7 +1020,7 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	if (node.flags.has(NodeFlag.Converter)) checkConverterOwner(ctx, d, fnType);
 
 	// Mark async functions for return type unwrapping
-	if (d.fnFlags == "async" || d.fnFlags == "async_generator" || (d.fnFlags != "" && d.fnFlags.indexOf("async") >= 0)) {
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Async)) {
 		setFlag(sym, SymbolFlag.Async);
 	}
 
@@ -1890,7 +1890,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
 			const sym = methodSym != null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, inferredType(), false);
-				if (d.methodFlags == "async" || d.methodFlags == "async_generator" || (d.methodFlags != "" && d.methodFlags.indexOf("async") >= 0)) {
+				if (routineFlagSet(d.methodFlags).has(RoutineFlag.Async)) {
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
@@ -2487,7 +2487,7 @@ let _forwardLocals: HashSet<Symbol> = new HashSet<Symbol>();
 
 function isLocalFunctionStmt(node: Node): boolean {
 	if (node.kind != NodeKind.FunctionDecl || node.flags.has(NodeFlag.Converter) || node.flags.has(NodeFlag.WhenDeferred)) return false;
-	return (node.data as FunctionDeclData).fnFlags.indexOf("extern", 0) < 0;
+	return !routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern);
 }
 
 function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
@@ -2982,7 +2982,8 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	while (flagsDecl != null && flagsDecl.kind == NodeKind.DecoratedDecl) flagsDecl = (flagsDecl.data as DecoratedDeclData).decoratedNode;
 	if (flagsDecl != null && flagsDecl.kind == NodeKind.FunctionDecl) declFlags = (flagsDecl.data as FunctionDeclData).fnFlags;
 	else if (flagsDecl != null && flagsDecl.kind == NodeKind.MethodDecl) declFlags = (flagsDecl.data as MethodDeclData).methodFlags;
-	const suspends = declFlags.indexOf("async") >= 0 || declFlags.indexOf("generator") >= 0;
+	const routine = routineFlagSet(declFlags);
+	const suspends = routine.has(RoutineFlag.Async) || routine.has(RoutineFlag.Generator);
 	const paramTypes: Type[] = [];
 	let i = 0;
 	for (const param of params) {
@@ -3075,7 +3076,8 @@ function declaredWithoutBody(sym: Symbol | null): boolean {
 		flags = md.methodFlags;
 		native = md.nativeName;
 	}
-	return (native != null && native != "") || flags.indexOf("extern") >= 0 || flags.indexOf("overload") >= 0 || flags.indexOf("abstract") >= 0;
+	const routine = routineFlagSet(flags);
+	return (native != null && native != "") || routine.has(RoutineFlag.Extern) || routine.has(RoutineFlag.Overload);
 }
 
 function refuseFallOffEndOf(ctx: CheckerContext, sym: Symbol, body: Node): void {
@@ -3098,8 +3100,9 @@ function refuseFallOffEndOf(ctx: CheckerContext, sym: Symbol, body: Node): void 
 		at = md.nameLocation;
 	}
 	if (declaredWithoutBody(sym)) return;
-	refuseFallingOffEnd(ctx, shown, body, sym.symbolType.typeReturn, hasFlag(sym, SymbolFlag.Async) || flags.indexOf("async") >= 0,
-		flags.indexOf("generator") >= 0, at);
+	const routine = routineFlagSet(flags);
+	refuseFallingOffEnd(ctx, shown, body, sym.symbolType.typeReturn, hasFlag(sym, SymbolFlag.Async) || routine.has(RoutineFlag.Async),
+		routine.has(RoutineFlag.Generator), at);
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {
@@ -3208,7 +3211,7 @@ function bindTemplateBodies(ctx: CheckerContext, program: Node): void {
 		const decl = declOfStatement(stmt);
 		if (decl.kind != NodeKind.FunctionDecl) continue;
 		const fd = decl.data as FunctionDeclData;
-		if (fd.fnBody != null && fd.fnFlags.indexOf("template", 0) >= 0) bindTemplateBodyNames(ctx, fd.params, fd.fnBody);
+		if (fd.fnBody != null && routineFlagSet(fd.fnFlags).has(RoutineFlag.Template)) bindTemplateBodyNames(ctx, fd.params, fd.fnBody);
 	}
 }
 
