@@ -69,13 +69,14 @@ function hashFile(path: string): string {
 // binary plus every file under the resolved runtime/ AND vendor/ trees. VERSION
 // only moves on release, but WIP trees change codegen, runtime/*.h and vendor
 // headers while reporting the same version — two such builds must never share
-// cache entries of msc's own output (pack, header translations, project cache), and an
+// cache entries of msc's own output (header translations, project cache), and an
 // on-disk runtime/vendor header edit must invalidate .o files even when their
 // generated C is byte-identical. vendor/ is a real compile input: runtime TUs
 // include vendor headers (zip/inflate/deflate → miniz.h, blake2b/chacha20/
 // x25519 → monocypher.h) and std modules @compile vendor .c directly.
 let _toolchainStamp = "";
 let _objectStamp = "";
+let _compilerStamp = "";
 
 // Content-hash every file under one support tree into the stamp accumulator.
 // Keys are prefixed with the tree name so runtime/x.h and vendor/x.h can never
@@ -137,14 +138,19 @@ function saveHashMemo(path: string, files: string[]): void {
 // workers only ever read the settled value.
 export function toolchainStamp(): string {
 	if (_toolchainStamp != "") return _toolchainStamp;
+	_toolchainStamp = hashContent(`${compilerStamp()}\n${objectStamp()}`);
+	return _toolchainStamp;
+}
+
+export function compilerStamp(): string {
+	if (_compilerStamp != "") return _compilerStamp;
 	const exe = resolveArgv0(argv[0]);
 	const memo = hashMemoPath(exe, "exe");
 	loadHashMemo(memo);
 	const writes = _hashMemoWrites;
-	const exeHash = hashFile(exe);
+	_compilerStamp = hashFile(exe);
 	if (_hashMemoWrites != writes) saveHashMemo(memo, [exe]);
-	_toolchainStamp = hashContent(`${exeHash}\n${objectStamp()}`);
-	return _toolchainStamp;
+	return _compilerStamp;
 }
 
 export function objectStamp(): string {

@@ -85,7 +85,7 @@ import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs,
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -100,10 +100,7 @@ import { VERSION } from "./usage";
 // checker/context → module/graph layering; callbacks pattern). Registered at
 // module load so every later build engages it without an init-order hazard.
 registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
-// Prelude pack shares the object cache's memoized toolchainStamp — one stamp
-// computation per process instead of two (the pack's local fallback would
-// re-hash the 30MB binary + runtime/ + vendor/ every process).
-registerPreludeStampFn(toolchainStamp, stdTreeStamp);
+registerPreludeStampFn(compilerStamp, stdTreeStamp);
 
 // ===== Build Helpers =====
 
