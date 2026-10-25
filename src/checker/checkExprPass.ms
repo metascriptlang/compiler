@@ -2077,7 +2077,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
 		&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
-		checkArcPointeeSendable(ctx, objExpected.typeReturn, (owner: Type): boolean => declaresUserHook(owner, ctx), node.location.line, node.location.column);
+		checkArcPointeeSendable(ctx, objExpected.typeReturn, (owner: Type): boolean => declaresUserHook(owner), node.location.line, node.location.column);
 	}
 	// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 	if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
