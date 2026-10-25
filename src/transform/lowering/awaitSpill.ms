@@ -15,7 +15,7 @@ import {
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts, isActorCall,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { isNamespaceTyped } from "./namespaceValueLower";
+import { isNamespaceTyped, isNamespaceRef } from "./namespaceValueLower";
 import { Spiller, bindTemp, tempRef, isVoidType, isNeverType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
 import { truthinessTest } from "../coercion/stringTruthiness";
@@ -50,7 +50,7 @@ function dropsNamespaceObject(node: Node): boolean {
 	if (_sp.ctx.jsBackend) return false;
 	if (node.kind != NodeKind.MemberExpr) return false;
 	const object = (node.data as MemberExprData).object;
-	return isNamespaceTyped(object.nodeType) && object.kind != NodeKind.Identifier;
+	return isNamespaceTyped(object.nodeType) && object.kind != NodeKind.Identifier && !isNamespaceRef(object);
 }
 
 // A JS extern pattern splices its arguments' source where its `#` sits, so a `#` after an

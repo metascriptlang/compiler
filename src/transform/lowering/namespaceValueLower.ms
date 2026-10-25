@@ -10,8 +10,9 @@ import { mangleModuleName, buildModuleNameRoots } from "../../codegen/c/names";
 import { mapChildren } from "../walker";
 import { makeCall, makeIdentResolved, runtimeRef } from "../util";
 
-function isNamespaceIdent(n: Node): boolean {
-	return n.kind == NodeKind.Identifier && n.resolvedSym != null && n.resolvedSym.symbolKind == SymbolKind.Module;
+export function isNamespaceRef(n: Node): boolean {
+	if (n.resolvedSym == null || n.resolvedSym.symbolKind != SymbolKind.Module) return false;
+	return n.kind == NodeKind.Identifier || (n.kind == NodeKind.MemberExpr && isNamespaceRef((n.data as MemberExprData).object));
 }
 
 export function isNamespaceTyped(t: Type | null): boolean {
@@ -38,18 +39,18 @@ function lowerNode(n: Node): Node {
 		call.nodeType = n.nodeType;
 		return call;
 	}
+	if (isNamespaceRef(n)) {
+		const unit = makeNumber(1, n.location);
+		unit.nodeType = getSysType(TypeKind.Uint8);
+		return unit;
+	}
 	if (n.kind == NodeKind.MemberExpr) {
 		const d = n.data as MemberExprData;
-		if (isNamespaceIdent(d.object)) return n;
+		if (isNamespaceRef(d.object)) return n;
 		if (isNamespaceTyped(d.object.nodeType) && d.object.kind == NodeKind.Identifier) {
 			d.object = namespaceIdent(d.object.nodeType!, d.object);
 			return n;
 		}
-	}
-	if (isNamespaceIdent(n)) {
-		const unit = makeNumber(1, n.location);
-		unit.nodeType = getSysType(TypeKind.Uint8);
-		return unit;
 	}
 	mapChildren(n, lowerNode);
 	return n;
