@@ -36,7 +36,6 @@ function collectReferences(program: Node, modulePath: string): Reference[] {
 export function markVmOnlyRoutines(graph: ModuleGraph, stdPath: string): void {
 	const refs: Reference[] = [];
 	for (const mod of graph.modules) {
-		if (mod.path.startsWith(stdPath) && !mod.path.startsWith(stdPath + "/meta/")) continue;
 		const program = lookupModuleProgram(mod.path);
 		if (program == null) continue;
 		for (const r of collectReferences(program, mod.path)) refs.push(r);
