@@ -9,7 +9,7 @@ import {
 	makeObjectLiteral, makeHiddenDeref, makeNull, makeAssign, makeExprStmt, syntheticToken,
 	resolveSimpleTypeStr,
 } from "../util";
-import { createCursor, createPtr, createRef, voidType } from "../../checker/types";
+import { createCursor, createPtr, createRef, isAwaitable, voidType } from "../../checker/types";
 import { CaptureCursors, inferCaptureCursors } from "../../analyzer/cursors";
 import { WriteEffects, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
 import { RcInfo, RcKind, classifyType } from "../../analyzer/classify";
@@ -242,7 +242,7 @@ function liftWrites(ctx: TransformContext): WriteEffects {
 }
 
 function heldUncounted(state: LiftState, t: Type | null): boolean {
-	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Struct && classifyType(t, state.ctx, false).rcKind == RcKind.Ref;
+	return t != null && (isAwaitable(t) || t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Struct) && classifyType(t, state.ctx, false).rcKind == RcKind.Ref;
 }
 
 // Lift-state context discriminator. `tryLiftClosure` invokes `saveSharedEnv`
