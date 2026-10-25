@@ -62,7 +62,7 @@ test "an actor method that awaits without async reaches lowerAsync through lower
 	assert skips(rows, "lowerAsync") == 0 && skips(rows, "lowerAsyncBridge") == 0 && skips(rows, "lowerGenerator") == 0;
 }
 
-test "MSC_FACTS_CHECK finds every gated feature noted after every pass, on C and JS" {
+test "MSC_FACTS_CHECK finds no gated pass skipping a module that holds its feature, on C and JS" {
 	for (const src of GATED_FEATURES) {
 		factsCheckEnable(true);
 		const c = compileToC(src);

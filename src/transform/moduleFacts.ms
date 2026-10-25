@@ -7,7 +7,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { routineKindFlag } from "../checker/context";
-import { TransformContext, ModuleFact, reportTransformError } from "./context";
+import { TransformContext, ModuleFact, reportTransformError, mayContain } from "./context";
 import { isRuntimeProcSym } from "./util";
 import { sharedProbe } from "./coercion/optionalChain";
 
@@ -61,10 +61,6 @@ export function collectFacts(node: Node | null): BitSet<ModuleFact> {
 let factsCheckOn = env.get("MSC_FACTS_CHECK") == "1";
 let factsMisses: int32 = 0;
 
-export function factsCheckEnabled(): boolean {
-	return factsCheckOn;
-}
-
 export function factsCheckEnable(on: boolean): void {
 	factsCheckOn = on;
 	factsMisses = 0;
@@ -74,11 +70,13 @@ export function factsCheckMisses(): int32 {
 	return factsMisses;
 }
 
-export function checkFactsAfter(program: Node, ctx: TransformContext, pass: string): void {
-	if (!factsCheckOn || !ctx.factsCollected) return;
-	const missing = collectFacts(program).difference(ctx.facts);
-	if (missing.isEmpty()) return;
+export function skipsModule(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pass: string): boolean {
+	if (mayContain(ctx, need)) return false;
+	if (!factsCheckOn || !ctx.factsCollected) return true;
+	const held = collectFacts(program).intersection(need);
+	if (held.isEmpty()) return true;
 	factsMisses += 1;
-	reportTransformError(ctx, `internal: after ${pass} the module holds ${missing.toString()} but its facts lack it, so a gated pass would skip it (MSC_FACTS_CHECK)`, program.location);
-	ctx.facts = ctx.facts.union(missing);
+	reportTransformError(ctx, `internal: ${pass} would skip a module that holds ${held.toString()}, because the pass that made it left its fact unnoted (MSC_FACTS_CHECK)`, program.location);
+	ctx.facts = ctx.facts.union(held);
+	return false;
 }
