@@ -452,7 +452,7 @@ test "E2E C: a non-null asserted field bound across a call that clears it takes 
 		}
 	`);
 	assert c.ok;
-	assert !c.value.contains("(d_1_ = (*h).a)");
+	assert !c.value.contains("(d_1_ = (*h_p0).a)");
 	assert c.value.contains("msIncref(dollarborrow_");
 	assert c.value.contains("(d_1_ = dollarborrow_");
 	assert c.value.contains("msDecref(d_1_)");
@@ -467,7 +467,7 @@ test "E2E C: a non-null asserted argument evaluated before a sibling that clears
 		function both(h: Holder): number { return sum(h.a!, bump(h)); }
 	`);
 	assert c.ok;
-	assert !c.value.contains("_ = (*h).a);");
+	assert !c.value.contains("_ = (*h_p0).a);");
 	assert c.value.contains("msIncref(dollarborrow_");
 	assert c.value.contains("_ = dollarborrow_");
 	assert c.value.contains("msDecref(__ord_");
@@ -483,7 +483,7 @@ test "E2E C: a non-null asserted field bound while nothing writes its holder sta
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("(d_1_ = (*h).a)");
+	assert c.value.contains("(d_1_ = (*h_p0).a)");
 	assert !c.value.contains("msDecref(d_1_)");
 }
 
