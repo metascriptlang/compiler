@@ -1870,7 +1870,7 @@ build_runner() {
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
-    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
+    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; %s run --target=raiser src/test/preludePackKey.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" "$CAND" "$CAND" ;;
     cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$(runner_path corpus)" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path san)" ;;
