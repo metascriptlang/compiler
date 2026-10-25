@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { safePath, fingerprint, classify, summarize, runCommand, subjectOutcome } from './core.mjs';
+import { safePath, fingerprint, classify, summarize, runCommand, subjectOutcome, findSupportRoot, ambientProjectConfig } from './core.mjs';
 
 function scratch(t) {
   const root = mkdtempSync(join(tmpdir(), 'ts-oracle-test-'));
@@ -31,9 +34,10 @@ test('fingerprint detects changed, missing and extra source files', t => {
   writeFileSync(join(root, 'cases', 'a.ts'), 'const x = 1;\r\n');
   assert.equal(fingerprint(root, ['cases']).sha256, original.sha256);
   writeFileSync(join(root, 'cases', 'b.ts'), '');
-  assert.notEqual(fingerprint(root, ['cases']).sha256, original.sha256);
+  const added = fingerprint(root, ['cases']);
+  assert.notEqual(added.sha256, original.sha256);
   rmSync(join(root, 'cases', 'a.ts'));
-  assert.notEqual(fingerprint(root, ['cases']).sha256, original.sha256);
+  assert.notEqual(fingerprint(root, ['cases']).sha256, added.sha256);
 });
 
 test('fingerprint refuses a symlink rather than reading outside the snapshot', t => {
@@ -53,6 +57,32 @@ test('fingerprint refuses symlink ancestors of selected roots', t => {
 
 test('a missing snapshot root is not an empty passing inventory', t => {
   assert.throws(() => fingerprint(scratch(t), ['missing']));
+});
+
+test('support tree follows the marker across four binary ancestors', t => {
+  const root = scratch(t);
+  mkdirSync(join(root, 'std/core/system'), { recursive: true });
+  writeFileSync(join(root, 'std/core/system/index.ms'), '');
+  const bin = join(root, 'a/b/c');
+  mkdirSync(join(bin, 'std'), { recursive: true });
+  writeFileSync(join(bin, 'msc'), '');
+  assert.equal(findSupportRoot(join(bin, 'msc')), realpathSync(root));
+});
+
+test('a marker-less adjacent std is not the compiler support tree', t => {
+  const root = scratch(t);
+  mkdirSync(join(root, 'bin/std'), { recursive: true });
+  writeFileSync(join(root, 'bin/msc'), '');
+  assert.throws(() => findSupportRoot(join(root, 'bin/msc')), /support marker/);
+});
+
+test('ambient manifests are detected before the subject can inherit them', t => {
+  const root = scratch(t);
+  const cwd = join(root, 'nested/input');
+  mkdirSync(cwd, { recursive: true });
+  assert.equal(ambientProjectConfig(join(cwd, 'main.ts'), cwd), null);
+  writeFileSync(join(root, 'build.ms'), 'untrusted settings');
+  assert.equal(ambientProjectConfig(join(cwd, 'main.ts'), cwd), join(root, 'build.ms'));
 });
 
 const accepted = { status: 'checked', diagnostics: [] };
@@ -122,6 +152,10 @@ test('a success receipt alongside an error is not acceptance', () => {
   assert.equal(subjectOutcome({ exit: 0, stdout: 'OK no type errors in 1 module(s)', stderr: 'error: broken invariant' }).status, 'unrecognized-result');
 });
 
+test('warning diagnostics cannot be ignored alongside a success receipt', () => {
+  assert.equal(subjectOutcome({ exit: 0, stdout: 'OK no type errors in 1 module(s)', stderr: 'warning: mismatch' }).status, 'unrecognized-result');
+});
+
 test('nonzero without diagnostics is not a correct rejection', () => {
   assert.equal(subjectOutcome({ exit: 1, stdout: '', stderr: 'internal failure' }).status, 'unrecognized-result');
 });
@@ -130,20 +164,51 @@ test('checker error receipt is recognized but not claimed equivalent to the orac
   assert.equal(subjectOutcome({ exit: 1, stdout: '', stderr: 'error: bad type\n' }).status, 'rejected');
 });
 
-test('real subprocess controls distinguish success, failure and a crash', () => {
-  assert.equal(runCommand(process.execPath, ['-e', 'console.log("ok")']).exit, 0);
-  assert.equal(runCommand(process.execPath, ['-e', 'process.exit(1)']).exit, 1);
-  const result = runCommand(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']);
+test('real subprocess controls distinguish success, failure and a crash', async () => {
+  assert.equal((await runCommand(process.execPath, ['-e', 'console.log("ok")'])).exit, 0);
+  assert.equal((await runCommand(process.execPath, ['-e', 'process.exit(1)'])).exit, 1);
+  const result = await runCommand(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']);
   assert.equal(result.status, 'crash');
 });
 
-test('a real timeout cannot count as a negative agreement', () => {
-  const result = runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 100 });
+test('a real timeout cannot count as a negative agreement', async () => {
+  const result = await runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 100 });
   assert.equal(result.status, 'timeout');
   assert.equal(classify(rejected, subjectOutcome(result)), 'subject-timeout');
 });
 
-test('output overflow is named, not silently truncated into a success', () => {
-  const result = runCommand(process.execPath, ['-e', 'console.log("x".repeat(100000))'], { maxBuffer: 100 });
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  test(`cancelling a runner with ${signal} reaps its detached subject`, async t => {
+    const root = scratch(t);
+    const pidFile = join(root, 'subject.pid');
+    const subject = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    const script = `import { runCommand } from ${JSON.stringify(new URL('./core.mjs', import.meta.url).href)}; await runCommand(process.execPath, ['-e', ${JSON.stringify(subject)}], { timeout: 10000 });`;
+    const runner = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore' });
+    const exited = once(runner, 'exit');
+    let pid;
+    t.after(() => {
+      runner.kill('SIGKILL');
+      if (pid) {
+        try { process.kill(-pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      }
+    });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(pidFile) && Date.now() < deadline) await delay(10);
+    assert.ok(existsSync(pidFile), 'subject did not start');
+    pid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    runner.kill(signal);
+    await exited;
+    let alive = true;
+    for (let i = 0; i < 100 && alive; i++) {
+      try { process.kill(pid, 0); await delay(10); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; alive = false; }
+    }
+    assert.equal(alive, false, 'subject survived runner cancellation');
+  });
+}
+
+test('output overflow is named, not silently truncated into a success', async () => {
+  const result = await runCommand(process.execPath, ['-e', 'console.log("x".repeat(100000))'], { maxBuffer: 100 });
   assert.equal(result.status, 'output-limit');
 });

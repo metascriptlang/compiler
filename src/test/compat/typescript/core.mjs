@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { lstatSync, readdirSync, readFileSync, realpathSync, existsSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep, dirname, join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 export function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -38,32 +38,87 @@ export function fingerprint(root, entries) {
   return { sha256: sha256(sorted.map(([name, hash]) => `${name}\0${hash}\n`).join('')), files: Object.fromEntries(sorted) };
 }
 
-export function runCommand(command, args, options = {}) {
-  const started = performance.now();
-  const result = spawnSync(command, args, {
-    encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
-    ...options, detached: process.platform !== 'win32', killSignal: 'SIGKILL', windowsHide: true,
-    env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ...options.env },
-  });
-  if (process.platform !== 'win32' && result.pid) {
-    try { process.kill(-result.pid, 'SIGKILL'); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
+export function findSupportRoot(binary) {
+  let base = dirname(realpathSync(binary));
+  for (let i = 0; i < 4; i++, base = dirname(base)) {
+    if (existsSync(join(base, 'std/core/system/index.ms'))) return base;
   }
-  const status = result.error?.code === 'ETIMEDOUT' ? 'timeout'
-    : result.error?.code === 'ENOBUFS' ? 'output-limit'
-    : result.error ? 'execution-error'
-    : result.signal || result.status < 0 ? 'crash' : 'exited';
-  return {
-    command, args, status, exit: result.status, signal: result.signal,
-    stdout: result.stdout ?? '', stderr: result.stderr ?? '',
-    error: result.error?.message ?? null, milliseconds: performance.now() - started,
-  };
+  throw new Error('compiler support marker not found in four binary ancestors; cwd-only installs cannot run in isolated cases');
+}
+
+export function ambientProjectConfig(entry, cwd) {
+  for (const start of [dirname(entry), cwd]) {
+    let dir = resolve(start);
+    for (let i = 0; i < 20; i++, dir = dirname(dir)) {
+      const config = join(dir, 'build.ms');
+      if (existsSync(config)) return config;
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return null;
+}
+
+const activeChildren = new Map();
+let cancelled;
+
+function killGroup(pid) {
+  const state = activeChildren.get(pid);
+  if (!state || state.killed) return;
+  try { process.kill(-pid, 'SIGKILL'); }
+  catch (error) { if (error.code !== 'ESRCH') throw error; }
+  state.killed = true;
+}
+
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.on(signal, () => {
+    cancelled = code;
+    for (const pid of activeChildren.keys()) killGroup(pid);
+    if (activeChildren.size === 0) process.exit(code);
+  });
+}
+
+export function runCommand(command, args, options = {}) {
+  if (process.platform === 'win32') throw new Error('subprocess tree isolation currently requires a POSIX host');
+  const started = performance.now();
+  const { timeout = 30000, maxBuffer = 4 * 1024 * 1024, ...spawnOptions } = options;
+  return new Promise(resolveResult => {
+    const child = spawn(command, args, {
+      ...spawnOptions, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ...options.env },
+    });
+    if (child.pid) activeChildren.set(child.pid, { killed: false });
+    const buffers = { stdout: [], stderr: [] };
+    let bytes = 0;
+    let status;
+    let failure;
+    const timer = setTimeout(() => { status ??= 'timeout'; killGroup(child.pid); }, timeout);
+    for (const stream of ['stdout', 'stderr']) {
+      child[stream].on('data', chunk => {
+        const remaining = Math.max(0, maxBuffer - bytes);
+        buffers[stream].push(chunk.subarray(0, remaining));
+        bytes += chunk.length;
+        if (bytes > maxBuffer) { status ??= 'output-limit'; killGroup(child.pid); }
+      });
+    }
+    child.on('error', error => { failure = error; });
+    child.on('exit', () => killGroup(child.pid));
+    child.on('close', (exit, signal) => {
+      clearTimeout(timer);
+      activeChildren.delete(child.pid);
+      if (cancelled && activeChildren.size === 0) process.exit(cancelled);
+      resolveResult({
+        command, args, status: status ?? (failure ? 'execution-error' : signal || exit < 0 ? 'crash' : 'exited'),
+        exit, signal, stdout: Buffer.concat(buffers.stdout).toString('utf8'), stderr: Buffer.concat(buffers.stderr).toString('utf8'),
+        error: failure?.message ?? null, milliseconds: performance.now() - started,
+      });
+    });
+  });
 }
 
 export function subjectOutcome(result) {
   if (result.status && result.status !== 'exited') return { ...result };
   const text = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '');
-  const status = result.exit === 0 && !/^error:/m.test(text) && /\bOK\s+no type errors in \d+ module\(s\)/.test(text) ? 'accepted'
+  const status = result.exit === 0 && !/^\s*(error|warning):/mi.test(text) && /\bOK\s+no type errors in \d+ module\(s\)/.test(text) ? 'accepted'
     : result.exit === 1 && /^error:/m.test(text) ? 'rejected' : 'unrecognized-result';
   return { ...result, status };
 }
