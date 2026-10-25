@@ -185,7 +185,7 @@ test "E2E C: an array field is released by its owner's destroy hook" {
 		console.log(b.items.length);
 	`);
 	assert c.ok;
-	assert c.value.contains("msDecref((*self).items)");
+	assert c.value.contains("msDecref((*self_p0).items)");
 }
 
 test "E2E C: class with method compiles" {
@@ -316,8 +316,8 @@ test "E2E C: a narrowed field returned through an identity assertion is copied" 
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("(&((*slot).got.value)));");
-	assert !c.value.contains("*__result = (*slot).got.value;");
+	assert c.value.contains("(&((*slot_p0).got.value)));");
+	assert !c.value.contains("*__result = (*slot_p0).got.value;");
 }
 
 test "E2E C: a narrowed captured local returned through an identity assertion is copied" {

@@ -23,8 +23,8 @@ test "proxyStaticKey: a pass-through get on a key written in the source is the f
 	const c = cOf(PASS + "console.log(p.title, p.done);\n");
 	const bodies = bodiesOf(c, "Pass_get");
 	assert bodies.length == 2, c.slice(0, 400);
-	assert bodies[0].includes("(*target).title") || bodies[1].includes("(*target).title"), bodies.join("\n---\n");
-	assert bodies[0].includes("(*target).done") || bodies[1].includes("(*target).done"), bodies.join("\n---\n");
+	assert bodies[0].includes("(*target_p1).title") || bodies[1].includes("(*target_p1).title"), bodies.join("\n---\n");
+	assert bodies[0].includes("(*target_p1).done") || bodies[1].includes("(*target_p1).done"), bodies.join("\n---\n");
 	for (const b of bodies) assert !b.includes("msStringEquals") && !b.includes("msStringCompare"), b;
 }
 

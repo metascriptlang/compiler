@@ -12,7 +12,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots } from "./names";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
@@ -262,8 +262,8 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
 		if (typed && isOpenArrayParam(fnType.typeChildren[i])) {
 			const elemPtr = getTypeDesc(g, skipModifier(fnType.typeChildren[i])!.typeReturn) + "*";
-			parts.push(named ? `${elemPtr} ${openArrayDataName(safeName(names[i]))}` : elemPtr);
-			parts.push(named ? `int64_t ${openArrayLenName(safeName(names[i]))}` : "int64_t");
+			parts.push(named ? `${elemPtr} ${openArrayDataName(paramCName(names[i], i))}` : elemPtr);
+			parts.push(named ? `int64_t ${openArrayLenName(paramCName(names[i], i))}` : "int64_t");
 			continue;
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
@@ -272,7 +272,7 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
-		parts.push(named ? `${pType} ${safeName(names[i])}` : pType);
+		parts.push(named ? `${pType} ${paramCName(names[i], i)}` : pType);
 	}
 	const paramList = parts.length > 0 ? parts.join(", ") : "void";
 	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;

@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt, paramCName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
@@ -346,7 +346,7 @@ function forwardToCurrent(fn: Node, symbol: string, cell: string): void {
 	}
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 	const args: string[] = nrvo ? ["__result"] : [];
-	for (const param of d.params) args.push(safeName(param));
+	for (let i = 0; i < d.params.length; i += 1) args.push(paramCName(d.params[i], i));
 	const call = `((__typeof__(&${symbol}))${cell}->current)(${args.join(", ")})`;
 	const returnsValue = !nrvo && fnType.typeReturn != null && fnType.typeReturn.kind != TypeKind.Void;
 	const forward = returnsValue ? `return ${call};` : `{ ${call}; return; }`;

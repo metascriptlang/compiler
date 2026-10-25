@@ -15,8 +15,8 @@ test "array fields are cycle edges only when their element graph reaches the own
 	for (const c of cases) {
 		const result = compileToC(c.declarations);
 		assert result.ok, result.ok ? "" : result.error;
-		assert result.value.contains(`msOrcTraceRef((&((*self).${c.field})), callback);`) == c.cyclic, c.field + " trace";
-		assert result.value.contains(`msDecrefCyclicEdge(self, (*self).${c.field})`) == c.cyclic, c.field + " release";
+		assert result.value.contains(`msOrcTraceRef((&((*self_p0).${c.field})), callback_p1);`) == c.cyclic, c.field + " trace";
+		assert result.value.contains(`msDecrefCyclicEdge(self_p0, (*self_p0).${c.field})`) == c.cyclic, c.field + " release";
 	}
 }
 
@@ -37,11 +37,11 @@ const r = rows();
 console.log(r.length);
 `);
 		assert result.ok, result.ok ? "" : result.error;
-		assert declaresItemArrayOp(result.value, "Destroy", "Array* self);"), container + " destroy ABI";
+		assert declaresItemArrayOp(result.value, "Destroy", "Array* self_p0);"), container + " destroy ABI";
 		if (container == "[Vec<Item>, int32]") {
-			assert declaresItemArrayOp(result.value, "Sink", "Array* src);"), container + " sink ABI";
+			assert declaresItemArrayOp(result.value, "Sink", "Array* src_p1);"), container + " sink ABI";
 		} else {
-			assert declaresItemArrayOp(result.value, "Copy", "Array* src);"), container + " copy ABI";
+			assert declaresItemArrayOp(result.value, "Copy", "Array* src_p1);"), container + " copy ABI";
 		}
 	}
 }

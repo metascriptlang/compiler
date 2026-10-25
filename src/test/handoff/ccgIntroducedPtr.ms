@@ -117,7 +117,7 @@ test "E2E: empty [] arg typed as Type[] param" {
 	const src = "interface Foo { x: number; }\nfunction bar(items: Foo[]): number { return items.length; }\nconst y = bar([]);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.contains("(msRefArray* items)");
+	assert result.value.contains("(msRefArray* items_p0)");
 }
 
 import { compileProjectToC, MapEntry } from "../helpers";

@@ -24,7 +24,7 @@ function testFn(source: MyType): boolean {
 `;
 	const r = compileToC(src);
 	assert r.ok, r.error;
-	assert r.value.indexOf("*((*source).inner)") < 0;
+	assert r.value.indexOf("*((*source_p0).inner)") < 0;
 }
 
 test "a value struct that holds itself on any by-value path is refused at its declaration" {

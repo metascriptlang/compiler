@@ -5,7 +5,6 @@ import {
 } from "../../ast/node";
 import { spelled, createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
 import { makeSymbol, setFlag, hasFlag } from "../../checker/symbol";
-import { initFlagName } from "../lowering/moduleTdz";
 import { constantLiteralOf } from "../../checker/constFold";
 import { skipConvDfa } from "../../analyzer/alias";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
@@ -53,7 +52,7 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 		globals.push(g);
 		bySymbol.set(g.sym, g);
 	}
-	const flagged = flaggedBindings(globals);
+	const flagged = flaggedBindings(globals, bySymbol, ctx);
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const stmt = pd.programStmts[i];
 		const g = extracted[i];
@@ -109,13 +108,11 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 	return program;
 }
 
-function flaggedBindings(globals: HcrGlobal[]): HashMap<Symbol, HcrGlobal> {
-	const byName = new HashMap<string, HcrGlobal>();
-	for (const g of globals) byName.set(g.sym.name, g);
+function flaggedBindings(globals: HcrGlobal[], bySymbol: HashMap<Symbol, HcrGlobal>, ctx: TransformContext): HashMap<Symbol, HcrGlobal> {
 	const flagged = new HashMap<Symbol, HcrGlobal>();
 	for (const g of globals) {
-		const flag = byName.get(initFlagName(g.sym.name));
-		if (flag != null && hasFlag(flag.sym, SymbolFlag.InitFlag)) flagged.set(flag.sym, g);
+		const flag = ctx.tdzFlags.get(g.sym);
+		if (flag != null && bySymbol.has(flag)) flagged.set(flag, g);
 	}
 	return flagged;
 }

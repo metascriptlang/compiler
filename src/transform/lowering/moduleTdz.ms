@@ -164,16 +164,13 @@ function guardedWriteStmt(stmt: Node, assign: Node, ctx: TransformContext): Node
 	return makeIf(makeIdentResolved(flagOf(bd.left, ctx)!, loc), makeBlock([stmt], loc), makeBlock(otherwise, loc), loc);
 }
 
-export function initFlagName(binding: string): string {
-	return binding + "$init";
-}
-
 const _moduleFlags = new HashMap<Symbol, Symbol>();
 
 function moduleFlagOf(binding: Symbol, modulePath: string, ctx: TransformContext): Symbol {
 	let flag = _moduleFlags.get(binding);
 	if (flag == null) {
-		flag = mintSym(ctx, SymbolKind.Variable, initFlagName(binding.name), booleanType());
+		flag = mintSym(ctx, SymbolKind.Variable, binding.name + "$init", booleanType());
+		flag.disamb = binding.disamb;
 		markModuleFlag(flag, modulePath);
 		_moduleFlags.set(binding, flag);
 	}
