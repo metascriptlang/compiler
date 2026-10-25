@@ -104,3 +104,55 @@ export macro m(x: Node): Node { return quote { later() }; }
 	], "open name");
 	assert bad == "", bad;
 }
+
+function stdLib(macros: string): MapEntry {
+	return { entryPath: "test/lib.ms", entrySource: `import { Node } from "std/meta";\n${macros}\n` };
+}
+
+function stmtCaller(decls: string, use: string): MapEntry {
+	return { entryPath: "test/main.ms", entrySource: `import { m } from "./lib";\n${decls}\n${use}\n` };
+}
+
+test "quoteBindsWhereWritten: a quote naming a std value, namespace or function is not captured by a caller namesake" {
+	const bad = failures([
+		buildFailure([
+			stdLib(`export macro m(x: Node): Node { return quote { console.log(7) }; }`),
+			stmtCaller(`const console = { log: (s: string): void => {} };`, "m(0);"),
+		], "std value"),
+		buildFailure([
+			stdLib(`export macro m(x: Node): Node { return quote { Math.floor(2.5) }; }`),
+			callerOf(`const Math = { floor: (n: number): string => "caller" };`, "m(0)"),
+		], "std namespace object"),
+		buildFailure([
+			stdLib(`export macro m(x: Node): Node { return quote { parseInt("5") }; }`),
+			callerOf(`function parseInt(s: string): string { return "caller"; }`, "m(0)"),
+		], "std function"),
+		buildFailure([
+			stdLib(`export macro m(x: Node): Node { return quote { Math.floor(2.5) }; }`),
+			callerOf("", "m(0)"),
+		], "std namespace object with no caller namesake"),
+	]);
+	assert bad == "", bad;
+}
+
+test "quoteBindsWhereWritten: identifiers inside a class declared in a quote name the declarations visible where it is written" {
+	const lib = `import { Node } from "std/meta";
+export const LIMIT: int32 = 100;
+export function helper(): int32 { return 100; }
+export macro m(x: Node): Node {
+	return quote { (() => {
+		class P {
+			v: int32 = 0;
+			constructor() { this.v = LIMIT; }
+			read(): int32 { return helper() + this.v; }
+		}
+		return new P().read();
+	})() };
+}
+`;
+	const bad = failures([
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf(callerNamesakes, "m(0)")], "class members beside caller namesakes"),
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf("", "m(0)")], "class members with no caller namesake"),
+	]);
+	assert bad == "", bad;
+}
