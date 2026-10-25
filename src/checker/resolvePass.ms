@@ -1500,15 +1500,20 @@ function resolveTypeQuery(ctx: CheckerContext, operand: string, line: int32, col
 }
 
 function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
-	const dot = name.indexOf(".");
-	if (dot <= 0) return null;
-	const nsSym = lookupSymbol(ctx.table, name.slice(0, dot));
-	if (nsSym == null || nsSym.symbolKind != SymbolKind.Module || nsSym.modulePath == "") return null;
-	const exported = findExportedSymbol(ctx.exportRegistry, nsSym.modulePath, name.slice(dot + 1, name.length));
-	if (exported == null) return null;
-	markUsedIn(ctx, nsSym);
-	noteImported(ctx, exported.sym);
-	return exported.sym;
+	const parts = name.split(".");
+	if (parts.length < 2 || parts[0] == "") return null;
+	const head = lookupSymbol(ctx.table, parts[0]);
+	if (head == null) return null;
+	let sym = head;
+	for (let i = 1; i < parts.length; i += 1) {
+		if (sym.symbolKind != SymbolKind.Module || sym.modulePath == "") return null;
+		const exported = findExportedSymbol(ctx.exportRegistry, sym.modulePath, parts[i]);
+		if (exported == null) return null;
+		sym = exported.sym;
+		noteImported(ctx, sym);
+	}
+	markUsedIn(ctx, head);
+	return sym;
 }
 
 export function builtinTypeHead(ctx: CheckerContext, writtenName: string, baseName: string = ""): string {
