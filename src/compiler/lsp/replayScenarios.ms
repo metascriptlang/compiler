@@ -1620,6 +1620,26 @@ function renameFollowsTheBindingOfAnImport(): LspScenario {
 	};
 }
 
+function renameEditsEachCallOnce(): LspScenario {
+	const uri = "file:///lspwire/rename/calls.ms";
+	const text = "function q(): int32 { return 1; }\nconst t = q() + q();\nconsole.log(t);";
+	return {
+		name: "rename of a called function edits each call once",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+			frames([request("10", "textDocument/rename", renameParams(uri, 1, 10, "h"))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("rename at a call", "0:9-0:10 h; 1:10-1:11 h; 1:16-1:17 h", renameRows(r, "n:10", uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
 
 function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
@@ -1762,6 +1782,7 @@ export function lspScenarios(): LspScenario[] {
 		hoverDocFollowsTheSymbol(),
 		signatureHelpFollowsTheCalleeSymbol(),
 		referencesFollowTheImportedSymbol(),
+		renameEditsEachCallOnce(),
 		enumMemberDefinitionIsTheMembersDeclaration(),
 		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
