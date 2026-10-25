@@ -1658,6 +1658,10 @@ let containerAssignments = new HashMap<Node, ContainerAssignments>();
 let lastAssignments = new HashMap<Symbol, int32>();
 let closureContainers = new HashMap<Node, Node>();
 
+export function capturedAssignmentCount(): int32 {
+	return containerAssignments.size + lastAssignments.size + closureContainers.size;
+}
+
 export function resetCapturedAssignments(): void {
 	containerAssignments = new HashMap<Node, ContainerAssignments>();
 	lastAssignments = new HashMap<Symbol, int32>();

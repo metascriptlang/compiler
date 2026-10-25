@@ -44,6 +44,7 @@ import {
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
+import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
@@ -822,6 +823,7 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		else addModule(graph, mod);
 	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	resetCapturedAssignments();
 	registerModuleProgram(filePath, program);
 	db.cache.bound += 1;
 	const unit = bindModuleForCheck(
@@ -2069,6 +2071,40 @@ test "rechecking a module leaves no instance body on the module that defines its
 test "rechecking a module leaves no instance body on the module whose class constructor it instantiates" {
 	const use = 'import { Box } from "./lib2";\nconst b = new Box<int32>(2);\nconst c = new Box<string>("s");\n';
 	const left = instanceBodiesKept("/g/lib2.ms", "/g/use2.ms", GENERIC_LIB, use);
+	assert left == "", left;
+}
+
+function capturedFlowKept(libPath: string, usePath: string, lib: string, use: string): string {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, libPath, lib);
+	dbSetFileText(db, usePath, use);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, usePath), getFileId(db.fileInput, libPath));
+	const edit = (k: int32): string => {
+		dbSetFileText(db, usePath, use + `const n${k} = ${k};\n`);
+		const errors = dbTypeCheck(db, usePath).errors;
+		return errors.length == 0 ? "" : errors[0].message;
+	};
+	for (let k = 0; k < 2; k += 1) { if (edit(k) != "") return edit(k); }
+	const afterTwo = capturedAssignmentCount();
+	if (afterTwo == 0) return "no captured assignment was recorded, the pin observes nothing";
+	for (let k = 2; k < 8; k += 1) { if (edit(k) != "") return edit(k); }
+	const grown = capturedAssignmentCount() - afterTwo;
+	return grown == 0 ? "" : `${grown} captured-assignment entries stayed`;
+}
+
+test "rechecking a module keeps no captured-assignment entry of an instance body it replaced" {
+	const lib = "export function twice<T>(x: T): T { let y = x; const f = (): T => y; return f(); }\n";
+	const use = 'import { twice } from "./lib3";\nconst a: int32 = twice(1);\nconst c: string = twice("s");\n';
+	const left = capturedFlowKept("/g/lib3.ms", "/g/use3.ms", lib, use);
+	assert left == "", left;
+}
+
+test "rechecking a module keeps no captured-assignment entry of a class method body it replaced" {
+	const lib = "export class Box<T> { v: T; constructor(v: T) { this.v = v; } get(): T { let y = this.v; const f = (): T => y; return f(); } }\n";
+	const use = 'import { Box } from "./lib4";\nconst a: int32 = new Box<int32>(2).get();\nconst c: string = new Box<string>("s").get();\n';
+	const left = capturedFlowKept("/g/lib4.ms", "/g/use4.ms", lib, use);
 	assert left == "", left;
 }
 
