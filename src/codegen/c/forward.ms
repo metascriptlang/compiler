@@ -4,7 +4,7 @@
 // would create circular imports if left in declarations.ms or index.ms.
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
-import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
+import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention, DecoratedDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CEmissionFacts, CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { ensureDrcProto, procHeader } from "./types";
@@ -47,13 +47,19 @@ export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
 	return !g.emissionFacts.hcrModules.has(sym.modulePath);
 }
 
-export function inlineDeclOf(sym: Symbol): Node | null;
-export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null>;
-export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null> {
-	const decl = sym.declNode;
-	if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym != sym || decl.nodeType == null) return null;
-	if ((decl.data as FunctionDeclData).fnBody == null) return null;
-	return sym.declNode;
+export function factInlineDecls(facts: CEmissionFacts, program: Node): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let decl = stmt;
+		if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+		if (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+		if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.nodeType == null || (decl.data as FunctionDeclData).fnBody == null) continue;
+		const sym = decl.resolvedSym;
+		if (sym != null && sym.symbolType != null && sym.symbolType.callConv == CallingConvention.CcInline) facts.inlineDecls.set(sym!, decl);
+	}
+}
+
+export function inlineDeclOf(facts: Readonly<CEmissionFacts>, sym: Readonly<Symbol>): Readonly<Node | null> {
+	return facts.inlineDecls.readonlyGet(sym);
 }
 
 function requestInlineCopy(g: CGen, facts: Readonly<CEmissionFacts>, calleeName: string, called: Readonly<Symbol>): void {
@@ -61,7 +67,7 @@ function requestInlineCopy(g: CGen, facts: Readonly<CEmissionFacts>, calleeName:
 	if (nameSetHas(g.declaredProcs, key)) return;
 	nameSetAdd(g.declaredProcs, key);
 	const sym = placedInstanceOf(facts.placedInstances!, called);
-	const decl = inlineDeclOf(sym);
+	const decl = inlineDeclOf(facts, sym);
 	if (decl == null) {
 		addCGenError(g, `internal: @inline function '${sym.name}' has no declaration to copy into ${g.modulePath}`, 0, 0);
 		return;

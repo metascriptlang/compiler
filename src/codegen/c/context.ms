@@ -682,6 +682,7 @@ export class CEmissionFacts {
 	moduleNameRoots: ModuleNameRoots | null = null;
 	hookOps: HashMap<string, Symbol> | null = null;
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
+	inlineDecls: HashMap<Symbol, Node> = new HashMap<Symbol, Node>();
 	headerIncludes: HashMap<string, string[]> | null = null;
 }
 

@@ -199,7 +199,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 }
 
 function emitInlineCopy(g: CGen, sym: Readonly<Symbol>): void {
-	const decl = inlineDeclOf(sym);
+	const decl = inlineDeclOf(g.emissionFacts, sym);
 	if (decl != null) genFunctionDecl(g, decl, false, true);
 }
 

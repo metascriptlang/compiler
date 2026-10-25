@@ -25,6 +25,7 @@ import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
+import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
@@ -458,6 +459,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
+	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}
@@ -615,6 +617,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
+	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}

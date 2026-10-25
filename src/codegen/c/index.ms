@@ -18,6 +18,7 @@ import {
 	replayFactWrites,
 } from "./context";
 import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
+import { factInlineDecls } from "./forward";
 import { mangleModuleName, mangledFunctionName, mangledTypeName, buildModuleNameRoots } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
@@ -120,6 +121,7 @@ export function generateCModuleOutput(program: Node, ctx: CheckerContext, module
 	let preparedFacts = facts;
 	if (preparedFacts == null) {
 		const localFacts = new CEmissionFacts();
+		if (program != null && program.kind == NodeKind.Program) factInlineDecls(localFacts, program);
 		prepareCModuleEmission(program, ctx, modulePath, aliveSet, localFacts);
 		if (program != null && program.kind == NodeKind.Program) registerTypeInfoDemands(collectModuleTypeInfoDemands(program, modulePath), localFacts);
 		preparedFacts = localFacts;

@@ -26,6 +26,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
+import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
@@ -3086,6 +3087,7 @@ resetLiftedOps();
 			}
 		}
 	}
+	for (const p of processed) factInlineDecls(emissionFacts, p.program);
 	setConcurrentTypeQueries(true);
 	try {
 		for (const p of processed) {
@@ -3666,6 +3668,7 @@ resetLiftedOps();
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
 	let emissionResults: ModuleEmissionResult[] = [];
+	for (const p of processed) factInlineDecls(emissionFacts, p.program);
 	setConcurrentTypeQueries(true);
 	try {
 		for (const p of processed) {
