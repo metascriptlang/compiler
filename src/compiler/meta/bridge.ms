@@ -704,8 +704,9 @@ function setNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: i
 // bindSym (Nim semBindSym model): bake-time resolves a name in the macro's
 // declaring module and registers the real Symbol here; the baked literal
 // carries the index as `symHandle` and valueToNode rebinds it on the way out.
-// Append-only, never reset — a shared macro body baked in an earlier
-// compilation may still hold old handles.
+// A handle baked into a macro body outlives the compilation that baked it, so
+// the table only grows there; a handle that marshals an argument lives in the
+// expansion's VM heaps, so boundMark/releaseBound drop it with them.
 let _boundSyms: Symbol[] = [];
 
 export function registerBoundSym(sym: Symbol): number {
@@ -723,6 +724,20 @@ let _boundTypes: Type[] = [];
 export function registerBoundType(t: Type): number {
 	_boundTypes.push(t);
 	return _boundTypes.length - 1;
+}
+
+export interface BoundMark {
+	syms: int32;
+	types: int32;
+}
+
+export function boundMark(): BoundMark {
+	return { syms: _boundSyms.length, types: _boundTypes.length };
+}
+
+export function releaseBound(mark: BoundMark): void {
+	_boundSyms.shrink(mark.syms);
+	_boundTypes.shrink(mark.types);
 }
 
 export function boundTypeAt(index: int32): Type | null {
