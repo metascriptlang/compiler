@@ -65,6 +65,7 @@ import "./distinctFnAlias";
 import "./functionArity";
 import "./genericAliasBody";
 import "./typeofNarrow";
+import "./closureWriteNamesake";
 import "./unionContextual";
 import "./fnSlotUnionRepr";
 import "./valueOfProtocol";
