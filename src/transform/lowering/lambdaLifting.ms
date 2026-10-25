@@ -720,6 +720,10 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
+			if (isOnceLoop(node)) {
+				walkLift(d.doBody, state);
+				return;
+			}
 			state.insideLoop += 1;
 			pushLoopBoundary(state.ss);
 			const savedDoRewrites = state.activeEnvRewrites;
@@ -727,7 +731,7 @@ function walkLift(node: Node, state: LiftState): void {
 			for (const rw of savedDoRewrites) doBodyRewrites.push(rw);
 			state.activeEnvRewrites = doBodyRewrites;
 			const openLoops = state.loopEnvs.length;
-			if (!isOnceLoop(node)) d.doBody = openLoopEnv(d.doBody, state, node.location);
+			d.doBody = openLoopEnv(d.doBody, state, node.location);
 			walkLift(d.doBody, state);
 			if (state.loopEnvs.length > openLoops) state.loopEnvs.pop();
 			state.activeEnvRewrites = savedDoRewrites;
