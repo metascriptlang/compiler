@@ -35,7 +35,8 @@ import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmt
 import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { hasFlag, setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
@@ -118,7 +119,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		hoisted.push(makeExprStmt(shallowCopy(expr), expr.location));
 		return expr;
 	}
-	if (callsToStatements > 0 && callCanRaise(expr)) return bindToStatement(expr, "call", hoisted, ctx);
+	if (callsToStatements > 0 && callMayRaiseValue(expr)) return bindToStatement(expr, "call", hoisted, ctx);
 	return expr;
 }
 
@@ -151,13 +152,10 @@ function hoistTargetCalls(target: Node, hoisted: Node[], ctx: TransformContext):
 	return ctx.jsBackend ? hoistTernaries(target, hoisted, ctx) : hoistRaisingCalls(target, hoisted, ctx);
 }
 
-function callCanRaise(n: Node): boolean {
+function callMayRaiseValue(n: Node): boolean {
 	if (n.nodeType != null && (n.nodeType.kind == TypeKind.Void || n.nodeType.kind == TypeKind.Never)) return false;
-	if (n.kind == NodeKind.NewExpr) return true;
-	if (n.kind != NodeKind.CallExpr) return false;
-	const sym = (n.data as CallExprData).callee.resolvedSym;
-	if (sym == null) return true;
-	return hasFlag(sym, SymbolFlag.Throws) || !hasFlag(sym, SymbolFlag.ImportC);
+	if (n.kind == NodeKind.NewExpr) return newMayRaise(n);
+	return n.kind == NodeKind.CallExpr && callMayRaise(n);
 }
 
 function shallowCopy(expr: Node): Node {
@@ -814,7 +812,7 @@ function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
 function condLowersVerdict(n: Node): Visit {
 	if (isFunctionNode(n)) return Visit.Skip;
 	if (tdzFlagOf(n) != null) return Visit.Hit;
-	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
+	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callMayRaiseValue(n)
 		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return Visit.Hit;
 	if (n.kind == NodeKind.BinaryExpr) {
 		const op = (n.data as BinaryExprData).operator;
