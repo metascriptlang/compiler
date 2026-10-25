@@ -31,7 +31,7 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 
 ## Running
 
-**During an edit, check the changed contract with its smallest real consumer.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. A path suggests checks; it does not justify running every lane after every edit.
+**During an edit, check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed (`--danger --lto=off`), then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff, and a wrong choice is accepted: the land's gate runs every lane once and catches what the choice missed, while a lane, `msc test src/index.ms` or a corpus sweep during the edit costs most of an hour. When the smallest consumer cannot finish in 60 s, run it once and record the slow step on card `fast-loop`.
 
 **When the slice is ready to land, queue `~/nerdtools/claude/tools/wt.sh land <name> --async` and wait in the background with `land <name> --wait`.** The land runs the acceptance gate once or reuses a valid verdict; do not run a separate gate first, because that duplicates the land's verification. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract; `--release` belongs to cutting a release. Follow the root `CLAUDE.md` for commit checks and verdict reuse.
 
