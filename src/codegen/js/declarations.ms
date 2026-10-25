@@ -496,16 +496,17 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		// runtime, so type names simply don't participate. MS-compiled
 		// consumers resolve through the registry straight to the origin
 		// module anyway; the hub's surface only matters to hand-written JS.
+		const star = imp.importNames.length == 1 && imp.importNames[0] == "*" && imp.importAliases[0] != "*" ? `* as ${imp.importAliases[0]}` : "*";
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
 			if (spec == "") return;
-			gen.moduleRequests = gen.moduleRequests + `export * from "${spec}";\n`;
+			gen.moduleRequests = gen.moduleRequests + `export ${star} from "${spec}";\n`;
 			return;
 		}
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
 			if (!gen.bundleMode) {
 				emitIndent(gen);
-				emit(gen, "export * from \"");
+				emit(gen, `export ${star} from "`);
 				emit(gen, convertImportPath(imp.importSource));
 				emit(gen, "\";\n");
 			}

@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -160,6 +160,9 @@ export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumN
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
+	if (gen.multiFile && sym.symbolKind == SymbolKind.Module && sym.modulePath != "" && sym.modulePath != gen.currentModulePath && !gen.ownNamespaceAliases.has(name)) {
+		return recordNamespaceImport(gen, sym.modulePath, safeJsName(name));
+	}
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
