@@ -88,6 +88,8 @@ test "spawnHandleEscape: a borrowing handle lent to a Readonly parameter that on
 		{ name: "const alias read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { const h = xs[0]; const h2 = h; return await h2; }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
 		{ name: "destructured read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { const [h, k] = xs; return (await h) + (await k); }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
 		{ name: "for-of read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { let t: int32 = 0; for (const h of xs) t += await h; return t; }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
+		{ name: "extension method", source: "function count(this n: Node, xs: Readonly<Promise<int32>[]>): int32 { return xs.length; }\nasync function f(): Promise<int32> { " + HANDLES + " const n = new Node().count(xs); return (await xs[0]) + n; }" },
+		{ name: "extension called as a function", source: "function count(this n: Node, xs: Readonly<Promise<int32>[]>): int32 { return xs.length; }\nasync function f(): Promise<int32> { " + HANDLES + " const n = count(new Node(), xs); return (await xs[0]) + n; }" },
 	];
 	for (const c of cases) {
 		const got = outcome(c.source);
@@ -111,6 +113,8 @@ test "spawnHandleEscape: a borrowing handle lent to a callee that keeps it or ca
 		{ name: "const alias escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { const h = xs[0]; const h2 = h; parkedAll.push(h2); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
 		{ name: "destructured escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { const [h] = xs; parkedAll.push(h); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
 		{ name: "for-of escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { for (const h of xs) parkedAll.push(h); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
+		{ name: "extension method whose argument slot keeps it", how: "parameter 'xs' is not Readonly<...>", source: "function put(this n: Node, k: Readonly<Node>, xs: Promise<int32>[]): void { parkedAll = xs; }\nasync function f(): Promise<int32> { " + HANDLES + " const n = new Node(); n.put(n, xs); return await xs[0]; }" },
+		{ name: "extension called as a function whose argument slot keeps it", how: "parameter 'xs' is not Readonly<...>", source: "function put(this n: Node, k: Readonly<Node>, xs: Promise<int32>[]): void { parkedAll = xs; }\nasync function f(): Promise<int32> { " + HANDLES + " const n = new Node(); put(n, n, xs); return await xs[0]; }" },
 	];
 	for (const c of cases) {
 		const got = outcome(c.source);
