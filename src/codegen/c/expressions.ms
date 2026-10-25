@@ -17,7 +17,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
 	isIndirectRef,
 } from "./context";
-import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
+import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
@@ -423,12 +423,8 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<
 // An indirect parameter is already a pointer, so it passes as the C name its declaration was given.
 function indirectParamCName(g: CGen, p: CProc, id: Readonly<Node>): string {
 	const name = (id.data as IdentifierData).name;
-	let sym = id.resolvedSym;
-	if (sym == null) {
-		const at = p.indirectParams.lastIndexOf(name);
-		sym = at >= 0 && at < p.indirectSyms.length ? p.indirectSyms[at] : null;
-	}
-	const cName = lookupLocalSymName(p, sym);
+	const pos = p.params.lastIndexOf(name);
+	const cName = id.resolvedSym != null ? lookupLocalSymName(p, id.resolvedSym) : pos >= 0 ? paramCName(name, pos) : "";
 	if (cName == "") addCGenError(g, `internal: indirect parameter '${name}' has no C name in '${p.name}' at ${id.location.line}:${id.location.column}`, id.location.line, id.location.column);
 	return cName;
 }
