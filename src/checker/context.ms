@@ -1437,6 +1437,7 @@ export class CheckerContext {
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
 	staticInitBoundary: Cursor<Scope>;
+	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	awaitedCall: Node | null;  // the call an await expression is checking as its operand
 	typeTestDepth: int32;
@@ -1538,6 +1539,7 @@ export function createContext(): CheckerContext {
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
 		staticInitBoundary: null as unknown as Cursor<Scope>,
+		hookBodyBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		awaitedCall: null,
 		typeTestDepth: 0,

@@ -466,6 +466,22 @@ function checkExternFunctionStmt(ctx: CheckerContext, node: Node): void {
 	ctx.pendingLocalTypeDecls.push(node);
 }
 
+function declaresLifecycleHook(node: Node): boolean {
+	const d = node.data as FunctionDeclData;
+	return isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "";
+}
+
+function checkLocalHookDecl(ctx: CheckerContext, node: Node): void {
+	collectFunction(ctx, node);
+	resolveFunction(ctx, node);
+	const saved = ctx.hookBodyBoundary;
+	openScope(ctx.table, ScopeKind.Block);
+	ctx.hookBodyBoundary = ctx.table.current;
+	checkFunctionDecl(ctx, node);
+	closeScope(ctx.table);
+	ctx.hookBodyBoundary = saved;
+}
+
 // ===== Statement Checker =====
 
 // A macro in statement position that returned SpliceMany: every element is a
@@ -581,6 +597,8 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 				collectFunction(ctx, node);
 				resolveFunction(ctx, node);
 				declareLocalGeneric(node.resolvedSym!, ctx.table.current);
+			} else if (fdLocal && declaresLifecycleHook(node)) {
+				checkLocalHookDecl(ctx, node);
 			} else if (fdLocal) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
@@ -1399,6 +1417,7 @@ interface DeclarationState {
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
 	staticInitBoundary: Cursor<Scope>;
+	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;
 	inSwitch: boolean;
@@ -1427,6 +1446,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		staticBlockPending: ctx.staticBlockPending,
 		readonlyBoundary: ctx.readonlyBoundary,
 		staticInitBoundary: ctx.staticInitBoundary,
+		hookBodyBoundary: ctx.hookBodyBoundary,
 		pendingSpawnThunk: ctx.pendingSpawnThunk,
 		inLoop: ctx.inLoop,
 		inSwitch: ctx.inSwitch,
@@ -1452,6 +1472,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.staticBlockPending = [];
 	ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
 	ctx.staticInitBoundary = null as unknown as Cursor<Scope>;
+	ctx.hookBodyBoundary = null as unknown as Cursor<Scope>;
 	ctx.pendingSpawnThunk = false;
 	ctx.inLoop = false;
 	ctx.inSwitch = false;
@@ -1480,6 +1501,7 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.staticBlockPending = saved.staticBlockPending;
 	ctx.readonlyBoundary = saved.readonlyBoundary;
 	ctx.staticInitBoundary = saved.staticInitBoundary;
+	ctx.hookBodyBoundary = saved.hookBodyBoundary;
 	ctx.pendingSpawnThunk = saved.pendingSpawnThunk;
 	ctx.inLoop = saved.inLoop;
 	ctx.inSwitch = saved.inSwitch;
@@ -2624,7 +2646,7 @@ let _forwardLocals: HashSet<Symbol> = new HashSet<Symbol>();
 
 function isLocalFunctionStmt(node: Node): boolean {
 	if (node.kind != NodeKind.FunctionDecl || node.flags.has(NodeFlag.Converter) || node.flags.has(NodeFlag.WhenDeferred)) return false;
-	return !routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern);
+	return !routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern) && !declaresLifecycleHook(node);
 }
 
 function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
