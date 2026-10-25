@@ -2233,23 +2233,16 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		const convUnion = matchUnionBehindInstance(d.convType);
 		if (isTagCarriedUnion(convUnion)) {
 			const srcType = d.convExpr.nodeType;
-			let vi = 0;
-			// Checker-stamped slot wins: union variants are frequently anonymous,
-			// so re-deriving one by type NAME here silently found nothing and
-			// emitted the bare variant struct.
 			const stampedSlot = node.variantSlot;
-			if (stampedSlot > 0) {
-				vi = stampedSlot - 1;
-			} else {
-				for (const child of convUnion.typeChildren) {
-					if (srcType != null && srcType.kind == TypeKind.Struct && child.kind == TypeKind.Struct
-						&& child.typeName == srcType.typeName) break;
-					vi += 1;
-				}
+			if (stampedSlot > convUnion.typeChildren.length) {
+				addCGenError(g, `internal: variant slot ${stampedSlot} is past the ${convUnion.typeChildren.length} arms of union '${typeDisplayName(convUnion)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
-			if (vi < convUnion.typeChildren.length) {
-				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
+			if (stampedSlot > 0) {
+				ctx.results.push(`((${targetC}){._tag=${stampedSlot - 1}, .v${stampedSlot - 1}=${inner}})`);
 				return;
+			}
+			if (srcType != null && srcType.kind == TypeKind.Struct) {
+				addCGenError(g, `internal: struct/class '${typeDisplayName(srcType)}' widened to union '${typeDisplayName(convUnion)}' without a variant slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			ctx.results.push(inner);
 			return;
