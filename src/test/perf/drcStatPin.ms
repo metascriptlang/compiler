@@ -57,7 +57,7 @@ function expect(program: string, small: Map<string, int64>, big: Map<string, int
 ensureDir(OUT);
 for (const program of ["collectGraph", "cycleRegister"]) {
 	const exe = `${OUT}/${program}`;
-	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, "--gc=orc", `--passC=${DEFINE}`, `--output=${exe}`], OUT);
+	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
 	if (!ok(b)) {
 		console.log(`FAIL build ${program}\n${b.output}${b.errorOutput}`);
 		fails++;
@@ -77,7 +77,7 @@ for (const program of ["collectGraph", "cycleRegister"]) {
 }
 for (const program of ["collectGraph", "cycleRegister"]) {
 	const exe = `${OUT}/${program}.ledger`;
-	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, "--gc=orc", "--passC=-DMS_DRC_LEDGER", `--output=${exe}`], OUT);
+	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, "--passC=-DMS_DRC_LEDGER", `--output=${exe}`], OUT);
 	const r = ok(b) ? execFileResult(exe, [`${SMALL}`]) : b;
 	if (!ok(r)) {
 		console.log(`FAIL ledger build ${program}\n${r.output}${r.errorOutput}`);
