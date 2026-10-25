@@ -1577,6 +1577,49 @@ function referencesFollowTheImportedSymbol(): LspScenario {
 	};
 }
 
+function renameParams(uri: string, line: int32, character: int32, newName: string): string {
+	const at = positionParams(uri, line, character);
+	return at.slice(0, at.length - 1) + `,"newName":${lspJsonString(newName)}}`;
+}
+
+function renameRows(r: LspReplay, key: string, uri: string): string {
+	const changes = answerResult(r, key).getDynamicField("changes");
+	const edits = changes.getDynamicField(uri);
+	if (edits.kind != JsonKind.Array) return "none";
+	const rows: string[] = [];
+	for (const edit of edits.items) rows.push(spanOf(edit) + " " + scalarText(edit.getDynamicField("newText")));
+	return rows.join("; ");
+}
+
+function renameFollowsTheBindingOfAnImport(): LspScenario {
+	const dep = "file:///lspwire/rename/b.ms";
+	const user = "file:///lspwire/rename/a.ms";
+	const depText = "export function f(): int32 { return 1; }";
+	const userText = "import { f as g } from \"./b\";\nexport const t = g();";
+	return {
+		name: "rename through an import alias renames the local binding, and from the export keeps the alias",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
+			frames([notification("textDocument/didOpen", openParams(user, userText))]),
+			frames([
+				request("10", "textDocument/rename", renameParams(user, 1, 17, "h")),
+				request("11", "textDocument/rename", renameParams(dep, 0, 16, "h")),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("rename at the alias use, the importer", "0:14-0:15 h; 1:17-1:18 h", renameRows(r, "n:10", user)),
+			sameText("rename at the alias use, the exporter", "none", renameRows(r, "n:10", dep)),
+			sameText("rename at the export, the declaration", "0:16-0:17 h", renameRows(r, "n:11", dep)),
+			sameText("rename at the export, the importer", "0:9-0:10 h", renameRows(r, "n:11", user)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
 
 function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
@@ -1720,6 +1763,7 @@ export function lspScenarios(): LspScenario[] {
 		signatureHelpFollowsTheCalleeSymbol(),
 		referencesFollowTheImportedSymbol(),
 		enumMemberDefinitionIsTheMembersDeclaration(),
+		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
 	];
