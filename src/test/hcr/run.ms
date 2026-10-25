@@ -1022,19 +1022,24 @@ function coreGroup(): void {
 function compileTimeHelper(): void {
 	const tag = "hcrCompileTimeHelper";
 	const dir = freshDir(`${TMP}/compileTimeHelper`);
-	for (const f of ["shapes.ms", "app.ms", "entry.ms", "runtime.ms"]) copy(`${FIXTURES}/compileTimeHelper/${f}`, `${dir}/${f}`);
+	for (const f of ["shapes.ms", "app.ms", "entry.ms", "runtime.ms", "method.ms"]) copy(`${FIXTURES}/compileTimeHelper/${f}`, `${dir}/${f}`);
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	if (!succeeded(ran) || !both(ran).includes("HCR-CT shapes struct")) {
 		console.log(both(ran));
 		failWith(tag, "an image exporting functions that only macros can call did not build under --hcr");
 	}
 	mustBuild(tag, dir, ["build", "entry.ms"], "an entry module exporting a function that only macros can call did not build");
-	for (const args of [["build", "runtime.ms"], ["build", "--hcr", "runtime.ms"]]) {
-		const refused = msc(dir, args);
-		const said = both(refused);
-		if (succeeded(refused) || !said.includes("exists only while macros expand") || !said.includes("describe -> namesStruct -> typeKind -> msMetaTypeKind")) {
+	for (const hcr of [[], ["--hcr"]]) {
+		const direct = msc(dir, ["build", ...hcr, "runtime.ms"]);
+		if (succeeded(direct) || !both(direct).includes("'describe' calls 'namesStruct'")) {
+			console.log(both(direct));
+			failWith(tag, `msc build ${hcr.join(" ")} runtime.ms: a top-level call to a macro-only function was not refused by name`);
+		}
+		const viaMethod = msc(dir, ["build", ...hcr, "method.ms"]);
+		const said = both(viaMethod);
+		if (succeeded(viaMethod) || !said.includes("exists only while macros expand") || !said.includes("describe -> namesStruct -> typeKind -> msMetaTypeKind")) {
 			console.log(said);
-			failWith(tag, `msc ${args.join(" ")}: runtime code calling a macro-only function was not refused with the call chain`);
+			failWith(tag, `msc build ${hcr.join(" ")} method.ms: a method calling a macro-only function was not refused with the call chain`);
 		}
 	}
 	console.log(`ok   ${tag}`);
