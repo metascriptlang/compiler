@@ -566,13 +566,22 @@ function elemNeedsLoop(elem: Type | null): boolean {
 		&& elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor);
 }
 
+function copiesAsMemory(t: Type, lctx: LiftCtx): boolean {
+	const elem = arrayOpElement(t);
+	if (elem == null || hasAnyUserHook(t, lctx) || hasAnyUserHook(elem, lctx)) return false;
+	const namedStruct = (elem.kind == TypeKind.Struct && elem.typeName != "" && !isAnonTypeName(elem.typeName))
+		|| (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && elem.typeExtra.kind == TypeKind.Struct);
+	return namedStruct && !arrayElementNeedsCleanup(elem);
+}
+
 // --- Standard sequence/array hook generator (reference parity: reference sequence op) ---
 // Primitive elements: runtime macros (no per-element cleanup).
 // Non-primitive elements: inline loops via genArrayLoop (reference loop pattern).
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const needsElemLoop = elemNeedsLoop(elem);
+	const managedElem = elemNeedsLoop(elem);
 	const isU8Elem = elem != null && elem.kind == TypeKind.Uint8;
-	if (needsElemLoop && elem != null) registerArrayOps(createArray(elem), lctx);
+	if (managedElem && elem != null) registerArrayOps(createArray(elem), lctx);
+	const needsElemLoop = managedElem && !copiesAsMemory(elem, lctx);
 	match (hook) {
 		"destroy" => {
 			if (needsElemLoop) {
@@ -594,8 +603,11 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				genShrinkLoop(elem, xf, yf, lctx, buf, loc);
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
+			} else if (isU8Elem) {
+				genCall("msArrayUint8Copy", hook, xf, yf, buf, loc);
 			} else {
-				genCall(isU8Elem ? "msArrayUint8Copy" : "msArrayCopy", hook, xf, yf, buf, loc);
+				genCall("msArraySetLen", hook, xf, yf, buf, loc);
+				genCall("msArrayCopyPayload", hook, clonePath(xf, loc), clonePath(yf, loc), buf, loc);
 			}
 		},
 		"sink" => {
@@ -779,7 +791,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType, lctx)) {
+					if (namedTypeHasHooks(fieldType, lctx) && !copiesAsMemory(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -842,7 +854,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (unwrapped.mangledName != "") {
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(unwrapped.body, lctx)) {
+					if (namedTypeHasHooks(unwrapped.body, lctx) && !copiesAsMemory(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);

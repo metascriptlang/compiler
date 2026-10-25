@@ -479,6 +479,7 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayCopy_GET(_1, _2, NAME, ...) NAME
 #define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
 #define msArraySetLen(d, s)            do { (d).len = (s).len; } while(0)
+#define msArrayCopyPayload(d, s)       do { (d) = (s); } while(0)
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayNumberSink(d, ...)      do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayStringDestroy(arr)      ((void)0)

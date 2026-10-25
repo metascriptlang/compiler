@@ -521,6 +521,9 @@ when (mscDeclaresRuntime) {
 	extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msArrayCopyPayload(d: Ptr<void>, s: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msArrayNumberSink(d: Ptr<void>, v: Ptr<void>): void;
 
 	@compilerFunc
