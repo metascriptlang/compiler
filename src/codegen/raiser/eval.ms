@@ -26,7 +26,7 @@ import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
-import { metaTypeSeeds, isMetaSeedName } from "../../compiler/meta/stdTags";
+import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -196,9 +196,13 @@ function freshEngine(): ComptimeEngine {
 }
 
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
-	if (_engine.metaSeeds == null) _engine.metaSeeds = metaTypeSeeds(_engineGraph);
+	let meta = _engine.metaSeeds;
+	if (meta == null) {
+		meta = metaTypeSeeds(_engineGraph, _engineToken != null ? _engineToken.exportRegistry : null);
+		if (seedsComplete(meta)) _engine.metaSeeds = meta;
+	}
 	const all: NamedSymbol[] = [];
-	for (const s of _engine.metaSeeds!) all.push(s);
+	for (const s of meta) all.push(s);
 	for (const s of seeds) all.push(s);
 	return all;
 }
