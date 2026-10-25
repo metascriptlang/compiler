@@ -28,11 +28,11 @@ import {
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind } from "../../../ast/node";
+import { makeLoc, Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc,
 } from "./shared";
-import { LineIndex } from "../../../utils/sourceLines";
+import { LineIndex, lineOffset } from "../../../utils/sourceLines";
 import { lspCharacterIn } from "../position";
 
 // ===== Hover =====
@@ -400,6 +400,35 @@ function buildFileEditsOfImport(ctx: CheckerContext, sym: Symbol | null, name: s
 	return buildTextEdits(refs, newName, source);
 }
 
+// Renaming a use of `import { f as g }` renames the local binding: the `g` uses and the `g` of the
+// specifier. The export and the other importers keep `f`. Null when the cursor is not on an import alias bound on one line.
+function renameImportAlias(db: TransAmDb, path: string, ctx: CheckerContext, sym: Symbol, alias: string, newName: string, source: string): string | null {
+	const program = dbParse(db, path);
+	if (program == null) return null;
+	const refs: SgSymbolRef[] = [];
+	let specifierAt = makeLoc(0, 0);
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl.kind != NodeKind.ImportDecl) continue;
+		const imp = decl.data as ImportDeclData;
+		for (let i = 0; i < imp.importNames.length && i < imp.nameLocations.length; i += 1) {
+			if (imp.importAliases[i] != alias || imp.importNames[i] != sym.name) continue;
+			const at = imp.nameLocations[i];
+			const nameOffset = lineOffset(source, at.line) + at.column - 1;
+			const asOffset = source.byteIndexOf("as", nameOffset + imp.importNames[i].byteLength);
+			const aliasOffset = asOffset < 0 ? -1 : source.byteIndexOf(alias, asOffset + 2);
+			if (aliasOffset < 0 || source.slice(nameOffset, aliasOffset).indexOf("\n", 0) >= 0) return null;
+			specifierAt = at;
+			refs.push({ name: alias, line: at.line, col: at.column + aliasOffset - nameOffset, nameLen: alias.byteLength, isDecl: false });
+		}
+	}
+	if (specifierAt.line == 0) return null;
+	for (const ref of sgQueryBySym(ctx, sym)) {
+		if (ref.name == alias && !(ref.line == specifierAt.line && ref.col == specifierAt.column)) refs.push(ref);
+	}
+	return buildTextEdits(refs, newName, source);
+}
+
 export function handleRename(id: string, params: string, db: TransAmDb): string {
 	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
@@ -412,6 +441,11 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest == null) return lspResponse(id, "null");
+
+	if (suggest.sym != null && suggest.sym.symbolKind != SymbolKind.EnumMember && suggest.name != suggest.sym.name) {
+		const aliasEdits = renameImportAlias(db, path, ctx, suggest.sym, suggest.name, newName, dbGetSource(db, path));
+		if (aliasEdits != null) return lspResponse(id, "{\"changes\":{" + lspJsonString(pos.uri) + ":" + aliasEdits + "}}");
+	}
 
 	// Collect edits across all files
 	const changes: string[] = [];

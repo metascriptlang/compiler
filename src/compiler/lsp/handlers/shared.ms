@@ -78,7 +78,7 @@ export function drainChangedFiles(): ChangedFile[] {
 // The built-in doc table describes std and prelude declarations; a user declaration spelled
 // like one of them (`log`, `parse`) has no built-in doc.
 export function lspHasBuiltinDoc(db: TransAmDb, sym: Symbol | null): boolean {
-	if (sym == null) return true;
+	if (sym == null) return false;
 	const modulePath = sym.modulePath != null ? sym.modulePath : "";
 	if (modulePath.startsWith("std/") || (db.stdPath.length > 0 && modulePath.startsWith(db.stdPath))) return true;
 	return db.preludeCtx != null && db.preludeCtx.preludeExports.has(sym);
