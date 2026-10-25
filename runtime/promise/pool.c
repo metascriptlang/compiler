@@ -219,9 +219,12 @@ void msOnThreadDestruction(void (*handler)(void)) {
 static _Thread_local struct msSpawnCtx* msPoolRuns = NULL;
 static _Thread_local int32_t msPoolRunsCap = 0;
 
+extern void msMsgPoolsThreadTeardown(void);
+
 static void msAfterThreadRuns(void) {
     for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
     msRootsThreadTeardown();
+    msMsgPoolsThreadTeardown();
     free(msPoolRuns);
     msPoolRuns = NULL;
     msPoolRunsCap = 0;

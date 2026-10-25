@@ -74,6 +74,49 @@ msActor* msCycleDetectorActor = NULL;
 MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
 MS_TLS_PUBLISH(msMsgPools)
 
+static msMessage* msMsgOrphans[MS_MSG_POOL_CLASSES];
+static char msMsgOrphansLock;
+int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
+
+static void msMsgOrphansAcquire(void) {
+    while (__atomic_test_and_set(&msMsgOrphansLock, __ATOMIC_ACQUIRE)) {}
+}
+
+static void msMsgOrphansRelease(void) {
+    __atomic_clear(&msMsgOrphansLock, __ATOMIC_RELEASE);
+}
+
+__attribute__((noinline)) msMessage* msMsgOrphansTake(uint8_t cls) {
+    msMsgOrphansAcquire();
+    msMessage* spilled = msMsgOrphans[cls];
+    msMsgOrphans[cls] = NULL;
+    __atomic_store_n(&msMsgOrphansPending[cls], 0, __ATOMIC_RELAXED);
+    msMsgOrphansRelease();
+    return spilled;
+}
+
+void msMsgPoolsThreadTeardown(void) {
+    msMessage* last[MS_MSG_POOL_CLASSES];
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        last[cls] = msMsgPools[cls].free_list;
+        if (last[cls] == NULL) continue;
+        msMessage* next;
+        while ((next = atomic_load_explicit(&last[cls]->next, memory_order_relaxed)) != NULL) last[cls] = next;
+    }
+    msMsgOrphansAcquire();
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        if (last[cls] == NULL) continue;
+        atomic_store_explicit(&last[cls]->next, msMsgOrphans[cls], memory_order_relaxed);
+        msMsgOrphans[cls] = msMsgPools[cls].free_list;
+        __atomic_store_n(&msMsgOrphansPending[cls], 1, __ATOMIC_RELAXED);
+    }
+    msMsgOrphansRelease();
+    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
+        msMsgPools[cls].free_list = NULL;
+        msMsgPools[cls].count = 0;
+    }
+}
+
 /* Selector per-thread poll result buffer (selector.h). Single TU-shared
  * TLS slot so msSelectorWait/EventFd/EventFlags called across TUs on the
  * same thread share the same event data. */

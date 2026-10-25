@@ -77,7 +77,16 @@ typedef struct msMsgPool {
  * different freelists. */
 MS_TLS_EXTERN_ARRAY(msMsgPool, msMsgPools, MS_MSG_POOL_CLASSES);
 
-static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
+extern int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
+msMessage* msMsgOrphansTake(uint8_t cls);
+void msMsgPoolsThreadTeardown(void);
+
+static inline void msMsgPoolGrow(msMsgPool* pool, uint8_t cls) {
+    if (__atomic_load_n(&msMsgOrphansPending[cls], __ATOMIC_RELAXED) != 0) {
+        pool->free_list = msMsgOrphansTake(cls);
+        if (pool->free_list != NULL) return;
+    }
+    int msgSize = MS_MSG_CLASS_SIZE[cls];
     /* Allocate slab as raw bytes — messages are msgSize apart */
     char* slab = (char*)msMemAllocN0((size_t)MS_MSG_POOL_SLAB, msgSize);
     for (int i = 0; i < MS_MSG_POOL_SLAB - 1; i++) {
@@ -95,7 +104,7 @@ static inline msMessage* msMsgAllocSized(int32_t kind, void* replyFut, int argCo
     uint8_t cls = msMsgSizeClass(argCount);
     msMsgPool* pool = &msMsgPools[cls];
     if (pool->free_list == NULL) {
-        msMsgPoolGrow(pool, MS_MSG_CLASS_SIZE[cls]);
+        msMsgPoolGrow(pool, cls);
     }
     msMessage* m = pool->free_list;
     pool->free_list = (msMessage*)atomic_load_explicit(&m->next, memory_order_relaxed);
