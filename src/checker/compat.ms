@@ -1470,7 +1470,10 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 }
 
 function sameDistinct(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
-	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
+	if (isBrandDistinct(a) || isBrandDistinct(b)) {
+		if (a.sym != null && b.sym != null) return sameNominalAux(a, b, c);
+		return a.typeName == b.typeName;
+	}
 	return sameNominalAux(a, b, c);
 }
 
