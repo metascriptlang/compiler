@@ -14,8 +14,8 @@
 // GUARD-CHECK-FAIL returning it would let the handle outlive that join
 // GUARD-CHECK-FAIL storing it in 'this.pending' would let the handle outlive that join
 // GUARD-CHECK-FAIL storing it in 'parked' would let the handle outlive that join
-// GUARD-CHECK-FAIL passing it to 'keep' would let the handle outlive that join
-// GUARD-CHECK-FAIL passing it to 'byKey.set' would let the handle outlive that join
+// GUARD-CHECK-FAIL passing it to 'keep', whose parameter 'p' is not Readonly<...>: declare it Readonly<...> to lend the handle for the call, would let the handle outlive that join
+// GUARD-CHECK-FAIL passing it to 'byKey.set', whose parameter 'value' is not Readonly<...>: declare it Readonly<...> to lend the handle for the call, would let the handle outlive that join
 // GUARD-CHECK-FAIL passing it to a constructor would let the handle outlive that join
 // GUARD-CHECK-FAIL storing it in an object would let the handle outlive that join
 
