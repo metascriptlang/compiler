@@ -23,14 +23,14 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType, addError } from "../../checker/context";
+import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -270,7 +270,9 @@ function attachedOpOf(hook: string): AttachedOp {
 		"copy" => AttachedOp.AttachedAsgn,
 		"sink" => AttachedOp.AttachedSink,
 		"wasMoved" => AttachedOp.AttachedWasMoved,
-		_ => AttachedOp.AttachedTrace,
+		"dup" => AttachedOp.AttachedDup,
+		"trace" => AttachedOp.AttachedTrace,
+		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
 	};
 }
 
@@ -943,54 +945,17 @@ function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void 
 }
 
 // ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
-// Maps each lifecycle op to its user-facing method name. A user hook is any
-// method/extension with that name on the receiver type — class methods and
-// free-function extensions both land in the extension registry (collectPass),
-// each with the real callable sym attached; the receiver is the extension's first-parameter type.
-// Reference: Nim binds `=destroy`/`=copy`/… to the type and getAttachedOp
-// retrieves by type — never by reconstructing a symbol name.
 
-function userHookMethodName(hook: string): string {
-	return match (hook) {
-		"destroy" => "onDestroy",
-		"copy" => "onCopy",
-		"sink" => "onMove",
-		"wasMoved" => "onMoved",
-		"dup" => "onClone",
-		"trace" => "onTrace",
-		_ => "",
-	};
-}
-
-function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol | null {
-	const methodName = userHookMethodName(hook);
-	if (methodName == "") return null;
-	const instHook = lookupInstanceHook(type, methodName);
+function getUserDefinedHookSym(type: Type, op: AttachedOp, lctx: LiftCtx): Symbol | null {
+	const instHook = lookupInstanceHook(type, op);
 	if (instHook != null) return instHook;
 	const declSym = unwrapRef(type).sym;
-	if (lctx.checkerCtx == null) return null;
-	// A type may carry duplicate registry entries reached through different import
-	// paths — distinct Symbol instances whose modulePath differs only by spelling
-	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
-	// C name. Reference rule: a type-bound op is defined in the type's own module.
-	// Prefer the sym whose module matches the type's so the emitted call resolves
-	// to the emitted definition (a stale-path sym links to an undefined symbol).
-	const typeModulePath = declSym != null ? declSym.modulePath : "";
-	const registry = pickBodyCtx(typeModulePath, lctx.checkerCtx).extensionRegistry;
-	if (registry == null) return null;
-	let fallback: Symbol | null = null;
-	for (const m of findAllExtensionsByName(registry, methodName)) {
-		if (m.isStatic || m.sym == null) continue;
-		if (declSym == null || extReceiverSym(m) != declSym) continue;
-		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
-		if (fallback == null) fallback = m.sym;
-	}
-	if (fallback != null) return fallback;
-	return null;
+	if (declSym == null || lctx.checkerCtx == null) return null;
+	return getAttachedOp(unwrapRef(declSym.symbolType), op);
 }
 
 function hasUserDefinedHook(type: Type, hook: string, lctx: LiftCtx): boolean {
-	return getUserDefinedHookSym(type, hook, lctx) != null;
+	return getUserDefinedHookSym(type, attachedOpOf(hook), lctx) != null;
 }
 
 // Reference parity: declaring any lifecycle hook makes the type need lifecycle
@@ -1328,7 +1293,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
 	// a user hook lets the author traverse iteratively instead. The author is
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
-	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
+	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
 	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
@@ -1610,27 +1575,20 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
 	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
-	setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
-	setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
-	setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
-	setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
 
 	const visited: NameSet = createNameSet();
 	hasCycles = isCyclicType(objType, lctx, visited);
 	if (hasCycles) {
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
-		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 
-	const userDup = getUserDefinedHookSym(orig, "dup", lctx);
+	const userDup = getUserDefinedHookSym(orig, AttachedOp.AttachedDup, lctx);
 	if (userDup != null) {
 		bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
-		setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
 	} else {
 		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
 	}
 	aliasLiftedOps(orig, objType);
 
@@ -2277,26 +2235,6 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 	};
 }
 
-// A user hook declared for a distinct type binds to that type (reference bindHookToType accepts
-// tyDistinct), so the distinct owns lifted ops of its own, lifted in the module that declares it.
-function liftDistinctUserHooks(lctx: LiftCtx): void {
-	const cc = lctx.checkerCtx;
-	if (cc == null || cc.extensionRegistry == null) return;
-	for (const hook of ["destroy", "copy", "sink", "wasMoved", "trace"]) {
-		const methodName = userHookMethodName(hook);
-		if (!hasExtensionByName(cc.extensionRegistry, methodName)) continue;
-		for (const m of findAllExtensionsByName(cc.extensionRegistry, methodName)) {
-			if (m.isStatic || m.sym == null || m.sym.modulePath != cc.modulePath) continue;
-			const fnType = getExtFnType(m);
-			if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) continue;
-			let formal = fnType.typeChildren[0];
-			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref) && formal.typeReturn != null) formal = formal.typeReturn;
-			if (formal.kind != TypeKind.Distinct || formal.sym == null || formal.sym.modulePath != cc.modulePath) continue;
-			ensureHooks(formal.sym.name, formal, null as unknown as Type, formal, true, lctx, makeLoc(0, 0));
-		}
-	}
-}
-
 // ===== Main Entry Point =====
 
 function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
@@ -2358,7 +2296,6 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 		for (const stmt of pd.programStmts) {
 			processDecl(stmt, lctx);
 		}
-		liftDistinctUserHooks(lctx);
 
 		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.

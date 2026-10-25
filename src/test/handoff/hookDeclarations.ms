@@ -232,3 +232,32 @@ test "hook declarations: a class takes no hook that copies, moves, resets or clo
 	expectAccepted(problems, "onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\n");
 	assert problems.length == 0, problems.join("\n");
 }
+
+function expectSecondBindingRefused(problems: string[], label: string, source: string, hook: string, owner: string): void {
+	const wanted = "cannot bind another '" + hook + "' to '" + owner + "'";
+	for (const error of errorsOf(shapes + source)) {
+		if (error.indexOf(wanted) >= 0) return;
+	}
+	problems.push(label + ": no '" + wanted + "' among " + errorsOf(shapes + source).join(" | "));
+}
+
+test "hook declarations: a second hook of one operation on one type is refused where it is declared" {
+	const problems: string[] = [];
+	expectSecondBindingRefused(problems, "two onDestroy on a struct", "function onDestroy(this x: S): void { }\nfunction onDestroy(this x: S): void { }\n", "onDestroy", "S");
+	expectSecondBindingRefused(problems, "two onCopy on a struct", "function onCopy(this ref x: S, y: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\n", "onCopy", "S");
+	expectSecondBindingRefused(problems, "two onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\nfunction onTrace(this x: C, env: Ptr<void>): void { }\n", "onTrace", "C");
+	expectSecondBindingRefused(problems, "a method and an extension onDestroy on a class", "class T { onDestroy(): void { } }\nfunction onDestroy(this x: T): void { }\n", "onDestroy", "T");
+	expectSecondBindingRefused(problems, "two onDestroy on a distinct type", "type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\nfunction onDestroy(this x: Fd): void { }\n", "onDestroy", "Fd");
+	expectAccepted(problems, "one hook per operation", "function onDestroy(this x: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\nfunction onDestroy(this x: C): void { }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook declarations: a hook declared before its type is the one the scope exit calls" {
+	const src = "function onDestroy(this x: Handle): void { console.log(\"closed\"); }\n"
+		+ "struct Handle { h: int32; }\n"
+		+ "function use(): void { const a: Handle = { h: 1 }; console.log(a.h.toString()); }\n"
+		+ "use();\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	assert destroyCallsOf(c.value, "Handle") >= 1, "the scope exit never calls a destroy hook declared before its type";
+}

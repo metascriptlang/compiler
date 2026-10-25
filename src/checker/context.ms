@@ -4,7 +4,7 @@ import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cm
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, AttachedOp } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -615,6 +615,12 @@ export function declaredTypeSym(t: Type): Symbol | null {
 	return null;
 }
 
+export function hookReceiverSym(recv: Type): Symbol | null {
+	const formal = addressed(withoutReadonlyView(recv));
+	if (formal.kind == TypeKind.GenericInstance || hasGenericParams(formal)) return null;
+	return declaredTypeSym(formal);
+}
+
 // The declaration that owns the extension's receiver: its first parameter's type, never a spelling.
 export function extReceiverSym(ext: ExtensionMethod): Symbol | null {
 	const formal = extReceiverFormal(ext);
@@ -1038,6 +1044,18 @@ export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", 
 
 export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
+}
+
+export function lifecycleHookOp(name: string): AttachedOp {
+	return match (name) {
+		"onDestroy" => AttachedOp.AttachedDestructor,
+		"onCopy" => AttachedOp.AttachedAsgn,
+		"onMove" => AttachedOp.AttachedSink,
+		"onMoved" => AttachedOp.AttachedWasMoved,
+		"onClone" => AttachedOp.AttachedDup,
+		"onTrace" => AttachedOp.AttachedTrace,
+		_ => { throw new Error(`internal: '${name}' is not a lifecycle hook, so it binds no type-bound operation`); },
+	};
 }
 
 export function declaresLifecycleHook(ctx: CheckerContext, typeSym: Symbol): boolean {

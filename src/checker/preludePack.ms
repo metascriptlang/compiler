@@ -40,7 +40,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK5";
+const PACK_MAGIC = "MSPK6";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -684,6 +684,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		enqType(t.typeReturn);
 		enqType(t.typeExtra);
 		enqSym(t.sym, false);
+		for (const op of t.attachedOps) enqSym(op, false);
 	}
 
 	const packDebug = env.get("MSC_PACK_DEBUG") != "";
@@ -701,12 +702,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
 		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
-		if (t.attachedOps != null) {
-			for (const o of t.attachedOps) {
-				if (o != null) throw new Error(`internal: prelude pack type '${t.typeName}' carries attached op '${o.name}', which exists only after lowering`);
-			}
-		}
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}`);
+		const ops: int32[] = [];
+		for (const o of t.attachedOps) ops.push(idxSym(o));
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1245,6 +1243,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const typeReturnIdx: int32[] = [];
 	const typeExtraIdx: int32[] = [];
 	const typeSymIdx: int32[] = [];
+	const typeOpsIdx: int32[][] = [];
 	const symTypeIdx: int32[] = [];
 	const symOverloadIdx: int32[][] = [];
 	const symStaticIdx: int32[][] = [];
@@ -1306,7 +1305,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeSymIdx.push(rd.int() as int32);
 			const optional = rd.str();
 			if (optional != "-") t.optionalFields = splitCsv(optional);
-			t.attachedOps = [];
+			typeOpsIdx.push(rd.ints());
 			types.push(t);
 			rd.endRow();
 		} else if (tag == 78) {
@@ -1434,6 +1433,10 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		t.typeReturn = typeReturnIdx[i] >= 0 && typeReturnIdx[i] < types.length ? types[typeReturnIdx[i]] : null as unknown as Type;
 		t.typeExtra = typeExtraIdx[i] >= 0 && typeExtraIdx[i] < types.length ? types[typeExtraIdx[i]] : null as unknown as Type;
 		t.sym = typeSymIdx[i] >= 0 && typeSymIdx[i] < syms.length ? syms[typeSymIdx[i]] : null as unknown as Symbol;
+		for (const k of typeOpsIdx[i]) {
+			if (k >= syms.length) return null;
+			t.attachedOps.push(k >= 0 ? syms[k] : null);
+		}
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {

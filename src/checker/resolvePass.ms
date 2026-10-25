@@ -8,10 +8,10 @@
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { proxyAtExtern } from "./proxy";
@@ -2225,8 +2225,21 @@ function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[],
 		addError(ctx, "signature for '" + d.fnName + "' must take its receiver as " + hookReceiverShapes(d.fnName) + ": " + fault, loc.line, loc.column);
 		return;
 	}
-	refuseHookOutsideItsModule(ctx, node, key);
+	const owner = hookReceiverSym(recv);
+	if (refuseHookOutsideItsModule(ctx, node, key) && owner != null && node.resolvedSym != null) bindLifecycleHook(ctx, owner, d.fnName, node.resolvedSym, d.nameLocation);
 	refuseHookSignature(ctx, d.fnName, d.nameLocation, paramTypes, declaredReturn);
+}
+
+function bindLifecycleHook(ctx: CheckerContext, owner: Symbol, hook: string, hookSym: Symbol, at: SourceLocation): void {
+	const op = lifecycleHookOp(hook);
+	const bound = unwrapRef(owner.symbolType);
+	const prev = getAttachedOp(bound, op);
+	if (prev == hookSym) return;
+	if (prev != null) {
+		addError(ctx, "cannot bind another '" + hook + "' to '" + owner.name + "': previous declaration at line " + prev.location.line.toString(), at.line, at.column);
+		return;
+	}
+	setAttachedOp(bound, op, hookSym);
 }
 
 function hookObjectOf(t: Type): Type {
@@ -2304,13 +2317,14 @@ export function refuseHookInferredReturn(ctx: CheckerContext, hook: string, at: 
 	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
 }
 
-function refuseHookOutsideItsModule(ctx: CheckerContext, node: Node, typeName: string): void {
+function refuseHookOutsideItsModule(ctx: CheckerContext, node: Node, typeName: string): boolean {
 	const d = node.data as FunctionDeclData;
 	const hookSym = node.resolvedSym;
 	const typeSym = lookupSymbol(ctx.table, typeName);
-	if (hookSym == null || typeSym == null || hookSym.modulePath == "" || typeSym.modulePath == "") return;
-	if (hookSym.modulePath == typeSym.modulePath) return;
+	if (hookSym == null || typeSym == null || hookSym.modulePath == "" || typeSym.modulePath == "") return true;
+	if (hookSym.modulePath == typeSym.modulePath) return true;
 	addError(ctx, "type bound operation '" + d.fnName + "' can be defined only in the same module with its type (" + typeName + "): declare it in the module that declares '" + typeName + "'", d.nameLocation.line, d.nameLocation.column);
+	return false;
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
@@ -2971,6 +2985,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			if (methodSym != null && methodSym.symbolType != null) {
 				assignType(methodSym.symbolType, fnType);
 			}
+			if (methodSym != null && isLifecycleHookName(md.methodName) && !md.methodIsStatic && !hasGenerics && sym.instantiatedFrom == null) {
+				bindLifecycleHook(ctx, sym, md.methodName, methodSym, md.nameLocation);
+			}
 		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
@@ -3180,6 +3197,9 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			member.nodeType = fnType;
 			if (methodSym != null && methodSym.symbolType != null) {
 				assignType(methodSym.symbolType, fnType);
+			}
+			if (methodSym != null && isLifecycleHookName(md.methodName) && !md.methodIsStatic && !hasGenerics && sym.instantiatedFrom == null) {
+				bindLifecycleHook(ctx, sym, md.methodName, methodSym, md.nameLocation);
 			}
 		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;

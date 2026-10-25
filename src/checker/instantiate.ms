@@ -16,7 +16,7 @@ import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -27,7 +27,7 @@ import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 import { CheckedInstantiation } from "./context";
-import { TypeFlag } from "../ast/node";
+import { TypeFlag, AttachedOp } from "../ast/node";
 import { sameType } from "./compat";
 
 // ===== Module-Path → CheckerContext Registry =====
@@ -179,7 +179,7 @@ export function resetInstantiationState(): void {
 
 interface InstanceHook {
 	concreteTypes: Type[];
-	methodName: string;
+	op: AttachedOp;
 	sym: Symbol;
 }
 
@@ -197,46 +197,46 @@ export function sameCheckedInstance(a: Symbol, b: Symbol): boolean {
 		&& sameInstanceArgs(instanceArgsOf(a), instanceArgsOf(b));
 }
 
-function instanceHook(owner: Symbol, types: Type[], methodName: string): Symbol | null {
+function instanceHook(owner: Symbol, types: Type[], op: AttachedOp): Symbol | null {
 	const hooks = _instanceHooks.get(owner);
 	if (hooks == null) return null;
 	for (const hook of hooks) {
-		if (hook.methodName == methodName && sameInstanceArgs(hook.concreteTypes, types)) return hook.sym;
+		if (hook.op == op && sameInstanceArgs(hook.concreteTypes, types)) return hook.sym;
 	}
 	return null;
 }
 
-function recordInstanceHook(owner: Symbol, types: Type[], methodName: string, sym: Symbol): void {
+function recordInstanceHook(owner: Symbol, types: Type[], op: AttachedOp, sym: Symbol): void {
 	let hooks = _instanceHooks.get(owner);
 	if (hooks == null) {
 		hooks = [];
 		_instanceHooks.set(owner, hooks);
 	}
 	for (const hook of hooks) {
-		if (hook.methodName == methodName && sameInstanceArgs(hook.concreteTypes, types)) {
+		if (hook.op == op && sameInstanceArgs(hook.concreteTypes, types)) {
 			hook.sym = sym;
 			return;
 		}
 	}
-	hooks.push({ concreteTypes: types, methodName, sym });
+	hooks.push({ concreteTypes: types, op, sym });
 }
 
-export function lookupInstanceHook(type: Type, methodName: string): Symbol | null {
+export function lookupInstanceHook(type: Type, op: AttachedOp): Symbol | null {
 	let t = type;
 	while ((t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr) && t.typeReturn != null) t = t.typeReturn;
 	if (t.kind == TypeKind.GenericInstance) {
 		const owner = nominalTypeSym(t);
-		return owner != null ? instanceHook(owner, t.typeChildren, methodName) : null;
+		return owner != null ? instanceHook(owner, t.typeChildren, op) : null;
 	}
 	if (t.sym != null && t.sym.instantiatedFrom != null) {
-		return instanceHook(t.sym.instantiatedFrom, instanceArgsOf(t.sym), methodName);
+		return instanceHook(t.sym.instantiatedFrom, instanceArgsOf(t.sym), op);
 	}
 	return null;
 }
 
 export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (lookupInstanceHook(t, hookName) != null) return true;
+		if (lookupInstanceHook(t, lifecycleHookOp(hookName)) != null) return true;
 	}
 	const owner = nominalTypeSym(t);
 	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner), owner);
@@ -255,7 +255,7 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 		}
 		ensureShaped(hookSym, ctx);
 		const inst = instantiateGenericFunction(hookSym, params, types, ctx, loc);
-		if (inst != null) recordInstanceHook(owner, types, md.methodName, inst);
+		if (inst != null) recordInstanceHook(owner, types, lifecycleHookOp(md.methodName), inst);
 	}
 }
 
@@ -264,7 +264,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: Chec
 	if (registry == null) return true;
 	let settled = true;
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (instanceHook(genericSym, instType.typeChildren, hookName) != null) continue;
+		if (instanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName)) != null) continue;
 		if (!hasExtensionByName(registry, hookName)) continue;
 		for (const m of findAllExtensionsByName(registry, hookName)) {
 			const hookSym = m.sym;
@@ -285,14 +285,14 @@ function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: Chec
 			if (formal.kind != TypeKind.GenericInstance || nominalTypeSym(formal) != genericSym) continue;
 			if (!hasGenericParams(formal)) {
 				if (!sameInstanceType(formal, instType)) continue;
-				recordInstanceHook(genericSym, instType.typeChildren, hookName, hookSym);
+				recordInstanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName), hookSym);
 				break;
 			}
 			const bindings = createUnifyBindings();
 			unifyType(formal, instType, bindings);
 			if (bindings.names.length == 0) continue;
 			const inst = instantiateGenericFunction(hookSym, bindings.params, bindings.types, ctx, loc);
-			if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, hookName, inst);
+			if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, lifecycleHookOp(hookName), inst);
 			break;
 		}
 	}
