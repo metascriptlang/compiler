@@ -19,7 +19,7 @@ import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
-import { checkedInstanceOf, sameInstanceArgs } from "./instantiate";
+import { instanceArgsOf, sameInstanceArgs } from "./instantiate";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
 	if (!aliveSet.computed) return true;
@@ -407,11 +407,11 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 }
 
 function markInstanceCopy(sym: Symbol): void {
-	const checked = checkedInstanceOf(sym);
+	const checked = instanceArgsOf(sym);
 	let di = _instDeclHead.get(sym.instantiatedFrom!) ?? -1;
 	while (di >= 0) {
 		const copy = _declNodes[di].resolvedSym!;
-		if (sameInstanceArgs(checkedInstanceOf(copy).concreteTypes, checked.concreteTypes)) {
+		if (sameInstanceArgs(instanceArgsOf(copy), checked)) {
 			aliveSetAddSym(_aliveSet, copy);
 			walkDecl(di);
 		}

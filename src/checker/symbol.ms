@@ -383,6 +383,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		itemModule: -1,
 		item: 0,
 		instantiatedFrom: null,
+		instanceArgs: null,
 		borrowedFrom: null,
 		typeParams: [],
 	};

@@ -273,6 +273,7 @@ export class Symbol {
 	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
 	item: int32;
 	instantiatedFrom: Symbol | null;
+	instanceArgs: Type[] | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
 	typeParams: Type[];

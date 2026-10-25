@@ -1,7 +1,7 @@
 import { checkSource } from "./helpers";
 import { lookupSymbol, makeSymbol } from "../../checker/symbol";
 import { createContext } from "../../checker/context";
-import { checkedInstanceOf, sameCheckedInstance, distinctInstances, retainCheckedInstances, lookupInstanceHook } from "../../checker/instantiate";
+import { instanceArgsOf, sameCheckedInstance, distinctInstances, retainCheckedInstances, lookupInstanceHook } from "../../checker/instantiate";
 import { createGenericInstance, createReadonlyView, unwrapRef, hasAsgnFlag } from "../../checker/types";
 import { ctorRoutineOf } from "../../checker/ctorRoutine";
 import { NodeKind, SymbolKind, FunctionDeclData, createNodeAt, makeLoc } from "../../ast/node";
@@ -29,7 +29,7 @@ test "instanceHookIdentity: placement keeps phantom arguments even when signatur
 	(second.declNode!.data as FunctionDeclData).fnName = first.name;
 	assert !sameCheckedInstance(first, second);
 	assert distinctInstances([first.declNode!, second.declNode!]).length == 2;
-	assert checkedInstanceOf(first) == instances[0];
+	assert instanceArgsOf(first) == instances[0].concreteTypes;
 }
 
 test "instanceHookIdentity: independent requesters retain checked records without recreating signature arguments" {
@@ -66,7 +66,7 @@ function change(value: Cell): int32 { const box = new Box<Cell>(value); box.valu
 		const ctor = ctorRoutineOf(instance.sym)!;
 		assert ctor.symbolKind == SymbolKind.Function;
 		assert ctor.instantiatedFrom == ctorRoutineOf(generic);
-		assert checkedInstanceOf(ctor).concreteTypes == instance.concreteTypes;
+		assert instanceArgsOf(ctor) == instance.concreteTypes;
 	}
 }
 

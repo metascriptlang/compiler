@@ -177,7 +177,6 @@ export function resetInstantiationState(): void {
 	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[][]>();
-	_checkedInstances = new HashMap<Symbol, CheckedInstantiation>();
 }
 
 interface InstanceHook {
@@ -188,18 +187,16 @@ interface InstanceHook {
 
 let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
 let _hookScannedInstances: HashMap<Symbol, Type[][]> = new HashMap<Symbol, Type[][]>();
-let _checkedInstances: HashMap<Symbol, CheckedInstantiation> = new HashMap<Symbol, CheckedInstantiation>();
 
-export function checkedInstanceOf(sym: Symbol): CheckedInstantiation {
-	const inst = _checkedInstances.get(sym);
-	if (inst == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
-	return inst;
+export function instanceArgsOf(sym: Symbol): Type[] {
+	if (sym.instanceArgs == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
+	return sym.instanceArgs;
 }
 
 export function sameCheckedInstance(a: Symbol, b: Symbol): boolean {
 	if (a == b) return true;
 	return a.instantiatedFrom != null && a.instantiatedFrom == b.instantiatedFrom
-		&& sameInstanceArgs(checkedInstanceOf(a).concreteTypes, checkedInstanceOf(b).concreteTypes);
+		&& sameInstanceArgs(instanceArgsOf(a), instanceArgsOf(b));
 }
 
 function instanceHook(owner: Symbol, types: Type[], methodName: string): Symbol | null {
@@ -234,7 +231,7 @@ export function lookupInstanceHook(type: Type, methodName: string): Symbol | nul
 		return owner != null ? instanceHook(owner, t.typeChildren, methodName) : null;
 	}
 	if (t.sym != null && t.sym.instantiatedFrom != null) {
-		return instanceHook(t.sym.instantiatedFrom, checkedInstanceOf(t.sym).concreteTypes, methodName);
+		return instanceHook(t.sym.instantiatedFrom, instanceArgsOf(t.sym), methodName);
 	}
 	return null;
 }
@@ -371,7 +368,7 @@ export function distinctInstances(order: Node[]): Node[] {
 	for (const node of order) {
 		const generic = instanceGenericOf(node);
 		if (generic == null) throw new Error(`internal: a generic instance of this build has no generic it was made from`);
-		const inst = checkedInstanceOf(node.resolvedSym!);
+		const inst: CheckedInstantiation = { sym: node.resolvedSym!, concreteTypes: instanceArgsOf(node.resolvedSym!) };
 		let instances = seen.get(generic);
 		if (instances == null) {
 			instances = [];
@@ -508,22 +505,20 @@ function cacheInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: 
 	if (known != null) instances = known;
 	const record: CheckedInstantiation = { sym: inst, concreteTypes: types };
 	instances.push(record);
-	_checkedInstances.set(inst, record);
+	inst.instanceArgs = types;
 	cache.set(generic, instances);
 }
 
 export function retainCheckedInstances(ctxs: CheckerContext[]): void {
 	for (const ctx of ctxs) {
 		for (const instances of ctx.procInstCache.values()) {
-			for (const inst of instances) _checkedInstances.set(inst.sym, inst);
+			for (const inst of instances) inst.sym.instanceArgs = inst.concreteTypes;
 		}
 		for (const instances of ctx.typeInstCache.values()) {
 			for (const inst of instances) {
-				_checkedInstances.set(inst.sym, inst);
+				inst.sym.instanceArgs = inst.concreteTypes;
 				const ctor = ctorRoutineOf(inst.sym);
-				if (ctor != null && ctor.instantiatedFrom != null && !_checkedInstances.has(ctor)) {
-					_checkedInstances.set(ctor, { sym: ctor, concreteTypes: inst.concreteTypes });
-				}
+				if (ctor != null && ctor.instantiatedFrom != null && ctor.instanceArgs == null) ctor.instanceArgs = inst.concreteTypes;
 			}
 		}
 	}
@@ -1424,7 +1419,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
-	_checkedInstances.set(ctorSym, { sym: ctorSym, concreteTypes: types });
+	ctorSym.instanceArgs = types;
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols
