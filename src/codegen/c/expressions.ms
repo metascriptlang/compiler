@@ -2246,14 +2246,14 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 			const srcType = d.convExpr.nodeType;
 			const stampedSlot = node.variantSlot;
 			if (stampedSlot > convUnion.typeChildren.length) {
-				addCGenError(g, `internal: variant slot ${stampedSlot} is past the ${convUnion.typeChildren.length} arms of union '${typeDisplayName(convUnion)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: variant slot ${stampedSlot} is past the ${convUnion.typeChildren.length} arms of union '${typeDisplayNameUnprofiled(convUnion)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			if (stampedSlot > 0) {
 				ctx.results.push(`((${targetC}){._tag=${stampedSlot - 1}, .v${stampedSlot - 1}=${inner}})`);
 				return;
 			}
 			if (srcType != null && srcType.kind == TypeKind.Struct) {
-				addCGenError(g, `internal: struct/class '${typeDisplayName(srcType)}' widened to union '${typeDisplayName(convUnion)}' without a variant slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: struct/class '${typeDisplayNameUnprofiled(srcType)}' widened to union '${typeDisplayNameUnprofiled(convUnion)}' without a variant slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			ctx.results.push(inner);
 			return;
