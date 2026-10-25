@@ -1825,9 +1825,8 @@ test "a cast into a type whose destroy hook its operand lacks owns the value it 
 }
 
 test "a downcast of a class reference into a hooked class borrows" {
-	const body = getFuncNamed("class Base { n: int32 = 1; }\nclass Derived extends Base { m: int32 = 2; }\n"
+	const body = inferredNamed("class Base { n: int32 = 1; }\nclass Derived extends Base { m: int32 = 2; }\n"
 		+ "function onDestroy(this x: Derived): void { }\n"
 		+ "function f(b: Base): int32 { const d = b as Derived; return d.m; }", "f");
-	inferCursors(body);
 	assert isCursorNamed(body, "d");
 }
