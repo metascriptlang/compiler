@@ -62,6 +62,7 @@ import "./serializationVariants";
 import "./spawnThunkValues";
 import "./receiverText";
 import "./receiverRelation";
+import "./routineFlagWords";
 import "./importedBindingShadow";
 import "./staticReceiver";
 import "./overloadedSubscript";
