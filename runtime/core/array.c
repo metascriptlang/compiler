@@ -283,6 +283,25 @@ bool msArraySamePayload(void* a, void* b) {
 	return a == b;
 }
 
+void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t elemSize) {
+	int64_t left = (mid - lo) * elemSize;
+	int64_t right = (hi - mid) * elemSize;
+	int64_t small = left < right ? left : right;
+	char few[256];
+	char* tmp = small <= (int64_t)sizeof(few) ? few : (char*)msMemAlloc(small);
+	char* base = data + lo * elemSize;
+	if (left <= right) {
+		memcpy(tmp, base, left);
+		memmove(base, base + left, right);
+		memcpy(base + right, tmp, left);
+	} else {
+		memcpy(tmp, base + left, right);
+		memmove(base + right, base, left);
+		memcpy(base, tmp, right);
+	}
+	if (tmp != few) free(tmp);
+}
+
 /* ===== Number Array Lifecycle ===== */
 
 void msNumberArrayShrink(msNumberArray* arr, int64_t newLen) {
