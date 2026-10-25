@@ -24,7 +24,7 @@ setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
-import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
+import { CtorRow, startCtorCapture, endCtorCapture, replayCtorRoutines } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
@@ -4230,14 +4230,14 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 
 function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
 	const duMark = duVariantMark();
-	const ctorMark = ctorRoutineMark();
+	const outerCtors = startCtorCapture();
 	const outerDispatch = startDispatchCapture();
 	const ctx = buildPreludeContext(stdPath, backendExt);
 	return {
 		ctx,
 
 		duVariants: duVariantsFrom(duMark),
-		ctorRoutines: ctorRoutinesFrom(ctorMark),
+		ctorRoutines: endCtorCapture(outerCtors),
 		dispatch: endDispatchCapture(outerDispatch),
 		owned: null,
 	};

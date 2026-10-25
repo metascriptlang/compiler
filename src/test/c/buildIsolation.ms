@@ -2,7 +2,6 @@ import { env } from "std/process";
 import { compileToC } from "../helpers";
 import { resetBuildState } from "../../compiler/buildSession";
 import { buildPreludeContext, preludeContextFor } from "../../checker/checkPass";
-import { ctorRoutineMark } from "../../checker/ctorRoutine";
 import { dispatchEntryCount } from "../../checker/context";
 import { duVariantRegistry, TargetInfo } from "../../checker/types";
 
@@ -11,7 +10,7 @@ const CLASS_SRC = "class A { v: int32; constructor(v: int32 = 3) { this.v = v; }
 const DU_SRC = "type Shape = { kind: \"c\", r: float64 } | { kind: \"s\", w: float64 };\nfunction area(s: Shape): float64 { return s.kind == \"c\" ? s.r * s.r : s.w * s.w; }\nconsole.log(area({ kind: \"c\", r: 2.0 }));\n";
 
 function perBuildTables(): string {
-	return `${duVariantRegistry().length}|${ctorRoutineMark()}|${dispatchEntryCount()}`;
+	return `${duVariantRegistry().length}|${dispatchEntryCount()}`;
 }
 
 function sameC(a: Result<string, string>, b: Result<string, string>): boolean {

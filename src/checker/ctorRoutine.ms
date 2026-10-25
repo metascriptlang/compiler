@@ -8,41 +8,33 @@ export interface CtorRow {
 	routine: Symbol;
 }
 
-let _routines: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
-let _rows: CtorRow[] = [];
-let _rowAt: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
+let _capture: CtorRow[] | null = null;
 
 export function resetCtorRoutines(): void {
-	_routines = new HashMap<Symbol, Symbol>();
-	_rows = [];
-	_rowAt = new HashMap<Symbol, int32>();
+	_capture = null;
 }
 
-export function ctorRoutineMark(): int32 {
-	return _rows.length;
+export function startCtorCapture(): CtorRow[] | null {
+	const outer = _capture;
+	_capture = [];
+	return outer;
 }
 
-export function ctorRoutinesFrom(mark: int32): CtorRow[] {
-	const rows: CtorRow[] = [];
-	for (let i = mark; i < _rows.length; i += 1) rows.push(_rows[i]);
-	return rows;
+export function endCtorCapture(outer: CtorRow[] | null): CtorRow[] {
+	const captured = _capture;
+	_capture = outer;
+	return captured!;
 }
 
 export function replayCtorRoutines(rows: CtorRow[]): void {
 	for (const row of rows) {
-		if (_routines.get(row.owner) == null) registerCtorRoutine(row.owner, row.routine);
+		if (row.owner.ctorRoutine == null) registerCtorRoutine(row.owner, row.routine);
 	}
 }
 
 function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
-	const at = _rowAt.get(owner);
-	if (at != null) {
-		_rows[at].routine = routine;
-	} else {
-		_rowAt.set(owner, _rows.length);
-		_rows.push({ owner, routine });
-	}
-	_routines.set(owner, routine);
+	if (_capture != null) _capture.push({ owner, routine });
+	owner.ctorRoutine = routine;
 }
 
 export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {
@@ -75,8 +67,7 @@ function declaredCtorRoutine(owner: Symbol): Symbol | null {
 
 export function ctorRoutineOf(owner: Symbol | null): Symbol | null {
 	if (owner == null) return null;
-	const known = _routines.get(owner);
-	if (known != null) return known;
+	if (owner.ctorRoutine != null) return owner.ctorRoutine;
 	return declaredCtorRoutine(owner);
 }
 

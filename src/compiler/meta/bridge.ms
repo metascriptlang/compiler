@@ -4083,6 +4083,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		item: 0 as int32,
 		instantiatedFrom: null,
 		instanceArgs: null,
+		ctorRoutine: null,
 		borrowedFrom: null,
 		staticOwner: null,
 		typeParams: [],
