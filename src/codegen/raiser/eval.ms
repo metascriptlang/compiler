@@ -457,8 +457,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	}
 	const checkedBy = _engine.instanceCtxs.get(sym);
 	if (checkedBy != null && isCheckedRoutineDecl(sym.declNode)) {
-		const bodyCtx = sym.modulePath == checkedBy.modulePath ? checkedBy : engineBodyCtx(sym.modulePath, sym) ?? checkedBy;
-		return compileCheckedBodyIntoEngine(sym, sym.declNode, "$comptime:helper", bodyCtx);
+		const bodyCtx = sym.modulePath == checkedBy.modulePath ? checkedBy : engineBodyCtx(sym.modulePath, sym);
+		if (bodyCtx != null) return compileCheckedBodyIntoEngine(sym, sym.declNode, "$comptime:helper", bodyCtx);
 	}
 	const seedCtx = seedCtxForSym(sym);
 	const seeds = instanceTypeParamSeeds(sym);
