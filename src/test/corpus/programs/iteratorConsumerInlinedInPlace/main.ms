@@ -94,6 +94,14 @@ function run(): void {
 	for (const w of count(4).windows(2)) note("w" + w.join(""));
 	const nested = count(3).map((v: int32, i: number): int32 => v + 1).map((v: int32, i: number): int32 => v * 10).sum();
 	note("nested " + nested.toString());
+	let acc: int32 = 5;
+	acc += count(4).map((v: int32, i: number): int32 => {
+		acc = 100;
+		return v;
+	}).sum();
+	let words = "a";
+	words += count(2).map((v: int32, i: number): string => "b" + v.toString()).reduce((s: string, v: string, i: number): string => s + v, "");
+	note("compound " + acc.toString() + " " + words);
 
 	note("up " + upTo(3) + " " + upTo(9));
 	stopEarly();
@@ -118,7 +126,7 @@ note("top " + top.toString() + " " + topWords.join(","));
 
 const expected = "reduce 90;sum 10;arr x0,x1,x2,x3;some true closed 1;every true;find 3;fe 0;fe 1;fe 2;"
 	+ "t0;t1;t2;drop 48;closed 1;q0;q1;closed 2;caught -1 must be positive;closed 2;chunks 3 1;"
-	+ "s0;s2;s4;caught step must be an integer;total 35;logged;inner;outer;l2;l3;w01;w12;w23;nested 60;"
+	+ "s0;s2;s4;caught step must be an integer;total 35;logged;inner;outer;l2;l3;w01;w12;w23;nested 60;compound 11 ab0b1;"
 	+ "up 012 01234!;se0;se1;fw 3;caught negative -2;closed 2;tally 4 4;top 6 m0,m1,m2;";
 console.log(trace);
 if (trace != expected) throw new Error("trace differs from TS: " + expected);

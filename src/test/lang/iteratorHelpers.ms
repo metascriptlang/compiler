@@ -656,3 +656,20 @@ test "iterator sum, min and max: reductions with null for an empty min and max" 
 	const words: string[] = ["b", "a", "c"];
 	assert words.values().min() == "a" && words.values().max() == "c";
 }
+
+test "iterator consumer: a compound assignment reads its target before the chain runs, as in TS" {
+	const nums: int32[] = [1, 2, 3];
+	let t: int32 = 10;
+	t += nums.values().map((x: int32, i: number): int32 => x * 2).reduce((acc: int32, x: int32, i: number): int32 => {
+		t = 100;
+		return acc + x;
+	}, 0);
+	assert t == 22;
+	const words: string[] = ["b", "c"];
+	let s = "a";
+	s += words.values().reduce((acc: string, x: string, i: number): string => {
+		s = "z";
+		return acc + x;
+	}, "");
+	assert s == "abc";
+}
