@@ -11,9 +11,11 @@
 export extern class Promise<T> {
 	@builtin("PromiseAll")
 	static extern all<T>(promises: Promise<T>[]): Promise<T[]>;
+	@builtin("PromiseRace")
 	static extern race<T>(promises: Promise<T>[]): Promise<T>;
 	@builtin("PromiseAllSettled")
 	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]>;
+	@builtin("PromiseAny")
 	static extern any<T>(promises: Promise<T>[]): Promise<T>;
 	static extern resolve(value: T): Promise<T>;
 	static extern reject(error: Error): Promise<never>;
