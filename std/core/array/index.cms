@@ -282,12 +282,14 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number, sin
 	const n = arr.length as int64;
 	const s = spliceStart(start, n);
 	const k = spliceCount(deleteCount, n - s);
-	if (k > 0) {
-		arr.rotate(s, s + k, n);
-		arr.shrink(n - k);
-	}
 	arr.push(item);
-	arr.rotate(s, n - k, n - k + 1);
+	arr.rotate(s, n, n + 1);
+	if (k == 0) return;
+	arr.rotate(s + 1, s + 1 + k, n + 1);
+	const evicted: T[] = [];
+	evicted.growEmpty(k);
+	for (let j: int64 = 0; j < k; j = j + 1) evicted.swapWith(j, arr, n + 1 - k + j);
+	arr.shrink(n + 1 - k);
 }
 
 /**
