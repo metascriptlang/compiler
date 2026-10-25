@@ -546,7 +546,19 @@ export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
 	return o + 8;
 }
 
+function badByteLength(byteLength: number, rule: string): never {
+	throw new RangeError(
+		`The value of "byteLength" is out of range. It must be ${rule}. Received ${byteLength}`,
+	);
+}
+
+function checkByteLength(byteLength: number): void {
+	if (Math.floor(byteLength) != byteLength) badByteLength(byteLength, "an integer");
+	if (byteLength < 1 || byteLength > 6) badByteLength(byteLength, ">= 1 and <= 6");
+}
+
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -556,6 +568,7 @@ export function readUIntLE(this b: Buffer, o: number, byteLength: number): numbe
 	return v;
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -575,6 +588,7 @@ export function readIntBE(this b: Buffer, o: number, byteLength: number): number
 	return u >= half ? u - half * 2 : u;
 }
 export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let x = v;
 	let k = 0;
 	while (k < byteLength) {
@@ -585,6 +599,7 @@ export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: nu
 	return o + byteLength;
 }
 export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let x = v;
 	let k = byteLength - 1;
 	while (k >= 0) {

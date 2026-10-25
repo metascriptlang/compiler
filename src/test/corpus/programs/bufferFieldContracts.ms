@@ -1,7 +1,7 @@
 // @skip-js: the js Buffer throws or reads undefined outside the bounds; the C Buffer returns 0 or the offset and writes nothing
 // @xfail(raiser): error: Undefined variable 'Buffer'
-// @stdout: bounds entries=2220 digest=850312886
-// @stdout: negative width reads 0 0 0 0 0 0 0 0 0 0 0 0
+// @stdout: bounds entries=1620 digest=484407731
+// @stdout: byteLength rejects=96 rejectedMessages=96 accepted=48 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
 // @stdout: ranges entries=224 digest=615181003
 // @stdout: strings entries=2880 digest=331562034
@@ -49,7 +49,7 @@ function checkFieldBounds(): void {
 			note(value.readFloatLE(at));
 			note(value.readDoubleBE(at));
 			log += `${value.readBigUInt64LE(at)} ${value.readBigInt64BE(at)};`;
-			for (const width of [0, 1, 2.5, 6, 7]) {
+			for (const width of [1, 2, 6]) {
 				note(value.readUIntLE(at, width));
 				note(value.readIntBE(at, width));
 			}
@@ -60,7 +60,7 @@ function checkFieldBounds(): void {
 			note(out.writeDoubleLE(1.25, at));
 			note(out.writeFloatBE(-3.5, at));
 			note(out.writeBigInt64LE(-3n, at));
-			for (const width of [-1, 0, 1, 3.5, 6, 7]) {
+			for (const width of [1, 3, 6]) {
 				note(out.writeUIntBE(258, at, width));
 				note(out.writeIntLE(-258, at, width));
 			}
@@ -144,17 +144,56 @@ function checkWriteBounds(): void {
 	section("strings");
 }
 
-function checkNegativeWidth(): void {
-	const value = patterned(8, 9);
-	let read = "";
-	for (const at of [0, 3, 8]) {
-		read += ` ${value.readUIntLE(at, -1)} ${value.readUIntBE(at, -2)} ${value.readIntLE(at, -1)} ${value.readIntBE(at, -6)}`;
+function checkByteLength(): void {
+	const reads: ((value: Buffer, width: number) => number)[] = [
+		(value, width) => value.readUIntLE(2, width),
+		(value, width) => value.readUIntBE(2, width),
+		(value, width) => value.readIntLE(2, width),
+		(value, width) => value.readIntBE(2, width),
+	];
+	const writes: ((value: Buffer, width: number) => number)[] = [
+		(value, width) => value.writeUIntLE(1, 2, width),
+		(value, width) => value.writeUIntBE(1, 2, width),
+		(value, width) => value.writeIntLE(-1, 2, width),
+		(value, width) => value.writeIntBE(-1, 2, width),
+	];
+	let rejects: int32 = 0;
+	let rejectedMessages: int32 = 0;
+	let accepted: int32 = 0;
+	let unexpected: int32 = 0;
+	let untouched = true;
+	for (const length of [0, 8]) {
+		for (const call of reads.concat(writes)) {
+			for (const width of [-1, 0, 7, 2.5, NaN, Infinity]) {
+				const value = patterned(length, 9);
+				const before = patterned(length, 9);
+				try {
+					call(value, width);
+				} catch (error) {
+					rejects += 1;
+					if (error.message.startsWith('The value of "byteLength" is out of range. It must be ')) {
+						rejectedMessages += 1;
+					}
+				}
+				if (value != before) untouched = false;
+			}
+			for (const width of [1, 3, 6]) {
+				try {
+					call(patterned(length, 9), width);
+					accepted += 1;
+				} catch (error) {
+					unexpected += 1;
+				}
+			}
+		}
 	}
-	console.log(`negative width reads${read}`);
+	console.log(
+		`byteLength rejects=${rejects} rejectedMessages=${rejectedMessages} accepted=${accepted} unexpected=${unexpected} untouched=${untouched}`,
+	);
 }
 
 checkFieldBounds();
-checkNegativeWidth();
+checkByteLength();
 checkSearchBounds();
 checkRangeBounds();
 checkWriteBounds();

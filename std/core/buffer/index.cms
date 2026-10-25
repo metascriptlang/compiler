@@ -1,6 +1,8 @@
 @include("runtime/core/buffer.h");
 @compile("runtime/core/buffer.c");
 
+import { Math } from "std/core/math";
+
 // Buffer = string. Same raw bytes, different semantics.
 // String methods interpret UTF-8/UTF-16. Buffer methods treat raw bytes.
 // Since Buffer IS string, all string methods (equals, byteAt, byteSlice,
@@ -832,6 +834,18 @@ export function bufReverse(this buf: Buffer): void {
 
 // --- Variable-Length Integer Read/Write (1-6 bytes) ---
 
+function badByteLength(byteLength: number, rule: string): never {
+	throw new RangeError(
+		`The value of "byteLength" is out of range. It must be ${rule}. Received ${byteLength}`,
+	);
+}
+
+function checkedWidth(byteLength: number): int64 {
+	if (Math.floor(byteLength) != byteLength) badByteLength(byteLength, "an integer");
+	if (byteLength < 1 || byteLength > 6) badByteLength(byteLength, ">= 1 and <= 6");
+	return byteLength as int64;
+}
+
 function readVariable(
 	this buf: Buffer,
 	offset: number,
@@ -839,14 +853,13 @@ function readVariable(
 	bigEndian: boolean,
 	signed: boolean,
 ): number {
+	const width = checkedWidth(byteLength);
 	const at = offset as int64;
-	const width = byteLength as int64;
-	if (width <= 0 || width > 6 || !buf.fits(at, width)) return 0;
+	if (!buf.fits(at, width)) return 0;
 	const value = buf.loadField(at, width, bigEndian);
 	return signed ? signExtend(value, width << 3) as number : value as number;
 }
 
-// On a non-empty buffer a negative width writes nothing and moves the returned offset back.
 function writeVariable(
 	this buf: Buffer,
 	value: number,
@@ -854,11 +867,9 @@ function writeVariable(
 	byteLength: number,
 	bigEndian: boolean,
 ): number {
+	const width = checkedWidth(byteLength);
 	const at = offset as int64;
-	const width = byteLength as int64;
-	if (width == 0 || width > 6 || buf.byteCount() == 0 || !buf.fits(at, width)) {
-		return at as number;
-	}
+	if (buf.byteCount() == 0 || !buf.fits(at, width)) return at as number;
 	buf.storeField(at, width, bigEndian, value as int64);
 	return (at + width) as number;
 }
