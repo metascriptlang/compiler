@@ -1,10 +1,14 @@
-import { Node, NodeKind, NodeFlag, TypeKind, Type, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
 import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots, joinBranchTypes } from "../../checker/fit";
 import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
 import { memberLabels, accessHead } from "../native/unionProjectLower";
+
+const TAG_FIELD = "$tag";
+const VALUE_FIELD = "$v";
+const ECHO_BUILTIN_KINDS = ["Echo", "ToString", "UnionText", "UnionDebug"];
 
 export function lowerUnionTags(program: Node, ctx: TransformContext): Node {
 	return lowerNode(program, "", ctx);
@@ -24,23 +28,41 @@ function lowerNode(node: Node, field: string, ctx: TransformContext): Node {
 		return readFieldOfValue(node, md);
 	}
 	mapChildren(node, (c: Node): Node => lowerNode(c, "", ctx));
-	if (node.kind == NodeKind.Identifier) return lowerIdentifier(node, field, ctx);
-	if (node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) return lowerConv(node, field, ctx);
-	if (node.kind == NodeKind.HiddenStdConv) return lowerStdConv(node);
-	if (node.kind == NodeKind.ObjectLiteral && node.variantSlot > 0) return lowerLiteral(node);
-	if (node.kind == NodeKind.UnaryExpr) return unwrapTypeofOperand(node);
-	if (node.kind == NodeKind.BinaryExpr) return unwrapOperands(node);
-	if (node.kind == NodeKind.CallExpr) return unwrapCallArguments(refuseHostUnion(node, ctx));
-	return node;
+	return match (node.kind) {
+		NodeKind.Identifier => lowerIdentifier(node, field, ctx),
+		NodeKind.HiddenSubConv => {
+			if (node.variantSlot > 0) return lowerConv(node, field, ctx);
+			return node;
+		},
+		NodeKind.HiddenStdConv => lowerStdConv(node),
+		NodeKind.ObjectLiteral => {
+			if (node.variantSlot > 0) return lowerLiteral(node);
+			return node;
+		},
+		NodeKind.UnaryExpr => unwrapTypeofOperand(node),
+		NodeKind.BinaryExpr => unwrapOperands(node),
+		NodeKind.CallExpr => unwrapCallArguments(refuseHostUnion(node, ctx)),
+		_ => node,
+	};
+}
+
+function makeValueRead(object: Node, type: Type, loc: SourceLocation): Node {
+	const read = createNode(NodeKind.MemberExpr, { object, property: VALUE_FIELD, isOptional: false }, syntheticToken(loc));
+	read.nodeType = type;
+	read.flags = read.flags.incl(NodeFlag.Sem);
+	return read;
+}
+
+function makeTaggedValue(slot: int32, value: Node, ut: Type, loc: SourceLocation): Node {
+	const lit = makeTypedObjectLiteral([TAG_FIELD, VALUE_FIELD], [makeIntNumber(slot as int64, loc), value], ut, loc);
+	lit.flags = lit.flags.incl(NodeFlag.Sem);
+	return lit;
 }
 
 function unionValue(n: Node): Node {
 	const ut = taggedUnion(n.nodeType);
 	if (ut == null) throw new Error("internal: a union value read has no tagged union operand");
-	const read = createNode(NodeKind.MemberExpr, { object: n, property: "$v", isOptional: false }, syntheticToken(n.location));
-	read.nodeType = valueType(ut);
-	read.flags = read.flags.incl(NodeFlag.Sem);
-	return read;
+	return makeValueRead(n, valueType(ut), n.location);
 }
 
 function valueType(ut: Type): Type {
@@ -101,7 +123,7 @@ function unwrapCallArguments(node: Node): Node {
 	const d = node.data as CallExprData;
 	const kind = callBuiltinKind(node);
 	const sym = d.callee.resolvedSym;
-	const echo = kind == "Echo" || kind == "ToString" || kind == "UnionText" || kind == "UnionDebug" || isRuntimeProcCall(node, "msPrintln") || (sym != null && sym.nativeName == "msStringFromValue");
+	const echo = ECHO_BUILTIN_KINDS.indexOf(kind) >= 0 || isRuntimeProcCall(node, "msPrintln") || (sym != null && sym.nativeName == "msStringFromValue");
 	if (sym == null && !echo) return node;
 	const formals = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && sym.nativeName != "" ? sym.symbolType.typeChildren : null;
 	for (let i = 0; i < d.arguments.length; i += 1) {
@@ -122,13 +144,10 @@ function memberHaving(ut: Type, prop: string): Type {
 }
 
 function readFieldOfValue(node: Node, md: MemberExprData): Node {
-	if (md.property == "$v" || md.property == "$tag") return node;
+	if (md.property == VALUE_FIELD || md.property == TAG_FIELD) return node;
 	const ut = taggedUnion(md.object.nodeType);
 	if (ut == null) return node;
-	const read = createNode(NodeKind.MemberExpr, { object: md.object, property: "$v", isOptional: false }, syntheticToken(node.location));
-	read.nodeType = memberHaving(ut, md.property);
-	read.flags = read.flags.incl(NodeFlag.Sem);
-	md.object = read;
+	md.object = makeValueRead(md.object, memberHaving(ut, md.property), node.location);
 	return node;
 }
 
@@ -137,15 +156,19 @@ function lowerIdentifier(node: Node, field: string, ctx: TransformContext): Node
 	if (t == null || t.kind == TypeKind.Union) return node;
 	const declared = declaredTagUnionOf(node);
 	if (declared == null || !storesUnionTag(declared)) return node;
-	const conv = narrowUnionToVariant(node, t);
-	if (conv == null as unknown as Node) return node;
+	const conv: Node | null = narrowUnionToVariant(node, t);
+	if (conv == null) return node;
 	return projectConv(conv, field, ctx);
 }
 
 function lowerConv(node: Node, field: string, ctx: TransformContext): Node {
 	const d = node.data as HiddenStdConvData;
-	if (taggedUnion(d.convType) != null) return wrapValue(node, d, d.convType);
-	if (isMaybeType(d.convType) && taggedUnion(d.convType.typeReturn) != null) return wrapMaybeValue(node, d);
+	const direct = taggedUnion(d.convType);
+	if (direct != null) return wrapValue(node, d, direct);
+	if (isMaybeType(d.convType)) {
+		const inner = taggedUnion(d.convType.typeReturn);
+		if (inner != null) return wrapMaybeValue(node, d, inner);
+	}
 	const from = d.convExpr.nodeType;
 	if (from == null) return node;
 	if (taggedUnion(from) != null || (isMaybeType(from) && taggedUnion(from.typeReturn) != null)) return projectConv(node, field, ctx);
@@ -159,9 +182,7 @@ function lowerStdConv(node: Node): Node {
 	if (ut == null || from == null || taggedUnion(from) != null) return node;
 	const slot = unionSlotOf(ut, from);
 	if (slot < 0) throw new Error(`internal: '${typeDisplayName(ut)}' has no member slot for a ${typeDisplayName(from)} operand`);
-	const lit = makeTypedObjectLiteral(["$tag", "$v"], [makeIntNumber(slot as int64, node.location), d.convExpr], ut, node.location);
-	lit.flags = lit.flags.incl(NodeFlag.Sem);
-	return lit;
+	return makeTaggedValue(slot, d.convExpr, ut, node.location);
 }
 
 function slotOf(node: Node, ut: Type): int32 {
@@ -171,14 +192,11 @@ function slotOf(node: Node, ut: Type): int32 {
 }
 
 function wrapValue(node: Node, d: HiddenStdConvData, ut: Type): Node {
-	const slot = slotOf(node, taggedUnion(ut)!);
-	const lit = makeTypedObjectLiteral(["$tag", "$v"], [makeIntNumber(slot as int64, node.location), d.convExpr], ut, node.location);
-	lit.flags = lit.flags.incl(NodeFlag.Sem);
-	return lit;
+	return makeTaggedValue(slotOf(node, ut), d.convExpr, d.convType, node.location);
 }
 
-function wrapMaybeValue(node: Node, d: HiddenStdConvData): Node {
-	const slot = slotOf(node, taggedUnion(d.convType.typeReturn)!);
+function wrapMaybeValue(node: Node, d: HiddenStdConvData, ut: Type): Node {
+	const slot = slotOf(node, ut);
 	const call = makeCall(runtimeRef("msUnionWrapMaybe", node.location), [d.convExpr, makeIntNumber(slot as int64, node.location)], node.location);
 	call.nodeType = d.convType;
 	return call;
@@ -190,9 +208,7 @@ function lowerLiteral(node: Node): Node {
 	const slot = slotOf(node, ut);
 	node.nodeType = ut.typeChildren[slot];
 	node.variantSlot = 0;
-	const lit = makeTypedObjectLiteral(["$tag", "$v"], [makeIntNumber(slot as int64, node.location), node], ut, node.location);
-	lit.flags = lit.flags.incl(NodeFlag.Sem);
-	return lit;
+	return makeTaggedValue(slot, node, ut, node.location);
 }
 
 function isLocation(n: Node): boolean {
@@ -222,10 +238,7 @@ function projectConv(node: Node, field: string, ctx: TransformContext): Node {
 	const objectSlot = node.flags.has(NodeFlag.ObjectSlot);
 	const checked = ctx.rangeChecks && (objectSlot || node.flags.has(NodeFlag.ConvCheck) || (field != "" && isLocation(src)));
 	if (!checked && !maybe) {
-		const read = createNode(NodeKind.MemberExpr, { object: src, property: "$v", isOptional: false }, syntheticToken(loc));
-		read.nodeType = d.convType;
-		read.flags = read.flags.incl(NodeFlag.Sem);
-		return read;
+		return makeValueRead(src, d.convType, loc);
 	}
 	const allowed: int32[] = !checked ? [] : objectSlot ? holderSlots(d, ut) : [slotOf(node, ut)];
 	const slots = createNode(NodeKind.ArrayLiteral, { elements: allowed.map((h: int32): Node => makeIntNumber(h as int64, loc)) }, syntheticToken(loc));
