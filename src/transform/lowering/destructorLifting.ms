@@ -1366,7 +1366,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, makeIdentResolved(s2, loc)], loc), loc));
 		} else if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
-			if (held != null) buf.items.push(makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(s1, loc), held], loc), loc));
 		} else {
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
@@ -1425,7 +1424,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		}
 	}
 	if (lctx.dropOwner != null && classType != null) {
-		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
+		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, held, lctx, loc);
+	} else if (held != null) {
+		buf.items.push(leftNoRef(s1, held, loc));
 	}
 	lctx.dropOwner = outerDropOwner;
 
@@ -1463,7 +1464,13 @@ function dropEdgeCall(stmt: Node): Node | null {
 	return isRuntimeProcCall(call, "msDecrefCyclicEdge") ? call : null;
 }
 
-function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName: string, lctx: LiftCtx, loc: SourceLocation): Node[] {
+function leftNoRef(self: Symbol, held: Node, loc: SourceLocation): Node {
+	return makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(self, loc), held], loc), loc);
+}
+
+function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName: string, held: Node | null, lctx: LiftCtx, loc: SourceLocation): Node[] {
+	const headCheck = held != null ? leftNoRef(self, held, loc) : null;
+	if (headCheck != null) items.push(headCheck);
 	let edges = 0;
 	for (let i = 0; i + 1 < items.length; i += 1) if (dropEdgeCall(items[i]) != null) edges += 1;
 	if (edges == 0) return items;
@@ -1484,7 +1491,7 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 		const edge = i + 1 < items.length ? dropEdgeCall(items[i]) : null;
 		if (edge == null) {
 			head.push(items[i]);
-			if (resume > 0) segment.push(cloneNodeKeepSem(items[i]));
+			if (resume > 0) segment.push(items[i] == headCheck ? leftNoRef(self, makeNumber(0, loc), loc) : cloneNodeKeepSem(items[i]));
 			continue;
 		}
 		resume += 1;
