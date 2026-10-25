@@ -3708,6 +3708,34 @@ export function awaitReturnedPromise(ctx: CheckerContext, arg: Node, expected: T
 
 // ===== Anonymous Functions =====
 
+export function formatTypeBrief(t: Type | null): string {
+	if (t == null) return "unknown";
+	// Generic-alias instance: show its resolved leaf body (U<Box<string>> → "string"),
+	// not the opaque alias name. Struct/Union-backed generics keep their own display.
+	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null
+		&& t.typeReturn.kind != TypeKind.Struct && t.typeReturn.kind != TypeKind.Union) {
+		return formatTypeBrief(t.typeReturn);
+	}
+	if (isResult(t)) {
+		const ok = getResultOkType(t);
+		const err = getResultErrType(t);
+		const okName = ok != null ? typeDisplayName(ok) : "?";
+		const errName = err != null ? typeDisplayName(err) : "?";
+		return "Result<" + okName + ", " + errName + ">";
+	}
+	return typeDisplayName(t);
+}
+
+export function refuseBareAsyncReturn(ctx: CheckerContext, routine: BitSet<RoutineFlag>, declared: Type | null, name: string, spelling: string, at: SourceLocation): void {
+	if (!routine.has(RoutineFlag.Async) || routine.has(RoutineFlag.Generator)) return;
+	if (declared == null || isUnresolvedType(declared) || declared.kind == TypeKind.Void || isAwaitable(declared)) return;
+	const got = formatTypeBrief(declared);
+	addError(ctx,
+		"async function '" + name + "' must declare return type as Promise<" + got
+			+ ">, not bare '" + got + "'. Change the signature to: " + spelling + "(...): Promise<" + got + ">",
+		at.line, at.column);
+}
+
 export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Node, declared: Type | null, isAsync: boolean, isGenerator: boolean, at: SourceLocation): void {
 	if (isGenerator || declared == null || body.kind != NodeKind.BlockStmt || isUnresolvedType(declared) || isIterator(declared)) return;
 	let ret: Type | null = declared;
@@ -3921,14 +3949,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
 	// so it doesn't catch this case for inline expression-form functions.
 	if (explicitReturnType != null) {
-		if (isAsync && returnTypeAnnotation != "" && explicitReturnType.kind != TypeKind.Void
-			&& !isAwaitable(explicitReturnType)) {
-			const got = typeDisplayName(explicitReturnType);
-			addError(ctx,
-				"async " + name + " must declare return type as Promise<" + got
-					+ ">, not bare '" + got + "'",
-				body.location.line, body.location.column);
-		}
+		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, name, name == "<arrow>" ? "async " : "async function", body.location);
 		return createClosureType(types, params, explicitReturnType);
 	}
 	if (returnTypeAnnotation == "void") {

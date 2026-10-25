@@ -6,7 +6,7 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
@@ -35,7 +35,7 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -50,26 +50,6 @@ import { forEachChild, literalHeldClosures } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
 import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl, isOutParamName } from "./initTracker";
-
-// Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
-// Brief type description for error messages
-function formatTypeBrief(t: Type | null): string {
-	if (t == null) return "unknown";
-	// Generic-alias instance: show its resolved leaf body (U<Box<string>> → "string"),
-	// not the opaque alias name. Struct/Union-backed generics keep their own display.
-	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null
-		&& t.typeReturn.kind != TypeKind.Struct && t.typeReturn.kind != TypeKind.Union) {
-		return formatTypeBrief(t.typeReturn);
-	}
-	if (isResult(t)) {
-		const ok = getResultOkType(t);
-		const err = getResultErrType(t);
-		const okName = ok != null ? typeDisplayName(ok) : "?";
-		const errName = err != null ? typeDisplayName(err) : "?";
-		return "Result<" + okName + ", " + errName + ">";
-	}
-	return typeDisplayName(t);
-}
 
 // ===== PARALOCK Phase 1: Scope-Exit Affine Check =====
 
@@ -1030,19 +1010,8 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	// produces a C signature / body type mismatch in codegen — catch it at the
 	// declaration site with a clear, actionable error. async_generator is exempt
 	// because it returns AsyncIterator<T>, not Promise<T>.
-	if (routine.has(RoutineFlag.Async) && !routine.has(RoutineFlag.Generator)
-		&& fnType != null
-		&& fnType.kind == TypeKind.Function
-		&& fnType.typeReturn != null
-		&& !isUnresolvedType(fnType.typeReturn)
-		&& fnType.typeReturn.kind != TypeKind.Void
-		&& !isAwaitable(fnType.typeReturn)) {
-		const got = formatTypeBrief(fnType.typeReturn);
-		addError(ctx,
-			"async function '" + d.fnName + "' must declare return type as Promise<" + got
-				+ ">, not bare '" + got + "'. Change the signature to: async function "
-				+ d.fnName + "(...): Promise<" + got + ">",
-			d.nameLocation.line, d.nameLocation.column);
+	if (fnType != null && fnType.kind == TypeKind.Function) {
+		refuseBareAsyncReturn(ctx, routine, fnType.typeReturn, d.fnName, "async function " + d.fnName, d.nameLocation);
 	}
 
 	// Reference parity (semProcAux): generic function bodies are NOT checked at declaration time.
@@ -1892,9 +1861,10 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
 			const sym = methodSym != null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, inferredType(), false);
-				if (routineFlagSet(d.methodFlags).has(RoutineFlag.Async)) {
-					setFlag(sym, SymbolFlag.Async);
-				}
+			const routine = routineFlagSet(d.methodFlags);
+			if (routine.has(RoutineFlag.Async)) setFlag(sym, SymbolFlag.Async);
+			const actorMethod = ctx.currentActor != null && ctx.currentActor.symbolType == classType;
+			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			const overridden = d.methodIsStatic ? null : checkOverride(ctx, d, className, classType);
 			if (!d.methodIsStatic) checkOverrideSinkMode(ctx, d, sym, className, classType);
