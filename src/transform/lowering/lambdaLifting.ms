@@ -26,7 +26,7 @@ import {
 	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym,
 } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
+import { forEachChild, initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeReturn, makeBlock, makeVarDecl, makeFnDecl, makeObjectLiteral,
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
@@ -1022,30 +1022,9 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 //
 function collectOwnDeclSyms(node: Node, acc: SymSet): void {
 	if (node == null) return;
-	match (node.kind) {
-		NodeKind.VariableDecl => {
-			if (node.resolvedSym != null) symSetAdd(acc, node.resolvedSym);
-			collectOwnDeclSyms((node.data as VariableDeclData).initializer, acc);
-		},
-		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction | NodeKind.MethodDecl | NodeKind.ConstructorDecl => {},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { collectOwnDeclSyms(s, acc); }
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectOwnDeclSyms(d.consequent, acc);
-			collectOwnDeclSyms(d.alternate, acc);
-		},
-		NodeKind.WhileStmt => { collectOwnDeclSyms((node.data as WhileStmtData).whileBody, acc); },
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectOwnDeclSyms(d.tryBody, acc);
-			collectOwnDeclSyms(d.catchBody, acc);
-			collectOwnDeclSyms(d.finallyBody, acc);
-		},
-		_ => {},
-	};
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) symSetAdd(acc, node.resolvedSym);
+	forEachChild(node, (child: Node): void => collectOwnDeclSyms(child, acc));
 }
 
 interface LoopPlan {
