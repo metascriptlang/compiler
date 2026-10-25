@@ -4,8 +4,9 @@
 //   value nothing in the actor keeps, or an Arc<T>; a field path of 'this' is none of them.
 //
 // WHAT IT CATCHES: a reply of the actor's own state: a class field, a nullable class field, an
-//   array field, a local alias of a field, a fallback between two of its fields, and a fresh local
-//   the actor also stored. The caller would then write what the actor reads, from another thread.
+//   array field, a local alias of a field, a fallback between two of its fields, a fresh local the
+//   actor also stored, and a generic method whose replies no per-type check reaches. The caller
+//   would then write what the actor reads, from another thread.
 //
 // RED MEANS: one of the shapes compiled. Accepted neighbours: actorReplyCopiesRun.ms.
 //
@@ -16,6 +17,7 @@
 // GUARD-CHECK-FAIL the reply of 'pick' may cross to the caller while the actor still reaches it — it replies with a value
 // GUARD-CHECK-FAIL the reply of 'alias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
 // GUARD-CHECK-FAIL the reply of 'kept' may cross to the caller while the actor still reaches it — 'n' is not the sole owner
+// GUARD-CHECK-FAIL actor method 'echo' is generic, so the reply of each instance cannot be checked before it crosses to the caller
 
 import { stop, ExitReason } from "std/actor";
 
@@ -33,6 +35,7 @@ actor Scene {
 		const r = this.top;
 		return r; // GUARD-REFUSED
 	}
+	echo<T>(x: T): T { return x; } // GUARD-REFUSED
 	kept(): Node {
 		const n = new Node();
 		this.last = n;

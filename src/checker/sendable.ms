@@ -221,7 +221,12 @@ export function checkActorReplies(ctx: CheckerContext, raw: Node): void {
 	if (member.kind == NodeKind.DecoratedDecl) member = (member.data as DecoratedDeclData).decoratedNode;
 	if (member == null || member.kind != NodeKind.MethodDecl || member.resolvedSym == null) return;
 	const d = member.data as MethodDeclData;
-	if (d.methodIsStatic || d.methodVisibility == "private" || d.methodName.startsWith("#") || d.methodBody == null || isGenericFn(d.methodFlags)) return;
+	if (d.methodIsStatic || d.methodVisibility == "private" || d.methodName.startsWith("#") || d.methodBody == null) return;
+	if (isGenericFn(d.methodFlags)) {
+		addError(ctx, `actor method '${d.methodName}' is generic, so the reply of each instance cannot be checked before it crosses to the caller — write a concrete method for each type the caller needs, or keep the generic code in a module-level function that a concrete method calls`,
+			member.location.line, member.location.column);
+		return;
+	}
 	const results: Node[] = [];
 	collectResults(d.methodBody, results);
 	const here = ctx.currentFunction;
