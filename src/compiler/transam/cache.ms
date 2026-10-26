@@ -44,14 +44,14 @@ export function createCacheStore(capacity: int32): TaCacheStore {
 
 // ===== Lookup =====
 
-function findEntry(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry {
+function findEntry(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry | null {
 	const indexed = cache.fileIndex.get(key.fileId);
 	if (indexed != null) {
 		for (const entry of indexed) {
 			if (entry.key.queryKind == key.queryKind) return entry;
 		}
 	}
-	return null as unknown as TaCacheEntry;
+	return null;
 }
 
 export function cacheContains(cache: TaCacheStore, key: TaQueryKey): boolean {
@@ -70,7 +70,7 @@ function touch(cache: TaCacheStore, entry: TaCacheEntry): void {
 	entry.accessedAt = cache.accessClock;
 }
 
-export function cacheGet(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry {
+export function cacheGet(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry | null {
 	const entry = findEntry(cache, key);
 	if (entry != null) touch(cache, entry);
 	return entry;
