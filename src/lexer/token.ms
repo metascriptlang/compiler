@@ -12,15 +12,19 @@ export function formatToken(token: Token): string {
 	return `[${tokenKindToString(token.kind)}: '${token.value}' at line ${token.line}]`;
 }
 
-// Returns true for Ident and all keyword tokens.
-// Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
+function inWordRange(kind: TokenKind, first: TokenKind): boolean {
+	return (kind as number) >= (first as number) && (kind as number) < (TokenKind.JsxTagStart as number) &&
+		kind != TokenKind.Comment && kind != TokenKind.Eof;
+}
+
+// Ident and every keyword, so a keyword can name a property (`obj.get`, `obj.set`).
 export function isIdentOrKeyword(kind: TokenKind): boolean {
-	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+	return kind == TokenKind.Ident || inWordRange(kind, TokenKind.Break);
 }
 
 // Ident and the contextual keywords (Abstract up to the JSX block): the tokens that may name a variable, parameter, field or type.
 export function isIdentLikeKind(kind: TokenKind): boolean {
-	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Abstract as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+	return kind == TokenKind.Ident || inWordRange(kind, TokenKind.Abstract);
 }
 
 // A token after which an expression may begin: the part a regex literal and a JSX `<` agree on.
@@ -39,8 +43,6 @@ export function startsExprAfter(kind: TokenKind): boolean {
 	};
 }
 
-// Map identifier string to keyword TokenKind (or Ident)
-// Compiler generates FNV-1a hash table for 80+ string cases — O(1) lookup
 export function identToKeyword(ident: string): TokenKind {
 	return match (ident) {
 		"break" => TokenKind.Break,
@@ -145,7 +147,6 @@ export function identToKeyword(ident: string): TokenKind {
 	};
 }
 
-// Map TokenKind enum to display string (match on enum -> C switch)
 export function tokenKindToString(kind: TokenKind): string {
 	return match (kind) {
 		TokenKind.Number => "NUMBER",
@@ -322,7 +323,6 @@ export function tokenKindToString(kind: TokenKind): string {
 	};
 }
 
-// ===== Token Tests =====
 test "identToKeyword const" { assert identToKeyword("const") == TokenKind.Const; }
 
 test "identToKeyword let" { assert identToKeyword("let") == TokenKind.Let; }
