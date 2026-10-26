@@ -66,11 +66,14 @@ enum {
 };
 void msDrcStatAdd(int id, uint64_t n);
 void msDrcStatCycle(const msTypeInfo* type);
+void msDrcStatTraced(const void* p, const msTypeInfo* type);
 #define MS_DRC_STAT_ADD(id, n) msDrcStatAdd((id), (uint64_t)(n))
 #define MS_DRC_STAT_CYCLE(t) msDrcStatCycle(t)
+#define MS_DRC_STAT_TRACED(p, t) msDrcStatTraced((p), (t))
 #else
 #define MS_DRC_STAT_ADD(id, n) ((void)0)
 #define MS_DRC_STAT_CYCLE(t) ((void)0)
+#define MS_DRC_STAT_TRACED(p, t) ((void)0)
 #endif
 
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */

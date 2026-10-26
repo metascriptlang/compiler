@@ -155,6 +155,9 @@ typedef struct msDsBlock {
 	uint64_t cycOther;
 	const msTypeInfo* cycType[MS_DS_TYPE_SLOTS];
 	uint64_t cycCount[MS_DS_TYPE_SLOTS];
+	uint64_t trcOther, trcArray, trcArrayEmpty;
+	const msTypeInfo* trcType[MS_DS_TYPE_SLOTS];
+	uint64_t trcCount[MS_DS_TYPE_SLOTS];
 	struct msDsBlock* next;
 } msDsBlock;
 
@@ -176,19 +179,33 @@ static msDsBlock* msDsLocal(void) {
 
 void msDrcStatAdd(int id, uint64_t n) { msDsLocal()->c[id] += n; }
 
-void msDrcStatCycle(const msTypeInfo* type) {
-	msDsBlock* b = msDsLocal();
-	b->c[MS_DS_CYC_REG]++;
+static void msDsBump(const msTypeInfo** types, uint64_t* counts, uint64_t* other, const msTypeInfo* type) {
 	size_t i = ((uintptr_t)type >> 4) & (MS_DS_TYPE_SLOTS - 1);
 	for (size_t n = 0; n < MS_DS_TYPE_SLOTS; n++) {
-		if (b->cycType[i] == type || b->cycType[i] == NULL) {
-			b->cycType[i] = type;
-			b->cycCount[i]++;
+		if (types[i] == type || types[i] == NULL) {
+			types[i] = type;
+			counts[i]++;
 			return;
 		}
 		i = (i + 1) & (MS_DS_TYPE_SLOTS - 1);
 	}
-	b->cycOther++;
+	(*other)++;
+}
+
+void msDrcStatCycle(const msTypeInfo* type) {
+	msDsBlock* b = msDsLocal();
+	b->c[MS_DS_CYC_REG]++;
+	msDsBump(b->cycType, b->cycCount, &b->cycOther, type);
+}
+
+/* Array cells are the types named ...ArrayRefCell; their payload is an msRefArray, len first. */
+void msDrcStatTraced(const void* p, const msTypeInfo* type) {
+	msDsBlock* b = msDsLocal();
+	msDsBump(b->trcType, b->trcCount, &b->trcOther, type);
+	size_t n = type != NULL && type->name != NULL ? strlen(type->name) : 0;
+	if (n < 12 || strcmp(type->name + n - 12, "ArrayRefCell") != 0) return;
+	b->trcArray++;
+	if (*(const int64_t*)p == 0) b->trcArrayEmpty++;
 }
 
 typedef struct { const char* name; uint64_t count; } msDsTypeRow;
@@ -198,6 +215,35 @@ static int msDsRowCmp(const void* a, const void* b) {
 	const msDsTypeRow* y = (const msDsTypeRow*)b;
 	if (x->count != y->count) return x->count < y->count ? 1 : -1;
 	return strcmp(x->name, y->name);
+}
+
+/* Per-type totals over all threads, sorted by count: the register table (which 0) or the traced table. */
+static msDsTypeRow* msDsRows(int traced, size_t cap, size_t* nrows) {
+	msDsTypeRow* rows = (msDsTypeRow*)calloc(cap + 1, sizeof(msDsTypeRow));
+	size_t n = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		const msTypeInfo** types = traced ? b->trcType : b->cycType;
+		const uint64_t* counts = traced ? b->trcCount : b->cycCount;
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) {
+			if (types[i] == NULL) continue;
+			const char* name = types[i]->name != NULL ? types[i]->name : "<unnamed>";
+			size_t k = 0;
+			while (k < n && strcmp(rows[k].name, name) != 0) k++;
+			if (k == n) { rows[k].name = name; n++; }
+			rows[k].count += counts[i];
+		}
+	}
+	qsort(rows, n, sizeof(msDsTypeRow), msDsRowCmp);
+	*nrows = n;
+	return rows;
+}
+
+static void msDsPrintRows(FILE* f, const char* flow, const msDsTypeRow* rows, size_t nrows, uint64_t other) {
+	for (size_t k = 0; k < nrows; k++) {
+		if (k < MS_DS_TOP_TYPES) fprintf(f, "drc\t%s.%s\tcount\t%llu\n", flow, rows[k].name, (unsigned long long)rows[k].count);
+		else other += rows[k].count;
+	}
+	fprintf(f, "drc\t%s.other\tcount\t%llu\n", flow, (unsigned long long)other);
 }
 
 static const char* msDsFlowNames[MS_DS_COUNT] = {
@@ -220,30 +266,26 @@ static void msDsDump(void) {
 		other += b->cycOther;
 		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) if (b->cycType[i] != NULL) cap++;
 	}
-	msDsTypeRow* rows = (msDsTypeRow*)calloc(cap + 1, sizeof(msDsTypeRow));
 	size_t nrows = 0;
-	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
-		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) {
-			if (b->cycType[i] == NULL) continue;
-			const char* name = b->cycType[i]->name != NULL ? b->cycType[i]->name : "<unnamed>";
-			size_t k = 0;
-			while (k < nrows && strcmp(rows[k].name, name) != 0) k++;
-			if (k == nrows) { rows[k].name = name; nrows++; }
-			rows[k].count += b->cycCount[i];
-		}
-	}
-	qsort(rows, nrows, sizeof(msDsTypeRow), msDsRowCmp);
+	msDsTypeRow* rows = msDsRows(0, cap, &nrows);
 	static const char* metric[MS_DS_COUNT] = {"count", "bytes"};
 	for (int i = 0; i < MS_DS_COUNT; i++) {
 		fprintf(f, "drc\t%s\t%s\t%llu\n", msDsFlowNames[i],
 			i == MS_DS_ALLOC_BYTES ? metric[1] : metric[0], (unsigned long long)total[i]);
 	}
 	fprintf(f, "drc\trc.decCyclic\tcount\t%llu\n", (unsigned long long)total[MS_DS_ORC_DEC_LAST]);
-	for (size_t k = 0; k < nrows; k++) {
-		if (k < MS_DS_TOP_TYPES) fprintf(f, "drc\tcycle.register.%s\tcount\t%llu\n", rows[k].name, (unsigned long long)rows[k].count);
-		else other += rows[k].count;
+	msDsPrintRows(f, "cycle.register", rows, nrows, other);
+	free(rows);
+	uint64_t trcOther = 0, trcArray = 0, trcArrayEmpty = 0;
+	size_t trcCap = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		trcOther += b->trcOther; trcArray += b->trcArray; trcArrayEmpty += b->trcArrayEmpty;
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) if (b->trcType[i] != NULL) trcCap++;
 	}
-	fprintf(f, "drc\tcycle.register.other\tcount\t%llu\n", (unsigned long long)other);
+	rows = msDsRows(1, trcCap, &nrows);
+	fprintf(f, "drc\tcollect.traced.arrayCell\tcount\t%llu\n", (unsigned long long)trcArray);
+	fprintf(f, "drc\tcollect.traced.arrayCellEmpty\tcount\t%llu\n", (unsigned long long)trcArrayEmpty);
+	msDsPrintRows(f, "collect.traced", rows, nrows, trcOther);
 	free(rows);
 	pthread_mutex_unlock(&gDsMutex);
 	fclose(f);
@@ -610,6 +652,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (getColor(h) == MS_COL_GRAY) return;
 	setColor(h, MS_COL_GRAY);
 	j->touched++;
+	MS_DRC_STAT_TRACED(p, type);
 	/* +1 because rc is 0-based (0 = sole owner = 1 reference) */
 	j->rcSum += getCount(h) + 1;
 	msTrace(p, type, j);
@@ -624,6 +667,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 		if (getColor(ch) != MS_COL_GRAY) {
 			setColor(ch, MS_COL_GRAY);
 			j->touched++;
+			MS_DRC_STAT_TRACED(child, entry.type);
 			/* +2: +1 for 0-based, +1 because we already decremented */
 			j->rcSum += getCount(ch) + 2;
 			msTrace(child, entry.type, j);
