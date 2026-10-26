@@ -42,24 +42,27 @@ import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { lowerValueParamSnapshot } from "./lowering/valueParamSnapshot";
+import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerVarHoist } from "./lowering/varHoist";
+import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.rangeChecks = rangeChecks;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx, namesEnums);
+		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolean): Node {
+function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean): Node {
 	let result = eraseVoidParamReads(planModuleTdz(program, ctx));
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
@@ -88,6 +91,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolea
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
+	if (placed) result = lowerParamReassign(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
@@ -95,6 +99,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolea
 	result = lowerGenerator(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = guardModuleTdzRaiser(result, ctx);
+	if (placed) result = lowerVarHoist(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
@@ -103,8 +108,9 @@ function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolea
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);
+	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
-	result = liftDestructors(result, ctx, false);
+	result = liftDestructors(result, ctx, placed);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
 }
@@ -143,7 +149,7 @@ test "the raiser lowering keeps the enum range check by default and drops it whe
 	const parsed = parseInput("enum Color { Red, Green, Blue }\nfunction raw(): int32 { return 9; }\nconst c = raw() as Color;");
 	assert parsed.ok;
 	const checkerCtx = checkProgram(parsed.value);
-	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false);
+	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false, false);
 	let checks = 0;
 	walkNode(lowered, (n: Node): Node => {
 		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks += 1;
