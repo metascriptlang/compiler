@@ -38,7 +38,7 @@ function stripped(t: Type): Type {
 	return cur;
 }
 
-function memKindOf(t: Type): MemKind {
+export function memKindOf(t: Type): MemKind {
 	const cur = stripped(t);
 	if (cur.kind == TypeKind.Union) {
 		if (unwrapRefNullUnion(cur) != null) return MemKind.Ptr;
