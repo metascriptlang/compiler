@@ -12,6 +12,9 @@ import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filt
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
+import { JSXElementData, JSXAttributeData } from "../ast/node";
+import { peelToStructOrUnion } from "./types";
+import { declaringSymOf, fieldDeclarer } from "./visibility";
 
 // ===== Data Types =====
 
@@ -1798,6 +1801,119 @@ export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, root
 			};
 			result.push(item);
 		}
+	}
+	return result;
+}
+
+// ===== JSX tag and attribute completion =====
+
+// The opening tag holding the cursor: on its tag name (the tag is being typed) or among its
+// attributes, outside any attribute value. `editing` is the attribute whose name the cursor is in.
+export interface SgJsxSite {
+	element: Node;
+	onTag: boolean;
+	editing: Node | null;
+}
+
+export function sgJsxSiteAt(program: Node, source: string, line: int32, col: int32): SgJsxSite | null {
+	const cursor = sgGetLineOffset(source, line) + col - 1;
+	let site: SgJsxSite | null = null;
+	const visit = (node: Node): void => {
+		if (site != null || node.location.line > line) return;
+		if (node.kind == NodeKind.JSXElement && node.typeExpr != null) site = jsxOpeningSite(node, source, cursor);
+		forEachChild(node, visit);
+	};
+	visit(program);
+	return site;
+}
+
+function jsxOpeningSite(element: Node, source: string, cursor: int32): SgJsxSite | null {
+	const tag = element.typeExpr!;
+	const tagStart = sgGetLineOffset(source, tag.location.line) + tag.location.column - 1;
+	if (cursor < tagStart) return null;
+	if (cursor <= tagStart + (tag.data as IdentifierData).name.byteLength) return { element, onTag: true, editing: null };
+	let i = tagStart + (element.data as JSXElementData).jsxTag.byteLength;
+	while (i < cursor) {
+		const c = source.byteAt(i);
+		if (c == ">".code || c == "/".code) return null;
+		if (c == "\"".code || c == "'".code || c == "{".code) {
+			const end = jsxValueEnd(source, i);
+			if (cursor <= end) return null;
+			i = end + 1;
+			continue;
+		}
+		i += 1;
+	}
+	let editing: Node | null = null;
+	for (const attr of (element.data as JSXElementData).jsxAttrs) {
+		if (attr.kind != NodeKind.JSXAttribute) continue;
+		const start = sgGetLineOffset(source, attr.location.line) + attr.location.column - 1;
+		if (cursor >= start && cursor <= start + (attr.data as JSXAttributeData).jsxAttrName.byteLength) editing = attr;
+	}
+	return { element, onTag: false, editing };
+}
+
+// The offset of the byte closing the attribute value opened at `open`: its quote, or the brace
+// balancing it (strings inside braces skipped).
+function jsxValueEnd(source: string, open: int32): int32 {
+	const first = source.byteAt(open);
+	let quote = first == "{".code ? 0 : first;
+	let depth = 0;
+	let i = open + 1;
+	while (i < source.byteLength) {
+		const c = source.byteAt(i);
+		if (quote != 0) {
+			if (c == "\\".code) i += 1;
+			else if (c == quote) {
+				if (first != "{".code) return i;
+				quote = 0;
+			}
+		} else if (c == "\"".code || c == "'".code || c == "`".code) {
+			quote = c;
+		} else if (c == "{".code) {
+			depth += 1;
+		} else if (c == "}".code) {
+			if (depth == 0) return i;
+			depth -= 1;
+		}
+		i += 1;
+	}
+	return i;
+}
+
+// TS completes a tag from IntrinsicElements' properties and an attribute from the props type's
+// properties, leaving out the attributes already written except the one being edited. Each
+// candidate carries the declaring type's location, from which the handler reads the field doc.
+export function sgCompleteJsx(ctx: CheckerContext, site: SgJsxSite, prefix: string): SgSuggest[] {
+	const result: SgSuggest[] = [];
+	const anchor = site.onTag ? site.element.typeExpr!.location : site.element.location;
+	const contextual = sgQueryContextualTypeAt(ctx, anchor.line, anchor.column);
+	if (contextual == null || contextual.symType == null) return result;
+	const t = peelToStructOrUnion(contextual.symType);
+	if (t == null || t.kind != TypeKind.Struct || t.typeNames == null) return result;
+	const container = declaringSymOf(contextual.symType);
+	const written = new HashSet<string>();
+	if (!site.onTag) {
+		for (const attr of (site.element.data as JSXElementData).jsxAttrs) {
+			if (attr.kind == NodeKind.JSXAttribute && attr != site.editing) written.add((attr.data as JSXAttributeData).jsxAttrName);
+		}
+	}
+	for (let fi = 0; fi < t.typeNames.length; fi += 1) {
+		const name = t.typeNames[fi];
+		if (written.has(name)) continue;
+		const ps = sgPrefixMatch(prefix, name);
+		if (ps <= 0) continue;
+		const found = fieldDeclarer(container, name);
+		const declarer = found != null ? found : container;
+		result.push({
+			sym: null, name, kind: SymbolKind.Property,
+			symType: fi < t.typeChildren.length ? t.typeChildren[fi] : noneType(),
+			location: declarer != null && declarer.location != null ? declarer.location : makeLoc(0, 0),
+			modulePath: declarer != null ? declarer.modulePath : "",
+			containerName: declarer != null ? declarer.name : "",
+			prefixScore: ps, scopeDepth: 0, contextFit: true,
+			isExported: false, isMutable: false, usageCount: 0,
+		});
 	}
 	return result;
 }
