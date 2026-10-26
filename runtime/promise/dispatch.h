@@ -108,6 +108,8 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 void msDrainUntilIdle(void);
 int msReportOrphanFailures(void);
 void msNoteOrphanFailure(void* fut);
+void msAdoptOrphanFailure(void* fut);
+void msCompletionQueuePushOrphanNote(void* fut);
 void msClearOrphanFailure(void* fut);
 /* Queued-or-running pool task count (pool.c; 0 on single-threaded targets) */
 int32_t msPoolPendingPeek(void);

@@ -45,7 +45,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGens
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
 import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild, literalHeldClosures } from "../ast/visitor";
@@ -1832,6 +1832,94 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 	unfriend(scope, friends);
 }
 
+let _fieldsCheckedOnDemand: HashSet<Node> = new HashSet<Node>();
+let _fieldsInFlight: Node[] = [];
+
+function storeFieldType(owner: Type, name: string, held: Type): void {
+	const slot = owner.typeNames.indexOf(name);
+	if (slot < 0) throw new Error(`internal: inferred field '${name}' has no slot in its class`);
+	owner.typeChildren[slot] = held;
+}
+
+function settleInferredField(node: Node, pd: PropertyDeclData, classType: Type): void {
+	const init = pd.propInitializer;
+	if (init == null || init.nodeType == null || isUnresolvedType(init.nodeType) || !isUnresolvedFieldType(node.nodeType)) return;
+	const held = closureStorageType(storedTypeOfNullRead(init, init.nodeType, init.nodeType));
+	node.nodeType = held;
+	if (node.resolvedSym != null) node.resolvedSym.symbolType = held;
+	if (!pd.propIsStatic) storeFieldType(unwrapRef(classType), pd.propName, held);
+}
+
+function isUnresolvedFieldType(t: Type | null): boolean {
+	return t == null || isUnresolvedType(t);
+}
+
+function inferredFieldDecl(classDecl: Node, name: string, isStatic: boolean): Node | null {
+	const body = (classDecl.data as ClassDeclData).classBody;
+	for (const raw of body) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propName == name && pd.propIsStatic == isStatic) return pd.propType == "" && pd.propInitializer != null ? member : null;
+	}
+	return null;
+}
+
+function demandFieldType(ctx: CheckerContext, owner: Symbol, name: string, isStatic: boolean, read: Node): void {
+	let declaring: Symbol | null = owner;
+	let member: Node | null = null;
+	let classDecl: Node | null = null;
+	while (declaring != null && declaring.symbolKind == SymbolKind.Class) {
+		classDecl = classDeclNodeOf(declaring);
+		if (classDecl == null || classDecl.kind != NodeKind.ClassDecl) return;
+		member = inferredFieldDecl(classDecl, name, isStatic);
+		if (member != null || isStatic) break;
+		const parent = classParentOf(declaring.symbolType);
+		const parentSym = parent == null ? null : unwrapRef(parent).sym;
+		declaring = parentSym != null || parent == null ? parentSym : lookupSymbol(ctx.table, unwrapRef(parent).typeName);
+	}
+	if (member == null || declaring == null || classDecl == null) return;
+	const field = member;
+	if (!isUnresolvedFieldType(field.nodeType)) {
+		copyFieldToSubclass(owner, declaring, name, field, isStatic);
+		return;
+	}
+	if (_fieldsInFlight.indexOf(field) >= 0) {
+		addError(ctx, `'${name}' implicitly has type any because it does not have a type annotation and is referenced directly or indirectly in its own initializer`, read.location.line, read.location.column);
+		field.nodeType = errorType();
+		if (!isStatic) storeFieldType(unwrapRef(declaring.symbolType), name, field.nodeType);
+		return;
+	}
+	if (ctx.decoratorsPending) return;
+	const cls = declaring;
+	const outer = keptComptimeOuter(ctx, cls);
+	const bodyCtx = enterOwnerModule(ctx, cls);
+	if (bodyCtx != null) demandFieldBody(bodyCtx, cls, classDecl, field);
+	restoreComptimeOuter(outer);
+	copyFieldToSubclass(owner, cls, name, field, isStatic);
+}
+
+function copyFieldToSubclass(owner: Symbol, declaring: Symbol, name: string, field: Node, isStatic: boolean): void {
+	if (isStatic || declaring == owner || isUnresolvedFieldType(field.nodeType)) return;
+	const ownStruct = unwrapRef(owner.symbolType);
+	if (ownStruct.typeNames.indexOf(name) >= 0) storeFieldType(ownStruct, name, field.nodeType!);
+}
+
+function demandFieldBody(ctx: CheckerContext, cls: Symbol, classDecl: Node, field: Node): void {
+	const genericStr = declGenericParams(classDecl);
+	const top = moduleScopeOf(ctx);
+	if (genericStr != "" || top.symbols.get(cls.nameId) != cls) return;
+	const saved = enterDeclarationState(ctx, top);
+	ensureShaped(cls, ctx);
+	instantiateParentClass(classParentOf(cls.symbolType), ctx);
+	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = cls;
+	checkClassMemberNode(ctx, field, cls.name, cls.symbolType);
+	_fieldsCheckedOnDemand.add(field);
+	closeScope(ctx.table);
+	leaveDeclarationState(ctx, saved);
+}
+
 function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node.kind == NodeKind.DecoratedDecl) {
@@ -1845,14 +1933,19 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const fieldSym = makeSymbol(pd.propName, SymbolKind.Property, node.nodeType, false);
 			fieldSym.state = SymbolState.Shaped;
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + pd.propName.length, fieldSym, node.nodeType, SymbolKind.Property, pd.propName, className, true);
-			if (pd.propInitializer != null) {
+			if (pd.propInitializer != null && _fieldsCheckedOnDemand.has(node)) {
+				_fieldsCheckedOnDemand.delete(node);
+			} else if (pd.propInitializer != null) {
 				const savedBoundary = ctx.staticInitBoundary;
 				if (pd.propIsStatic) {
 					ctx.staticInitBoundary = ctx.table.current;
 					openStaticReceiverScope(ctx, classType.sym);
 				}
 				const hoistMark = ctx.pendingHoisted.length;
+				const inferring = pd.propType == "";
+				if (inferring) _fieldsInFlight.push(node);
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (inferring) _fieldsInFlight.pop();
 				if (!pd.propIsStatic && takeDefaultArgTemps(ctx, hoistMark).length > 0) {
 					addError(ctx, "the initializer of field '" + pd.propName + "' passes an argument that a default value reads, and a field initializer has no statement to bind it in — pass a variable, or assign the field in the constructor",
 						pd.propInitializer.location.line, pd.propInitializer.location.column);
@@ -1862,6 +1955,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				}
 				if (pd.propIsStatic) closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
+				if (pd.propType == "") settleInferredField(node, pd, classType);
 			}
 		},
 		NodeKind.MethodDecl => {
@@ -4341,6 +4435,7 @@ registerCheckLocalInstance((ctx: CheckerContext, node: Node, declared: (sym: Sym
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
 registerDemandBinding(demandBindingType);
+registerDemandField(demandFieldType);
 registerSelfReadType(selfReadType);
 registerUndefinedVariableMessage(undefinedVariableMessage);
 
@@ -6517,4 +6612,9 @@ test "a prelude module's unexported declaration resolves only inside that module
 		["math", "export function fromMath(): string { return pick(); }\n"],
 	]);
 	assert outside.errors.length == 1 && outside.errors[0].message.includes("pick"), outside.errors.length > 0 ? outside.errors[0].message : "";
+}
+
+test "a class field inferred through its own initializer is refused" {
+	assert checkOk("class A { x = new B().y; } class B { y = 4; } const n: int32 = new A().x;");
+	assert !checkOk("class A { x = new B().y; } class B { y = new A().x; } const n = new A().x;");
 }

@@ -9,7 +9,7 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
-import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
+import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, stampOwner, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash } from "./context";
@@ -5500,6 +5500,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
 	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object, d.property);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
+	if (!isStaticClassAccess && isUnresolvedType(propType) && fieldOwnerSym != null) {
+		callDemandField(ctx, fieldOwnerSym, d.property, false, node);
+		propType = getProperty(resolvedObjType, d.property);
+	}
 	// Engine (macro-body) view of Node.nodeType: the VM wire carries a type-AST
 	// Node tree (mapTypeToAst), not the checker Type the class declares. Type
 	// the member as Node so flat reads on it resolve via the NodeData
@@ -5536,6 +5540,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym != null) {
 		const staticField = findStaticField(d.object.resolvedSym, d.property);
 		if (staticField != null) {
+			if (isUnresolvedType(staticField.symbolType)) callDemandField(ctx, d.object.resolvedSym, d.property, true, node);
 			if (ctx.currentFunction == null) {
 				for (const pending of ctx.staticBlockPending) {
 					if (pending == staticField.declNode) {
