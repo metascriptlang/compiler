@@ -1,4 +1,5 @@
 // @skip-js: the cycle collector exists only in the C runtime
+// @skip-raiser: the cycle collector exists only in the C runtime; the Raiser VM has no msOrcCollect host function
 // @stdout: generic-method=1 generic-function=1 depth2=1 generic-base=1
 // note: a generic subclass built only from a dependent instantiation (`new Sub<V>` inside a generic method or function) must trace each inherited field once. A second traced edge per closure env balances an outside reference during the collection, and the collector frees live objects; a surviving slot proves every edge was counted once.
 
