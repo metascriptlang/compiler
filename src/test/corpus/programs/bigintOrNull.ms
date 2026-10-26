@@ -1,5 +1,4 @@
 // @stdout: null true false true false | false true true true false | true true false true true false true | 6 7 | null 5 anullb5 null 5 | true 14 null | 9 null true | 14 2 5 null 3 | F F T if-F | true true false | 5 6 null 5n
-// @xfail(raiser): raiser runtime error: expected an object, got value kind Array (after the last matching line)
 // note: bigint | null is a nullable pointer on C (null is the NULL pointer) that keeps its TS meaning on C and JS: == null tests the pointer, == against a value compares values, text prints "null" or the digits, 0n is falsy, tuples compare the values and x! on a value reads it. C used to stop in the transform or in the C compiler, and JS printed <object> for String() and console.log.
 
 class Holder { x: bigint | null = null; }

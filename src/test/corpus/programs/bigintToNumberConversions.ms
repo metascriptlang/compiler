@@ -1,5 +1,3 @@
-// @xfail(raiser): a uint64 interpolation or toString leaks a string and a module string global reads empty on the drc base (compiler inbox card pending)
-
 function main(): void {
 	const s: bigint[] = [9223372036854775807n, -9223372036854775808n, 127n, -128n, 2147483647n, -2147483648n];
 	console.log(`signed ${s[0] as int64} ${s[1] as int64} ${s[2] as int8} ${s[3] as int8} ${s[4] as int32} ${s[5] as int32}`);
