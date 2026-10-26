@@ -11,7 +11,7 @@ import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
 import { lookupModuleProgram } from "./instantiate";
-import { ModuleGraph } from "../module/graph";
+import { ModuleGraph, addModule, createModule, createModuleGraph } from "../module/graph";
 
 export enum Effect {
 	SideEffect,
@@ -468,9 +468,11 @@ function reachableFrom(graph: ModuleGraph, start: string, reverse: boolean): str
 		for (const m of graph.modules) {
 			for (const imp of m.imports) {
 				if (imp.typeOnly) continue;
-				const from = reverse ? imp.sourcePath : m.path;
-				const to = reverse ? m.path : imp.sourcePath;
-				if (from == seen[i] && !seen.includes(to)) seen.push(to);
+				if (reverse) {
+					if (imp.sourcePath == seen[i] && !seen.includes(m.path)) seen.push(m.path);
+				} else if (m.path == seen[i] && !seen.includes(imp.sourcePath)) {
+					seen.push(imp.sourcePath);
+				}
 			}
 		}
 	}
@@ -1054,4 +1056,27 @@ function walkChildren(node: Node, e: Effect): EffectCause | null {
 		if (found[0] == null) found[0] = walkEffect(child, e);
 	});
 	return found[0];
+}
+
+function linkedGraph(edges: string[][], typeOnly: boolean): ModuleGraph {
+	const graph = createModuleGraph();
+	for (const e of edges) {
+		const mod = createModule(e[0]);
+		mod.imports.push({ names: [], aliases: [], sourcePath: e[1], sourceSpecifier: e[1], dynamic: false, typeOnly });
+		addModule(graph, mod);
+	}
+	return graph;
+}
+
+test "reachableFrom follows imports forward and backward in discovery order" {
+	const graph = linkedGraph([["a", "b"], ["b", "c"], ["c", "b"], ["d", "a"]], false);
+	assert(reachableFrom(graph, "a", false).join(",") == "a,b,c");
+	assert(reachableFrom(graph, "a", true).join(",") == "a,d");
+	assert(importCycleOf(graph, "b").join(",") == "b,c");
+}
+
+test "reachableFrom skips type-only imports" {
+	const graph = linkedGraph([["a", "b"], ["b", "c"]], true);
+	assert(reachableFrom(graph, "a", false).join(",") == "a");
+	assert(reachableFrom(graph, "c", true).join(",") == "c");
 }
