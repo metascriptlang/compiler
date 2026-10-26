@@ -43,6 +43,7 @@ import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
+import { lowerStringOps } from "./native/stringOpLower";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false): Node {
@@ -102,6 +103,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean): 
 	result = lowerUnionTags(result, ctx);
 	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
+	if (placed) result = lowerStringOps(result, ctx);
 	result = liftDestructors(result, ctx, placed);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
