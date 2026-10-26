@@ -455,7 +455,7 @@ function finalizeCfg(ctx: BuildCtx): Cfg {
 	return { instrs: ctx.cfg };
 }
 
-export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
+function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 	const ctx: BuildCtx = {
 		cfg: [],
 		rootSym,
@@ -468,9 +468,8 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 
 // ===== Alias-Aware Last-Read Query (Phase B) =====
 // Uses aliases() for field-level comparison.
-// Reference: isLastReadImpl with bidirectional alias checks.
 
-export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
+function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
 	if (queryNode == null) return false;
 	const instrs = cfg.instrs;
 	const len = instrs.length;

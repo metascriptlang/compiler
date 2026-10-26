@@ -56,7 +56,7 @@ function collectFieldsInto(body: string, out: string[]): void {
 	}
 }
 
-export function nodeFieldNames(src: string): string[] {
+function nodeFieldNames(src: string): string[] {
 	const out: string[] = [];
 	let pos = 0;
 	while (true) {
@@ -73,7 +73,7 @@ export function nodeFieldNames(src: string): string[] {
 	return out;
 }
 
-export function tableMentions(tableSrc: string, field: string): boolean {
+function tableMentions(tableSrc: string, field: string): boolean {
 	return tableSrc.indexOf("." + field, 0) >= 0;
 }
 

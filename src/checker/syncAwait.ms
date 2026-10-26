@@ -6,7 +6,7 @@ import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
 import { createState } from "../parser/cursor";
 
-export const JS_SYNC_AWAIT_MSG: string = "await in a function that is not async: the JS backend has no blocking wait, so every caller of this function would receive a Promise — declare it async and await its calls, or move this code to the module top level";
+const JS_SYNC_AWAIT_MSG: string = "await in a function that is not async: the JS backend has no blocking wait, so every caller of this function would receive a Promise — declare it async and await its calls, or move this code to the module top level";
 
 interface SaScope {
 	awaitAllowed: boolean;
@@ -51,7 +51,7 @@ function saWalk(node: Node, out: Node[], scope: SaScope, awaitingFns: Node[]): v
 	forEachChild(node, (child: Node): void => { saWalk(child, out, scope, awaitingFns); });
 }
 
-export function collectSyncAwait(program: Node): Node[] {
+function collectSyncAwait(program: Node): Node[] {
 	const out: Node[] = [];
 	if (program == null) return out;
 	saWalk(program, out, { awaitAllowed: true, reported: false }, []);
