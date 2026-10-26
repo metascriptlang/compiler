@@ -43,11 +43,11 @@
 // ternary branch is still left untouched (a flag rewrite can't express it), and
 // short-circuit in a VariableDecl/assignment initializer is left to the analyzer.
 
-import { Node, NodeKind, DeclKind, Symbol, SourceLocation, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, WhileStmtData, ConditionalExprData, Type, TypeKind } from "../../ast/node";
-import { isResult, isAwaitable, noneType, booleanType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, Symbol, SourceLocation, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, Type, TypeKind } from "../../ast/node";
+import { isResult, isAwaitable, noneType, booleanType, isBoolType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
-import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { moveWhileTestIntoBody, moveDoWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue } from "../util";
 
 // A boolean condition lowered to: run `pre` statements (unconditionally, in order),
@@ -147,6 +147,13 @@ function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocat
 	return makeBlock(stmts, loc);
 }
 
+// The flag holds a truth value, and an operand of another type reaches it through `!`, as on a
+// test: only the Raiser lowering leaves a string or a number a test operand.
+function asTruth(operand: Node, loc: SourceLocation): Node {
+	if (operand.nodeType != null && isBoolType(operand.nodeType)) return operand;
+	return makeUnary("!", makeUnary("!", operand, loc), loc);
+}
+
 // Lower a boolean condition that contains a fresh RC call in a SHORT-CIRCUIT
 // operand (`a && f().ok`, `a || f().ok`) into preceding statements + a pure flag,
 // preserving short-circuit evaluation. MetaScript has no statement-list expression
@@ -183,7 +190,8 @@ function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null 
 			flagDecl.nodeType = booleanType();
 			pre.push(flagDecl);
 			const guard = isAnd ? left.expr : makeUnary("!", left.expr, loc);
-			pre.push(makeIf(guard, assignBlock(flagSym, booleanType(), right, loc), null, loc));
+			const flagged: CondLower = { pre: right.pre, expr: asTruth(right.expr, loc) };
+			pre.push(makeIf(guard, assignBlock(flagSym, booleanType(), flagged, loc), null, loc));
 			const flagRef = makeIdentResolved(flagSym, loc);
 			flagRef.nodeType = booleanType();
 			return { pre, expr: flagRef };
@@ -299,9 +307,27 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 // per-iteration semantics hold and the fresh temp is destroyed at each iteration's exit.
 function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
-	const lowered = lowerBoolCond(wd.whileCondition, ctx);
+	const lowered = loopCondLowered(wd.whileCondition, ctx);
 	if (lowered == null) return [stmt];
 	moveWhileTestIntoBody(stmt, lowered.pre, lowered.expr);
+	return [stmt];
+}
+
+// A loop test the flag lowering cannot split (a counted `||` or `&&` value inside a comparison)
+// still moves into the body unchanged: a test in the body is an `if` condition, which the analyzer
+// walks, while the test of a loop is never walked and its temps would be written over each iteration.
+function loopCondLowered(cond: Node, ctx: TransformContext): CondLower | null {
+	const lowered = lowerBoolCond(cond, ctx);
+	if (lowered != null || !ctx.raiserBackend || !containsFreshRcCall(cond)) return lowered;
+	return { pre: [], expr: cond };
+}
+
+function expandDoWhile(stmt: Node, ctx: TransformContext): Node[] {
+	if (!ctx.raiserBackend) return [stmt];
+	const dd = stmt.data as DoWhileStmtData;
+	const lowered = loopCondLowered(dd.doCondition, ctx);
+	if (lowered == null) return [stmt];
+	moveDoWhileTestIntoBody(stmt, lowered.pre, lowered.expr, ctx);
 	return [stmt];
 }
 
@@ -311,6 +337,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		NodeKind.ExprStmt => expandAssign(stmt, ctx),
 		NodeKind.IfStmt => expandIf(stmt, ctx),
 		NodeKind.WhileStmt => expandWhile(stmt, ctx),
+		NodeKind.DoWhileStmt => expandDoWhile(stmt, ctx),
 		_ => [stmt],
 	};
 }
