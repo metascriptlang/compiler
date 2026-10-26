@@ -707,54 +707,103 @@ function fillPattern(this buf: Buffer, value: Buffer, first: int64, last: int64)
 	if (from < to) buf.fillRepeated(from, to, value.bytePointer(), patternLength);
 }
 
+// ===== Range contract =====
+// A read or write outside the buffer, an integer outside its width and a byteLength outside 1..6
+// throw the RangeError the Node Buffer throws; the C runtime would answer 0 or drop the write.
+
+function needBytes(buf: Buffer, offset: number, width: number): void {
+	const max = buf.byteLength - width;
+	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
+	if (!(offset >= 0 && offset <= max && offset % 1 == 0)) {
+		throw new RangeError(
+			`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${offset}`,
+		);
+	}
+}
+
+function needValue(value: number, lo: number, hi: number): void {
+	if (!(value >= lo && value <= hi)) {
+		throw new RangeError(
+			`The value of "value" is out of range. It must be >= ${lo} and <= ${hi}. Received ${value}`,
+		);
+	}
+}
+
+function needWidth(byteLength: number): void {
+	if (widthOrZero(byteLength) == 0) badByteLength(byteLength);
+}
+
+function needIntValue(value: number, byteLength: number, isSigned: boolean): void {
+	needWidth(byteLength);
+	let span: number = 1;
+	for (let k = 0; k < byteLength; k += 1) span *= 256;
+	const half = span / 2;
+	if (isSigned) needValue(value, -half, half - 1);
+	else needValue(value, 0, span - 1);
+}
+
 // --- Read Unsigned Integers ---
 
 export function readUInt8(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 1);
 	return buf.readField(offset, 1, false) as number;
 }
 export function readUInt16LE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 2);
 	return buf.readField(offset, 2, false) as number;
 }
 export function readUInt16BE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 2);
 	return buf.readField(offset, 2, true) as number;
 }
 export function readUInt32LE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.readField(offset, 4, false) as number;
 }
 export function readUInt32BE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.readField(offset, 4, true) as number;
 }
 
 // --- Read Signed Integers ---
 
 export function readInt8(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 1);
 	return buf.readSigned(offset, 1, false);
 }
 export function readInt16LE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 2);
 	return buf.readSigned(offset, 2, false);
 }
 export function readInt16BE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 2);
 	return buf.readSigned(offset, 2, true);
 }
 export function readInt32LE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.readSigned(offset, 4, false);
 }
 export function readInt32BE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.readSigned(offset, 4, true);
 }
 
 // --- Read Float/Double ---
 
 export function readFloatLE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return floatFromBits(buf.readField(offset, 4, false) as uint32) as number;
 }
 export function readFloatBE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 4);
 	return floatFromBits(buf.readField(offset, 4, true) as uint32) as number;
 }
 export function readDoubleLE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 8);
 	return doubleFromBits(buf.readField(offset, 8, false));
 }
 export function readDoubleBE(this buf: Buffer, offset: number): number {
+	needBytes(buf, offset, 8);
 	return doubleFromBits(buf.readField(offset, 8, true));
 }
 
@@ -762,15 +811,19 @@ export function readDoubleBE(this buf: Buffer, offset: number): number {
 
 when (!bare && !solana) {
 	export function readBigUInt64LE(this buf: Buffer, offset: number): bigint {
+		needBytes(buf, offset, 8);
 		return msBigIntFromUint64(buf.readField(offset, 8, false));
 	}
 	export function readBigUInt64BE(this buf: Buffer, offset: number): bigint {
+		needBytes(buf, offset, 8);
 		return msBigIntFromUint64(buf.readField(offset, 8, true));
 	}
 	export function readBigInt64LE(this buf: Buffer, offset: number): bigint {
+		needBytes(buf, offset, 8);
 		return msBigIntFromInt64(bitsToInt64(buf.readField(offset, 8, false)));
 	}
 	export function readBigInt64BE(this buf: Buffer, offset: number): bigint {
+		needBytes(buf, offset, 8);
 		return msBigIntFromInt64(bitsToInt64(buf.readField(offset, 8, true)));
 	}
 }
@@ -778,51 +831,75 @@ when (!bare && !solana) {
 // --- Write Unsigned Integers ---
 
 export function writeUInt8(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 255);
+	needBytes(buf, offset, 1);
 	return buf.writeField(value as int64, offset, 1, false);
 }
 export function writeUInt16LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 65535);
+	needBytes(buf, offset, 2);
 	return buf.writeField(value as int64, offset, 2, false);
 }
 export function writeUInt16BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 65535);
+	needBytes(buf, offset, 2);
 	return buf.writeField(value as int64, offset, 2, true);
 }
 export function writeUInt32LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 4294967295);
+	needBytes(buf, offset, 4);
 	return buf.writeField(value as int64, offset, 4, false);
 }
 export function writeUInt32BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 4294967295);
+	needBytes(buf, offset, 4);
 	return buf.writeField(value as int64, offset, 4, true);
 }
 
 // --- Write Signed Integers ---
 
 export function writeInt8(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -128, 127);
+	needBytes(buf, offset, 1);
 	return buf.writeField(value as int64, offset, 1, false);
 }
 export function writeInt16LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -32768, 32767);
+	needBytes(buf, offset, 2);
 	return buf.writeField(value as int64, offset, 2, false);
 }
 export function writeInt16BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -32768, 32767);
+	needBytes(buf, offset, 2);
 	return buf.writeField(value as int64, offset, 2, true);
 }
 export function writeInt32LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -2147483648, 2147483647);
+	needBytes(buf, offset, 4);
 	return buf.writeField(value as int64, offset, 4, false);
 }
 export function writeInt32BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -2147483648, 2147483647);
+	needBytes(buf, offset, 4);
 	return buf.writeField(value as int64, offset, 4, true);
 }
 
 // --- Write Float/Double ---
 
 export function writeFloatLE(this buf: Buffer, value: number, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.writeField(floatBits(value as float32) as int64, offset, 4, false);
 }
 export function writeFloatBE(this buf: Buffer, value: number, offset: number): number {
+	needBytes(buf, offset, 4);
 	return buf.writeField(floatBits(value as float32) as int64, offset, 4, true);
 }
 export function writeDoubleLE(this buf: Buffer, value: number, offset: number): number {
+	needBytes(buf, offset, 8);
 	return buf.writeField(bitsToInt64(doubleBits(value)), offset, 8, false);
 }
 export function writeDoubleBE(this buf: Buffer, value: number, offset: number): number {
+	needBytes(buf, offset, 8);
 	return buf.writeField(bitsToInt64(doubleBits(value)), offset, 8, true);
 }
 
@@ -830,15 +907,19 @@ export function writeDoubleBE(this buf: Buffer, value: number, offset: number): 
 
 when (!bare && !solana) {
 	export function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number {
+		needBytes(buf, offset, 8);
 		return buf.writeField(msBigIntToInt64(BigInt.asUintN(64, value)), offset, 8, false);
 	}
 	export function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number {
+		needBytes(buf, offset, 8);
 		return buf.writeField(msBigIntToInt64(BigInt.asUintN(64, value)), offset, 8, true);
 	}
 	export function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number {
+		needBytes(buf, offset, 8);
 		return buf.writeField(msBigIntToInt64(BigInt.asIntN(64, value)), offset, 8, false);
 	}
 	export function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number {
+		needBytes(buf, offset, 8);
 		return buf.writeField(msBigIntToInt64(BigInt.asIntN(64, value)), offset, 8, true);
 	}
 }
@@ -947,15 +1028,23 @@ function writeVariable(
 }
 
 export function readUIntLE(this buf: Buffer, offset: number, byteLength: number): number {
+	needWidth(byteLength);
+	needBytes(buf, offset, byteLength);
 	return buf.readVariable(offset, byteLength, false, false);
 }
 export function readUIntBE(this buf: Buffer, offset: number, byteLength: number): number {
+	needWidth(byteLength);
+	needBytes(buf, offset, byteLength);
 	return buf.readVariable(offset, byteLength, true, false);
 }
 export function readIntLE(this buf: Buffer, offset: number, byteLength: number): number {
+	needWidth(byteLength);
+	needBytes(buf, offset, byteLength);
 	return buf.readVariable(offset, byteLength, false, true);
 }
 export function readIntBE(this buf: Buffer, offset: number, byteLength: number): number {
+	needWidth(byteLength);
+	needBytes(buf, offset, byteLength);
 	return buf.readVariable(offset, byteLength, true, true);
 }
 export function writeUIntLE(
@@ -964,6 +1053,8 @@ export function writeUIntLE(
 	offset: number,
 	byteLength: number,
 ): number {
+	needIntValue(value, byteLength, false);
+	needBytes(buf, offset, byteLength);
 	return buf.writeVariable(value, offset, byteLength, false);
 }
 export function writeUIntBE(
@@ -972,6 +1063,8 @@ export function writeUIntBE(
 	offset: number,
 	byteLength: number,
 ): number {
+	needIntValue(value, byteLength, false);
+	needBytes(buf, offset, byteLength);
 	return buf.writeVariable(value, offset, byteLength, true);
 }
 export function writeIntLE(
@@ -980,6 +1073,8 @@ export function writeIntLE(
 	offset: number,
 	byteLength: number,
 ): number {
+	needIntValue(value, byteLength, true);
+	needBytes(buf, offset, byteLength);
 	return buf.writeVariable(value, offset, byteLength, false);
 }
 export function writeIntBE(
@@ -988,5 +1083,7 @@ export function writeIntBE(
 	offset: number,
 	byteLength: number,
 ): number {
+	needIntValue(value, byteLength, true);
+	needBytes(buf, offset, byteLength);
 	return buf.writeVariable(value, offset, byteLength, true);
 }
