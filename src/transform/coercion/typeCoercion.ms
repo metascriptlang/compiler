@@ -1,5 +1,4 @@
-// Type Coercion Lowering — transforms String(x) → x.toString()
-// Follows reference type_coercion.zig
+// String(x) becomes x.toString().
 
 import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -7,31 +6,24 @@ import { walkNode } from "../walker";
 import { makeMember, makeCall, callBuiltinKind } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
-// ===== Main Entry Point =====
-
 export function lowerTypeCoercion(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, lowerCoercionNode);
 }
-
-// ===== Visitor =====
 
 function lowerCoercionNode(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	const d = node.data as CallExprData;
 
-	// Only transform String(x) with exactly 1 argument
 	if (callBuiltinKind(node) != "ToString") return node;
 	if (d.arguments.length != 1) return node;
 
 	const loc = node.location;
-	// String(x) → x.toString()
 	const toStringCallee = makeMember(d.arguments[0], "toString", loc);
 	const call = makeCall(toStringCallee, [], loc);
 	call.nodeType = node.nodeType;
 	return call;
 }
 
-// ===== Tests =====
 test "String(x) becomes call" { assert firstExprKindAfter("String(x);", lowerTypeCoercion) == NodeKind.CallExpr; }
 
 test "Number(x) unchanged" { assert firstExprKindAfter("Number(x);", lowerTypeCoercion) == NodeKind.CallExpr; }
