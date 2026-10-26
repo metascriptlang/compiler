@@ -35,7 +35,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserRefUnion } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -879,6 +879,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				}
 				return;
 			}
+			if (lctx.raiserBackend && raiserRefUnion(fieldType)) {
+				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
+				return;
+			}
 			// Pure strlit union is msString-backed (see isTaggedUnion below) —
 			// same ops as a String field, never named tagged-union hooks.
 			if (isStringLike(fieldType)) {
@@ -1415,7 +1419,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
 		const firstOwn = owner != null ? owner.typeNames.length : 0;
 		if (objType.kind == TypeKind.Union) {
-			if (isPrimitiveOnlyUnion(objType)) {
+			if (lctx.raiserBackend && raiserRefUnion(objType)) {
+				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
+			} else if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
 				generateUnionArms(hook, cName, objType, s1, s2, lctx, buf, loc);
@@ -1642,6 +1648,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	for (const field of objType.typeChildren) propagateToOwner(objType, field);
 	if (userHook) objType.typeFlags = objType.typeFlags.incl(TypeFlag.HasAsgn);
 	if (hasAsgnFlag(objType)) orig.typeFlags = orig.typeFlags.incl(TypeFlag.HasAsgn);
+	if (lctx.raiserBackend && !userHook && objType.kind == TypeKind.Union && raiserRefUnion(objType)) {
+		nameSetAdd(lctx.trivial, typeId);
+		return;
+	}
 	if (!needsHooks && !userHook) {
 		const isPlainValueAggregate = !isClassOrInterface
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));

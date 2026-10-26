@@ -7,6 +7,7 @@
 
 import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym, generatedProcSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
@@ -240,6 +241,16 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 	return noRcInfo();
 }
 
+// A Raiser union whose members are all class refs stays the member's handle, with no tag beside it.
+export function raiserRefUnion(t: Type): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	for (const child of t.typeChildren) {
+		if (child.kind != TypeKind.Ref || isAtomicRef(child)) return false;
+		if (child.sym != null && child.sym.symbolKind == SymbolKind.Actor) return false;
+	}
+	return true;
+}
+
 // A Raiser struct is a heap cell until typed memory lays structs inline, so a struct with no hook of its own
 // still has a cell to release, copy and move.
 function structCellInfo(): RcInfo {
@@ -357,6 +368,10 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// hooks for a typedef that never exists.
 			if (isAllStringLiteralUnion(t)) {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
+			}
+			if (ctx.raiserBackend && raiserRefUnion(t) && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
+				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
 			if (t.typeName != "" && hasAsgnFlag(t)) {
 				return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
