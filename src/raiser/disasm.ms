@@ -157,6 +157,10 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.NeVal => "NeVal",
 		RaiserOpcode.Box => "Box",
 		RaiserOpcode.Unbox => "Unbox",
+		RaiserOpcode.RcInc => "RcInc",
+		RaiserOpcode.RcDec => "RcDec",
+		RaiserOpcode.WasMoved => "WasMoved",
+		RaiserOpcode.DestroyValue => "DestroyValue",
 	};
 }
 
@@ -193,6 +197,8 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const name = opName(op);
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
+	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved || op == RaiserOpcode.DestroyValue) return `${name} ${ra}`;
+	if (op == RaiserOpcode.RcDec) return inst.b == 1 ? `${name} ${ra} cyclic` : `${name} ${ra}`;
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
 	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
 	if (isBranchI64(op)) return `${name} ${ra} ${isBranchImm(op) ? `#${immValue(inst.b)}` : regText(op, 1, inst.b)} ->${branchOffset(inst.c)}`;
@@ -256,6 +262,14 @@ test "disasmFunc includes constant annotations" {
 	const s = disasmFunc(entry);
 	assert s.length > 0;
 	// Should contain "LoadConst" and the constant value annotation
+}
+
+test "the reference-count opcodes print their register and the cyclic flag" {
+	assert disasmInst(raiserABC(RaiserOpcode.RcInc, 3, 0, 0)) == "RcInc R3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 0, 0)) == "RcDec R3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 1, 0)) == "RcDec R3 cyclic";
+	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, 1, 0, 0)) == "WasMoved R1";
+	assert disasmInst(raiserABC(RaiserOpcode.DestroyValue, 1, 0, 0)) == "DestroyValue R1";
 }
 
 test "immediate operands print as numbers" {
