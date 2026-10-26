@@ -4,7 +4,8 @@
 //   lowerConstFold before lowerMatch (patterns resolved)
 
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
-import { Node } from "../ast/node";
+import { Node, NodeKind, CallExprData } from "../ast/node";
+import { walkNode } from "./walker";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
@@ -44,7 +45,7 @@ import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
-import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
+import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
@@ -58,8 +59,17 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext, pl
 	}
 }
 
+function dropUnionTextMemberTexts(program: Node): Node {
+	return walkNode(program, (n: Node): Node => {
+		if (n.kind != NodeKind.CallExpr) return n;
+		const kind = callBuiltinKind(n);
+		if (kind == "UnionText" || kind == "UnionDebug") (n.data as CallExprData).arguments.shrink(1);
+		return n;
+	});
+}
+
 function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean): Node {
-	let result = planModuleTdz(program, ctx);
+	let result = dropUnionTextMemberTexts(planModuleTdz(program, ctx));
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
