@@ -50,9 +50,13 @@ function emitPlaceStore(s: RaiserCompState, name: string, place: Node, value: in
 	throw new Error(`internal: ${name} stores into a ${place.kind.toString()}, which Raiser has no store for`);
 }
 
+function localOfPlace(s: RaiserCompState, place: Node): int32 {
+	return place.kind == NodeKind.Identifier && resolveGlobal(s, place.resolvedSym) < 0 ? resolveLocal(s, place.resolvedSym) : -1;
+}
+
 function emitClear(s: RaiserCompState, name: string, arg: Node): void {
 	const place = placeOf(arg);
-	const local = place.kind == NodeKind.Identifier && resolveGlobal(s, place.resolvedSym) < 0 ? resolveLocal(s, place.resolvedSym) : -1;
+	const local = localOfPlace(s, place);
 	if (local >= 0) {
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
 		return;
@@ -219,6 +223,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		return true;
 	}
 	if (isCellHook(d, SymbolFlag.WasMovedOp)) {
+		const movedByHook = s.hookMovedAt == codeLen(s) && s.hookMovedReg == localOfPlace(s, placeOf(d.arguments[0]));
 		const held = refRegister(s, d.callee.resolvedSym!.name, d.arguments[0]);
 		const isNil = allocBool(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, held, RaiserValueKind.Nil as number));
@@ -226,6 +231,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		const toEnd = emitJumpPlaceholder(s);
 		patchJumpTo(s, callHook, codeLen(s));
 		compileExpr(s, call);
+		if (movedByHook) emitInst(s, raiserABC(RaiserOpcode.WasMoved, held, 1, 0));
 		patchJumpTo(s, toEnd, codeLen(s));
 		return true;
 	}
@@ -240,6 +246,18 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		return true;
 	}
 	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);
+	if (isLiftedCellOp(d, AttachedOp.AttachedSink)) {
+		compileExpr(s, call);
+		const source = localOfPlace(s, placeOf(d.arguments[1]));
+		if (source >= 0) {
+			if (userHookOf(placeOf(d.arguments[1]).nodeType!, AttachedOp.AttachedWasMoved) == null) emitInst(s, raiserABC(RaiserOpcode.WasMoved, source, 1, 0));
+			else {
+				s.hookMovedAt = codeLen(s);
+				s.hookMovedReg = source;
+			}
+		}
+		return true;
+	}
 	const row = ownershipRow(d.callee.resolvedSym);
 	if (row == 0) return false;
 	const name = ownershipName(d.callee.resolvedSym);

@@ -135,6 +135,8 @@ export interface RaiserCompState {
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
 	receiverReg: int32;
+	hookMovedAt: int32;    // codeLen right after a user move hook took a local, and that local: the user wasMoved hook statement that follows frees its cell
+	hookMovedReg: int32;
 	tries: RaiserTryInfo[];
 	cellNodes: Node[];
 	cellRegs: int32[];
@@ -153,7 +155,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [], cellNodes: [], cellRegs: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, tries: [], cellNodes: [], cellRegs: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
