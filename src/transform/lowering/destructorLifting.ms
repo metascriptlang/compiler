@@ -1074,11 +1074,16 @@ function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void 
 // ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
 
 function getUserDefinedHookSym(type: Type, op: AttachedOp, lctx: LiftCtx): Symbol | null {
+	if (lctx.checkerCtx == null) return lookupInstanceHook(type, op);
+	return userHookOf(type, op);
+}
+
+export function userHookOf(type: Type, op: AttachedOp): Symbol | null {
 	const instHook = lookupInstanceHook(type, op);
 	if (instHook != null) return instHook;
 	const declared = unwrapRef(type);
 	const declSym = declared.sym;
-	if (declSym == null || declared.kind == TypeKind.GenericInstance || declSym.instantiatedFrom != null || lctx.checkerCtx == null) return null;
+	if (declSym == null || declared.kind == TypeKind.GenericInstance || declSym.instantiatedFrom != null) return null;
 	return getAttachedOp(unwrapRef(declSym.symbolType), op);
 }
 
