@@ -41,6 +41,13 @@ function laidChildrenOf(plan: RaiserCopyPlan, cls: RaiserClassType): int32[] {
 	return children;
 }
 
+// A copy that is a fresh cell already holds the count its allocation gave it when that count is 1 (a placed module);
+// an alias of the original, and every copy under counting by the VM, takes one more.
+function holdCopied(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, original: RaiserValue, copied: RaiserValue): void {
+	if (arrays.allocRc > 0 && copied.intVal != original.intVal) return;
+	rcIncref(arrays, objects, copied);
+}
+
 // A fully laid object copies slot by slot: word, float and bool slots as their bits, the others through their plan child.
 function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: RaiserObjectData, plans: RaiserCopyPlan[], plan: RaiserCopyPlan): RaiserValue {
 	const cls = source.classType;
@@ -51,10 +58,11 @@ function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: Ra
 	for (let f = 0; f < children.length; f += 1) {
 		const kind = cls.kinds[f];
 		if (kind == RaiserRegClass.Ref || kind == RaiserRegClass.Dyn) {
-			let copied = fieldValueAt(source, f);
-			if (children[f] >= 0) copied = copyTypedValue(arrays, objects, copied, plans, children[f]);
+			const original = fieldValueAt(source, f);
+			let copied = original;
+			if (children[f] >= 0) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
 			fieldStoreAt(objects.objects[at], f, copied);
-			rcIncref(arrays, objects, copied);
+			holdCopied(arrays, objects, original, copied);
 		} else {
 			objects.objects[at].slots[f] = source.slots[f];
 		}
@@ -77,9 +85,10 @@ export function copyTypedValue(
 		const handle = heapAllocArrayOf(arrays, arrayBaseOf(arrays, arrays.arrays[handleIndex(value.intVal)]).elemClass);
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
-			const copied = copyTypedValue(arrays, objects, heapArrayGet(arrays, value.intVal, i), plans, plan.children[0]);
+			const original = heapArrayGet(arrays, value.intVal, i);
+			const copied = copyTypedValue(arrays, objects, original, plans, plan.children[0]);
 			heapArrayPush(arrays, handle, copied);
-			rcIncref(arrays, objects, copied);
+			holdCopied(arrays, objects, original, copied);
 		}
 		return raiserArray(handle);
 	}
@@ -93,15 +102,16 @@ export function copyTypedValue(
 		const count = objectFieldCount(source);
 		for (let f = 0; f < count; f += 1) {
 			const name = fieldNameAt(source, f);
-			let copied = fieldValueAt(source, f);
+			const original = fieldValueAt(source, f);
+			let copied = original;
 			for (let i = 0; i < plan.names.length; i += 1) {
 				if (plan.names[i] == name) {
-					copied = copyTypedValue(arrays, objects, copied, plans, plan.children[i]);
+					copied = copyTypedValue(arrays, objects, original, plans, plan.children[i]);
 					break;
 				}
 			}
 			appendField(objects.objects[handleIndex(handle)], name, copied);
-			rcIncref(arrays, objects, copied);
+			holdCopied(arrays, objects, original, copied);
 		}
 		return raiserObject(handle);
 	}
