@@ -183,7 +183,7 @@ function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null 
 			flagDecl.nodeType = booleanType();
 			pre.push(flagDecl);
 			const guard = isAnd ? left.expr : makeUnary("!", left.expr, loc);
-			pre.push(makeIf(guard, assignBlock(flagSym, booleanType(), right, loc), null as unknown as Node, loc));
+			pre.push(makeIf(guard, assignBlock(flagSym, booleanType(), right, loc), null, loc));
 			const flagRef = makeIdentResolved(flagSym, loc);
 			flagRef.nodeType = booleanType();
 			return { pre, expr: flagRef };
