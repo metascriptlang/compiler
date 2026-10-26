@@ -1,5 +1,4 @@
 // Result Desugar — transforms TryExpr → VariableDecl + IfStmt + value extraction
-// Follows reference result_desugar.zig
 //
 // Case 1: const x = try f();
 //   → const $result_0 = f();
@@ -19,39 +18,38 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
-import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, BlockStmtData, ReturnStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
+import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType, createResult, numberType, stringType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { newSym } from "../../checker/context";
 import { widenVariantToUnion } from "../../checker/fit";
 import { TransformContext, freshTempSym, mintingChecker } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind } from "../walker";
+import { hoistStmtValue } from "../blockExpand";
 import { hoistGuarded, lowerGuardedTernary, expandConditionStmt, KindHoister } from "../lowering/guardedLower";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
 	makeExprStmt, makeOwningTryCatch, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
 } from "../util";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Helpers: Typed Result Access =====
 
-// Create a member access on a Result variable with resolvedSym for the property.
-// Property type comes from `getResultOkType` (T) / `getResultErrType` (E).
 function makeResultMember(ctx: TransformContext, sym: Symbol, resType: Type | null, propName: string, loc: SourceLocation): Node {
-	const ref = makeIdentResolved(sym, loc);
-	const mem = makeMember(ref, propName, loc);
-
-	if (resType != null && isResult(resType)) {
-		let propType: Type = noneType();
-		if (propName == "ok") { propType = booleanType(); }
-		else if (propName == "value") { const okType = getResultOkType(resType); propType = okType != null ? okType : noneType(); }
-		else if (propName == "error") { const errType = getResultErrType(resType); propType = errType != null ? errType : noneType(); }
-		mem.nodeType = propType;
-		const propSym = newSym(mintingChecker(ctx, propName), SymbolKind.Property, propName, propType);
-		propSym.state = SymbolState.Shaped;
-		mem.resolvedSym = propSym;
-	}
+	const mem = makeMember(makeIdentResolved(sym, loc), propName, loc);
+	if (resType == null || !isResult(resType)) return mem;
+	const propType: Type | null = match (propName) {
+		"ok" => booleanType(),
+		"value" => getResultOkType(resType),
+		"error" => getResultErrType(resType),
+		_ => null,
+	};
+	if (propType == null) throw new Error(`internal: Result '${sym.name}' has no '${propName}' type`);
+	mem.nodeType = propType;
+	const propSym = newSym(mintingChecker(ctx, propName), SymbolKind.Property, propName, propType);
+	propSym.state = SymbolState.Shaped;
+	mem.resolvedSym = propSym;
 	return mem;
 }
 
@@ -106,15 +104,11 @@ function rewriteResultCall(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
 	const kind = callBuiltinKind(node);
-	const loc = node.location;
-
-	if (kind == "ResultOk") {
-		return makeResultOk(cd.arguments, node.nodeType!, loc);
-	}
-	if (kind == "ResultErr" && cd.arguments.length == 1) {
-		return makeResultErr(cd.arguments[0], node.nodeType!, loc);
-	}
-	return node;
+	const isOk = kind == "ResultOk";
+	if (!isOk && !(kind == "ResultErr" && cd.arguments.length == 1)) return node;
+	const resType = node.nodeType;
+	if (resType == null) throw new Error("internal: a Result constructor call reached lowering untyped");
+	return isOk ? makeResultOk(cd.arguments, resType, node.location) : makeResultErr(cd.arguments[0], resType, node.location);
 }
 
 // Shared helpers for Result construction — used by both rewriteResultCall and makeErrorCheck.
@@ -141,7 +135,7 @@ function makeResultOk(args: Node[], resType: Type, loc: SourceLocation): Node {
 	return lit;
 }
 
-function makeResultErr(errExpr: Node, resType: Type, loc: SourceLocation): Node {
+function makeResultErr(errExpr: Node, resType: Type | null, loc: SourceLocation): Node {
 	const lit = makeObjectLiteral(["ok", "error"], [makeBool(false, loc), errExpr], loc);
 	lit.nodeType = resType;
 	return lit;
@@ -217,7 +211,7 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext, run: Tr
 			} else if (joinedT != null && joinedT.kind == TypeKind.Union
 				&& valueAccess.nodeType != null && valueAccess.nodeType.kind != TypeKind.Union) {
 				const widened = widenVariantToUnion(valueAccess, joinedT, valueAccess.nodeType);
-				if (widened != null as unknown as Node) okBranch = widened;
+				if (widened != null) okBranch = widened;
 			}
 		}
 		const condExpr = makeConditional(okCheck, okBranch, tryData.catchVal, loc);
@@ -227,7 +221,7 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext, run: Tr
 	}
 
 	// if (!$result.ok) { return { ok: false, error: $result.error }; }
-	hoisted.push(makeErrorCheck(sym, resType!, run.enclosingFnRetType, loc, ctx, node.resolvedSym));
+	hoisted.push(makeErrorCheck(sym, resType, run.enclosingFnRetType, loc, ctx, node.resolvedSym));
 
 	// Replace TryExpr with $result.value. For `Result<void, E>` the v0
 	// variant has no `value` field — synthesize a void placeholder
@@ -242,36 +236,12 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext, run: Tr
 	return makeResultMember(ctx, sym, resType, "value", loc);
 }
 
-// Expand a single statement — unified through hoistTryExpr.
-// Matches reference desugarStatement: all cases dispatch to desugarExpression.
 function expandStmt(stmt: Node, ctx: TransformContext, run: TryRun, hoistOne: KindHoister): Node[] {
 	match (stmt.kind) {
-		NodeKind.VariableDecl => {
-			const d = stmt.data as VariableDeclData;
-			if (d.initializer != null && containsExprKind(d.initializer, NodeKind.TryExpr)) {
-				const hoisted: Node[] = [];
-				d.initializer = hoistTryExpr(d.initializer, hoisted, ctx, run);
-				hoisted.push(stmt);
-				return hoisted;
-			}
-		},
-		NodeKind.ReturnStmt => {
-			const d = stmt.data as ReturnStmtData;
-			if (d.argument != null && containsExprKind(d.argument, NodeKind.TryExpr)) {
-				const hoisted: Node[] = [];
-				d.argument = hoistTryExpr(d.argument, hoisted, ctx, run);
-				hoisted.push(stmt);
-				return hoisted;
-			}
-		},
-		NodeKind.ExprStmt => {
-			const d = stmt.data as ExprStmtData;
-			if (containsExprKind(d.expr, NodeKind.TryExpr)) {
-				const hoisted: Node[] = [];
-				d.expr = hoistTryExpr(d.expr, hoisted, ctx, run);
-				hoisted.push(stmt);
-				return hoisted;
-			}
+		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ExprStmt => {
+			return hoistStmtValue(stmt, (value: Node, pre: Node[], c: TransformContext): Node => {
+				return containsExprKind(value, NodeKind.TryExpr) ? hoistTryExpr(value, pre, c, run) : value;
+			}, ctx);
 		},
 		NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt | NodeKind.SwitchStmt | NodeKind.AssertStmt => {
 			return expandConditionStmt(stmt, NodeKind.TryExpr, hoistOne, ctx);
@@ -284,7 +254,7 @@ function expandStmt(stmt: Node, ctx: TransformContext, run: TryRun, hoistOne: Ki
 // Build: if (!$result.ok) { return { ok: false, error: $result.error }; }
 // Uses enclosingFnRetType for the return literal's type (not resType) so the error-path
 // return matches the function's signature (e.g. Result<void, string>, not Result<Person, string>).
-function makeErrorCheck(sym: Symbol, resType: Type, enclosingFnRetType: Type | null, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
+function makeErrorCheck(sym: Symbol, resType: Type | null, enclosingFnRetType: Type | null, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
 	const okAccess = makeResultMember(ctx, sym, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
@@ -308,11 +278,6 @@ function makeErrorCheck(sym: Symbol, resType: Type, enclosingFnRetType: Type | n
 }
 
 // ===== Tests =====
-import { ReturnStmtData as RetData, BlockStmtData } from "../../ast/node";
-import { makeCtx } from "../testUtil";
-import { TypeKind as TK } from "../../ast/node";
-import { createResult, numberType, stringType } from "../../checker/types";
-
 // --- Structural tests (pipeline output shape) ---
 
 test "var decl try expands to 3 stmts" { assert stmtCountAfter("const x = try f;", lowerTryExpr) == 3; }
@@ -343,7 +308,7 @@ test "makeResultMember sets correct type for .value" {
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
 	const mem = makeResultMember(makeCtx(), sym, resType, "value", loc);
 	assert mem.nodeType != null;
-	assert mem.nodeType.kind == TK.Number;
+	assert mem.nodeType.kind == TypeKind.Number;
 	assert mem.resolvedSym != null;
 }
 
@@ -353,15 +318,28 @@ test "makeResultMember sets correct type for .error" {
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
 	const mem = makeResultMember(makeCtx(), sym, resType, "error", loc);
 	assert mem.nodeType != null;
-	assert mem.nodeType.kind == TK.String;
+	assert mem.nodeType.kind == TypeKind.String;
 	assert mem.resolvedSym != null;
 }
 
-test "makeResultMember with null resType is graceful" {
-	const loc = makeLoc(0, 0);
+test "makeResultMember leaves a member of an untyped operand untyped" {
 	const sym = makeSymbol("$r", SymbolKind.Variable, noneType(), false);
-	const mem = makeResultMember(makeCtx(), sym, null, "ok", loc);
+	const mem = makeResultMember(makeCtx(), sym, null, "ok", makeLoc(0, 0));
 	assert mem.kind == NodeKind.MemberExpr;
+	assert mem.nodeType == null;
+	assert mem.resolvedSym == null;
+}
+
+test "makeResultMember refuses a member a Result does not have" {
+	const resType = createResult(numberType(), stringType());
+	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
+	let refused = false;
+	try {
+		makeResultMember(makeCtx(), sym, resType, "present", makeLoc(0, 0));
+	} catch (e) {
+		refused = true;
+	}
+	assert refused;
 }
 
 test "makeErrorCheck produces IfStmt with return" {
@@ -384,7 +362,7 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const ifNode = makeErrorCheck(sym, resType, null, loc, makeCtx());
 	const ifData = ifNode.data as IfStmtData;
 	const thenBlock = ifData.consequent.data as BlockStmtData;
-	const retData = thenBlock.statements[0].data as RetData;
+	const retData = thenBlock.statements[0].data as ReturnStmtData;
 	assert retData.argument.nodeType != null;
 	assert retData.argument.nodeType != null;
 }
