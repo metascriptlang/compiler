@@ -11,55 +11,49 @@ import { findChar } from "../utils/string";
 import { error as errStyle, bold, cyan, dim } from "../utils/color";
 
 
+function homeDir(): string | null {
+	const home = env.get("HOME");
+	if (home != "") return home;
+	const profile = env.get("USERPROFILE");
+	return profile != "" ? profile : null;
+}
+
 export function globalManifestRoot(): string {
-	let home = env.get("HOME");
-	if (home == "") home = env.get("USERPROFILE");
-	if (home == "") return "";
-	return join(home, ".metascript/global");
+	const home = homeDir();
+	return home == null ? "" : join(home, ".metascript/global");
 }
 
 function dirEntryName(entry: string): string {
-	if (entry.length > 1 && entry.charAt(entry.length - 1) == "/") {
+	if (entry.length > 1 && entry.endsWith("/")) {
 		return entry.slice(0, entry.length - 1);
 	}
 	return entry;
 }
 
 function searchRoots(projectRoot: string): { keys: string[], values: string[] } {
-	const keys: string[] = [];
-	const values: string[] = [];
 	const local = depRoots(projectRoot);
-	let i = 0;
-	while (i < local.keys.length) {
-		keys.push(local.keys[i]);
-		values.push(local.values[i]);
-		i = i + 1;
-	}
+	const keys = local.keys.slice(0, local.keys.length);
+	const values = local.values.slice(0, local.values.length);
 	const globalRoot = globalManifestRoot();
 	if (globalRoot != "" && globalRoot != projectRoot && exists(join(globalRoot, "build.ms"))) {
 		const globals = depRoots(globalRoot);
-		let g = 0;
-		while (g < globals.keys.length) {
-			let seen = false;
-			for (const v of values) { if (v == globals.values[g]) seen = true; }
-			if (!seen) {
+		for (let g = 0; g < globals.keys.length; g++) {
+			if (!values.includes(globals.values[g])) {
 				keys.push(globals.keys[g]);
 				values.push(globals.values[g]);
 			}
-			g = g + 1;
 		}
 	}
 	return { keys, values };
 }
 
-export function declaredCommands(projectRoot: string): { commands: string[], packages: string[], roots: string[], entries: string[] } {
+function declaredCommands(projectRoot: string): { commands: string[], packages: string[], roots: string[], entries: string[] } {
 	const commands: string[] = [];
 	const packages: string[] = [];
 	const roots: string[] = [];
 	const entries: string[] = [];
 	const found = searchRoots(projectRoot);
-	let i = 0;
-	while (i < found.keys.length) {
+	for (let i = 0; i < found.keys.length; i++) {
 		const root = found.values[i];
 		const depBuild = join(root, "build.ms");
 		if (exists(depBuild)) {
@@ -74,7 +68,6 @@ export function declaredCommands(projectRoot: string): { commands: string[], pac
 				}
 			}
 		}
-		i = i + 1;
 	}
 	return { commands, packages, roots, entries };
 }
@@ -84,22 +77,16 @@ export function projectShimDir(projectRoot: string): string {
 }
 
 export function globalShimDir(): string {
-	let home = env.get("HOME");
-	if (home == "") home = env.get("USERPROFILE");
-	if (home == "") return "";
-	return join(home, join(".metascript", "bin"));
+	const home = homeDir();
+	return home == null ? "" : join(home, join(".metascript", "bin"));
 }
 
-export function pruneStaleShims(shimDir: string, keep: string[]): int32 {
+function pruneStaleShims(shimDir: string, keep: string[]): int32 {
 	if (!exists(shimDir)) return 0;
 	let pruned = 0;
 	for (const rawEntry of readDir(shimDir)) {
 		const entry = dirEntryName(rawEntry);
-		let isKeep = false;
-		for (const k of keep) {
-			if (k == entry) isKeep = true;
-		}
-		if (isKeep) continue;
+		if (keep.includes(entry)) continue;
 		const shimPath = join(shimDir, entry);
 		const content = try readFile(shimPath) catch "";
 		if (isShim(content)) {
@@ -118,23 +105,19 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 	}
 
 	let ok = true;
-	let i = 0;
-	while (i < declared.commands.length) {
+	for (let i = 0; i < declared.commands.length; i++) {
 		const cmd = declared.commands[i];
 		const nameErr = commandNameError(cmd);
-		if (nameErr != "") {
+		if (nameErr != null) {
 			console.log(`${errStyle("error")}: ${declared.packages[i]}: ${nameErr}`);
 			ok = false;
 		}
-		let j = 0;
-		while (j < i) {
+		for (let j = 0; j < i; j++) {
 			if (declared.commands[j] == cmd) {
 				console.log(`${errStyle("error")}: ${bold(cmd)} is declared by both ${declared.packages[j]} and ${declared.packages[i]}`);
 				ok = false;
 			}
-			j = j + 1;
 		}
-		i = i + 1;
 	}
 	if (!ok) {
 		console.log("no command was installed");
@@ -144,8 +127,7 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 	ensureDir(shimDir);
 	const keep: string[] = [];
 	let written = 0;
-	let s = 0;
-	while (s < declared.commands.length) {
+	for (let s = 0; s < declared.commands.length; s++) {
 		const cmd = declared.commands[s];
 		const name = shimFileName(cmd);
 		keep.push(name);
@@ -166,7 +148,6 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 		chmod(shimPath, SHIM_MODE);
 		console.log(`  ${cyan(cmd)} ${dim(`(${declared.packages[s]})`)}`);
 		written = written + 1;
-		s = s + 1;
 	}
 	console.log(`${written.toString()} command(s) installed in ${dim(shimDir)}`);
 	const pruned = pruneStaleShims(shimDir, keep);
@@ -213,8 +194,7 @@ export function cmdInstallGlobal(spec: string): boolean {
 		}
 	}
 	if (spec != "") {
-		const addArgs: string[] = [spec];
-		if (!cmdAdd(root, addArgs)) return false;
+		if (!cmdAdd(root, [spec])) return false;
 	}
 	return syncShims(root, shimDir);
 }
@@ -229,10 +209,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 			return false;
 		}
 		console.log(bold("commands:"));
-		let d = 0;
-		while (d < declared.commands.length) {
+		for (let d = 0; d < declared.commands.length; d++) {
 			console.log(`  ${cyan(declared.commands[d])} ${dim(`(${declared.packages[d]})`)}`);
-			d = d + 1;
 		}
 		return false;
 	}
@@ -243,20 +221,16 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 	const wantCmd = colon >= 0 ? spec.slice(colon + 1, spec.length) : spec;
 
 	const hits: int32[] = [];
-	let i = 0;
-	while (i < declared.commands.length) {
+	for (let i = 0; i < declared.commands.length; i++) {
 		if (declared.commands[i] == wantCmd && (wantPkg == "" || declared.packages[i] == wantPkg)) {
 			hits.push(i);
 		}
-		i = i + 1;
 	}
 
 	if (hits.length == 0) {
 		console.log(`${errStyle("error")}: no dependency declares the command ${bold(wantCmd)}`);
 		if (declared.commands.length > 0) {
-			let known = "";
-			for (const c of declared.commands) { known = known == "" ? c : `${known}, ${c}`; }
-			console.log(`declared here: ${known}`);
+			console.log(`declared here: ${declared.commands.join(", ")}`);
 		}
 		return false;
 	}
@@ -278,15 +252,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 		return false;
 	}
 
-	const forwarded: string[] = [];
-	let f = 1;
-	while (f < args.length) {
-		forwarded.push(args[f]);
-		f = f + 1;
-	}
-
 	opts.projectRoot = root;
-	opts.extraArgs = forwarded;
+	opts.extraArgs = args.slice(1, args.length);
 	cmdRunRaiser(entryPath, opts, loadBuildConfig(join(root, "build.ms"), false).resolve, wantCmd);
 	return true;
 }
