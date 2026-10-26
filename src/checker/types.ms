@@ -5,6 +5,7 @@ import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLitera
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty } from "../codegen/c/names";
 import { resolveRuntimeDir } from "../utils/path";
+import { isAssignable } from "./compat";
 import { join, normalize } from "std/fs/path";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
@@ -2778,27 +2779,17 @@ function conditionalFor(t: Type, check: Type, params: Type[], concretes: Type[])
 		}
 		const inferredExt = substituteBound(ext, bindings);
 		if (hasGenericParams(inferredExt)) return t;
-		if (!isAssignableForConditional(check, inferredExt)) return branchFor(t.typeChildren[3], params, concretes);
+		if (!isAssignable(check, inferredExt)) return branchFor(t.typeChildren[3], params, concretes);
 		for (let i = 0; i < params.length; i += 1) bindParam(bindings, params[i], concretes[i]);
 		return substituteBound(t.typeChildren[2], bindings);
 	}
-	return branchFor(isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3], params, concretes);
+	return branchFor(isAssignable(check, ext) ? t.typeChildren[2] : t.typeChildren[3], params, concretes);
 }
 
 function branchFor(branch: Type, params: Type[], concretes: Type[]): Type {
 	return params.length > 0 ? substituteParams(branch, params, concretes) : branch;
 }
 
-// Simplified assignability check for conditional type evaluation.
-// Uses the main isAssignable but avoids circular dependency.
-let _condAssignFn: (source: Type, target: Type) => boolean = null as unknown as (source: Type, target: Type) => boolean;
-export function setConditionalAssignFn(fn: (source: Type, target: Type) => boolean): void {
-	_condAssignFn = fn;
-}
-function isAssignableForConditional(source: Type, target: Type): boolean {
-	if (_condAssignFn != null) return _condAssignFn(source, target);
-	return source.kind == target.kind;
-}
 
 // Indexed access type — T[K], deferred while T or K is generic.
 // typeChildren[0] = object type (T)
