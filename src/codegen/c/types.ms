@@ -1892,8 +1892,9 @@ function elemArrayCName(elem: Readonly<Type>): string {
 export function arrayCTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const elem = t.typeReturn;
 	if (elem == null) return "msRefArray";
-	// Awaitable element → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
-	if (isAwaitable(elem)) return "msRefArray";
+	// Awaitable element, nullable or not → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
+	const nonNull = unwrapRefNullUnion(elem);
+	if (isAwaitable(nonNull != null ? nonNull : elem)) return "msRefArray";
 	const ecn = elemArrayCNameIn(roots, elem);
 	const elemIsRefArray = elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array;
 	const elemIsClass = elem.sym != null && elem.sym.symbolKind == SymbolKind.Class;
