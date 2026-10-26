@@ -2,7 +2,10 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, MemberExprData, makeLoc } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
+import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
+import { lookupHost } from "../../raiser/hostRegistry";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
@@ -295,7 +298,9 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	if (known != null) return known;
 	registerSeedSymbols(withMetaSeeds(moduleScopeNamed(declCtx.table)), seedExtensionsOf(declCtx, null));
 	const empty = createNode(NodeKind.Program, { programStmts: [] }, synthToken(makeLoc(1, 1)));
+	const prevEngineMode = setEngineCheckMode(true);
 	const bodyCtx = checkProgramWithRegistryCancellable(empty, outer.registry, outer.graph, mod, raiserPreludeCtx(), null as unknown as CancelCtx, 0);
+	setEngineCheckMode(prevEngineMode);
 	clearSeedSymbols();
 	_engine.bodyCtxs.set(declCtx, bodyCtx);
 	return bodyCtx;
@@ -433,6 +438,123 @@ export function engineRecheckCount(): int32 {
 	return _engineRecheckCount;
 }
 
+let _engineBuildLowered: int32 = 0;
+
+export function engineBuildLoweredCount(): int32 {
+	return _engineBuildLowered;
+}
+
+const _engineRecheckReasons = new HashMap<string, int32>();
+
+export function engineRecheckReasons(): string[] {
+	const out: string[] = [];
+	for (const reason of _engineRecheckReasons.keys()) out.push(`${reason} x${_engineRecheckReasons.get(reason) ?? 0}`);
+	return out;
+}
+
+function noteRecheck(reason: string): void {
+	_engineRecheckReasons.set(reason, (_engineRecheckReasons.get(reason) ?? 0) + 1);
+}
+
+const BUILD_LOWERING_BLOCKED: int32 = -2;
+let _buildLoweringBlockedBy = "";
+
+const INTERCEPTED_EXTERNS = ["msStringEquals", "msStringCompareLt", "msStringCompareLe", "msStringCharAt", "msStringSlice", "msStringByteAt", "msStringCharCodeAt"];
+
+function holdsValueSym(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp
+		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Property;
+}
+
+function unservedExtern(call: Node): string {
+	const d = call.data as CallExprData;
+	const sym = d.callee.resolvedSym;
+	if (sym == null || holdsValueSym(sym) || sym.nativeName == "" || sym.builtinKind != "") return "";
+	if (hasHostCallback(sym) || lookupHost(sym.nativeName) != null || INTERCEPTED_EXTERNS.includes(sym.nativeName)) return "";
+	if (d.callee.kind == NodeKind.MemberExpr && sym.symbolKind != SymbolKind.Method) {
+		const property = (d.callee.data as MemberExprData).property;
+		if (property == "push" || property == "setLength" || (property == "toString" && d.arguments.length == 0)) return "";
+	}
+	return `extern ${sym.nativeName}`;
+}
+
+function blockedForm(node: Node, afterTransform: boolean): string {
+	if (node == null) return "";
+	if (!afterTransform) {
+		if (node.kind == NodeKind.QuoteExpr || node.kind == NodeKind.MacroInvocation) return "macro form";
+		const sym = node.resolvedSym;
+		if (sym != null && (sym.builtinKind.startsWith("Meta") || isMetaNodeSym(sym))) return "meta builtin";
+	}
+	if (afterTransform && node.kind == NodeKind.CallExpr) {
+		const extern = unservedExtern(node);
+		if (extern != "") return extern;
+		const d = node.data as CallExprData;
+		if (d.arguments.length > 0 && d.callee.kind == NodeKind.MemberExpr && (d.callee.data as MemberExprData).property == "toString") return "toString radix";
+	}
+	let found = "";
+	forEachChild(node, (child: Node): void => {
+		if (found == "") found = blockedForm(child, afterTransform);
+	});
+	return found;
+}
+
+function holdsBigInt(node: Node): boolean {
+	if (node == null) return false;
+	if (carriesBigInt(node.nodeType)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = holdsBigInt(child);
+	});
+	return found;
+}
+
+function buildBodyCtx(sym: Symbol): CheckerContext | null {
+	const outer = getComptimeOuterCtx();
+	if (outer == null || outer.preludeCtx == null) return null;
+	if (outer.preludeCtx.preludeModuleScopes.has(sym.modulePath)) return preludeBodyCtx(outer.preludeCtx, sym.modulePath);
+	return engineBodyCtx(sym.modulePath, sym);
+}
+
+function lowerBuildCheckedHelper(sym: Symbol): int32 {
+	if (sym.symbolKind == SymbolKind.Class || !isCheckedRoutineDecl(sym.declNode)) {
+		_buildLoweringBlockedBy = sym.symbolKind == SymbolKind.Class ? "class" : "not checked";
+		return BUILD_LOWERING_BLOCKED;
+	}
+	const bodyCtx = buildBodyCtx(sym);
+	if (bodyCtx == null) {
+		_buildLoweringBlockedBy = "no build context";
+		return BUILD_LOWERING_BLOCKED;
+	}
+	const blocked = blockedForm(sym.declNode, false);
+	if (blocked != "") {
+		_buildLoweringBlockedBy = blocked;
+		return BUILD_LOWERING_BLOCKED;
+	}
+	if (holdsBigInt(sym.declNode)) {
+		_pendingHelperErrors.push({
+			message: `helper '${sym.name}': ${RAISER_NO_BIGINT_MSG}`,
+			line: sym.declNode.location.line, column: sym.declNode.location.column, endLine: sym.declNode.location.line, endColumn: sym.declNode.location.column,
+			fatal: false, severity: Severity.Error, tags: 0,
+		});
+		return -1;
+	}
+	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
+	defer registerRaiserOnDemand(previousOnDemand);
+	enterEngineCompile();
+	defer leaveEngineCompile();
+	const clone = cloneNodeKeepSem(sym.declNode);
+	(clone.data as FunctionDeclData).fnName = "$comptime:helper";
+	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(sym.declNode.location));
+	const transformed = transformCheckedForEngine(program, bodyCtx);
+	const unserved = blockedForm(transformed, true);
+	if (unserved != "") {
+		_buildLoweringBlockedBy = unserved;
+		return BUILD_LOWERING_BLOCKED;
+	}
+	_engineBuildLowered += 1;
+	return appendProgramToImage(_engine.image, _engine.funcMap, transformed, "$comptime:helper", sym);
+}
+
 const _engineBodyNames: string[] = [];
 
 export function engineCompiledNames(): string[] {
@@ -460,6 +582,13 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		const bodyCtx = sym.modulePath == checkedBy.modulePath ? checkedBy : engineBodyCtx(sym.modulePath, sym);
 		if (bodyCtx != null) return compileCheckedBodyIntoEngine(sym, sym.declNode, "$comptime:helper", bodyCtx);
 	}
+	let recheckReason = vmStd ? "vm std" : "";
+	if (recheckReason == "") {
+		const lowered = lowerBuildCheckedHelper(sym);
+		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
+		recheckReason = _buildLoweringBlockedBy;
+	}
+	noteRecheck(recheckReason);
 	const seedCtx = seedCtxForSym(sym);
 	const seeds = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
