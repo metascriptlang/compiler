@@ -575,6 +575,33 @@ export function resolveLto(opts: CliOptions): void {
 	}
 }
 
+// -- TSan capability --
+// Same shape as LTO above. zig → Mach-O: a binary built with
+// -fsanitize=thread segfaults at startup (exit 139) even for a 5-line
+// pthread_create/join program, so no run through that pair can be trusted.
+// Measured on zig 0.16.0 / macOS arm64; other targets are not known broken.
+export function tsanBroken(cc: string, targetOs: string): boolean {
+	if (!isZigCC(cc)) return false;
+	return targetOs == "darwin" || targetOs == "macos";
+}
+
+// Runs right after resolveCC, before the header root is read from opts.ccCompiler.
+// An auto-detected compiler that cannot run TSan is swapped for clang with a
+// notice; an explicit --cc= against a proven-broken pair fails loud.
+export function resolveSanitizerCC(opts: CliOptions): void {
+	if (!opts.sanitize.split(",").includes("thread")) return;
+	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
+	if (!tsanBroken(cc, opts.targetOs)) return;
+	const explicit = opts.ccBinary != "" || opts.ccCompiler != 0;
+	if (explicit || !cmdExists("clang")) {
+		writeStderr(`error: zig cc cannot run --sanitize=thread targeting ${opts.targetOs}.\n`);
+		writeStderr(`  → ${explicit ? "re-run with --cc=clang" : "install clang"}, or drop --sanitize=thread.\n`);
+		stopBuild();
+	}
+	opts.ccCompiler = 1;
+	writeStderr(`note: --sanitize=thread builds with clang: zig cc cannot run TSan targeting ${opts.targetOs}.\n`);
+}
+
 // -- LTO strategy flags --
 // Orthogonal to opt-level. Thin = parallel per-function LTO (fast link, ~full
 // runtime); full = monolithic whole-program LTO (slow serial link). Rides the
@@ -1578,6 +1605,27 @@ test "a release build takes thin LTO where its compiler links it, and leaves it 
 	assert resolvedLto(["--release", "--cc=gcc", "--os=linux"]) == "off";
 	assert resolvedLto(["--release", "--cc=clang", "--os=linux", "--lto=off"]) == "off";
 	assert resolvedLto(["--cc=clang", "--os=linux"]) == "off";
+}
+
+test "TSan is broken for zig cc on Mach-O only" {
+	assert tsanBroken("zig cc", "darwin");
+	assert tsanBroken("zig cc", "macos");
+	assert !tsanBroken("zig cc", "linux");
+	assert !tsanBroken("clang", "darwin");
+}
+
+test "an explicit clang with --sanitize=thread on macOS is kept" {
+	const clang = newCliOptions();
+	assert applyArgs(clang, ["--sanitize=thread", "--cc=clang", "--os=macos"], 0).ok;
+	resolveSanitizerCC(clang);
+	assert clang.ccCompiler == 1;
+}
+
+test "a build without thread sanitizing keeps its auto-detected compiler" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["--sanitize=address", "--os=macos"], 0).ok;
+	resolveSanitizerCC(opts);
+	assert opts.ccCompiler == 0;
 }
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {
