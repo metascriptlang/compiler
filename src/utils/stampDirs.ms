@@ -8,11 +8,11 @@ const STALE_TMP_SECONDS = 3600;
 const COLLECT_EVERY_SECONDS = 3600;
 const COLLECTED_MARK = ".collected";
 
-export function nowSeconds(): number {
+export function nowSeconds(): float64 {
 	return Date.now() / 1000;
 }
 
-function collectable(path: string, now: number, limitSeconds: number): boolean {
+function collectable(path: string, now: float64, limitSeconds: float64): boolean {
 	const mtime = modifiedTime(path);
 	return mtime < 0 || now - mtime > limitSeconds;
 }
@@ -24,7 +24,7 @@ function drop(path: string, isDir: boolean): void {
 	}
 }
 
-export function collectStaleEntries(root: string, now: number, staleSeconds: number = STALE_ENTRY_SECONDS): void {
+export function collectStaleEntries(root: string, now: float64, staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
 	const mark = `${root}/${COLLECTED_MARK}`;
 	const last = modifiedTime(mark);
 	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return;
