@@ -1,5 +1,5 @@
 import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset } from "./vmSeq";
-import { isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
+import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
 // Raiser VM — Bytecode executor
 
 import {
@@ -12,6 +12,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles,
+	isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
@@ -19,6 +20,7 @@ import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
+import { objectCellSlot, objectCellSetSlot } from "./objectCell";
 import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, RaiserCopyPlan, copyTypedValue } from "./valueCopy";
@@ -463,6 +465,14 @@ function writeRef(vm: RaiserVM, abs: int64, handle: int64): void {
 
 // The store of a handle into a Ref slot, in the order writeRef keeps.
 @inline
+function storeCellRef(vm: RaiserVM, cell: int64, idx: int32, handle: int64): void {
+	const old = objectCellSlot(cell, idx);
+	if (old == handle) return;
+	holdShell(vm, handle);
+	objectCellSetSlot(cell, idx, handle);
+	releaseShell(vm, old);
+}
+
 function storeSlotRef(vm: RaiserVM, obj: Cursor<RaiserObjectData>, idx: int32, handle: int64): void {
 	const old = obj.slots[idx];
 	if (old == handle) return;
@@ -1074,10 +1084,9 @@ function unionConvRefusal(vm: RaiserVM, held: RaiserValue, plan: string): string
 
 function discriminantHolds(vm: RaiserVM, held: RaiserValue, spec: string): boolean {
 	const eq = spec.indexOf("=");
-	const obj = vm.objectHeap.objects[handleIndex(held.intVal)];
-	const at = obj.classType.fields.indexOf(spec.substring(0, eq));
+	const at = heapObjectFieldIndex(vm.objectHeap, held.intVal, spec.substring(0, eq));
 	if (at < 0) return false;
-	const stored = fieldValueAt(obj, at);
+	const stored = heapObjectFieldValueAt(vm.objectHeap, held.intVal, at as int64);
 	return stored.kind == RaiserValueKind.Int && stored.intVal == parseIntStr(spec.substring(eq + 1)) as int64;
 }
 
@@ -1090,7 +1099,7 @@ function unionTokenHolds(vm: RaiserVM, held: RaiserValue, token: string): boolea
 	if (head == "a") return held.kind == RaiserValueKind.Array;
 	if (head == "o") return held.kind == RaiserValueKind.Object;
 	if (head == "d") return held.kind == RaiserValueKind.Object && discriminantHolds(vm, held, token.substring(1));
-	if (head == "c") return held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, raiserInt(parseIntStr(token.substring(1)) as int64));
+	if (head == "c") return held.kind == RaiserValueKind.Object && raiserIsInstance(heapObjectClass(vm.objectHeap, held.intVal), raiserInt(parseIntStr(token.substring(1)) as int64));
 	throw new Error("internal: the union conversion plan names the kind token '" + token + "'");
 }
 
@@ -2988,6 +2997,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if ((slotKind(obj, idx) as int32) != cls || cls == CLS_DYN) { slow = true; break; }
 					if (cls == CLS_REF) writeRef(vm, fb + (ia >> 3), obj.slots[idx]);
 					else slots[fb + (ia >> 3)] = obj.slots[idx];
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					const t = objectCellClass(handle);
+					if (idx >= t.kinds.length) { slow = true; break; }
+					when (mode != "danger") { if (t.fields[idx] != func.names[ic]) { slow = true; break; } }
+					const cls = ia & 7;
+					if ((t.kinds[idx] as int32) != cls || cls == CLS_DYN) { slow = true; break; }
+					if (cls == CLS_REF) writeRef(vm, fb + (ia >> 3), objectCellSlot(seqCellOf(handle), idx));
+					else slots[fb + (ia >> 3)] = objectCellSlot(seqCellOf(handle), idx);
 				} else {
 					slow = true;
 				}
@@ -3008,6 +3025,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if ((slotKind(obj, idx) as int32) != cls || cls == CLS_DYN) { slow = true; break; }
 					if (cls == CLS_REF) storeSlotRef(vm, obj, idx, slots[fb + (ic >> 3)]);
 					else obj.slots[idx] = slots[fb + (ic >> 3)];
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					const t = objectCellClass(handle);
+					if (idx >= t.kinds.length) { slow = true; break; }
+					when (mode != "danger") { if (t.fields[idx] != func.names[ib]) { slow = true; break; } }
+					const cls = ic & 7;
+					if ((t.kinds[idx] as int32) != cls || cls == CLS_DYN) { slow = true; break; }
+					if (cls == CLS_REF) storeCellRef(vm, seqCellOf(handle), idx, slots[fb + (ic >> 3)]);
+					else objectCellSetSlot(seqCellOf(handle), idx, slots[fb + (ic >> 3)]);
 				} else {
 					slow = true;
 				}
@@ -3025,6 +3050,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					slots[fb + ia] = obj.slots[idx];
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					when (mode != "danger") { const t = objectCellClass(handle); if (idx >= t.kinds.length || t.kinds[idx] != RaiserRegClass.Word || t.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					slots[fb + ia] = objectCellSlot(seqCellOf(handle), idx);
 				} else {
 					slow = true;
 				}
@@ -3042,6 +3070,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					writeRef(vm, fb + ia, obj.slots[idx]);
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					when (mode != "danger") { const t = objectCellClass(handle); if (idx >= t.kinds.length || t.kinds[idx] != RaiserRegClass.Ref || t.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					writeRef(vm, fb + ia, objectCellSlot(seqCellOf(handle), idx));
 				} else {
 					slow = true;
 				}
@@ -3059,6 +3090,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					obj.slots[idx] = slots[fb + ic];
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					when (mode != "danger") { const t = objectCellClass(handle); if (idx >= t.kinds.length || t.kinds[idx] != RaiserRegClass.Word || t.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					objectCellSetSlot(seqCellOf(handle), idx, slots[fb + ic]);
 				} else {
 					slow = true;
 				}
@@ -3076,6 +3110,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					storeSlotRef(vm, obj, idx, slots[fb + ic]);
+				} else if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+					when (mode != "danger") { const t = objectCellClass(handle); if (idx >= t.kinds.length || t.kinds[idx] != RaiserRegClass.Ref || t.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					storeCellRef(vm, seqCellOf(handle), idx, slots[fb + ic]);
 				} else {
 					slow = true;
 				}
@@ -3400,12 +3437,12 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.InstanceOf => {
 			const held = getDyn(vm, ib);
-			setRegBool(vm, ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, getFuncConst(func, ic)));
+			setRegBool(vm, ia, held.kind == RaiserValueKind.Object && raiserIsInstance(heapObjectClass(vm.objectHeap, held.intVal), getFuncConst(func, ic)));
 		},
 		RaiserOpcode.ObjConv => {
 			const held = getDyn(vm, ia);
 			if (held.kind != RaiserValueKind.Nil) {
-				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[handleIndex(held.intVal)].classType : RAISER_NO_CLASS;
+				const classType = held.kind == RaiserValueKind.Object ? heapObjectClass(vm.objectHeap, held.intVal) : RAISER_NO_CLASS;
 				if (!raiserIsInstance(classType, getFuncConst(func, ib))) {
 					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic)));
 				}
@@ -3429,7 +3466,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.IsKind => {
 			const v = getDyn(vm, ib);
-			setRegBool(vm, ia, ic < 64 ? (v.kind as number) == ic : v.kind == RaiserValueKind.Object && isClosurePair(vm.objectHeap.objects[handleIndex(v.intVal)].classType) == (ic == 64));
+			setRegBool(vm, ia, ic < 64 ? (v.kind as number) == ic : v.kind == RaiserValueKind.Object && isClosurePair(heapObjectClass(vm.objectHeap, v.intVal)) == (ic == 64));
 		},
 		RaiserOpcode.AddrIndex => {
 			vmHandleAddrIndex(vm, ia, ib, ic);
@@ -3850,7 +3887,7 @@ function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
 function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 	const handle = innerHandle(vm, vm.regs.slots[vm.base + ia]);
 	if (rcCountOf(vm.arrayHeap, vm.objectHeap, handle) <= vm.regs.slots[vm.base + ib]) return;
-	const name = handleHeapKind(handle) == RaiserHeapKind.Object ? vm.objectHeap.objects[handleIndex(handle)].classType.name : "cell";
+	const name = handleKind(handle) == RaiserValueKind.Object ? heapObjectClass(vm.objectHeap, handle).name : "cell";
 	vmError(vm, `onDestroy kept a reference to the ${name} it destroys; that reference would dangle once the object is freed`);
 }
 
@@ -3861,8 +3898,8 @@ function vmFreeCell(vm: RaiserVM, handle: int64): void {
 }
 
 function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
-	if (handleHeapKind(handle) != RaiserHeapKind.Object) return -1;
-	return vm.objectHeap.objects[handleIndex(handle)].classType.destroyFn;
+	if (handleKind(handle) != RaiserValueKind.Object) return -1;
+	return heapObjectClass(vm.objectHeap, handle).destroyFn;
 }
 
 function vmDestroyTop(vm: RaiserVM, handle: int64): void {
@@ -3930,7 +3967,15 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 		RaiserHeapKind.Seq => {
 			const c = seqCellOf(handle);
 			const base = seqBase(c);
-			if (base == 0 && !seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
+			if (isObjectCell(handle)) {
+				const t = objectCellClass(handle);
+				for (let i = 0; i < t.kinds.length; i += 1) {
+					if (t.kinds[i] != RaiserRegClass.Ref) continue;
+					const child = objectCellSlot(c, i);
+					objectCellSetSlot(c, i, 0);
+					if (!t.uncounted[i]) vmReleaseChild(vm, child, t.cyclic[i]);
+				}
+			} else if (base == 0 && !seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 				const cyclic = seqCyclic(c);
 				for (let i = 0; i < seqLen(c); i += 1) {
 					const child = seqLoad(c, i);
@@ -3997,7 +4042,7 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	vm.funcIdx = fn;
 	vm.ip = 0;
 	vm.regs.slots[newBase] = handle;
-	vm.objectHeap.objects[handleIndex(handle)].rc = 1;
+	heapObjectSetRc(vm.objectHeap, handle, 1);
 	vm.disposing.push(handle);
 }
 
@@ -4047,7 +4092,7 @@ function vmReleasePlanned(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], 
 
 function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], planIndex: int32): void {
 	const plan = plans[planIndex];
-	const kind = handleHeapKind(handle);
+	const kind = isObjectCell(handle) ? RaiserHeapKind.Object : handleHeapKind(handle);
 	const index = handleIndex(handle);
 	if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Seq) {
 		const c = seqCellOf(handle);
@@ -4073,13 +4118,14 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 			}
 		}
 	} else if (plan.kind == RaiserCopyKind.Object && kind == RaiserHeapKind.Object) {
-		const data: Cursor<RaiserObjectData> = vm.objectHeap.objects[index];
-		const count = objectFieldCount(data);
+		const classType = heapObjectClass(vm.objectHeap, handle);
+		const laid = heapObjectLaidCount(vm.objectHeap, handle);
+		const count = heapObjectFieldCount(vm.objectHeap, handle);
 		for (let f = 0; f < count; f += 1) {
-			const held = fieldValueAt(data, f);
+			const held = heapObjectFieldValueAt(vm.objectHeap, handle, f);
 			if (held.kind < RaiserValueKind.String) continue;
-			if (f < data.slots.length && data.classType.uncounted[f]) continue;
-			const name = fieldNameAt(data, f);
+			if (f < laid && classType.uncounted[f]) continue;
+			const name = heapObjectFieldNameAt(vm.objectHeap, handle, f);
 			let child: int32 = -1;
 			for (let i = 0; i < plan.names.length; i += 1) {
 				if (plan.names[i] == name) {
@@ -4087,7 +4133,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 					break;
 				}
 			}
-			vmReleasePlanned(vm, held.intVal, plans, child, f < data.slots.length && data.classType.cyclic[f]);
+			vmReleasePlanned(vm, held.intVal, plans, child, f < laid && classType.cyclic[f]);
 		}
 	} else if (plan.kind == RaiserCopyKind.Union && kind == RaiserHeapKind.Object) {
 		const discriminant = heapObjectGetField(vm.objectHeap, handle, plan.names[0]);
@@ -4142,7 +4188,16 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 	vmReleaseByPlan(vm, dest, plans, planIndex);
 	const d = handleIndex(dest);
 	const s = handleIndex(source);
-	if (kind == RaiserHeapKind.Seq) {
+	if (isObjectCell(dest) != isObjectCell(source)) {
+		throw new Error("internal: AssignInPlace between an object cell and an array cell");
+	} else if (isObjectCell(dest)) {
+		if (cellTypeIndex(seqCellOf(dest)) != cellTypeIndex(seqCellOf(source))) throw new Error(`internal: AssignInPlace between a ${objectCellClass(dest).name} cell and a ${objectCellClass(source).name} cell`);
+		for (let i = 0; i < objectCellClass(dest).fields.length; i += 1) {
+			const word = objectCellSlot(seqCellOf(dest), i);
+			objectCellSetSlot(seqCellOf(dest), i, objectCellSlot(seqCellOf(source), i));
+			objectCellSetSlot(seqCellOf(source), i, word);
+		}
+	} else if (kind == RaiserHeapKind.Seq) {
 		const dc = seqCellOf(dest);
 		const sc = seqCellOf(source);
 		if (seqBase(dc) != 0 || seqBase(sc) != 0) throw new Error("internal: AssignInPlace over a view");
@@ -4315,13 +4370,14 @@ function vmHandleStoreDeref(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 		vmDecref(vm, heapArrayGet(vm.arrayHeap, ptr.intVal, idx));
 		heapArraySet(vm.arrayHeap, ptr.intVal, idx, val);
 	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
-		const obj = vm.objectHeap.objects[handleIndex(ptr.intVal)];
-		const idx = fieldIndex(obj, fieldAddrName(ptr));
+		const idx = heapObjectFieldIndex(vm.objectHeap, ptr.intVal, fieldAddrName(ptr));
 		if (idx >= 0) {
-			vmStoreFieldAt(vm, obj, idx, val);
+			vmStoreFieldAt(vm, ptr.intVal, idx, val);
+		} else if (isObjectCell(ptr.intVal)) {
+			vmError(vm, `internal: ${objectCellClass(ptr.intVal).name} has no field '${fieldAddrName(ptr)}' and a laid object takes none past its layout`);
 		} else {
 			vmIncref(vm, val);
-			appendField(obj, fieldAddrName(ptr), val);
+			heapObjectAppendField(vm.objectHeap, ptr.intVal, fieldAddrName(ptr), val);
 		}
 	} else if (ptr.kind == RaiserValueKind.Nil) {
 		vmError(vm, "attempt to write through a nil pointer");
@@ -4614,12 +4670,21 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	const objVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.objectHeap.objects.length) {
+	if (!isObjectCell(handle) && handleIndex(handle) >= vm.objectHeap.objects.length) {
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
-	const obj = vm.objectHeap.objects[handleIndex(handle)];
-	const idx = cachedFieldIndex(func, pc, obj, ic);
-	setRegConform(vm, ia, idx >= 0 ? fieldValueAt(obj, idx) : raiserNil());
+	const idx = cachedFieldIndexOf(vm, func, pc, handle, ic);
+	setRegConform(vm, ia, idx >= 0 ? heapObjectFieldValueAt(vm.objectHeap, handle, idx) : raiserNil());
+}
+
+function cachedFieldIndexOf(vm: RaiserVM, func: RaiserFunction, pc: int32, handle: int64, ni: int32): int32 {
+	if (!isObjectCell(handle)) return cachedFieldIndex(func, pc, vm.objectHeap.objects[handleIndex(handle)], ni);
+	const t = objectCellClass(handle);
+	const cached = func.fieldCache[pc];
+	if (cached >= 0 && cached < t.fields.length && t.fieldIds[cached] == func.nameIds[ni]) return cached;
+	const found = t.fields.indexOf(func.names[ni]) as int32;
+	if (found >= 0) func.fieldCache[pc] = found;
+	return found;
 }
 
 // The position of field `names[ni]` in `obj`, -1 when it has none. A laid slot hits on the
@@ -4642,29 +4707,32 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	const objVal = getDyn(vm, ia);
 	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.objectHeap.objects.length) {
+	if (!isObjectCell(handle) && handleIndex(handle) >= vm.objectHeap.objects.length) {
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
-	const obj = vm.objectHeap.objects[handleIndex(handle)];
 	const val = getDyn(vm, ic);
-	const idx = cachedFieldIndex(func, pc, obj, ib);
+	const idx = cachedFieldIndexOf(vm, func, pc, handle, ib);
 	if (idx >= 0) {
-		vmStoreFieldAt(vm, obj, idx, val);
+		vmStoreFieldAt(vm, handle, idx, val);
+		return;
+	}
+	if (isObjectCell(handle)) {
+		vmError(vm, `internal: ${objectCellClass(handle).name} has no field '${func.names[ib]}' and a laid object takes none past its layout`);
 		return;
 	}
 	vmIncref(vm, val);
-	const count = objectFieldCount(obj);
-	appendField(obj, func.names[ib], val);
+	const count = heapObjectFieldCount(vm.objectHeap, handle);
+	heapObjectAppendField(vm.objectHeap, handle, func.names[ib], val);
 	func.fieldCache[pc] = count;
 }
 
 // The counted store of a value into field `idx`: the field holds the new value before it gives up the old one.
-function vmStoreFieldAt(vm: RaiserVM, obj: RaiserObjectData, idx: number, val: RaiserValue): void {
-	const refused = fieldRefusal(obj, idx, val);
+function vmStoreFieldAt(vm: RaiserVM, handle: int64, idx: number, val: RaiserValue): void {
+	const refused = heapObjectFieldRefusal(vm.objectHeap, handle, idx, val);
 	if (refused != "") { vmError(vm, refused); return; }
 	vmIncref(vm, val);
-	const old = fieldValueAt(obj, idx);
-	fieldStoreAt(obj, idx, val);
+	const old = heapObjectFieldValueAt(vm.objectHeap, handle, idx as int64);
+	heapObjectStoreFieldAt(vm.objectHeap, handle, idx, val);
 	vmDecref(vm, old);
 }
 
@@ -4673,11 +4741,11 @@ function vmStoreFieldAt(vm: RaiserVM, obj: RaiserObjectData, idx: number, val: R
 // the host built keeps its own field order and is read by name.
 function vmCheckSlot(vm: RaiserVM, func: RaiserFunction, pc: int32, objReg: int32, name: int32): void {
 	const held = getDyn(vm, objReg);
-	if (held.kind != RaiserValueKind.Object || handleIndex(held.intVal) >= vm.objectHeap.objects.length) return;
-	const obj = vm.objectHeap.objects[handleIndex(held.intVal)];
+	if (held.kind != RaiserValueKind.Object || (!isObjectCell(held.intVal) && handleIndex(held.intVal) >= vm.objectHeap.objects.length)) return;
+	const classType = heapObjectClass(vm.objectHeap, held.intVal);
 	const slot = ((func.packed[pc] >> 56) & 255) as int32;
-	if (slot < obj.classType.fields.length && obj.classType.fields[slot] != func.names[name]) {
-		vmError(vm, `internal: ${func.name} reads '${func.names[name]}' at slot ${slot} of a ${obj.classType.name != "" ? obj.classType.name : "typed object"} that holds '${obj.classType.fields[slot]}' there, so the receiver's type does not fix its layout`);
+	if (slot < classType.fields.length && classType.fields[slot] != func.names[name]) {
+		vmError(vm, `internal: ${func.name} reads '${func.names[name]}' at slot ${slot} of a ${classType.name != "" ? classType.name : "typed object"} that holds '${classType.fields[slot]}' there, so the receiver's type does not fix its layout`);
 	}
 }
 
