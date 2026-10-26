@@ -620,10 +620,23 @@ when (mscDeclaresRuntime) {
 	extern function msClosureDisown(c: () => void): void;
 
 	@compilerFunc
-	extern function msSetCard32(v: uint32): int32;
+	function msSetCard32(v: uint32): int32 {
+		let n: uint32 = v;
+		let c: int32 = 0;
+		while (n != 0) {
+			c += (n & 1) as int32;
+			n = n >> 1;
+		}
+		return c;
+	}
 
 	@compilerFunc
-	extern function msSetHashWord(acc: int64, word: uint32): int64;
+	function msSetHashWord(acc: int64, word: uint32): int64 {
+		let h: uint64 = ((acc as uint64) ^ (word as uint64)) * 2654435761;
+		h = (h ^ (h >> 16)) & 0xFFFFFFFF;
+		if (h == 0) h = 314159265;
+		return h as int64;
+	}
 
 	@compilerFunc
 	extern function msToInt32(x: float64): int32;
