@@ -11,7 +11,9 @@ import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
 import { sleepAsync } from "std/core/promise";
+import { JsonKind, parseJson, stringify } from "std/core/json";
 import { registryRequest } from "./registry";
+import { extractJsonField } from "./json";
 import { loadToken, saveToken, deleteToken, credentialsErrorMessage } from "./credentials";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
@@ -58,8 +60,6 @@ function percentDecode(s: string): string {
 	}
 	return result;
 }
-
-import { extractJsonField } from "./json";
 
 // HTTPS POST — uses fetch() with auto TLS from URL.
 function httpsPost(host: string, path: string, body: string, contentType: string): Result<HttpResponse, HttpError> {
@@ -261,6 +261,15 @@ export function cmdLogout(): boolean {
 //
 // Flags:
 //   --json    Print the full user object instead of just the username.
+// The `user` object of a /auth/me response as compact JSON; the body itself when it has none.
+function userObjectJson(body: string): string {
+	const parsed = parseJson(body);
+	if (!parsed.ok || parsed.value.kind != JsonKind.Object) return body;
+	const user = parsed.value.getDynamicField("user");
+	if (user.kind != JsonKind.Object) return body;
+	return stringify(user);
+}
+
 export function cmdWhoami(args: string[]): boolean {
 	const token = loadToken();
 	if (token == "") {
@@ -295,30 +304,9 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 
 	// Response shape: { "user": { "username", "displayName", "avatarUrl", "githubUrl" } }
-	// We hand-parse with extractJsonField since /me is a flat string-only object.
 	const body = result.value.body;
 	if (jsonOutput) {
-		// Echo the user object verbatim — trim surrounding envelope.
-		const userStart = body.indexOf("\"user\":");
-		if (userStart < 0) { console.log(body); return true; }
-		let depth = 0;
-		let objStart = -1;
-		let j = userStart;
-		while (j < body.length) {
-			const ch = body.charAt(j);
-			if (ch == "{") {
-				if (objStart < 0) objStart = j;
-				depth = depth + 1;
-			} else if (ch == "}") {
-				depth = depth - 1;
-				if (depth == 0) {
-					console.log(body.slice(objStart, j + 1));
-					return true;
-				}
-			}
-			j = j + 1;
-		}
-		console.log(body);
+		console.log(userObjectJson(body));
 		return true;
 	}
 
@@ -329,6 +317,13 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 	console.log(username);
 	return true;
+}
+
+test "the whoami user object survives a closing brace inside a value" {
+	const user = userObjectJson("{\"user\":{\"username\":\"a\",\"displayName\":\"x}y\"}}");
+	assert user == "{\"username\":\"a\",\"displayName\":\"x}y\"}";
+	assert userObjectJson("{\"other\":1}") == "{\"other\":1}";
+	assert userObjectJson("nope") == "nope";
 }
 
 test "the poll interval follows the server" {
