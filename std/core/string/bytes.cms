@@ -29,7 +29,8 @@ export function byteSlice(this s: string, start: int32, end: int32): string {
 }
 
 extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
-extern function msMemEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly<Span<uint8>>): boolean;
+export extern function byteEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly<Span<uint8>>): boolean from "msMemEqAt";
+export extern function byteIsAscii(s: string): boolean from "msStringIsAscii";
 
 @exportName("msStringByteIndexOf")
 export function stringByteIndexOf(s: string, sub: string, byteStart: int64): int64 {
@@ -43,7 +44,7 @@ export function stringByteIndexOf(s: string, sub: string, byteStart: int64): int
 	while (at <= limit) {
 		const hit = msMemChr(hb, at, limit + 1, first);
 		if (hit < 0) return -1;
-		if (nb.length == 1 || msMemEqAt(hb, hit, nb)) return hit;
+		if (nb.length == 1 || byteEqAt(hb, hit, nb)) return hit;
 		at = hit + 1;
 	}
 	return -1;

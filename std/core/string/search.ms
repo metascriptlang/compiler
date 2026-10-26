@@ -1,7 +1,86 @@
-// MetaScript String Prelude — byte-offset search for the C and Raiser backends;
+// MetaScript String Prelude — search for the C and Raiser backends;
 // the JS backend binds the native String methods instead (index.jms).
+// indexOf and lastIndexOf answer UTF-16 unit positions over the UTF-8 bytes.
 
-import { asBytes, byteIndexOf } from "./bytes";
+import { asBytes, byteIndexOf, byteEqAt, byteIsAscii } from "./bytes";
+
+function unitWidth(lead: uint8): int32 {
+	return lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+}
+
+/**
+ * Returns the position of the first occurrence of a substring.
+ * @param sub The substring to search for in the string.
+ * @param start The index at which to begin searching the String object. If omitted, search starts at the beginning of the string.
+ */
+export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	const from = start < 0 ? 0 : start;
+	const hb = s.asBytes();
+	const nb = sub.asBytes();
+	if (nb.length == 0) {
+		const n = s.length;
+		return from < n ? from : n;
+	}
+	if (nb.length > hb.length) return -1;
+	if (byteIsAscii(s)) return s.byteIndexOf(sub, from);
+	let p = 0;
+	let unit = 0;
+	while (p < hb.length && unit < from) {
+		const w = unitWidth(hb[p]);
+		p = p + w;
+		unit = unit + (w == 4 ? 2 : 1);
+	}
+	while (p + nb.length <= hb.length) {
+		if (byteEqAt(hb, p, nb)) return unit;
+		const w = unitWidth(hb[p]);
+		p = p + w;
+		unit = unit + (w == 4 ? 2 : 1);
+	}
+	return -1;
+}
+
+/**
+ * Returns the last occurrence of a substring in the string.
+ * @param sub The substring to search for.
+ */
+export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
+	const hb = s.asBytes();
+	const nb = sub.asBytes();
+	if (nb.length == 0) {
+		const n = s.length;
+		return startIdx >= 0 && startIdx < n ? startIdx : n;
+	}
+	if (nb.length > hb.length) return -1;
+	const ascii = byteIsAscii(s);
+	let i = hb.length - nb.length;
+	if (startIdx >= 0) {
+		if (ascii) {
+			if (startIdx < i) i = startIdx;
+		} else {
+			let bytePos = 0;
+			let unit = 0;
+			while (bytePos < hb.length) {
+				const w = unitWidth(hb[bytePos]);
+				const next = unit + (w == 4 ? 2 : 1);
+				if (next > startIdx) break;
+				bytePos = bytePos + w;
+				unit = next;
+			}
+			if (bytePos < i) i = bytePos;
+		}
+	}
+	const first = nb[0];
+	while (i >= 0 && !(hb[i] == first && (nb.length == 1 || byteEqAt(hb, i, nb)))) i = i - 1;
+	if (i < 0 || ascii) return i;
+	let p = 0;
+	let unit = 0;
+	while (p < i) {
+		const w = unitWidth(hb[p]);
+		p = p + w;
+		unit = unit + (w == 4 ? 2 : 1);
+	}
+	return unit;
+}
 
 export function startsWith(this s: string, prefix: string): boolean {
 	const sb = s.asBytes();

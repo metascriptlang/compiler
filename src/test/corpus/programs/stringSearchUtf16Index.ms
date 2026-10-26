@@ -1,4 +1,3 @@
-// @xfail(raiser): indexOf and lastIndexOf answer byte offsets on the Raiser VM (index.rms), so every non-ASCII row differs from C
 // @stdout: ascii first 0 0 1 -1 -1
 // @stdout: ascii start 3 3 -1 6 -1
 // @stdout: ascii last 3 6 7 -1 -1
