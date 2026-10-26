@@ -597,21 +597,21 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 
 /* A failed future noted off its owner thread: the owner adopts it (kind=-4) before the
  * release the poster queues behind it, so the in-flight ref still holds the future. */
-void msCompletionQueuePushOrphanNote(void* fut) {
-    msLoopChannel* c = msChannelOf(((msFutureBase*)fut)->completionQueue);
-    msMessage* msg = msMsgAlloc(/*kind=*/-4, /*replyFut=*/fut);
+__attribute__((noinline)) static void msChannelPostOne(void* queue, int32_t kind, void* p) {
+    msLoopChannel* c = msChannelOf(queue);
+    msMessage* msg = msMsgAlloc(kind, /*replyFut=*/p);
     msChannelCount(c, 1);
     msMpscPush(&c->queue, msg);
     msChannelWake(c);
 }
 
+void msCompletionQueuePushOrphanNote(void* fut) {
+    msChannelPostOne(((msFutureBase*)fut)->completionQueue, /*kind=*/-4, fut);
+}
+
 void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
     if (env == NULL) return;
-    msLoopChannel* c = msChannelOf(ownerQueue);
-    msMessage* msg = msMsgAlloc(/*kind=*/-3, /*replyFut=*/env);
-    msChannelCount(c, 1);
-    msMpscPush(&c->queue, msg);
-    msChannelWake(c);
+    msChannelPostOne(ownerQueue, /*kind=*/-3, env);
 }
 
 /* Ensure wake pipe + MPSC queue are initialized (called by actor init).
