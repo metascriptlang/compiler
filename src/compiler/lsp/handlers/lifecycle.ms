@@ -622,6 +622,49 @@ test "hover on an inherited field read through a member access shows its declari
 	assert jsxQuery(db, 1, 46, false).indexOf("Unique id of the element.") >= 0;
 }
 
+function jsxComplete(main: string, line: int32, character: int32): string {
+	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
+	return handleCompletion("72", params, jsxDb(main), testCache());
+}
+
+// line 1: `const v: number = <a href="x" />;` — a at 19, href at 21, its value at 26..28, `/` at 30
+const JSX_ANCHOR = "import { view } from \"./ui\";\nconst v: number = <a href=\"x\" />;";
+
+test "completion among JSX attributes offers the props fields not written yet, with their docs" {
+	const r = jsxComplete(JSX_ANCHOR, 1, 30);
+	assert r.indexOf("\"label\":\"id\"") >= 0;
+	assert r.indexOf("Unique id of the element.") >= 0;
+	assert r.indexOf("\"label\":\"href\"") < 0;
+}
+
+test "completion on the JSX attribute being typed offers it again" {
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a hr />;", 1, 23).indexOf("The URL the link points to.") >= 0;
+}
+
+test "completion on a JSX tag offers the IntrinsicElements fields with their docs" {
+	const r = jsxComplete(JSX_ANCHOR, 1, 20);
+	assert r.indexOf("\"label\":\"a\"") >= 0;
+	assert r.indexOf("The anchor element.") >= 0;
+}
+
+test "completion inside a JSX attribute value or the children offers no attributes" {
+	assert jsxComplete(JSX_ANCHOR, 1, 27).indexOf("Unique id of the element.") < 0;
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a href=\"x\">t</a>;", 1, 30).indexOf("Unique id of the element.") < 0;
+}
+
+test "completion among an explicit macro call's JSX attributes reads the macro module's JSX" {
+	// line 1: `const w = ui(<a href="z" />);` — `/` at 25
+	assert jsxComplete("import { ui } from \"./ui\";\nconst w = ui(<a href=\"z\" />);", 1, 25).indexOf("Unique id of the element.") >= 0;
+}
+
+test "completion on a function component's JSX attribute offers its props fields" {
+	assert jsxComplete(JSX_COMPONENT, 6, 29).indexOf("The heading the card shows.") >= 0;
+}
+
+test "completion among JSX attributes with no JSX namespace anywhere offers nothing" {
+	assert jsxComplete("import { view } from \"./uiPlain\";\nconst v: number = <a href=\"x\" />;", 1, 30).indexOf("\"label\"") < 0;
+}
+
 test "find references from a JSX tag finds the other usages" {
 	const src = "function Counter(): number { return 0; }\nconst a = <Counter/>;\nconst b = <Counter/>;";
 	const db = testDb("file:///test.ms", src);
