@@ -3441,7 +3441,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleLoadDeref(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StoreDeref => {
-			vmHandleStoreDeref(vm, ia, ib, ic);
+			vmHandleStoreDeref(vm, func, pc, ia, ib, ic);
 		},
 		RaiserOpcode.Conv => {
 			vmHandleConv(vm, ia, ib, ic);
@@ -4290,7 +4290,7 @@ function vmHandleLoadDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	setRegConform(vm, ia, held);
 }
 
-function vmHandleStoreDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+function vmHandleStoreDeref(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
 	const ptr = getDyn(vm, ia);
 	const held = getReg(vm, ic);
 	const val = ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr ? held : readDyn(vm.arrayHeap, held);
@@ -4321,7 +4321,7 @@ function vmHandleStoreDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	} else if (ptr.kind == RaiserValueKind.Nil) {
 		vmError(vm, "attempt to write through a nil pointer");
 	} else {
-		vmError(vm, `cannot write through a value of kind ${ptr.kind}: it is not a location`);
+		vmError(vm, `internal: cannot write through a value of kind ${ptr.kind}: it is not a location (in ${func.name} at instruction ${pc})`);
 	}
 }
 
@@ -8695,6 +8695,17 @@ test "placed: overwriting a Dyn register frees the shell around a string and lea
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert heapBoxLive(vm.arrayHeap) == 0 && heapStringLive(vm.arrayHeap) == 0, `${heapBoxLive(vm.arrayHeap)} ${heapStringLive(vm.arrayHeap)}`;
+}
+
+test "placed: a store through an array cell names the function and instruction that wrote" {
+	const main = mainWithClasses([
+		slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+		raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+		raiserABC(RaiserOpcode.StoreDeref, 0, 0, 1),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [], []);
+	const vm = execModule(createRaiserModule("placed", [main], 0));
+	assert vm.error.startsWith("internal: cannot write through a value of kind Array") && vm.error.endsWith(" at instruction 2)"), vm.error;
 }
 
 test "placed: RcDec on a Dyn register frees the object it holds the last reference to, and the shell goes at the next overwrite" {
