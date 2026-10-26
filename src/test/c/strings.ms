@@ -1,7 +1,7 @@
 // E2E: String Operations → C output
 // Tests string lowering transforms (stringOpLower) and codegen.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileProjectToCWithStd } from "../helpers";
 
 
 test "E2E C: string concat" {
@@ -13,9 +13,9 @@ test "E2E C: string concat" {
 
 test "E2E C: string equality" {
 	const src = "function eq(a: string, b: string): boolean { return a === b; }\nconst r = eq(\"a\", \"b\");";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("msStringEquals");
+	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms", true);
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("static inline MS_BOOL msStringEquals"), c;
 }
 
 test "E2E C: string literal pool" {
@@ -34,9 +34,9 @@ test "E2E C: string length remapping" {
 
 test "E2E C: string inequality" {
 	const src = "function neq(a: string, b: string): boolean { return a !== b; }\nconst r = neq(\"a\", \"b\");";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("msStringEquals");
+	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms", true);
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("static inline MS_BOOL msStringEquals"), c;
 }
 
 test "E2E C: string param and return" {
