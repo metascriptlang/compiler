@@ -2223,6 +2223,7 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (hasGenericParams(t)) return;
 	if (t.kind == TypeKind.GenericInstance) {
 		const seen = peelTransparentInstance(t);
 		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
