@@ -1204,7 +1204,63 @@ export function objectFieldCount(obj: RaiserObjectData): int32 {
 }
 
 export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int32 {
+	if (isObjectCell(handle)) return objectCellClass(handle).fields.length as int32;
 	return objectFieldCount(heap.objects[handleIndex(handle)]);
+}
+
+export function objectCellClass(handle: int64): RaiserClassType {
+	return classTypeAt(cellTypeIndex(seqCellOf(handle)));
+}
+
+// The class type of an object handle, whichever heap holds it.
+export function heapObjectClass(heap: RaiserObjectHeap, handle: int64): RaiserClassType {
+	return isObjectCell(handle) ? objectCellClass(handle) : heap.objects[handleIndex(handle)].classType;
+}
+
+// The value of laid slot `index` of an object cell, read in its slot's class.
+export function objectCellFieldValue(handle: int64, index: number): RaiserValue {
+	const bits = ld64(seqCellOf(handle) + (index as int64) * OBJECT_CELL_SLOT_BYTES);
+	return match (objectCellClass(handle).kinds[index]) {
+		RaiserRegClass.Word => raiserInt(bits),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(bits)),
+		RaiserRegClass.Bool => raiserBool(bits != 0),
+		RaiserRegClass.Ref => handleValue(bits),
+		RaiserRegClass.Dyn => raiserNil(),
+	};
+}
+
+// Stores a value into laid slot `index` of an object cell without counting it: the slot takes over the caller's count.
+export function objectCellStoreField(handle: int64, index: number, val: RaiserValue): void {
+	const t = objectCellClass(handle);
+	const cls = t.kinds[index];
+	if (!slotFits(cls, val)) throw new Error(`internal: field '${t.fields[index]}' of ${t.name} is a ${regClassLetter(cls)} slot, got a value of kind ${val.kind}`);
+	st64(seqCellOf(handle) + (index as int64) * OBJECT_CELL_SLOT_BYTES, slotWord(cls, val));
+}
+
+// "" when field `index` of the object can hold the value, otherwise why it cannot.
+export function heapObjectFieldRefusal(heap: RaiserObjectHeap, handle: int64, index: number, val: RaiserValue): string {
+	if (!isObjectCell(handle)) return fieldRefusal(heap.objects[handleIndex(handle)], index, val);
+	const t = objectCellClass(handle);
+	const cls = t.kinds[index];
+	if (slotFits(cls, val)) return "";
+	return `internal: field '${t.fields[index]}' of ${t.name} is a ${regClassLetter(cls)} slot, got a value of kind ${val.kind}`;
+}
+
+// The position of the field called `name`, -1 when the object has none.
+export function heapObjectFieldIndex(heap: RaiserObjectHeap, handle: int64, name: string): number {
+	if (isObjectCell(handle)) return objectCellClass(handle).fields.indexOf(name);
+	return fieldIndex(heap.objects[handleIndex(handle)], name);
+}
+
+// Stores a value into field `index` without counting it: the field takes over the caller's count.
+export function heapObjectStoreFieldAt(heap: RaiserObjectHeap, handle: int64, index: number, val: RaiserValue): void {
+	if (isObjectCell(handle)) objectCellStoreField(handle, index, val);
+	else fieldStoreAt(heap.objects[handleIndex(handle)], index, val);
+}
+
+export function heapObjectAppendField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
+	if (isObjectCell(handle)) throw new Error(`internal: ${objectCellClass(handle).name} has no field '${name}' and a laid object takes none past its layout`);
+	appendField(heap.objects[handleIndex(handle)], name, val);
 }
 
 export function fieldNameAt(obj: RaiserObjectData, index: number): string {
@@ -1288,6 +1344,10 @@ export function appendField(obj: RaiserObjectData, name: string, val: RaiserValu
 }
 
 export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: int64, index: int64): string {
+	if (isObjectCell(handle)) {
+		const fields = objectCellClass(handle).fields;
+		return index < 0 || index >= fields.length ? "" : fields[index as number];
+	}
 	const obj = heap.objects[handleIndex(handle)];
 	if (index < 0 || index >= objectFieldCount(obj)) return "";
 	return fieldNameAt(obj, index as number);
@@ -1306,18 +1366,32 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 }
 
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
+	if (isObjectCell(handle)) {
+		if (index < 0 || index >= objectCellClass(handle).fields.length) return raiserNil();
+		return objectCellFieldValue(handle, index as number);
+	}
 	const obj = heap.objects[handleIndex(handle)];
 	if (index < 0 || index >= objectFieldCount(obj)) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
 	return fieldValueAt(obj, index as number);
 }
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: string): RaiserValue {
+	if (isObjectCell(handle)) {
+		const at = objectCellClass(handle).fields.indexOf(name);
+		return at >= 0 ? objectCellFieldValue(handle, at) : raiserNil();
+	}
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
 	return i >= 0 ? fieldValueAt(obj, i) : raiserNil();
 }
 
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
+	if (isObjectCell(handle)) {
+		const at = objectCellClass(handle).fields.indexOf(name);
+		if (at < 0) throw new Error(`internal: ${objectCellClass(handle).name} has no field '${name}' and a laid object takes none past its layout`);
+		objectCellStoreField(handle, at, val);
+		return;
+	}
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
 	if (i >= 0) fieldStoreAt(obj, i, val);
