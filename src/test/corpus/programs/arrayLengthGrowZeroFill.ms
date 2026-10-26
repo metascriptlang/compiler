@@ -1,5 +1,4 @@
 // @skip-js: the JS backend leaves grown slots undefined (inbox 2026-10-12-js-array-setlength-grow-leaves-undefined-slots)
-// @xfail(raiser): the Raiser VM refuses `a.length = n` on an int32[] with "expected an object, got value kind Array" (base compiler too)
 // @stdout: int32 1 2 0 0 0 0 0 0
 // @stdout: uint8 1 2 0 0 0 0 0 0
 // @stdout: int16 1 2 0 0 0 0 0 0
