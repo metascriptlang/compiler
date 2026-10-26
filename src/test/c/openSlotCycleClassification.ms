@@ -20,6 +20,14 @@ function cyclicOps(c: string): int32 {
 	return n;
 }
 
+function traceRefs(c: string): int32 {
+	let n: int32 = 0;
+	for (const line of c.split("\n")) {
+		if (line.contains("msOrcTraceRef(")) n += 1;
+	}
+	return n;
+}
+
 function cyclicFlag(c: string, name: string): string {
 	const line = typeInfoOf(c, name);
 	if (line == "") return "no TypeInfo for " + name + " in " + c.substring(0, 200);
@@ -258,4 +266,20 @@ console.log(n.data !== null);
 `);
 	assert cyclicFlag(c, "Env") == "cyclic";
 	assert cyclicFlag(c, "Node") == "cyclic";
+}
+
+test "E2E C: the record arms of a union a cyclic class holds are not traced when they reach nothing" {
+	const c = compiled(`export type U = { s: string } | { n: number, b: boolean };
+export class K { u: U; next: K | null; }
+export function f(k: K): int32 { k.next = k; return 1; }
+`);
+	assert traceRefs(c) == 1;
+}
+
+test "E2E C: a union record arm that holds the cyclic class is traced beside the class's own edge" {
+	const c = compiled(`export type U = { s: string } | { n: number, b: boolean } | { k: K };
+export class K { u: U; next: K | null; }
+export function f(k: K): int32 { k.next = k; return 1; }
+`);
+	assert traceRefs(c) == 2;
 }
