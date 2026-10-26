@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-loop r=5000056-2000000
 // A self tail call inside a while / do-while body IS lowered: the wrapper
 // carries a label and the rewrite continues the wrapper, not the inner loop

@@ -1,5 +1,4 @@
 // @stdout: ints=3,2,1,|refs=tz3,txb32,txxb21,|deep=2|guarded=4
-// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 class Box { s: string = ""; constructor(s: string) { this.s = s; } }
 function build(n: int32, acc: (() => int32)[]): (() => int32)[] {
 	if (n == 0) return acc;
