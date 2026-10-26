@@ -11,16 +11,10 @@ export function splitLines(s: string): string[] {
 			start = i + 1;
 		}
 	}
-	if (start <= s.byteLength) {
-		lines.push(s.slice(start, s.byteLength));
-	}
+	lines.push(s.slice(start, s.byteLength));
 	return lines;
 }
 
-// Uses the "tabs for indentation, spaces for alignment" model (EditorConfig/Go convention):
-//   - Tabs-mode: tabs first, then optional trailing spaces for alignment -> valid.
-//     Only flag when a space appears *before* a tab (interleaved).
-//   - Spaces-mode: any tab in leading whitespace -> wrong.
 export interface LineIndent {
 	indentEnd: int32;
 	hasSpace: boolean;
@@ -75,6 +69,15 @@ test "LF line content preserves spaces and trailing blank lines" {
 	assert lines[1] == "日";
 	assert lines[2] == "";
 	assert lines[3] == "";
+}
+
+test "a missing trailing newline keeps the last line and an empty string is one empty line" {
+	const unterminated = splitLines("a\r\nb");
+	assert unterminated.length == 2;
+	assert unterminated[1] == "b";
+	const empty = splitLines("");
+	assert empty.length == 1;
+	assert empty[0] == "";
 }
 
 test "CRLF line content excludes terminators but preserves spaces and blank lines" {
