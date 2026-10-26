@@ -55,7 +55,7 @@ function expect(program: string, small: Map<string, int64>, big: Map<string, int
 }
 
 ensureDir(OUT);
-for (const program of ["collectGraph", "cycleRegister"]) {
+for (const program of ["collectGraph", "cycleRegister", "closureVisit"]) {
 	const exe = `${OUT}/${program}`;
 	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
 	if (!ok(b)) {
@@ -66,6 +66,11 @@ for (const program of ["collectGraph", "cycleRegister"]) {
 	const small = runWith(exe, SMALL, `${OUT}/${program}.small`);
 	const big = runWith(exe, BIG, `${OUT}/${program}.big`);
 	const n = BIG - SMALL;
+	if (program == "closureVisit") {
+		expect(program, small, big, "alloc.count", n);
+		expect(program, small, big, "cycle.register.count", 0);
+		continue;
+	}
 	expect(program, small, big, "alloc.count", 2 * n);
 	if (program == "collectGraph") {
 		expect(program, small, big, "cycle.register.count", 2 * n);
