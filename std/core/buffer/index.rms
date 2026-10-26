@@ -71,13 +71,11 @@ function isUtf8Name(enc: string): boolean {
 
 // Decodes `value` as the C runtime's hex and base64 constructors do; null-free by returning the bytes.
 function decodeHex(value: string): Buffer {
-	const n = value.byteLength / 2;
+	const limit = value.byteLength / 2;
+	let n = 0;
+	while (n < limit && hexVal(sbyte(value, n * 2)) >= 0 && hexVal(sbyte(value, n * 2 + 1)) >= 0) n += 1;
 	const out = newBuffer(n);
-	for (let i = 0; i < n; i += 1) {
-		const hi = hexVal(sbyte(value, i * 2));
-		const lo = hexVal(sbyte(value, i * 2 + 1));
-		put(out, i, hi < 0 || lo < 0 ? 0 : (hi << 4) | lo);
-	}
+	for (let i = 0; i < n; i += 1) put(out, i, (hexVal(sbyte(value, i * 2)) << 4) | hexVal(sbyte(value, i * 2 + 1)));
 	return out;
 }
 
@@ -500,15 +498,27 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 
 // ===== Fixed-width integers =====
 
+// A read or write outside the buffer, an integer outside its width, or a byteLength outside 1..6
+// stops with the range error the Node Buffer throws, as the C runtime does.
+function need(b: Buffer, o: int64, width: int64): void {
+	const max: int64 = (b.length as int64) - width;
+	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
+	if (o < 0 || o > max) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${o}`);
+}
+
+function inRange(v: int64, lo: int64, hi: int64): void {
+	if (v < lo || v > hi) throw new RangeError(`The value of "value" is out of range. It must be >= ${lo} and <= ${hi}. Received ${v}`);
+}
+
 function readLE(b: Buffer, o: int64, width: int64): int64 {
-	if (o < 0 || o + width > b.length) return 0;
+	need(b, o, width);
 	let v: int64 = 0;
 	for (let k: int64 = width - 1; k >= 0; k -= 1) v = (v << 8) | at8(b, o + k);
 	return v;
 }
 
 function readBE(b: Buffer, o: int64, width: int64): int64 {
-	if (o < 0 || o + width > b.length) return 0;
+	need(b, o, width);
 	let v: int64 = 0;
 	for (let k: int64 = 0; k < width; k += 1) v = (v << 8) | at8(b, o + k);
 	return v;
@@ -520,13 +530,13 @@ function signed(v: int64, bits: int64): int64 {
 }
 
 function writeLE(b: Buffer, value: int64, o: int64, width: int64): int64 {
-	if (o < 0 || o + width > b.length) return o;
+	need(b, o, width);
 	for (let k: int64 = 0; k < width; k += 1) put(b, o + k, value >> (k * 8));
 	return o + width;
 }
 
 function writeBE(b: Buffer, value: int64, o: int64, width: int64): int64 {
-	if (o < 0 || o + width > b.length) return o;
+	need(b, o, width);
 	for (let k: int64 = 0; k < width; k += 1) put(b, o + k, value >> ((width - 1 - k) * 8));
 	return o + width;
 }
@@ -542,16 +552,16 @@ export function readInt16BE(this b: Buffer, o: number): number { return signed(r
 export function readInt32LE(this b: Buffer, o: number): number { return signed(readLE(b, o as int64, 4), 32) as number; }
 export function readInt32BE(this b: Buffer, o: number): number { return signed(readBE(b, o as int64, 4), 32) as number; }
 
-export function writeUInt8(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 1) as number; }
-export function writeUInt16LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 2) as number; }
-export function writeUInt16BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 2) as number; }
-export function writeUInt32LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 4) as number; }
-export function writeUInt32BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 4) as number; }
-export function writeInt8(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 1) as number; }
-export function writeInt16LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 2) as number; }
-export function writeInt16BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 2) as number; }
-export function writeInt32LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 4) as number; }
-export function writeInt32BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 4) as number; }
+export function writeUInt8(this b: Buffer, v: number, o: number): number { inRange(v as int64, 0, 255); return writeLE(b, v as int64, o as int64, 1) as number; }
+export function writeUInt16LE(this b: Buffer, v: number, o: number): number { inRange(v as int64, 0, 65535); return writeLE(b, v as int64, o as int64, 2) as number; }
+export function writeUInt16BE(this b: Buffer, v: number, o: number): number { inRange(v as int64, 0, 65535); return writeBE(b, v as int64, o as int64, 2) as number; }
+export function writeUInt32LE(this b: Buffer, v: number, o: number): number { inRange(v as int64, 0, 4294967295); return writeLE(b, v as int64, o as int64, 4) as number; }
+export function writeUInt32BE(this b: Buffer, v: number, o: number): number { inRange(v as int64, 0, 4294967295); return writeBE(b, v as int64, o as int64, 4) as number; }
+export function writeInt8(this b: Buffer, v: number, o: number): number { inRange(v as int64, -128, 127); return writeLE(b, v as int64, o as int64, 1) as number; }
+export function writeInt16LE(this b: Buffer, v: number, o: number): number { inRange(v as int64, -32768, 32767); return writeLE(b, v as int64, o as int64, 2) as number; }
+export function writeInt16BE(this b: Buffer, v: number, o: number): number { inRange(v as int64, -32768, 32767); return writeBE(b, v as int64, o as int64, 2) as number; }
+export function writeInt32LE(this b: Buffer, v: number, o: number): number { inRange(v as int64, -2147483648, 2147483647); return writeLE(b, v as int64, o as int64, 4) as number; }
+export function writeInt32BE(this b: Buffer, v: number, o: number): number { inRange(v as int64, -2147483648, 2147483647); return writeBE(b, v as int64, o as int64, 4) as number; }
 
 // ===== Float and double =====
 
@@ -602,16 +612,16 @@ function singleBits(value: number): int64 {
 }
 
 export function readFloatLE(this b: Buffer, o: number): number {
-	return o < 0 || o + 4 > b.length ? 0.0 : singleFromBits(readLE(b, o as int64, 4));
+	return singleFromBits(readLE(b, o as int64, 4));
 }
 export function readFloatBE(this b: Buffer, o: number): number {
-	return o < 0 || o + 4 > b.length ? 0.0 : singleFromBits(readBE(b, o as int64, 4));
+	return singleFromBits(readBE(b, o as int64, 4));
 }
 export function readDoubleLE(this b: Buffer, o: number): number {
-	return o < 0 || o + 8 > b.length ? 0.0 : doubleFromBits(readLE(b, o as int64, 8) as uint64);
+	return doubleFromBits(readLE(b, o as int64, 8) as uint64);
 }
 export function readDoubleBE(this b: Buffer, o: number): number {
-	return o < 0 || o + 8 > b.length ? 0.0 : doubleFromBits(readBE(b, o as int64, 8) as uint64);
+	return doubleFromBits(readBE(b, o as int64, 8) as uint64);
 }
 export function writeFloatLE(this b: Buffer, v: number, o: number): number { return writeLE(b, singleBits(v), o as int64, 4) as number; }
 export function writeFloatBE(this b: Buffer, v: number, o: number): number { return writeBE(b, singleBits(v), o as int64, 4) as number; }
@@ -663,31 +673,47 @@ export function bufReverse(this b: Buffer): void { swapGroups(b, b.length); }
 
 // ===== Variable-width integers (1-6 bytes) =====
 
-function validWidth(b: Buffer, o: number, width: number): boolean {
-	return o >= 0 && width > 0 && width <= 6 && o + width <= b.length;
+function widthOf(byteLength: number): int64 {
+	const w = byteLength as int64;
+	if (w < 1 || w > 6) throw new RangeError(`The value of "byteLength" is out of range. It must be >= 1 and <= 6. Received ${w}`);
+	return w;
+}
+
+function unsignedSpan(width: int64): int64 {
+	return (1 as int64) << (width * 8);
 }
 
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? readLE(b, o as int64, byteLength as int64) as number : 0;
+	return readLE(b, o as int64, widthOf(byteLength)) as number;
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? readBE(b, o as int64, byteLength as int64) as number : 0;
+	return readBE(b, o as int64, widthOf(byteLength)) as number;
 }
 export function readIntLE(this b: Buffer, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? signed(readLE(b, o as int64, byteLength as int64), (byteLength as int64) * 8) as number : 0;
+	const w = widthOf(byteLength);
+	return signed(readLE(b, o as int64, w), w * 8) as number;
 }
 export function readIntBE(this b: Buffer, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? signed(readBE(b, o as int64, byteLength as int64), (byteLength as int64) * 8) as number : 0;
+	const w = widthOf(byteLength);
+	return signed(readBE(b, o as int64, w), w * 8) as number;
 }
 export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? writeLE(b, v as int64, o as int64, byteLength as int64) as number : o;
+	const w = widthOf(byteLength);
+	inRange(v as int64, 0, unsignedSpan(w) - 1);
+	return writeLE(b, v as int64, o as int64, w) as number;
 }
 export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	return validWidth(b, o, byteLength) ? writeBE(b, v as int64, o as int64, byteLength as int64) as number : o;
+	const w = widthOf(byteLength);
+	inRange(v as int64, 0, unsignedSpan(w) - 1);
+	return writeBE(b, v as int64, o as int64, w) as number;
 }
 export function writeIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	return writeUIntLE(b, v, o, byteLength);
+	const w = widthOf(byteLength);
+	inRange(v as int64, -(unsignedSpan(w) >> 1), (unsignedSpan(w) >> 1) - 1);
+	return writeLE(b, v as int64, o as int64, w) as number;
 }
 export function writeIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	return writeUIntBE(b, v, o, byteLength);
+	const w = widthOf(byteLength);
+	inRange(v as int64, -(unsignedSpan(w) >> 1), (unsignedSpan(w) >> 1) - 1);
+	return writeBE(b, v as int64, o as int64, w) as number;
 }
