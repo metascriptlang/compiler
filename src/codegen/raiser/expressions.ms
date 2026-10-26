@@ -2360,7 +2360,6 @@ function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32
 }
 
 function sharedNewKind(t: Type | null, sym: Symbol | null): string {
-	if (sym != null && sym.symbolKind == SymbolKind.Actor) return "actors";
 	if (t != null && isAtomicRef(t)) return "Arc and Locked cells";
 	return "";
 }
