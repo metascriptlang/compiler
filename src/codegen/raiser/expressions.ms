@@ -327,13 +327,20 @@ function isUint64Type(t: Type | null): boolean {
 	return t != null && peelDistinct(t).kind == TypeKind.Uint64;
 }
 
+function stringPartIsChar(node: Node): boolean {
+	return node.nodeType != null && peelDistinct(node.nodeType).kind == TypeKind.Char;
+}
+
 function compileStringPart(s: RaiserCompState, node: Node): int32 {
 	const reg = compileExpr(s, node);
-	if (node.nodeType != null && peelDistinct(node.nodeType).kind == TypeKind.Char) {
-		return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.Char as int32);
-	}
+	if (stringPartIsChar(node)) return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.Char as int32);
 	if (!isUint64Type(node.nodeType)) return reg;
 	return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.U64 as int32);
+}
+
+// A char or uint64 part is converted to a fresh string that only its consumer holds.
+function releaseStringPart(s: RaiserCompState, node: Node, reg: int32): void {
+	if (stringPartIsChar(node) || isUint64Type(node.nodeType)) emitInst(s, raiserABC(RaiserOpcode.RcDec, reg, 0, 0));
 }
 
 function bitwiseOpcode(op: string): RaiserOpcode {
@@ -1272,6 +1279,8 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const typed = hasStringType(d.left) && hasStringType(d.right)
 			&& classOfReg(s, lReg) == RaiserRegClass.Ref && classOfReg(s, rReg) == RaiserRegClass.Ref;
 		emitInst(s, raiserABC(typed ? RaiserOpcode.ConcatStrR : RaiserOpcode.ConcatStr, dest, lReg, rReg));
+		releaseStringPart(s, d.left, lReg);
+		releaseStringPart(s, d.right, rReg);
 		return dest;
 	}
 
@@ -1510,6 +1519,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileExpr(s, d.right);
 		if (strConcat) {
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
+			releaseStringPart(s, d.right, rhsReg);
 		} else {
 			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
 		}
@@ -1526,6 +1536,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 			// String concat: += on string variable
 			if (strConcat) {
 				emitInst(s, raiserABC(RaiserOpcode.ConcatStr, targetReg, targetReg, rhsReg));
+				releaseStringPart(s, d.right, rhsReg);
 			} else {
 				emitCompoundArith(s, op, targetReg, targetReg, rhsReg, d.left);
 			}
@@ -1545,6 +1556,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileCompoundOperand(s, op, d.right);
 		if (strConcat) {
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
+			releaseStringPart(s, d.right, rhsReg);
 		} else {
 			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
 		}
@@ -1924,6 +1936,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			for (let i = 0; i < d.arguments.length; i = i + 1) {
 				lastReg = compileStringPart(s, d.arguments[i]);
 				emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
+				releaseStringPart(s, d.arguments[i], lastReg);
 			}
 			return lastReg;
 		}
@@ -2594,6 +2607,7 @@ function compileTextOf(s: RaiserCompState, obj: Node): int32 {
 	emitLoadConst(s, emptyReg, raiserConstString(""));
 	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, objReg, emptyReg));
+	releaseStringPart(s, obj, objReg);
 	return dest;
 }
 
@@ -2737,10 +2751,12 @@ function compileEchoLine(s: RaiserCompState, args: Node[]): int32 {
 	}
 	const firstReg = compileStringPart(s, args[0]);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, firstReg, emptyReg));
+	releaseStringPart(s, args[0], firstReg);
 	for (let i = 1; i < args.length; i = i + 1) {
 		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, spaceReg));
 		const argReg = compileStringPart(s, args[i]);
 		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, argReg));
+		releaseStringPart(s, args[i], argReg);
 	}
 	return acc;
 }
