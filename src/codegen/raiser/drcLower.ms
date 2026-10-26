@@ -3,14 +3,14 @@ import { hasFlag } from "../../checker/symbol";
 import { isStructType, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
-import { RaiserCompState, emitInst, allocBlock, allocRef, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
+import { RaiserCompState, emitInst, allocBlock, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { getOpByKey } from "../c/types";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
 import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
 import {
-	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT,
+	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT, ROW_TRACE, ROW_SET_LEN,
 	ownershipName, ownershipRow,
 } from "./drcRows";
 
@@ -46,6 +46,10 @@ function emitPlaceStore(s: RaiserCompState, name: string, place: Node, value: in
 		const d = place.data as ArrayAccessData;
 		const arrReg = compileExpr(s, d.array);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, compileIndex(s, d.index), value));
+		return;
+	}
+	else if (place.kind == NodeKind.HiddenDeref) {
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, compileExpr(s, (place.data as HiddenDerefData).expr), 0, value));
 		return;
 	}
 	throw new Error(`internal: ${name} stores into a ${place.kind.toString()}, which Raiser has no store for`);
@@ -271,6 +275,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	const row = ownershipRow(d.callee.resolvedSym);
 	if (row == 0) return false;
 	const name = ownershipName(d.callee.resolvedSym);
+	if (row == ROW_COPY_VALUE && d.arguments.length != 2) throw new Error(`internal: Raiser has no lowering for ${name} with ${d.arguments.length} argument(s) in statement position`);
 	if (row == ROW_INCREF) emitInst(s, raiserABC(RaiserOpcode.RcInc, refRegister(s, name, d.arguments[0]), 0, 0));
 	else if (row == ROW_DECREF) emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 0, 0));
 	else if (row == ROW_DECREF_CYCLIC) emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 1, 0));
@@ -282,6 +287,11 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	else if (row == ROW_STR_APPEND) emitAppend(s, name, d.arguments[0], compileExpr(s, d.arguments[1]));
 	else if (row == ROW_STR_APPEND_CHAR) emitAppendChar(s, name, d.arguments[0], d.arguments[1]);
 	else if (row == ROW_STR_APPEND_CODEPOINT) emitAppendCodePoint(s, name, d.arguments[0], d.arguments[1]);
-	else throw new Error(`internal: ownership row ${row} of ${name} has no emitter`);
+	else if (row == ROW_SET_LEN) {
+		const len = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayLen, len, refRegister(s, name, d.arguments[1]), 0));
+		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, refRegister(s, name, d.arguments[0]), len, 0));
+	}
+	else if (row != ROW_TRACE) throw new Error(`internal: ownership row ${row} of ${name} has no emitter`);
 	return true;
 }

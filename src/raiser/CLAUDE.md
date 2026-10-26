@@ -13,7 +13,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | `regs.ms` | register layout: class inference, the operand verifier, renumbering into the word file and the ref file |
 | `ledger.ms` | live-0 audit: finds heap items whose count exceeds the references that remain |
 | `vm.ms` | dispatch loop, strands and scheduler, futures, safepoints, loop budget |
-| `orc.ms` | `orcCollectCycles`: trial-deletion cycle collector |
+| `orc.ms` | `orcRegisterCandidate` / `orcCollect`: the registered-root cycle collector |
 | `context.ms` | persistent context across module executions: the embedding API |
 | `hostRegistry.ms` / `marshal.ms` | `CallHost` name → function table; box / unbox at the host boundary |
 | `disasm.ms` | bytecode printer |
@@ -22,7 +22,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 
 - **The VM knows no AST** — `src/raiser/` never imports a node type; codegen hands it a `RaiserModule`.
 - **Dispatch is one `switch (op)` in `vm.ms` over packed instruction words, one arm per opcode** — the `while (true)` around it is marked `@computedGoto`, so the C backend jumps through a table of label addresses.
-- **`gcMode` picks the memory regime per VM** — `createVM` and `createContext` default to `"arena"` (no refcount); `cmdRunRaiser` sets `"orc"`. RC and the cycle collector run only under `"orc"`.
+- **Every program runs placed** — the bytecode carries every count (`RcInc`, `RcDec`, `WasMoved`, `DestroyValue`); the VM only holds and releases box shells. `comptime` (the macro engine, the default of `createVM` and `execModule`) skips timers, spawn and the ledger audit; the CLI and `createContext(false)` run with the audit, which in a build that keeps the ledger collects the registered cycle roots once right before it.
 - **A string is a handle on the strand's string heap** — text reaches a host function only through `unboxString` and returns through `boxString`, both on the active host heap; module constants and field names are interned handles below zero that every heap reads.
 - **Every value that crosses strand heaps goes through `copyGraph`** — `spawn` copies the closure env and the global slots into the new strand's heap, `futureComplete` copies the result into the future's own heap, the awaiting reader copies it out.
 - **A parked strand rewinds to its `Await` and runs it again on resume** — no partial-instruction state is saved anywhere.

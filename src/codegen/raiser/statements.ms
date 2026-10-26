@@ -20,7 +20,7 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
-	registerRaiserStmtCompiler, raiserPlaced, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
@@ -48,12 +48,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				compileExprForEffect(s, d.argument);
 				emitReturnNothing(s);
 			} else if (d.argument != null) {
-				let reg = emitStoreCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
-				if (s.tries.length > 0) {
-					const held = allocReg(s, classOfReg(s, reg));
-					emitInst(s, raiserABC(RaiserOpcode.Move, held, reg, 0));
-					reg = held;
-				}
+				const reg = compileExpr(s, d.argument);
 				emitRet(s, reg);
 			} else {
 				emitReturnNothing(s);
@@ -65,7 +60,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				const mi = d.expr.data as MacroInvocationData;
 				if (mi.macroName != "emit") { return; }
 			}
-			if (raiserPlaced() && compileOwnershipStmt(s, d.expr)) return;
+			if (compileOwnershipStmt(s, d.expr)) return;
 			compileExprForEffect(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
@@ -186,7 +181,7 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			}
 		}
 		const isStr = exprIsString(s, d.initializer);
-		const reg = emitStoreCopy(s, compileExpr(s, d.initializer), node.nodeType);
+		const reg = compileExpr(s, d.initializer);
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
