@@ -52,6 +52,7 @@ export function backendName(backend: Backend): string {
 		Backend.C => "c",
 		Backend.JS => "js",
 		Backend.Raiser => "raiser",
+		Backend.Wasm => "c",
 		_ => "",
 	};
 	if (name == "") throw new Error(`internal: no build defines for the backend '${backendExtension(backend)}'`);

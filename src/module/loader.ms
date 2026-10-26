@@ -861,8 +861,8 @@ test "an absolute import with an explicit extension loads the module it names" {
 
 test "a module loaded for a backend is parsed as that backend's build" {
 	const app = "when (c) { import { x } from \"/vendor/c.ms\"; } else { import { x } from \"/vendor/js.ms\"; }";
-	const backends: Backend[] = [Backend.C, Backend.JS];
-	const picked: string[] = ["/vendor/c.ms", "/vendor/js.ms"];
+	const backends: Backend[] = [Backend.C, Backend.JS, Backend.Wasm];
+	const picked: string[] = ["/vendor/c.ms", "/vendor/js.ms", "/vendor/c.ms"];
 	for (let i = 0; i < backends.length; i++) {
 		const entries: MapEntry[] = [];
 		entries.push(makeEntry("/src/a.ms", app));
