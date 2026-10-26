@@ -56,7 +56,7 @@ Measured on lc-1, tree 651e100ee, 2026-10-26, cache warm:
 - **Over budget now; these are tracked on card `fast-loop`:**
   - `src/checker/checkPass.ms` takes 65 s with the flag, 30 s of it its own tests.
   - `src/codegen/raiser/eval.ms` takes 76 s with the flag, 19 s of it its own tests.
-  - Every test binary costs about 40 s to build, because the front end checks and transforms the test blocks of every module in the graph, not only the tested ones.
+  - Every test binary costs about 40 s to build, because the front end checks and transforms every module the tested file imports. For `inject.ms` with the flag, `MSC_FLOWS` splits 62–72 s into graph 7, phase A 23, DCE 6–8, link 7–11 and the run of the `-O0` test binary 12–19.
 - **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 
 **After a RED land, rerun the named failures in the owning worktree before requeueing.** Fix new reds before requeueing; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
