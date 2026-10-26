@@ -93,7 +93,12 @@ export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node,
 		return;
 	}
 	const refusal = writeRefusal(place, WriteSite.RefArg);
-	if (refusal == "" || node.nodeType == null || isReadonlyView(node.nodeType)) return;
+	if (refusal == "") return;
+	if (node.nodeType == null) {
+		addError(ctx, refusal, expr.location.line, expr.location.column);
+		return;
+	}
+	if (isReadonlyView(node.nodeType)) return;
 	const view = createReadonlyView(node.nodeType);
 	if (isReadonlyView(view)) {
 		node.nodeType = view;
