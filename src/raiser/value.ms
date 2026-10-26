@@ -656,6 +656,114 @@ export function arrayHeldStore(data: RaiserArrayData, index: number, val: Raiser
 	data.words[index] = slotWord(data.elemClass, val);
 }
 
+function heldCopy(val: RaiserValue): RaiserValue {
+	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
+	return copy;
+}
+
+function heldSwap(data: RaiserArrayData, i: number, j: number): void {
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		const kept = heldCopy(data.items[i]);
+		data.items[i] = heldCopy(data.items[j]);
+		data.items[j] = kept;
+		return;
+	}
+	const kept = data.words[i];
+	data.words[i] = data.words[j];
+	data.words[j] = kept;
+}
+
+// Removes `count` held values from `start` without counting: the caller reads and releases them first.
+export function arrayHeldRemove(data: RaiserArrayData, start: number, count: number): void {
+	const n = arrayHeldCount(data);
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		for (let i = start; i + count < n; i += 1) data.items[i] = heldCopy(data.items[i + count]);
+		data.items.shrink((n - count) as int64);
+		return;
+	}
+	for (let i = start; i + count < n; i += 1) data.words[i] = data.words[i + count];
+	data.words.shrink((n - count) as int64);
+}
+
+// Inserts a value at `index` without counting: the array takes over the caller's count of it.
+export function arrayHeldInsert(data: RaiserArrayData, index: number, val: RaiserValue): void {
+	arrayHeldPush(data, val);
+	for (let i = arrayHeldCount(data) - 1; i > index; i -= 1) heldSwap(data, i, i - 1);
+}
+
+export function arrayHeldReverse(data: RaiserArrayData): void {
+	let j = arrayHeldCount(data) - 1;
+	for (let i = 0; i < j; i += 1) {
+		heldSwap(data, i, j);
+		j -= 1;
+	}
+}
+
+function heldLess(heap: RaiserArrayHeap, cls: RaiserRegClass, x: int64, y: int64): boolean {
+	if (cls == RaiserRegClass.Float) return msBitsFloat64(x) < msBitsFloat64(y);
+	if (cls == RaiserRegClass.Ref) return heapStringLess(heap, handleValue(x), handleValue(y));
+	return x < y;
+}
+
+// Sorts the held values in place, stable: numbers by value (a NaN compares equal to everything, as the C kernel's
+// comparator does) and strings by bytes. "" on success, otherwise why the array cannot be sorted.
+export function arrayHeldSort(heap: RaiserArrayHeap, data: RaiserArrayData): string {
+	const cls = data.elemClass;
+	if (cls == RaiserRegClass.Dyn) return "internal: sort of an array of tagged values";
+	const n = data.words.length;
+	if (cls == RaiserRegClass.Ref) {
+		for (let i = 0; i < n; i += 1) {
+			if (!isStringHandleTag(handleTag(data.words[i]))) return "internal: sort of an array whose element is no string";
+		}
+	}
+	const from: int64[] = [];
+	const to: int64[] = [];
+	for (let i = 0; i < n; i += 1) {
+		from.push(data.words[i]);
+		to.push(0);
+	}
+	let width = 1;
+	while (width < n) {
+		let lo = 0;
+		while (lo < n) {
+			const mid = lo + width < n ? lo + width : n;
+			const hi = lo + 2 * width < n ? lo + 2 * width : n;
+			let i = lo;
+			let j = mid;
+			let k = lo;
+			while (i < mid && j < hi) {
+				if (heldLess(heap, cls, from[j], from[i])) {
+					to[k] = from[j];
+					j += 1;
+				} else {
+					to[k] = from[i];
+					i += 1;
+				}
+				k += 1;
+			}
+			while (i < mid) {
+				to[k] = from[i];
+				i += 1;
+				k += 1;
+			}
+			while (j < hi) {
+				to[k] = from[j];
+				j += 1;
+				k += 1;
+			}
+			lo += 2 * width;
+		}
+		for (let i = 0; i < n; i += 1) from[i] = to[i];
+		width *= 2;
+	}
+	for (let i = 0; i < n; i += 1) data.words[i] = from[i];
+	return "";
+}
+
+function isStringHandleTag(tag: int64): boolean {
+	return tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64);
+}
+
 function arrayHeldPush(data: RaiserArrayData, val: RaiserValue): void {
 	if (data.elemClass == RaiserRegClass.Dyn) {
 		const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
