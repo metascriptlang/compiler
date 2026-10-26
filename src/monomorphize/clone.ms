@@ -106,7 +106,7 @@ export function bindsSignatureTypes(node: Node): boolean {
 // The mode distinction ensures that dbTypeCheck can safely mutate the clone without
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
-function copyNodeMeta(src: Node, dst: Node): Node {
+function copyNodeMeta(src: Node, dst: Node): void {
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
 		dst.variantSlot = src.variantSlot;
@@ -118,7 +118,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.paramLocations = src.paramLocations;
 		dst.paramSyms = src.paramSyms;
 		dst.comments = src.comments;
-		return dst;
+		return;
 	}
 	// Clear Sem flag on mono clones so monoCheckInstantiatedBody can actually
 	// re-check the cloned body. Without this, the Sem flag from the original
@@ -168,7 +168,6 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		if (isFrameValue(src.resolvedSym)) dst.flags = dst.flags.excl(NodeFlag.BoundSym);
 		else dst.resolvedSym = src.resolvedSym;
 	}
-	return dst;
 }
 
 const cloneXform: FieldXform = {
@@ -209,7 +208,9 @@ const cloneXform: FieldXform = {
 function cloneNodeImpl(node: Node | null): Node {
 	if (node == null) return null as unknown as Node;
 	const loc = node.location;
-	return copyNodeMeta(node, createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn)));
+	const dst = createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn));
+	copyNodeMeta(node, dst);
+	return dst;
 }
 
 
