@@ -51,9 +51,9 @@ actor Sink {
 }
 
 actor Feeds {
-	peer: Sink = new Sink();
+	p: Sink = new Sink();
 	ping(): int32 { return 1; }
-	onTerminate(reason: ExitReason): void { this.peer.take(await this.peer.ping()); } // GUARD-REFUSED
+	onTerminate(reason: ExitReason): void { this.p.take(await this.p.ping()); } // GUARD-REFUSED
 }
 
 actor Settles {
