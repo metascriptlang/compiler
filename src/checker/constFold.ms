@@ -682,28 +682,28 @@ export function foldBinaryLiterals(op: string, left: Node, right: Node, node: No
 		NodeKind.NumberLiteral => {
 			const ld = left.data as NumberLiteralData;
 			const rd = right.data as NumberLiteralData;
-			if (!ld.isFloat && !rd.isFloat) {
-				if (isComparisonOperator(op) && left.nodeType != null && isIntegerType(left.nodeType)
-						&& literalFitsWidth(ld, left.nodeType) && literalFitsWidth(rd, left.nodeType)) {
-					return foldIntegerComparison(op, ld.intVal, rd.intVal, left.nodeType, loc, node);
-				}
-				if (!isComparisonOperator(op) && node.nodeType != null && isIntegerType(node.nodeType)
-						&& literalFitsWidth(ld, node.nodeType) && literalFitsWidth(rd, node.nodeType)) {
-					return foldIntegerArithmetic(op, ld.intVal, rd.intVal, node.nodeType, loc, node);
-				}
+			const ints = !ld.isFloat && !rd.isFloat;
+			if (ints && isComparisonOperator(op) && left.nodeType != null && isIntegerType(left.nodeType)
+					&& literalFitsWidth(ld, left.nodeType) && literalFitsWidth(rd, left.nodeType)) {
+				foldIntegerComparison(op, ld.intVal, rd.intVal, left.nodeType, loc, node)
+			} else if (ints && !isComparisonOperator(op) && node.nodeType != null && isIntegerType(node.nodeType)
+					&& literalFitsWidth(ld, node.nodeType) && literalFitsWidth(rd, node.nodeType)) {
+				foldIntegerArithmetic(op, ld.intVal, rd.intVal, node.nodeType, loc, node)
+			} else if (!fitsDouble(ld) || !fitsDouble(rd) || involvesFloat32(left, right, node)) {
+				node
+			} else {
+				foldNumberBinary(op, ld.value, rd.value, loc, node)
 			}
-			if (!fitsDouble(ld) || !fitsDouble(rd) || involvesFloat32(left, right, node)) return node;
-			return foldNumberBinary(op, ld.value, rd.value, loc, node);
 		},
 		NodeKind.StringLiteral => {
 			const ls = (left.data as StringLiteralData).value;
 			const rs = (right.data as StringLiteralData).value;
-			return foldStringBinary(op, ls, rs, loc, node);
+			foldStringBinary(op, ls, rs, loc, node)
 		},
 		NodeKind.BooleanLiteral => {
 			const lb = (left.data as BooleanLiteralData).boolValue;
 			const rb = (right.data as BooleanLiteralData).boolValue;
-			return foldBoolBinary(op, lb, rb, loc, node);
+			foldBoolBinary(op, lb, rb, loc, node)
 		},
 		_ => node,
 	};

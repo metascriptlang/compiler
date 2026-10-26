@@ -1685,7 +1685,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.BlockStmt => processBlockBody(stmt, dctx, false, false, sloc),
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
-		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); return stmt; },
+		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); stmt },
 		NodeKind.ThrowStmt => processThrow(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, idx, stmts, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),

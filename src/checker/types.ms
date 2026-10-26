@@ -4439,6 +4439,39 @@ function substituteAllParamsInner(t: Type | null, params: Type[], concretes: Typ
 	return result;
 }
 
+function substitutedUnionOrTupleAll(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	const copy = copyTypeForSubst(t);
+	substituteChildrenInPlaceAll(copy, params, concretes, active);
+	for (const child of copy.typeChildren) { propagateToOwner(copy, child); }
+	return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
+}
+
+function substitutedInstanceAll(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
+	const reused = reusedPastLimit(t);
+	if (reused != null) return reused;
+	const gi = copyTypeForSubst(t);
+	noteSessionInstance(t, gi);
+	substituteChildrenInPlaceAll(gi, params, concretes, active);
+	const building = instanceBeingBuilt(gi);
+	if (building != null) return building;
+	if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
+		if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(gi)}' would reach emission without its body`);
+		gi.typeReturn = null as unknown as Type;
+		instantiateGenericBody(gi, genericParamsOf(gi));
+	} else if (gi.typeReturn != null) {
+		_substitutingFrom.push(t);
+		_substitutingTo.push(gi);
+		gi.typeReturn = substituteAllParamsInner(gi.typeReturn, params, concretes, active);
+		_substitutingFrom.pop();
+		_substitutingTo.pop();
+		nameInstanceBody(gi, t);
+	} else if (!_queryCachesReadOnly) {
+		instantiateGenericBody(gi, genericParamsOf(gi));
+	}
+	return gi;
+}
+
 function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
@@ -4456,15 +4489,11 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				const fn = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(fn, params, concretes, active);
 				fn.typeReturn = substituteAllParamsInner(t.typeReturn, params, concretes, active);
-				return fn;
+				fn
 			},
-			TypeKind.Union | TypeKind.Tuple => {
-				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
-				const copy = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(copy, params, concretes, active);
-				for (const child of copy.typeChildren) { propagateToOwner(copy, child); }
-				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
-			},
+			TypeKind.Union | TypeKind.Tuple => t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)
+				? t
+				: substitutedUnionOrTupleAll(t, params, concretes, active),
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), params, concretes, active)),
 			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
@@ -4473,41 +4502,17 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Distinct => substitutedDistinct(t, substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Struct => substituteStructAll(t, params, concretes, active),
-			TypeKind.GenericInstance => {
-				// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
-				const reused = reusedPastLimit(t);
-				if (reused != null) return reused;
-				const gi = copyTypeForSubst(t);
-				noteSessionInstance(t, gi);
-				substituteChildrenInPlaceAll(gi, params, concretes, active);
-				const building = instanceBeingBuilt(gi);
-				if (building != null) return building;
-				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
-					if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(gi)}' would reach emission without its body`);
-					gi.typeReturn = null as unknown as Type;
-					instantiateGenericBody(gi, genericParamsOf(gi));
-				} else if (gi.typeReturn != null) {
-					_substitutingFrom.push(t);
-					_substitutingTo.push(gi);
-					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, params, concretes, active);
-					_substitutingFrom.pop();
-					_substitutingTo.pop();
-					nameInstanceBody(gi, t);
-				} else if (!_queryCachesReadOnly) {
-					instantiateGenericBody(gi, genericParamsOf(gi));
-				}
-				return gi;
-			},
+			TypeKind.GenericInstance => substitutedInstanceAll(t, params, concretes, active),
 			TypeKind.Conditional => substitutedConditionalAll(t, params, concretes, active),
 			TypeKind.IndexedAccess => {
 				const access = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(access, params, concretes, active);
-				return evaluateIndexedAccessType(access);
+				evaluateIndexedAccessType(access)
 			},
 			TypeKind.KeyOf => {
 				const keyOf = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(keyOf, params, concretes, active);
-				return evaluateKeyOfType(keyOf);
+				evaluateKeyOfType(keyOf)
 			},
 			TypeKind.Mapped => substitutedMapped(t, params, concretes, active),
 			_ => t,
@@ -5323,9 +5328,10 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 					display = display + typeDisplayNameInner(child, 0 as BitSet<TypeFlag>, open, shapes);
 				}
 				open.pop();
-				return prefix + display;
+				display
+			} else {
+				t2.typeName
 			}
-			return prefix + t2.typeName;
 		},
 		_ => "",
 	};
