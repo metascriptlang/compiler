@@ -23,6 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
+import { storesUnionTag } from "../../checker/fit";
 import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -1199,7 +1200,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Sy
 
 	// For wasMoved: set _tag = -1 after dispatch
 	if (hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeAssign(makeMember(hookParamDeref(s1, loc), "_tag", loc), makeNumber(-1, loc), loc), loc));
+		buf.items.push(makeExprStmt(makeAssign(makeMember(hookParamDeref(s1, loc), raiserCellUnion(objType, lctx) ? "$tag" : "_tag", loc), makeNumber(-1, loc), loc), loc));
 	}
 }
 
@@ -1249,7 +1250,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				}
 
 			// Dispatch: call the helper from the main if/else chain
-			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
+			const tagAccess = makeMember(hookParamDeref(s1, loc), raiserCellUnion(objType, lctx) ? "$tag" : "_tag", loc);
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
 			const a1 = makeIdentResolved(s1, loc);
 			const a2 = makeIdentResolved(s2, loc);
@@ -1286,8 +1287,18 @@ function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string,
 }
 
 // Generate the body of a single variant's arm (used by both inline and helper patterns)
+function raiserCellUnion(objType: Type, lctx: LiftCtx): boolean {
+	if (!lctx.raiserBackend || !storesUnionTag(objType)) return false;
+	for (const child of objType.typeChildren) {
+		if (inlineVariantStruct(child) == null) return false;
+	}
+	return true;
+}
+
 function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
-	if (hook == "destroy") {
+	if (hook == "destroy" && raiserCellUnion(objType, lctx)) {
+		fillBody(hook, hookParamDeref(s1, loc), hookParamDeref(s1, loc), "$v", variant, lctx, armBuf, createNameSet(), loc);
+	} else if (hook == "destroy") {
 		let fi = variant.typeNames.length - 1;
 		while (fi >= 0) {
 			if (!fieldStored(variant, fi)) { fi -= 1; continue; }
