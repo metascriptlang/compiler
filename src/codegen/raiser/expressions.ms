@@ -1556,6 +1556,38 @@ function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	}
 }
 
+function isClosureLiteral(node: Node): boolean {
+	const bare = skipModifier(node.nodeType);
+	return node.kind == NodeKind.ObjectLiteral && bare != null && bare.kind == TypeKind.Function;
+}
+
+// A closure literal passed to a call is a temporary pair the call borrows. Its env is counted
+// once for the pair, so the pair is released after the call, as a stored copy of it would be.
+// The callee's registers overlap the registers allocated after the call block, so the register
+// that keeps the pair across the call is reserved before the block.
+function reserveClosureArgs(s: RaiserCompState, args: Node[]): int32[] {
+	const held: int32[] = [];
+	for (const a of args) held.push(raiserPlaced() && isClosureLiteral(a) ? allocRef(s) : -1);
+	return held;
+}
+
+function compileClosureArg(s: RaiserCompState, arg: Node, slot: int32, held: int32): void {
+	if (held < 0) {
+		compileExprInto(s, arg, slot);
+		return;
+	}
+	const pair = compileExpr(s, arg);
+	const env = allocRef(s);
+	emitInst(s, fieldInst(s, arg.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, pair, addConst(s, raiserConstString("env"))));
+	emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
+	emitInst(s, raiserABC(RaiserOpcode.Move, held, pair, 0));
+	emitInst(s, raiserABC(RaiserOpcode.Move, slot, pair, 0));
+}
+
+function releaseClosureArgs(s: RaiserCompState, held: int32[]): void {
+	for (const pair of held) if (pair >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, pair, 0, 0));
+}
+
 function emitIntConst(s: RaiserCompState, value: int64): int32 {
 	const reg = allocWord(s);
 	emitLoadConst(s, reg, raiserInt(value));
@@ -1919,11 +1951,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
 			const cells = reserveCells(s, d.arguments);
+			const closures = reserveClosureArgs(s, d.arguments);
 			const dest = callBlock(s, node.nodeType, d.arguments, calleeParamTypes(calleeSym));
-			emitCallArgs(s, dest, d.arguments);
+			for (let i = 0; i < d.arguments.length; i = i + 1) compileClosureArg(s, d.arguments[i], dest + 1 + i, closures[i]);
 			const pastBase = d.arguments.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym)) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
 			patchJumpsTo(s, pastBase, codeLen(s));
+			releaseClosureArgs(s, closures);
 			releaseCells(s, cells);
 			return dest;
 		}
@@ -2018,6 +2052,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	}
 	const plain = calleeType != null && isPlainFunctionPointer(calleeType);
 	if (!plain) closureClasses.push(RaiserRegClass.Ref);
+	const closures = reserveClosureArgs(s, d.arguments);
 	const dest = allocBlock(s, closureClasses);
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
@@ -2025,14 +2060,16 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 			if (d.arguments[i].kind != NodeKind.Identifier) compileExpr(s, d.arguments[i]);
 			continue;
 		}
-		compileExprInto(s, d.arguments[i], dest + 1 + slot);
+		compileClosureArg(s, d.arguments[i], dest + 1 + slot, closures[i]);
 		slot = slot + 1;
 	}
 	if (plain) {
 		emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, closureReg, argCount));
+		releaseClosureArgs(s, closures);
 		return dest;
 	}
 	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
+	releaseClosureArgs(s, closures);
 	return dest;
 }
 
