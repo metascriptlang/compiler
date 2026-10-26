@@ -8,7 +8,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
@@ -2884,7 +2884,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3205,6 +3205,37 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.RcKeptCheck => {
 			vmRcKeptCheck(vm, ia, ib);
+		},
+		RaiserOpcode.ArrayPop => {
+			vmHandleArrayPop(vm, ia, ib);
+		},
+		RaiserOpcode.ArrayShift => {
+			vmHandleArrayShift(vm, ia, ib, ic);
+		},
+		RaiserOpcode.ArraySplice => {
+			vmHandleArraySplice(vm, ia, -1, ic);
+		},
+		RaiserOpcode.ArraySplice3 => {
+			vmHandleArraySplice(vm, ia, ib, ic);
+		},
+		RaiserOpcode.ArrayReverse => {
+			const handle = vmPlainArray(vm, ia, "reverse");
+			if (handle >= 0) arrayHeldReverse(vm.arrayHeap.arrays[handleIndex(handle)]);
+		},
+		RaiserOpcode.ArraySort => {
+			const handle = vmPlainArray(vm, ia, "sort");
+			if (handle < 0) return;
+			const refused = arrayHeldSort(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(handle)]);
+			if (refused != "") vmError(vm, refused);
+		},
+		RaiserOpcode.ArrayFill => {
+			vmHandleArrayFill(vm, ia, ib);
+		},
+		RaiserOpcode.ArraySliceCopy => {
+			vmHandleArraySliceCopy(vm, ia, ib, ic);
+		},
+		RaiserOpcode.ArrayConcat => {
+			vmHandleArrayConcat(vm, ia, ib, ic);
 		},
 		RaiserOpcode.Ret => {
 			vmHandleRet(vm, ia, ib, ic);
@@ -3862,6 +3893,174 @@ function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (vmElemRefused(vm, handle, val)) return;
 	heapArrayPush(vm.arrayHeap, handle, val);
 	vmIncref(vm, val);
+}
+
+// --- Array kernels: the std operations that rewrite or copy a reference-holding array ---
+// A kernel that makes another holder of an element counts it, and one that evicts an element releases it, in
+// both regimes: a placed module counts through the shared decrement, the others through the VM's own counts.
+
+function vmPlainArray(vm: RaiserVM, t: int32, verb: string): int64 {
+	const handle = vmHeapOperand(vm, getDyn(vm, t), RaiserValueKind.Array, "an array");
+	if (vm.halted) return -1;
+	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return -1;
+	}
+	if (heapArrayIsView(vm.arrayHeap, handle)) {
+		vmError(vm, `cannot ${verb} a slice`); return -1;
+	}
+	return handle;
+}
+
+function vmShareHold(vm: RaiserVM, val: RaiserValue): void {
+	if (val.kind < RaiserValueKind.String) return;
+	if (vm.placed) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, val.intVal);
+	else vmIncref(vm, val);
+}
+
+function vmEvict(vm: RaiserVM, val: RaiserValue, cyclic: boolean): void {
+	if (val.kind < RaiserValueKind.String) return;
+	if (vm.placed) vmReleaseChild(vm, val.intVal, cyclic);
+	else vmDecref(vm, val);
+}
+
+function vmEvictAll(vm: RaiserVM, evicted: RaiserValue[], cyclic: boolean): void {
+	for (const val of evicted) vmEvict(vm, val, cyclic);
+	vmDrain(vm);
+}
+
+function vmHandleArrayPop(vm: RaiserVM, ia: int32, ib: int32): void {
+	const handle = vmPlainArray(vm, ib, "pop from");
+	if (handle < 0) return;
+	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	const n = arrayHeldCount(data);
+	if (n == 0) {
+		vmError(vm, "array index out of bounds: -1 (length 0)"); return;
+	}
+	const val = arrayHeldAt(data, n - 1);
+	heapArraySetLen(vm.arrayHeap, handle, (n - 1) as int64);
+	setRegConform(vm, ia, val);
+	vmDecref(vm, val);
+}
+
+function vmHandleArrayShift(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const handle = vmPlainArray(vm, ib, "shift");
+	if (handle < 0) return;
+	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (arrayHeldCount(data) == 0) {
+		let zero = raiserNil();
+		if (data.elemClass == RaiserRegClass.Word) zero = raiserInt(0);
+		else if (data.elemClass == RaiserRegClass.Float) zero = raiserFloat(0.0);
+		else if (data.elemClass == RaiserRegClass.Bool) zero = raiserBool(false);
+		else if (ic == 1) zero = heapAllocString(vm.arrayHeap, "");
+		setRegConform(vm, ia, zero);
+		return;
+	}
+	const val = arrayHeldAt(data, 0);
+	arrayHeldRemove(data, 0, 1);
+	setRegConform(vm, ia, val);
+	vmDecref(vm, val);
+}
+
+// itemReg < 0 is the removal alone; otherwise the item goes in where the removal began.
+function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32): void {
+	const handle = vmPlainArray(vm, ia, "splice");
+	if (handle < 0) return;
+	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	let start = getDyn(vm, ic).intVal;
+	let count = getDyn(vm, ic + 8).intVal;
+	const inserting = itemReg >= 0;
+	let item = raiserNil();
+	if (inserting) {
+		item = getDyn(vm, itemReg);
+		if (vmElemRefused(vm, handle, item)) return;
+		if (start < 0) start = 0;
+	}
+	const n = arrayHeldCount(data) as int64;
+	const evicted: RaiserValue[] = [];
+	if (start >= 0 && start < n && count > 0) {
+		if (count > n - start) count = n - start;
+		for (let i = 0; i < count; i += 1) evicted.push(arrayHeldAt(data, (start + i) as number));
+		arrayHeldRemove(data, start as number, count as number);
+	}
+	if (inserting) {
+		const length = arrayHeldCount(data) as int64;
+		const at = start < length ? start : length;
+		vmShareHold(vm, item);
+		arrayHeldInsert(data, at as number, item);
+	}
+	vmEvictAll(vm, evicted, data.elemCyclic);
+}
+
+function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
+	const handle = vmPlainArray(vm, ia, "fill");
+	if (handle < 0) return;
+	const val = getDyn(vm, ib);
+	if (vmElemRefused(vm, handle, val)) return;
+	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	const evicted: RaiserValue[] = [];
+	for (let i = 0; i < arrayHeldCount(data); i += 1) {
+		evicted.push(arrayHeldAt(data, i));
+		vmShareHold(vm, val);
+		heapArraySet(vm.arrayHeap, handle, i as int64, val);
+	}
+	vmEvictAll(vm, evicted, data.elemCyclic);
+}
+
+function vmSourceArray(vm: RaiserVM, t: int32): int64 {
+	const handle = vmHeapOperand(vm, getDyn(vm, t), RaiserValueKind.Array, "an array");
+	if (vm.halted) return -1;
+	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return -1;
+	}
+	return handle;
+}
+
+function vmNewArrayLike(vm: RaiserVM, source: int64): int64 {
+	const base = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(source)]);
+	const handle = heapAllocArrayOf(vm.arrayHeap, base.elemClass);
+	vm.arrayHeap.arrays[handleIndex(handle)].elemCyclic = base.elemCyclic;
+	return handle;
+}
+
+function vmCopyElements(vm: RaiserVM, from: int64, start: int64, end: int64, into: int64): void {
+	for (let i = start; i < end; i += 1) {
+		const val = heapArrayGet(vm.arrayHeap, from, i);
+		heapArrayPush(vm.arrayHeap, into, val);
+		vmShareHold(vm, val);
+	}
+}
+
+function vmHandleArraySliceCopy(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const source = vmSourceArray(vm, ib);
+	if (source < 0) return;
+	const len = heapArrayLen(vm.arrayHeap, source) as int64;
+	let start = getDyn(vm, ic).intVal;
+	let end = getDyn(vm, ic + 8).intVal;
+	if (start < 0) start = len + start;
+	if (end < 0) end = len + end;
+	if (start < 0) start = 0;
+	if (end > len) end = len;
+	const handle = vmNewArrayLike(vm, source);
+	if (start < end) vmCopyElements(vm, source, start, end, handle);
+	setRegRef(vm, ia, RaiserValueKind.Array, handle);
+	vmMaybeCollect(vm);
+}
+
+function vmHandleArrayConcat(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const left = vmSourceArray(vm, ib);
+	if (left < 0) return;
+	const right = vmSourceArray(vm, ic);
+	if (right < 0) return;
+	const leftClass = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(left)]).elemClass;
+	const rightClass = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(right)]).elemClass;
+	if (leftClass != rightClass) {
+		vmError(vm, `internal: concat of an array of ${regClassLetter(leftClass)} elements with one of ${regClassLetter(rightClass)} elements`); return;
+	}
+	const handle = vmNewArrayLike(vm, left);
+	vmCopyElements(vm, left, 0, heapArrayLen(vm.arrayHeap, left) as int64, handle);
+	vmCopyElements(vm, right, 0, heapArrayLen(vm.arrayHeap, right) as int64, handle);
+	setRegRef(vm, ia, RaiserValueKind.Array, handle);
+	vmMaybeCollect(vm);
 }
 
 function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -7533,4 +7732,348 @@ test "placed: an exception thrown by a destroy routine unwinds its frame and sti
 	const vm = throwingDestroy();
 	assert vm.error.includes("boom"), vm.error;
 	assert vm.disposing.length == 0 && vmLiveCount(vm) == 0 && vm.callStack.depth == 0, `${vm.disposing.length} ${vmLiveCount(vm)}`;
+}
+
+// --- Array kernels: results the C kernels give, and the counts they keep in both regimes ---
+
+function kernelVM(classes: RaiserRegClass[], code: RaiserInstruction[], consts: RaiserValue[], placed: boolean, gcMode: string): RaiserVM {
+	const main = createRaiserFunction("main", code, consts, 0, 0, classes.length, classes);
+	return createVM(placedModule([main], placed), gcMode);
+}
+
+function heldText(vm: RaiserVM, handle: int64): string {
+	let text = "[";
+	const n = heapArrayLen(vm.arrayHeap, handle);
+	for (let i = 0; i < n; i += 1) {
+		if (i > 0) text = `${text},`;
+		text = `${text}${raiserToString(vm.arrayHeap, heapArrayGet(vm.arrayHeap, handle, i))}`;
+	}
+	return `${text}]`;
+}
+
+function numberArray(vm: RaiserVM, values: number[]): int64 {
+	const handle = heapAllocArrayOf(vm.arrayHeap, RaiserRegClass.Float);
+	for (const v of values) heapArrayPush(vm.arrayHeap, handle, raiserFloat(v));
+	return handle;
+}
+
+function ownedString(vm: RaiserVM, text: string): RaiserValue {
+	const s = heapAllocString(vm.arrayHeap, text);
+	if (!vm.placed) rcIncref(vm.arrayHeap, vm.objectHeap, s);
+	return s;
+}
+
+function ownedObject(vm: RaiserVM): RaiserValue {
+	const o = raiserObject(heapAllocObject(vm.objectHeap));
+	if (!vm.placed) rcIncref(vm.arrayHeap, vm.objectHeap, o);
+	return o;
+}
+
+function refArray(vm: RaiserVM, elems: RaiserValue[]): int64 {
+	const handle = heapAllocArrayOf(vm.arrayHeap, RaiserRegClass.Ref);
+	for (const e of elems) heapArrayPush(vm.arrayHeap, handle, e);
+	return handle;
+}
+
+function stringRc(vm: RaiserVM, v: RaiserValue): int32 {
+	return vm.arrayHeap.strings.rc[handleIndex(v.intVal)];
+}
+
+function objectRc(vm: RaiserVM, v: RaiserValue): int32 {
+	return vm.objectHeap.objects[handleIndex(v.intVal)].rc;
+}
+
+function numberSplice(values: number[], start: number, count: number, withItem: boolean, item: number): string {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Float], [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 1),
+		raiserABx(RaiserOpcode.LoadConst, 3, 2),
+		withItem ? raiserABC(RaiserOpcode.ArraySplice3, 0, 3, 1) : raiserABC(RaiserOpcode.ArraySplice, 0, 0, 1),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserInt(start as int64), raiserInt(count as int64), raiserFloat(item)], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, values);
+	execLoop(vm);
+	if (vm.error != "") return vm.error;
+	return heldText(vm, vm.regs.refs[0]);
+}
+
+test "array kernels: splice removes by the C clamps and splice3 inserts where the removal began" {
+	const base: number[] = [5, 4, 3, 1];
+	assert numberSplice(base, 1, 2, false, 0) == "[5,1]";
+	assert numberSplice(base, -1, 1, false, 0) == "[5,4,3,1]";
+	assert numberSplice(base, 9, 1, false, 0) == "[5,4,3,1]";
+	assert numberSplice(base, 0, 0, false, 0) == "[5,4,3,1]";
+	assert numberSplice(base, 0, -3, false, 0) == "[5,4,3,1]";
+	assert numberSplice(base, 2, 99, false, 0) == "[5,4]";
+	assert numberSplice(base, 0, 99, false, 0) == "[]";
+	assert numberSplice([5, 1], -4, 0, true, 7) == "[7,5,1]";
+	assert numberSplice([5, 1], 99, 0, true, 7) == "[5,1,7]";
+	assert numberSplice([5, 1], 1, 1, true, 7) == "[5,7]";
+	assert numberSplice([5, 1], 0, 99, true, 7) == "[7]";
+	assert numberSplice([5, 1], 1, 0, true, 7) == "[5,7,1]";
+	assert numberSplice([], 3, 2, true, 7) == "[7]";
+}
+
+function numberTransform(values: number[], op: RaiserOpcode): string {
+	const vm = kernelVM([RaiserRegClass.Ref], [raiserABC(op, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, values);
+	execLoop(vm);
+	if (vm.error != "") return vm.error;
+	return heldText(vm, vm.regs.refs[0]);
+}
+
+test "array kernels: reverse and sort rewrite a number array in place" {
+	assert numberTransform([5, 3, 5, 1, 4, 1], RaiserOpcode.ArraySort) == "[1,1,3,4,5,5]";
+	assert numberTransform([5, 3, 4], RaiserOpcode.ArrayReverse) == "[4,3,5]";
+	assert numberTransform([], RaiserOpcode.ArraySort) == "[]";
+	assert numberTransform([2], RaiserOpcode.ArrayReverse) == "[2]";
+	assert numberTransform([-1.5, 2, -7, 0], RaiserOpcode.ArraySort) == "[-7,-1.5,0,2]";
+}
+
+function numberFill(values: number[], value: number): string {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Float], [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.ArrayFill, 0, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserFloat(value)], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, values);
+	execLoop(vm);
+	if (vm.error != "") return vm.error;
+	return heldText(vm, vm.regs.refs[0]);
+}
+
+function numberCopy(values: number[], other: number[], op: RaiserOpcode, start: number, end: number): string {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], [
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		raiserABx(RaiserOpcode.LoadConst, 3, 1),
+		op == RaiserOpcode.ArrayConcat ? raiserABC(op, 1, 0, 4) : raiserABC(op, 1, 0, 2),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserInt(start as int64), raiserInt(end as int64)], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, values);
+	vm.regs.refs[2] = numberArray(vm, other);
+	execLoop(vm);
+	if (vm.error != "") return vm.error;
+	if (vm.regs.refs[1] == vm.regs.refs[0] || vm.regs.refs[1] == vm.regs.refs[2]) return "result aliases an operand";
+	return heldText(vm, vm.regs.refs[1]);
+}
+
+test "array kernels: fill, slice and concat of a number array follow the C kernels" {
+	assert numberFill([5, 4, 3], 2) == "[2,2,2]";
+	assert numberFill([], 2) == "[]";
+	const six: number[] = [6, 1, 8, 7, 9, 3];
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, 1, 3) == "[1,8]";
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, 1, -1) == "[1,8,7,9]";
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, -2, 9007199254740991) == "[9,3]";
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, 4, 2) == "[]";
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, -99, 99) == "[6,1,8,7,9,3]";
+	assert numberCopy(six, [], RaiserOpcode.ArraySliceCopy, 2, 2) == "[]";
+	assert numberCopy([7, 6], [0, 0], RaiserOpcode.ArrayConcat, 0, 0) == "[7,6,0,0]";
+	assert numberCopy([], [], RaiserOpcode.ArrayConcat, 0, 0) == "[]";
+}
+
+test "array kernels: pop and shift hand the element out, an empty shift gives the zero of its class and an empty pop is fatal" {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Float], [
+		raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.ArrayShift, 1, 0, 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.ArrayShift, 1, 0, 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, [1, 2]);
+	execLoop(vm);
+	assert vm.output == "2\n1\n0\n", vm.output;
+	assert vm.error.includes("array index out of bounds: -1 (length 0)"), vm.error;
+}
+
+function stringKernel(placed: boolean, texts: string[], code: RaiserInstruction[], consts: RaiserValue[]): RaiserVM {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], code, consts, placed, "orc");
+	const elems: RaiserValue[] = [];
+	for (const t of texts) elems.push(ownedString(vm, t));
+	vm.regs.refs[0] = refArray(vm, elems);
+	if (!placed) rcIncref(vm.arrayHeap, vm.objectHeap, raiserArray(vm.regs.refs[0]));
+	return vm;
+}
+
+function elemAt(vm: RaiserVM, handle: int64, i: number): RaiserValue {
+	return heapArrayGet(vm.arrayHeap, handle, i as int64);
+}
+
+test "array kernels: slice, concat, splice, pop and fill count string elements (not placed)" {
+	const placed = false;
+	const range = [raiserABx(RaiserOpcode.LoadConst, 2, 0), raiserABx(RaiserOpcode.LoadConst, 3, 1)];
+	const halt = raiserABC(RaiserOpcode.Halt, 0, 0, 0);
+	const abc = ["p", "q", "r"];
+
+	const sliced = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(1), raiserInt(3)]);
+	const slicedFrom = elemAt(sliced, sliced.regs.refs[0], 0);
+	execLoop(sliced);
+	assert heldText(sliced, sliced.regs.refs[1]) == "[q,r]";
+	assert stringRc(sliced, slicedFrom) == 1 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 1)) == 2 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 2;
+	assert sliced.arrayHeap.arrays[handleIndex(sliced.regs.refs[1])].rc == 1;
+
+	const joined = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayConcat, 1, 0, 0), halt], []);
+	execLoop(joined);
+	assert heldText(joined, joined.regs.refs[1]) == "[p,q,r,p,q,r]" && stringRc(joined, elemAt(joined, joined.regs.refs[0], 1)) == 3;
+
+	const spliced = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(1), raiserInt(1)]);
+	const survivor = elemAt(spliced, spliced.regs.refs[0], 2);
+	execLoop(spliced);
+	assert heldText(spliced, spliced.regs.refs[0]) == "[p,r]" && spliced.arrayHeap.strings.freeList.length == 1 && stringRc(spliced, survivor) == 1;
+
+	const inserted = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
+	inserted.regs.refs[2] = elemAt(inserted, inserted.regs.refs[0], 0).intVal;
+	execLoop(inserted);
+	assert heldText(inserted, inserted.regs.refs[0]) == "[p,p,r]" && inserted.arrayHeap.strings.freeList.length == 1 && stringRc(inserted, handleValue(inserted.regs.refs[2])) == 2;
+
+	const itself = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
+	itself.regs.refs[2] = elemAt(itself, itself.regs.refs[0], 1).intVal;
+	execLoop(itself);
+	assert heldText(itself, itself.regs.refs[0]) == "[p,q,r]" && itself.arrayHeap.strings.freeList.length == 0 && stringRc(itself, handleValue(itself.regs.refs[2])) == 1;
+
+	const popped = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0), raiserABC(RaiserOpcode.ArrayShift, 4, 0, 0), halt], []);
+	execLoop(popped);
+	assert heldText(popped, popped.regs.refs[0]) == "[q]" && stringRc(popped, handleValue(popped.regs.refs[1])) == 1 && stringRc(popped, handleValue(popped.regs.refs[2])) == 1;
+
+	const filled = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayFill, 0, 4, 0), halt], []);
+	const z = ownedString(filled, "z");
+	filled.regs.refs[2] = z.intVal;
+	execLoop(filled);
+	assert heldText(filled, filled.regs.refs[0]) == "[z,z,z]" && filled.arrayHeap.strings.freeList.length == 3 && stringRc(filled, z) == 4;
+}
+
+test "array kernels: slice, concat, splice, pop and fill count string elements (placed)" {
+	const placed = true;
+	const range = [raiserABx(RaiserOpcode.LoadConst, 2, 0), raiserABx(RaiserOpcode.LoadConst, 3, 1)];
+	const halt = raiserABC(RaiserOpcode.Halt, 0, 0, 0);
+	const abc = ["p", "q", "r"];
+
+	const sliced = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(1), raiserInt(3)]);
+	const slicedFrom = elemAt(sliced, sliced.regs.refs[0], 0);
+	execLoop(sliced);
+	assert heldText(sliced, sliced.regs.refs[1]) == "[q,r]";
+	assert stringRc(sliced, slicedFrom) == 1 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 1)) == 2 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 2;
+	assert sliced.arrayHeap.arrays[handleIndex(sliced.regs.refs[1])].rc == 1;
+
+	const joined = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayConcat, 1, 0, 0), halt], []);
+	execLoop(joined);
+	assert heldText(joined, joined.regs.refs[1]) == "[p,q,r,p,q,r]" && stringRc(joined, elemAt(joined, joined.regs.refs[0], 1)) == 3;
+
+	const spliced = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(1), raiserInt(1)]);
+	const survivor = elemAt(spliced, spliced.regs.refs[0], 2);
+	execLoop(spliced);
+	assert heldText(spliced, spliced.regs.refs[0]) == "[p,r]" && spliced.arrayHeap.strings.freeList.length == 1 && stringRc(spliced, survivor) == 1;
+
+	const inserted = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
+	inserted.regs.refs[2] = elemAt(inserted, inserted.regs.refs[0], 0).intVal;
+	execLoop(inserted);
+	assert heldText(inserted, inserted.regs.refs[0]) == "[p,p,r]" && inserted.arrayHeap.strings.freeList.length == 1 && stringRc(inserted, handleValue(inserted.regs.refs[2])) == 2;
+
+	const itself = stringKernel(placed, abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
+	itself.regs.refs[2] = elemAt(itself, itself.regs.refs[0], 1).intVal;
+	execLoop(itself);
+	assert heldText(itself, itself.regs.refs[0]) == "[p,q,r]" && itself.arrayHeap.strings.freeList.length == 0 && stringRc(itself, handleValue(itself.regs.refs[2])) == 1;
+
+	const popped = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0), raiserABC(RaiserOpcode.ArrayShift, 4, 0, 0), halt], []);
+	execLoop(popped);
+	assert heldText(popped, popped.regs.refs[0]) == "[q]" && stringRc(popped, handleValue(popped.regs.refs[1])) == 1 && stringRc(popped, handleValue(popped.regs.refs[2])) == 1;
+
+	const filled = stringKernel(placed, abc, [raiserABC(RaiserOpcode.ArrayFill, 0, 4, 0), halt], []);
+	const z = ownedString(filled, "z");
+	filled.regs.refs[2] = z.intVal;
+	execLoop(filled);
+	assert heldText(filled, filled.regs.refs[0]) == "[z,z,z]" && filled.arrayHeap.strings.freeList.length == 3 && stringRc(filled, z) == 4;
+}
+
+test "array kernels: a sort of strings is by bytes and keeps equal strings in their order" {
+	const texts = ["pear", "apple", "fig", "apple", "Zed", "fig", ""];
+	const vm = stringKernel(false, texts, [raiserABC(RaiserOpcode.ArraySort, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+	const before = vm.regs.refs[0];
+	const handles: int64[] = [];
+	for (let i = 0; i < texts.length; i += 1) handles.push(elemAt(vm, before, i).intVal);
+	execLoop(vm);
+	assert vm.error == "", vm.error;
+	assert heldText(vm, vm.regs.refs[0]) == "[,Zed,apple,apple,fig,fig,pear]", heldText(vm, vm.regs.refs[0]);
+	const sorted = vm.regs.refs[0];
+	assert elemAt(vm, sorted, 2).intVal == handles[1] && elemAt(vm, sorted, 3).intVal == handles[3];
+	assert elemAt(vm, sorted, 4).intVal == handles[2] && elemAt(vm, sorted, 5).intVal == handles[5];
+	const reversed = stringKernel(false, ["a", "b", "c"], [raiserABC(RaiserOpcode.ArrayReverse, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+	execLoop(reversed);
+	assert heldText(reversed, reversed.regs.refs[0]) == "[c,b,a]";
+}
+
+test "array kernels: an empty shift of strings gives \"\" or nil by the instruction's flag" {
+	const asString = stringKernel(false, [], [raiserABC(RaiserOpcode.ArrayShift, 1, 0, 1), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+	execLoop(asString);
+	assert asString.error == "" && raiserToString(asString.arrayHeap, handleValue(asString.regs.refs[1])) == "";
+	assert handleTag(asString.regs.refs[1]) == (RaiserHeapKind.ConstString as int64);
+	const asObject = stringKernel(false, [], [raiserABC(RaiserOpcode.ArrayShift, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+	execLoop(asObject);
+	assert asObject.error == "" && asObject.regs.refs[1] == 0;
+}
+
+test "array kernels: a view is read by slice and concat and refused by every kernel that rewrites" {
+	const ops = [RaiserOpcode.ArrayReverse, RaiserOpcode.ArraySort];
+	for (const op of ops) {
+		const vm = stringKernel(false, ["b", "a", "c"], [raiserABC(op, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+		vm.regs.refs[1] = heapAllocView(vm.arrayHeap, handleValue(vm.regs.refs[0]), 1, 2);
+		execLoop(vm);
+		assert vm.error.includes("a slice"), vm.error;
+	}
+	const popping = stringKernel(false, ["b", "a", "c"], [raiserABC(RaiserOpcode.ArrayPop, 4, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
+	popping.regs.refs[1] = heapAllocView(popping.arrayHeap, handleValue(popping.regs.refs[0]), 1, 2);
+	execLoop(popping);
+	assert popping.error.includes("cannot pop from a slice"), popping.error;
+	const reading = stringKernel(false, ["b", "a", "c"], [
+		raiserABx(RaiserOpcode.LoadConst, 2, 0), raiserABx(RaiserOpcode.LoadConst, 3, 1),
+		raiserABC(RaiserOpcode.ArraySliceCopy, 4, 1, 2), raiserABC(RaiserOpcode.ArrayConcat, 4, 1, 1),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserInt(0), raiserInt(5)]);
+	reading.regs.refs[1] = heapAllocView(reading.arrayHeap, handleValue(reading.regs.refs[0]), 1, 2);
+	execLoop(reading);
+	assert heldText(reading, reading.regs.refs[2]) == "[a,c,a,c]", heldText(reading, reading.regs.refs[2]);
+}
+
+test "array kernels: a fill with a value the element class cannot hold is refused before any element changes" {
+	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref], [raiserABC(RaiserOpcode.ArrayFill, 0, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [], false, "arena");
+	vm.regs.refs[0] = numberArray(vm, [1, 2]);
+	vm.regs.refs[1] = heapAllocString(vm.arrayHeap, "s").intVal;
+	execLoop(vm);
+	assert vm.error != "" && heldText(vm, vm.regs.refs[0]) == "[1,2]", vm.error;
+}
+
+test "array kernels: object elements are shared by a slice and freed by the splice that evicts the last holder (not placed)" {
+	const placed = false;
+	const range = [raiserABx(RaiserOpcode.LoadConst, 2, 0), raiserABx(RaiserOpcode.LoadConst, 3, 1)];
+	const halt = raiserABC(RaiserOpcode.Halt, 0, 0, 0);
+	const make = (code: RaiserInstruction[], consts: RaiserValue[]): RaiserVM => {
+		const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], code, consts, placed, "orc");
+		vm.regs.refs[0] = refArray(vm, [ownedObject(vm), ownedObject(vm), ownedObject(vm)]);
+		return vm;
+	};
+	const evicting = make([...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(0), raiserInt(99)]);
+	execLoop(evicting);
+	assert vmLiveCount(evicting) == 1 && heapArrayLen(evicting.arrayHeap, evicting.regs.refs[0]) == 0, `${vmLiveCount(evicting)}`;
+	const sliced = make([...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(0), raiserInt(2)]);
+	execLoop(sliced);
+	assert objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 0)) == 2 && objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 1;
+}
+
+test "array kernels: object elements are shared by a slice and freed by the splice that evicts the last holder (placed)" {
+	const placed = true;
+	const range = [raiserABx(RaiserOpcode.LoadConst, 2, 0), raiserABx(RaiserOpcode.LoadConst, 3, 1)];
+	const halt = raiserABC(RaiserOpcode.Halt, 0, 0, 0);
+	const make = (code: RaiserInstruction[], consts: RaiserValue[]): RaiserVM => {
+		const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], code, consts, placed, "orc");
+		vm.regs.refs[0] = refArray(vm, [ownedObject(vm), ownedObject(vm), ownedObject(vm)]);
+		return vm;
+	};
+	const evicting = make([...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(0), raiserInt(99)]);
+	execLoop(evicting);
+	assert vmLiveCount(evicting) == 1 && heapArrayLen(evicting.arrayHeap, evicting.regs.refs[0]) == 0, `${vmLiveCount(evicting)}`;
+	const sliced = make([...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(0), raiserInt(2)]);
+	execLoop(sliced);
+	assert objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 0)) == 2 && objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 1;
 }
