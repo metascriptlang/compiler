@@ -90,3 +90,24 @@ const b = o(1, 2);
 	assert text.contains("Ambiguous call to overloaded function 'o'"), "one argument: " + text;
 	assert errors.length == 1, "two arguments pick the second: " + text;
 }
+
+test "overloads that differ by a read-only receiver pick by the receiver, and the same signature stays ambiguous" {
+	const pair = `
+class Item { n: int32 = 0; }
+class Box { item: Item | null = null; }
+function peek(this b: Box): Item | null { return b.item; }
+function peek(this b: Readonly<Box>): Readonly<Item | null> { return b.item; }
+function mutable(b: Box): void { const it = b.peek(); if (it != null) it.n = 1; }
+function viewed(b: Readonly<Box>): int32 { const it = b.peek(); return it == null ? 0 : it.n; }
+`;
+	const accepted = checkOnly(pair).errors.join("\n");
+	assert accepted == "", "a mutable receiver mutates through the result and a view reads it: " + accepted;
+	const refused = checkOnly(pair + "function viewWrites(b: Readonly<Box>): void { const it = b.peek(); if (it != null) it.n = 2; }\n").errors.join("\n");
+	assert refused != "", "a view's result stays read-only";
+	const twice = checkOnly(`
+class Box { n: int32 = 0; }
+function size(this b: Readonly<Box>): int32 { return 1; }
+function size(this b: Readonly<Box>): string { return "s"; }
+`).errors.join("\n");
+	assert twice.contains("overloaded 'size' leads to ambiguous calls"), "same receiver view-ness and parameters: " + twice;
+}

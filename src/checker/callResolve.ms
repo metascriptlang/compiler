@@ -5084,8 +5084,8 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 	const recvT = withoutArrayEnvelope(formal);
 	const objT = withoutArrayEnvelope(objType);
 	const rel = typeRelation(recvT, objT);
-	if (rel == TypeRelation.None && hasGenericParams(recvT)) return TypeRelation.Generic;
-	return rel;
+	if (rel == TypeRelation.None && hasGenericParams(recvT)) return recvT.kind != TypeKind.GenericParam && dropsReadonlyView(objT, recvT) ? TypeRelation.None : TypeRelation.Generic;
+	return rel == TypeRelation.Generic && recvT.kind != TypeKind.Unknown && !isUnresolvedType(recvT) && dropsReadonlyView(recvT, objT) ? TypeRelation.Subtype : rel;
 }
 
 function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], args: Node[],
@@ -5340,6 +5340,18 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 
 function refuseReadonlyViewCall(ctx: CheckerContext, node: Node, property: string, objType: Type, receiverName: string): void {
 	addError(ctx, "cannot call '" + property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + property + "(this: Readonly<" + receiverName + ">)' on the class, or 'function " + property + "(this x: Readonly<" + receiverName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
+}
+
+function receiverViewPeer(exts: ExtensionMethod[], ext: ExtensionMethod | null, wantView: boolean): ExtensionMethod {
+	if (ext == null || ext.isStatic) return ext as ExtensionMethod;
+	const recv = getExtFnType(ext).typeChildren[0];
+	if (recv == null || isReadonlyView(recv) == wantView || isUnresolvedType(recv) || recv.kind == TypeKind.Unknown) return ext;
+	for (const other of exts) {
+		if (other == ext || other.isStatic) continue;
+		const otherRecv = getExtFnType(other).typeChildren[0];
+		if (otherRecv != null && isReadonlyView(otherRecv) == wantView && sameType(withoutReadonlyView(otherRecv), withoutReadonlyView(recv))) return other;
+	}
+	return ext;
 }
 
 function boundExtensions(member: Node, byName: ExtensionMethod[]): ExtensionMethod[] {
@@ -5858,7 +5870,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (ctx.extensionRegistry != null) {
 		const allByName = boundExtensions(node, findAllExtensionsByName(ctx.extensionRegistry, d.property));
 		const recvLookupType = withoutReadonlyView(objType);
-		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : findFirstMatchingExt(allByName, recvLookupType);
+		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : receiverViewPeer(allByName, findFirstMatchingExt(allByName, recvLookupType), isReadonlyView(objType));
 		let extObjType = recvLookupType;
 		const narrowedDeclared = ext == null ? declaredUnionOfNarrowed(d.object) : null;
 		if (narrowedDeclared != null) {

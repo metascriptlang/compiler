@@ -2081,6 +2081,7 @@ function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclDat
 	for (let i = 0; i < a.typeChildren.length; i += 1) {
 		if (a.typeNames[i] != fnType.typeNames[i]) return false;
 		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return false;
+		if (isReadonlyView(a.typeChildren[i]) != isReadonlyView(fnType.typeChildren[i])) return false;
 	}
 	const ea = existing.declNode != null && existing.declNode.kind == NodeKind.FunctionDecl
 		? existing.declNode.data as FunctionDeclData : null;
