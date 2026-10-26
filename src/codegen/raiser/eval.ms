@@ -5,7 +5,7 @@
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
@@ -225,11 +225,11 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 	const fromPrelude = new HashSet<Symbol>();
 	for (const layer of [mc.preludeCtx, mc.globalImportsCtx]) {
 		if (layer == null || layer.extensionRegistry == null) continue;
-		for (const p of layer.extensionRegistry.methods) {
+		for (const p of extensionsOf(layer.extensionRegistry)) {
 			if (p.sym != null) fromPrelude.add(p.sym);
 		}
 	}
-	for (const m of mc.extensionRegistry.methods) {
+	for (const m of extensionsOf(mc.extensionRegistry)) {
 		if (m.sym == null || m.sym == skip || fromPrelude.has(m.sym)) continue;
 		out.push(m);
 	}
@@ -255,7 +255,7 @@ function isVmPreludeSym(sym: Symbol): boolean {
 		}
 		const exts = raiserPreludeCtx().extensionRegistry;
 		if (exts != null) {
-			for (const e of exts.methods) if (e.sym != null) own.add(e.sym);
+			for (const e of extensionsOf(exts)) if (e.sym != null) own.add(e.sym);
 		}
 		_vmPreludeSyms = own;
 	}
@@ -272,7 +272,7 @@ function isVmStdHelper(sym: Symbol): boolean {
 			for (const s of scope) addWithOverloads(own, s);
 		}
 		if (prelude.extensionRegistry != null) {
-			for (const ext of prelude.extensionRegistry.methods) {
+			for (const ext of extensionsOf(prelude.extensionRegistry)) {
 				if (ext.sym != null) addWithOverloads(own, ext.sym!);
 			}
 		}

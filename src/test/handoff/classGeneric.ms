@@ -9,7 +9,7 @@ import { TypeKind, NodeKind, ClassDeclData } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
 import { compileToC, compileToJS, compileToCWithStd } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
-import { extReceiverSym } from "../../checker/context";
+import { extReceiverSym, extensionsOf } from "../../checker/context";
 import { drainPendingInstances } from "../../checker/instantiate";
 
 test "checker: generic class method has this param" {
@@ -18,7 +18,7 @@ test "checker: generic class method has this param" {
 	// Methods live in the extension registry keyed by (receiver, name), not as flat
 	// module symbols; codegen later lowers them to Box_get free functions.
 	let found = false;
-	for (const m of ctx.extensionRegistry.methods) {
+	for (const m of extensionsOf(ctx.extensionRegistry)) {
 		if (extReceiverSym(m) != null && extReceiverSym(m).name == "Box" && m.methodName == "get") {
 			found = true;
 			assert m.sym != null;
@@ -34,7 +34,7 @@ test "checker: generic class method with T param has 2 params" {
 	const ctx = checkSource("class Box<T> { value: T; set(v: T): void { this.value = v; } }");
 	assert ctx != null;
 	let found = false;
-	for (const m of ctx.extensionRegistry.methods) {
+	for (const m of extensionsOf(ctx.extensionRegistry)) {
 		if (extReceiverSym(m) != null && extReceiverSym(m).name == "Box" && m.methodName == "set") {
 			found = true;
 			assert m.sym != null;
