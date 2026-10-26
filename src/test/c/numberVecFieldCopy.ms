@@ -9,6 +9,6 @@ b = a;
 console.log(b.xs.length);
 `);
 	assert result.ok, result.ok ? "" : result.error;
-	assert result.value.contains("msArraySetLen((*dest).xs, (*src).xs);"), "reuses the destination payload";
-	assert result.value.contains("msArrayCopyPayload((*dest).xs, (*src).xs);"), "bulk copy";
+	assert result.value.contains("msArraySetLen((*dest_p0).xs, (*src_p1).xs);"), "reuses the destination payload";
+	assert result.value.contains("msArrayCopyPayload((*dest_p0).xs, (*src_p1).xs);"), "bulk copy";
 }
