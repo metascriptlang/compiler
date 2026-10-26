@@ -1,3 +1,4 @@
+import { WordSeq, wlen, wat, wput, wpush, wshrink, wclear } from "./vmSeq";
 // Raiser VM — Value representation
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
@@ -535,7 +536,7 @@ test "array" { assert raiserToString(createArrayHeap(), raiserArray(0)) == "[arr
 // `items`. A view holds only the array it stands on, as the one value of `items`.
 export interface RaiserArrayData {
 	items: RaiserValue[];
-	words: int64[];
+	words: WordSeq;
 	elemClass: RaiserRegClass;
 	rc: int32;
 	color: int32;
@@ -577,7 +578,7 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 		heap.freeList.length = heap.freeList.length - 1;
 		const data = heap.arrays[reused];
 		data.items.length = 0;
-		data.words.length = 0;
+		data.words.wclear();
 		data.elemClass = elemClass;
 		data.rc = OWNED_BY_RECEIVER_RC;
 		data.color = 0;
@@ -590,7 +591,7 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const words: int64[] = [];
+	const words = new WordSeq(heap.mem);
 	const views: int64[] = [];
 	const data: RaiserArrayData = { items, words, elemClass, rc: OWNED_BY_RECEIVER_RC, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
 	heap.arrays.push(data);
@@ -614,7 +615,7 @@ export function heapArrayIsView(heap: RaiserArrayHeap, handle: int64): boolean {
 
 // The number of values the array holds: its elements, or the one array a view stands on.
 export function arrayHeldCount(data: RaiserArrayData): number {
-	return data.elemClass == RaiserRegClass.Dyn ? data.items.length : data.words.length;
+	return data.elemClass == RaiserRegClass.Dyn ? data.items.length : data.words.wlen();
 }
 
 // Whether any held value can be a heap reference.
@@ -626,10 +627,10 @@ export function arrayHoldsHandles(data: RaiserArrayData): boolean {
 export function arrayHeldAt(data: RaiserArrayData, index: number): RaiserValue {
 	return match (data.elemClass) {
 		RaiserRegClass.Dyn => data.items[index],
-		RaiserRegClass.Word => raiserInt(data.words[index]),
-		RaiserRegClass.Float => raiserFloat(msBitsFloat64(data.words[index])),
-		RaiserRegClass.Bool => raiserBool(data.words[index] != 0),
-		RaiserRegClass.Ref => handleValue(data.words[index]),
+		RaiserRegClass.Word => raiserInt(data.words.wat(index)),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(data.words.wat(index))),
+		RaiserRegClass.Bool => raiserBool(data.words.wat(index) != 0),
+		RaiserRegClass.Ref => handleValue(data.words.wat(index)),
 	};
 }
 
@@ -647,7 +648,7 @@ export function arrayHeldStore(data: RaiserArrayData, index: number, val: Raiser
 	}
 	const refused = arrayRefusal(data, val);
 	if (refused != "") throw new Error(refused);
-	data.words[index] = slotWord(data.elemClass, val);
+	data.words.wput(index, slotWord(data.elemClass, val));
 }
 
 function heldCopy(val: RaiserValue): RaiserValue {
@@ -662,9 +663,9 @@ function heldSwap(data: RaiserArrayData, i: number, j: number): void {
 		data.items[j] = kept;
 		return;
 	}
-	const kept = data.words[i];
-	data.words[i] = data.words[j];
-	data.words[j] = kept;
+	const kept = data.words.wat(i);
+	data.words.wput(i, data.words.wat(j));
+	data.words.wput(j, kept);
 }
 
 // Removes `count` held values from `start` without counting: the caller reads and releases them first.
@@ -675,8 +676,8 @@ export function arrayHeldRemove(data: RaiserArrayData, start: number, count: num
 		data.items.shrink((n - count) as int64);
 		return;
 	}
-	for (let i = start; i + count < n; i += 1) data.words[i] = data.words[i + count];
-	data.words.shrink((n - count) as int64);
+	for (let i = start; i + count < n; i += 1) data.words.wput(i, data.words.wat(i + count));
+	data.words.wshrink(n - count);
 }
 
 // Inserts a value at `index` without counting: the array takes over the caller's count of it.
@@ -704,16 +705,16 @@ function heldLess(heap: RaiserArrayHeap, cls: RaiserRegClass, x: int64, y: int64
 export function arrayHeldSort(heap: RaiserArrayHeap, data: RaiserArrayData): string {
 	const cls = data.elemClass;
 	if (cls == RaiserRegClass.Dyn) return "internal: sort of an array of tagged values";
-	const n = data.words.length;
+	const n = data.words.wlen();
 	if (cls == RaiserRegClass.Ref) {
 		for (let i = 0; i < n; i += 1) {
-			if (!isStringHandleTag(handleTag(data.words[i]))) return "internal: sort of an array whose element is no string";
+			if (!isStringHandleTag(handleTag(data.words.wat(i)))) return "internal: sort of an array whose element is no string";
 		}
 	}
 	const from: int64[] = [];
 	const to: int64[] = [];
 	for (let i = 0; i < n; i += 1) {
-		from.push(data.words[i]);
+		from.push(data.words.wat(i));
 		to.push(0);
 	}
 	let width = 1;
@@ -750,7 +751,7 @@ export function arrayHeldSort(heap: RaiserArrayHeap, data: RaiserArrayData): str
 		for (let i = 0; i < n; i += 1) from[i] = to[i];
 		width *= 2;
 	}
-	for (let i = 0; i < n; i += 1) data.words[i] = from[i];
+	for (let i = 0; i < n; i += 1) data.words.wput(i, from[i]);
 	return "";
 }
 
@@ -766,7 +767,7 @@ function arrayHeldPush(data: RaiserArrayData, val: RaiserValue): void {
 	}
 	const refused = arrayRefusal(data, val);
 	if (refused != "") throw new Error(refused);
-	data.words.push(slotWord(data.elemClass, val));
+	data.words.wpush(slotWord(data.elemClass, val));
 }
 
 // The array a view stands on, or the array itself.
@@ -804,8 +805,8 @@ export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: in
 	const data = heap.arrays[handleIndex(handle)];
 	const target = newLen < 0 ? 0 : newLen;
 	if (data.elemClass != RaiserRegClass.Dyn) {
-		if (target < data.words.length) data.words.shrink(target);
-		while (data.words.length < target) data.words.push(0);
+		if (target < (data.words.wlen() as int64)) data.words.wshrink(target as number);
+		while ((data.words.wlen() as int64) < target) data.words.wpush(0);
 		return;
 	}
 	if (newLen < data.items.length) {
@@ -1271,7 +1272,7 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 			data.views.length = 0;
 			data.viewOff = -1;
 			data.items.length = 0;
-			data.words.length = 0;
+			data.words.wclear();
 			arrHeap.freeList.push(index);
 		},
 		RaiserHeapKind.Object => {
@@ -1309,7 +1310,8 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ind
 	const data = arrHeap.arrays[index];
 	if (!data.elemUncounted) {
 		if (data.elemClass == RaiserRegClass.Ref) {
-			for (const handle of data.words) {
+			for (let i = 0; i < data.words.wlen(); i += 1) {
+				const handle = data.words.wat(i);
 				if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
 			}
 		}
@@ -1318,7 +1320,7 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ind
 		}
 	}
 	data.items.length = 0;
-	data.words.length = 0;
+	data.words.wclear();
 	arrHeap.freeList.push(index);
 }
 
