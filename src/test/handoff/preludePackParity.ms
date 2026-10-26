@@ -6,7 +6,7 @@ import { join } from "std/fs/path";
 import { readFile, writeFile, removeAll } from "std/fs";
 import { Symbol, Type, NodeKind } from "../../ast/node";
 import { pkDumpNode } from "../../ast/fieldspec";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, extensionsOf } from "../../checker/context";
 import { identName } from "../../checker/idents";
 import { checkPreludeFromSource } from "../../checker/checkPass";
 import { writePreludePack, tryLoadPreludePack, packRoot, emptyPreludeTables } from "../../checker/preludePack";
@@ -72,7 +72,7 @@ function sameScopeText(ctx: CheckerContext): string[] {
 function tableRows(ctx: CheckerContext): string[] {
 	const rows: string[] = [];
 	if (ctx.extensionRegistry != null) {
-		for (const e of ctx.extensionRegistry.methods) rows.push(`ext|${e.methodName}|${e.sourcePath}|${e.isStatic}|${e.scopeDepth as int32}|${e.sym != null ? e.sym.name : "-"}`);
+		for (const e of extensionsOf(ctx.extensionRegistry)) rows.push(`ext|${e.methodName}|${e.sourcePath}|${e.isStatic}|${e.scopeDepth as int32}|${e.sym != null ? e.sym.name : "-"}`);
 	}
 	for (const spec of ctx.preludeInterf.keys()) {
 		const members = ctx.preludeInterf.get(spec);

@@ -16,7 +16,7 @@ import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym, ownExtensionCount, extensionsUnsharedWith } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -795,8 +795,8 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): int32 {
 	if (bodyCtx == ctx) return -1;
 	if (bodyCtx.extensionRegistry == null || ctx.extensionRegistry == null) return -1;
-	const preCount = bodyCtx.extensionRegistry.methods.length;
-	for (const m of ctx.extensionRegistry.methods) registerExtension(bodyCtx.extensionRegistry, m);
+	const preCount = ownExtensionCount(bodyCtx.extensionRegistry);
+	for (const m of extensionsUnsharedWith(ctx.extensionRegistry, bodyCtx.extensionRegistry)) registerExtension(bodyCtx.extensionRegistry, m);
 	return preCount;
 }
 

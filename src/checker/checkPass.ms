@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, stringType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
-import { findAllExtensionsByName, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, noteDefaultSource, stdSymbol, createExportRegistry } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry, createLayeredExtensionRegistry, exportedExtensionLayer, extensionsOf, ExtensionRegistry, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, noteDefaultSource } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -4207,7 +4207,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		}
 		// Copy parent extensions so sub-module can use string/array methods
 		if (ctx.extensionRegistry != null) {
-			for (const ext of ctx.extensionRegistry.methods) {
+			for (const ext of extensionsOf(ctx.extensionRegistry)) {
 				registerExtension(subCtx.extensionRegistry, ext);
 			}
 		}
@@ -4234,7 +4234,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		// Also register sub-module extensions into parent context
 		if (subCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
-			for (const ext of subCtx.extensionRegistry.methods) {
+			for (const ext of extensionsOf(subCtx.extensionRegistry)) {
 				if (ext.sym != null && isExportedBy(subCtx, ext.sym)) {
 					registerExtension(ctx.extensionRegistry, ext);
 				}
@@ -4308,10 +4308,7 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 	return ctx.table.identCache;
 }
 
-// Inject exported prelude symbols, extensions, and directives into a module context.
-// NOTE: Uses while loops (not for-of) so DRC properly increfs shared symbols.
-// for-of creates cursor bindings that skip RC — pushing cursors into another
-// container creates dangling pointers when the source is destroyed.
+// Inject exported prelude symbols and converters into a module context.
 function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
@@ -4326,19 +4323,6 @@ function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): 
 				ctx.converterTargetTypes.set(sym, ctt);
 				registerConverter(ctx, sym, 2, 0, 0);
 			}
-		}
-	}
-	if (preludeCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
-		const preludeExts = preludeCtx.extensionRegistry.methods;
-		let ei = 0;
-		while (ei < preludeExts.length) {
-			const ext = preludeExts[ei];
-			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
-				// Imported extensions get scope depth 0 (other module).
-				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				registerExtension(ctx.extensionRegistry, reexportExt(ext, ext.methodName, ext.sourcePath, ext.sym!, 0));
-			}
-			ei = ei + 1;
 		}
 	}
 }
@@ -4384,7 +4368,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		if (ctt != null) preludeCtx.converterTargetTypes.set(sym, ctt);
 	}
 	if (ctx.extensionRegistry == null || preludeCtx.extensionRegistry == null) return;
-	const exts = ctx.extensionRegistry.methods;
+	const exts = extensionsOf(ctx.extensionRegistry);
 	let ei = 0;
 	while (ei < exts.length) {
 		const ext = exts[ei];
@@ -4419,7 +4403,7 @@ export function bindModulePassesFrom(modulePath: string, ctx: CheckerContext): s
 
 export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
 	if (ctx.extensionRegistry != null && preludeCtx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) registerExtension(preludeCtx.extensionRegistry, ext);
 		}
 	}
@@ -4496,6 +4480,14 @@ export interface BoundModule {
 	gensymMark: int32;
 }
 
+// A module reads the exported prelude and globalImports extensions through their shared
+// layers, as an importer reads a module's interface, instead of copying them per bind.
+function importedExtensionRegistry(preludeCtx: CheckerContext, globalImports: CheckerContext | null): ExtensionRegistry {
+	let layer: ExtensionRegistry | null = preludeCtx.extensionRegistry != null ? exportedExtensionLayer(preludeCtx.extensionRegistry, null) : null;
+	if (globalImports != null && globalImports.extensionRegistry != null) layer = exportedExtensionLayer(globalImports.extensionRegistry, layer);
+	return layer != null ? createLayeredExtensionRegistry(layer) : createExtensionRegistry();
+}
+
 export function bindModuleForCheck(
 	program: Node,
 	registry: ExportRegistry | null,
@@ -4512,7 +4504,7 @@ export function bindModuleForCheck(
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
 	const ctx = graph != null && mod != null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
-	ctx.extensionRegistry = createExtensionRegistry();
+	ctx.extensionRegistry = importedExtensionRegistry(preludeCtx, globalImports);
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
