@@ -1021,9 +1021,14 @@ function emitUnionConv(s: RaiserCompState, reg: int32, source: Type | null, targ
 	}
 	if (!refuses) return;
 	const names: string[] = [];
-	for (const m of members) names.push(unionMemberDisplay(m));
+	for (const m of union.typeChildren) names.push(unionMemberDisplay(m));
 	const unionShown = union.sym != null && union.sym.name != "" ? union.sym.name : names.join(" | ");
-	const head = "member '" + typeDisplayName(aimed) + "' is not accessible for type '" + unionShown + "' using '";
+	const aimedNames: string[] = [];
+	for (const m of aimed.kind == TypeKind.Union ? aimed.typeChildren : [aimed]) {
+		if (m.kind != TypeKind.Null) aimedNames.push(unionMemberDisplay(m));
+	}
+	const aimedShown = aimedNames.join(" | ");
+	const head = "member '" + aimedShown + "' is not accessible for type '" + unionShown + "' using '";
 	emitInst(s, raiserABC(RaiserOpcode.UnionConv, reg, addConst(s, raiserConstString(plan)), addConst(s, raiserConstString(head))));
 }
 
