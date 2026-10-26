@@ -1056,6 +1056,7 @@ export interface RaiserClassType {
 	zeroRefSlots: int64;
 	dynCount: int32;   // the nil values a fresh object holds, one per Dyn slot
 	cyclic: boolean[];   // per slot: the slot's type can reach the object again, so a release that leaves its referent alive registers it with the cycle collector
+	uncounted: boolean[];   // per slot: the slot borrows its referent (a cursor), so a destroy or copy of the object never counts it
 	destroyFn: int32;   // function index of the lifted destroy routine of the type, -1 when the VM destroys its cells by walking them
 }
 
@@ -1066,8 +1067,10 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 	let zeroRefSlots: int64 = 0;
 	let dynCount: int32 = 0;
 	const cyclic: boolean[] = [];
+	const uncounted: boolean[] = [];
 	for (let i = 0; i < fields.length; i += 1) {
 		cyclic.push(false);
+		uncounted.push(false);
 		const cls = kinds[i];
 		const bit: int64 = i < TYPED_SLOTS ? (1 as int64) << (i as int64) : 0;
 		if (cls == RaiserRegClass.Word) zeroWordSlots = zeroWordSlots | bit;
@@ -1079,7 +1082,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, destroyFn: -1 };
+	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1 };
 }
 
 export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
@@ -1496,7 +1499,7 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, in
 	const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 	const kinds = data.classType.kinds;
 	for (let i = 0; i < data.slots.length; i += 1) {
-		if (kinds[i] == RaiserRegClass.Ref && data.slots[i] != 0) rcDecrefHandle(arrHeap, objHeap, data.slots[i]);
+		if (kinds[i] == RaiserRegClass.Ref && !data.classType.uncounted[i] && data.slots[i] != 0) rcDecrefHandle(arrHeap, objHeap, data.slots[i]);
 	}
 	for (let i = 0; i < data.values.length; i += 1) {
 		if (data.values[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.values[i].intVal);

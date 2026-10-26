@@ -3787,7 +3787,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 				if (kinds[i] == RaiserRegClass.Ref) {
 					const child = data.slots[i];
 					data.slots[i] = 0;
-					vmReleaseChild(vm, child, data.classType.cyclic[i]);
+					if (!data.classType.uncounted[i]) vmReleaseChild(vm, child, data.classType.cyclic[i]);
 				}
 			}
 			for (let i = 0; i < data.values.length; i += 1) {
@@ -3951,6 +3951,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 		for (let f = 0; f < count; f += 1) {
 			const held = fieldValueAt(data, f);
 			if (held.kind < RaiserValueKind.String) continue;
+			if (f < data.slots.length && data.classType.uncounted[f]) continue;
 			const name = fieldNameAt(data, f);
 			let child: int32 = -1;
 			for (let i = 0; i < plan.names.length; i += 1) {
