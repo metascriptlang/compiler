@@ -22,21 +22,23 @@ type SelfReadTypeFn = (callee: Node) => Type | null;
 type UndefinedVariableMessageFn = (ctx: CheckerContext, name: string) => string;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
+	throw new Error("internal: checker callback checkExpr was called before it was installed");
 };
 
 let stmtCheckerFn: StmtCheckerFn = (ctx: CheckerContext, node: Node): void => {
+	throw new Error("internal: checker callback checkStmt was called before it was installed");
 };
 
 let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => {
-	return [];
+	throw new Error("internal: checker callback checkFunctionBody was called before it was installed");
 };
 
 let localInstanceCheckerFn: LocalInstanceCheckerFn = (ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void): Symbol | null => {
-	return null;
+	throw new Error("internal: checker callback checkLocalInstance was called before it was installed");
 };
 
 let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null => {
-	return null;
+	throw new Error("internal: checker callback instantiateGeneric was called before it was installed");
 };
 
 let evalComptimeBlockFn: EvalComptimeBlockFn = (node: Node, ctx: CheckerContext): Node => {
@@ -57,16 +59,18 @@ let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Nod
 	return stmt;
 };
 let demandReturnFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+	throw new Error("internal: checker callback demandReturn was called before it was installed");
 };
 let demandBindingFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+	throw new Error("internal: checker callback demandBinding was called before it was installed");
 };
 let demandFieldFn: DemandFieldFn = (ctx: CheckerContext, owner: Symbol, name: string, isStatic: boolean, read: Node): void => {
 };
 let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
-	return null;
+	throw new Error("internal: checker callback selfReadType was called before it was installed");
 };
 let undefinedVariableMessageFn: UndefinedVariableMessageFn = (ctx: CheckerContext, name: string): string => {
-	return `Undefined variable '${name}'`;
+	throw new Error("internal: checker callback undefinedVariableMessage was called before it was installed");
 };
 
 
