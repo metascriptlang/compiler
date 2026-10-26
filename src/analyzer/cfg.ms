@@ -8,6 +8,7 @@
 
 import { Node, NodeKind, ProgramData, Symbol, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isEagerAssignOp } from "../ast/operators";
 import { flowTally } from "../compiler/flows";
 import { AliasKind, aliases, getRootSym } from "./alias";
 
@@ -256,8 +257,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			// Check for assignment: x = expr (def on LHS, use on RHS)
 			if (d.expr != null && d.expr.kind == NodeKind.BinaryExpr) {
 				const bd = d.expr.data as BinaryExprData;
-				if (bd.operator == "=" || bd.operator == "+=" || bd.operator == "-=" || bd.operator == "*=" || bd.operator == "/="
-					|| bd.operator == "&=" || bd.operator == "|=" || bd.operator == "^=" || bd.operator == "<<=" || bd.operator == ">>=" || bd.operator == ">>>=") {
+				if (isEagerAssignOp(bd.operator)) {
 					// RHS first (uses before def)
 					walkExpr(bd.right, ctx);
 					// LHS: check if it's a direct identifier or field path to our var
