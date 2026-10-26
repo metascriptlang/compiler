@@ -900,6 +900,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 		const arrReg = compileExpr(s, d.array);
 		const idxReg = compileIndex(s, d.index);
 		emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, arrReg, idxReg));
+		if (d.array.kind == NodeKind.ArrayAccess && (d.array.data as ArrayAccessData).index.kind == NodeKind.BinaryExpr) emitInst(s, raiserABC(RaiserOpcode.RcDec, arrReg, 0, 0));
 		return dest;
 	} else if (place.kind == NodeKind.MemberExpr) {
 		const d = place.data as MemberExprData;
@@ -1834,7 +1835,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	for (const a of d.arguments) {
 		let peeled = a;
 		while (peeled.kind == NodeKind.HiddenStdConv || peeled.kind == NodeKind.HiddenSubConv) peeled = (peeled.data as HiddenStdConvData).convExpr;
-		if (peeled.kind == NodeKind.ArrayAccess && (peeled.data as ArrayAccessData).index.kind == NodeKind.BinaryExpr && exprIsString(s, (peeled.data as ArrayAccessData).array)) s.argSlices.push(peeled);
+		if (peeled.kind == NodeKind.ArrayAccess && (peeled.data as ArrayAccessData).index.kind == NodeKind.BinaryExpr) s.argSlices.push(peeled);
 	}
 	const result = compileCallExprBody(s, node);
 	while (s.argViews.length > viewMark) emitInst(s, raiserABC(RaiserOpcode.RcDec, s.argViews.pop(), 0, 0));
