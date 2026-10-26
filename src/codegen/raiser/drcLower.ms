@@ -1,7 +1,9 @@
-import { Node, NodeKind, CallExprData, MemberExprData, ArrayAccessData, HiddenDerefData } from "../../ast/node";
-import { RaiserOpcode, inRefFile, raiserABC } from "../../raiser/bytecode";
-import { raiserConstString } from "../../raiser/value";
-import { RaiserCompState, emitInst, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
+import { Node, NodeKind, CallExprData, MemberExprData, ArrayAccessData, HiddenDerefData, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { hasFlag } from "../../checker/symbol";
+import { isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
+import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
+import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
+import { RaiserCompState, emitInst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { compileExpr, compileIndex } from "./expressions";
 import { fieldInst, emitValueCopy, emitZeroValue } from "./valueCopy";
 import {
@@ -53,6 +55,12 @@ function emitClear(s: RaiserCompState, name: string, arg: Node): void {
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
 		return;
 	}
+	if (needsValueCopy(place.nodeType)) {
+		const cleared = allocReg(s, RaiserRegClass.Ref);
+		emitLoadConst(s, cleared, raiserNil());
+		emitPlaceStore(s, name, place, cleared);
+		return;
+	}
 	emitPlaceStore(s, name, place, emitZeroValue(s, place.nodeType));
 }
 
@@ -86,9 +94,37 @@ function emitCopyValue(s: RaiserCompState, name: string, dest: Node, src: Node):
 	emitInst(s, raiserABC(RaiserOpcode.RcDec, old, 0, 0));
 }
 
+function isCellType(type: Type | null): boolean {
+	const t = valueCopyRepr(type);
+	return isStructType(t) || (t != null && t.kind == TypeKind.Union && t.typeFlags.has(TypeFlag.ValueUnion));
+}
+
+function isCellHook(call: CallExprData, flag: SymbolFlag): boolean {
+	const sym = call.callee.resolvedSym;
+	return sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && hasFlag(sym, flag) && call.arguments.length == 1
+		&& isCellType(placeOf(call.arguments[0]).nodeType);
+}
+
 export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	if (call.kind != NodeKind.CallExpr) return false;
 	const d = call.data as CallExprData;
+	if (isCellHook(d, SymbolFlag.WasMovedOp)) {
+		const held = refRegister(s, d.callee.resolvedSym!.name, d.arguments[0]);
+		const isNil = allocBool(s);
+		emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, held, RaiserValueKind.Nil as number));
+		const callHook = emitBranchIfFalsy(s, isNil);
+		const toEnd = emitJumpPlaceholder(s);
+		patchJumpTo(s, callHook, codeLen(s));
+		compileExpr(s, call);
+		patchJumpTo(s, toEnd, codeLen(s));
+		return true;
+	}
+	if (isCellHook(d, SymbolFlag.DestroyOp)) {
+		const hookName = d.callee.resolvedSym!.name;
+		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, hookName, d.arguments[0]), 0, 0));
+		emitClear(s, hookName, d.arguments[0]);
+		return true;
+	}
 	const row = ownershipRow(d.callee.resolvedSym);
 	if (row == 0) return false;
 	const name = ownershipName(d.callee.resolvedSym);
