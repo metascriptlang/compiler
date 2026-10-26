@@ -12,6 +12,7 @@
 // RED MEANS: the cursor result drifted from Nim. Run /trace-nim on processCall and
 //   passCopyToSink in inject.ms.
 // GUARD-BALANCE CoNode
+// GUARD-BALANCE CoClosurePayload
 // GUARD-JS
 
 class CoNode {
@@ -53,6 +54,52 @@ function run(): int32 {
 	owner.length = 0;
 	return sum;
 }
+
+let closurePayloadDestroyed: int32 = 0;
+
+class CoClosurePayload {
+	value: int32 = 17;
+	onDestroy(): void { closurePayloadDestroyed += 1; }
+}
+
+interface CoClosureLink { callback: Cursor<() => int32>; }
+
+function ownedCallback(link: CoClosureLink): () => int32 { return link.callback; }
+
+function closureFromCursorReturn(): () => int32 {
+	const payload = new CoClosurePayload();
+	const owner = (): int32 => payload.value;
+	const link: CoClosureLink = { callback: owner };
+	const kept = ownedCallback(link);
+	if (owner() != 17) process.exit(1);
+	return kept;
+}
+
+function closureFromCursorArray(): (() => int32)[] {
+	const payload = new CoClosurePayload();
+	const owner = (): int32 => payload.value;
+	const link: CoClosureLink = { callback: owner };
+	const kept: (() => int32)[] = [link.callback];
+	if (owner() != 17) process.exit(1);
+	return kept;
+}
+
+function checkCursorClosureReturn(): void {
+	const kept = closureFromCursorReturn();
+	when (c) { if (closurePayloadDestroyed != 0) process.exit(1); }
+	if (kept() != 17) process.exit(1);
+}
+
+function checkCursorClosureArray(): void {
+	const kept = closureFromCursorArray();
+	when (c) { if (closurePayloadDestroyed != 1) process.exit(1); }
+	if (kept[0]() != 17) process.exit(1);
+}
+
+checkCursorClosureReturn();
+when (c) { if (closurePayloadDestroyed != 1) process.exit(1); }
+checkCursorClosureArray();
+when (c) { if (closurePayloadDestroyed != 2) process.exit(1); }
 
 if (run() == 50 * 5 + 50) {
 	console.log("GUARD-OK");
