@@ -4363,7 +4363,9 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 		setRegRef(vm, ia, RaiserValueKind.String, heapConcat(vm.arrayHeap, lhs, rhs).intVal);
 		return;
 	}
+	const replaced = vm.placed && ia == ib && (ia & 7) == CLS_REF && lhs.kind == RaiserValueKind.String ? lhs.intVal : 0;
 	setRegString(vm, ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
+	if (replaced != 0 && rcDecIsLast(vm.arrayHeap, vm.objectHeap, replaced)) vmDestroyTop(vm, replaced);
 }
 
 function vmHandleConcatStrR(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
