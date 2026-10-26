@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-timing" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-timing, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-timing, windows-cross, or all");
 	exit(2);
 }
 
@@ -1195,6 +1195,14 @@ function runTestScope(): void {
 	recordTrue("only the shard that tests a module checks its test blocks", shard0 != shard1);
 }
 
+function runWindowsCross(): void {
+	const dir = `${root}/windows-cross`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "console.log(Math.random() < 1);\n");
+	record("a std extern from a libc header builds for --os=windows", "0", `${command(dir, "windows-cross", compiler, ["build", "main.ms", "--os=windows", "--output=main.exe"]).code}`);
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
@@ -1215,6 +1223,7 @@ if (group == "emcc-jspi" || group == "all") runEmccJspi();
 if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
 if (group == "ios-process" || group == "all") runIosProcess();
+if (group == "windows-cross" || group == "all") runWindowsCross();
 if (group == "flows" || group == "all") runFlows();
 if (group == "test-timing" || group == "all") runTestTiming();
 
