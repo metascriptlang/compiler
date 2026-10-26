@@ -1,4 +1,3 @@
-import { wput, wpush } from "./vmSeq";
 // Raiser ORC — cycle collector (Bacon synchronous trial deletion).
 //
 // ARC (rcIncref/rcDecref in value.ms) reclaims everything except reference
@@ -8,12 +7,14 @@ import { wput, wpush } from "./vmSeq";
 // left at rc==0 are pure garbage cycles and are reclaimed.
 
 import {
-	RaiserValue, RaiserValueKind, RaiserHeapKind, makeHandle, handleIndex, raiserArray, raiserObject,
+	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
-	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject
+	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
+	isSeqHandle, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
+import { cellRootIdx, setCellRootIdx } from "./memory";
 import { RaiserRegClass } from "./bytecode";
 
 const COL_BLACK = 0;   // in use / alive (alloc default)
@@ -29,13 +30,16 @@ const NEVER_COLLECT = 2147483647;
 
 function colorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): int32 {
 	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq) return cellRootIdx(seqCellOf(h)) as int32;
 	if (kind == RaiserHeapKind.Array) return arrHeap.arrays[handleIndex(h)].color;
 	if (kind == RaiserHeapKind.Object) return objHeap.objects[handleIndex(h)].color;
 	throw new Error(`internal: handle ${h} is no collectable cell`);
 }
 
 function setColorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, field: int32): void {
-	if (handleHeapKind(h) == RaiserHeapKind.Array) { arrHeap.arrays[handleIndex(h)].color = field; }
+	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq) { setCellRootIdx(seqCellOf(h), field as int64); }
+	else if (kind == RaiserHeapKind.Array) { arrHeap.arrays[handleIndex(h)].color = field; }
 	else { objHeap.objects[handleIndex(h)].color = field; }
 }
 
@@ -52,17 +56,20 @@ function registered(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int6
 }
 
 function countAt(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): int32 {
-	if (handleHeapKind(h) == RaiserHeapKind.Array) return arrHeap.arrays[handleIndex(h)].rc;
+	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) return heapArrayRc(arrHeap, h);
 	return objHeap.objects[handleIndex(h)].rc;
 }
 
 function addCount(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, delta: int32): void {
-	if (handleHeapKind(h) == RaiserHeapKind.Array) { arrHeap.arrays[handleIndex(h)].rc += delta; }
+	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) { heapArraySetRc(arrHeap, h, heapArrayRc(arrHeap, h) + delta); }
 	else { objHeap.objects[handleIndex(h)].rc += delta; }
 }
 
 function setCount(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, count: int32): void {
-	if (handleHeapKind(h) == RaiserHeapKind.Array) { arrHeap.arrays[handleIndex(h)].rc = count; }
+	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) { heapArraySetRc(arrHeap, h, count); }
 	else { objHeap.objects[handleIndex(h)].rc = count; }
 }
 
@@ -91,11 +98,11 @@ function pushSlot(env: OrcEnv, owner: int64, index: int32, held: RaiserValue): v
 }
 
 function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64): void {
-	if (handleHeapKind(h) == RaiserHeapKind.Array) {
-		const data = arrHeap.arrays[handleIndex(h)];
-		if (!data.elemCyclic || !arrayHoldsHandles(data)) return;
-		const count = arrayHeldCount(data);
-		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, arrayHeldAt(data, i));
+	const kind = handleHeapKind(h);
+	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) {
+		if (!heapArrayCyclic(arrHeap, h) || !arrayHoldsHandles(arrHeap, h)) return;
+		const count = arrayHeldCount(arrHeap, h);
+		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, arrayHeldAt(arrHeap, h, i));
 	} else {
 		const obj = objHeap.objects[handleIndex(h)];
 		const cyclic = obj.classType.cyclic;
@@ -106,11 +113,12 @@ function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: Orc
 }
 
 function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: int64, index: int32): void {
+	if (isSeqHandle(owner)) {
+		arrayHeldStore(arrHeap, owner, index, raiserNil());
+		return;
+	}
 	if (handleHeapKind(owner) == RaiserHeapKind.Array) {
-		const data = arrHeap.arrays[handleIndex(owner)];
-		if (data.elemClass == RaiserRegClass.Dyn) { data.items[index] = raiserNil(); }
-		else if (data.elemClass == RaiserRegClass.Ref) { data.words.wput(index, 0); }
-		else throw new Error("internal: a collector slot names an array that holds no handles");
+		arrHeap.arrays[handleIndex(owner)].items[index] = raiserNil();
 		return;
 	}
 	const obj = objHeap.objects[handleIndex(owner)];
@@ -224,7 +232,7 @@ export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserOb
 
 export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	const kind = handleHeapKind(handle);
-	if (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Object) return;
+	if (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object) return;
 	if (!registered(arrHeap, objHeap, handle)) return;
 	unregisterAt(arrHeap, objHeap, handle);
 }
@@ -383,14 +391,14 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	const items = heapAllocArray(arr);
 	const words = heapAllocArrayOf(arr, RaiserRegClass.Ref);
 	arr.arrays[handleIndex(items)].elemCyclic = true;
-	arr.arrays[handleIndex(words)].elemCyclic = true;
+	heapArraySetFlags(arr, words, true, false);
 	heapObjectSetField(obj, o, "items", raiserArray(items));
 	heapArrayPush(arr, items, raiserArray(words));
-	arr.arrays[handleIndex(words)].words.wpush(o);
+	heapArrayPush(arr, words, handleValue(o));
 	rcIncref(arr, obj, raiserObject(o));
 	orcRegisterCandidate(arr, obj, items);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 3;
-	assert arr.freeList.length == 2 && obj.freeList.length == 1;
+	assert arr.freeList.length == 1 && obj.freeList.length == 1;
 }
 
 test "orcRegisterCandidate asks for a collection at 128 plus the threshold and the threshold follows the runtime rule" {

@@ -5,7 +5,8 @@ import { isSlotUnion } from "../../checker/fit";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
-import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
+import { MemKind, memKindOf } from "../../raiser/layout";
 import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isPlainFunctionPointer } from "../../checker/types";
@@ -432,9 +433,26 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
 }
 
-// An array holds its elements in the register class of their type.
+// An array holds its elements in the register class of their type, each as wide in memory as the type is.
+function elemWidthOf(cls: RaiserRegClass, t: Type | null): ElemWidth {
+	if (t == null || (cls != RaiserRegClass.Word && cls != RaiserRegClass.Float && cls != RaiserRegClass.Bool)) return ElemWidth.Wide;
+	const kind = memKindOf(t);
+	if (cls == RaiserRegClass.Float) return kind == MemKind.F32 ? ElemWidth.F32 : ElemWidth.Wide;
+	if (cls == RaiserRegClass.Bool) return ElemWidth.U8;
+	return match (kind) {
+		MemKind.I32 => ElemWidth.I32,
+		MemKind.I16 => ElemWidth.I16,
+		MemKind.I8 => ElemWidth.I8,
+		MemKind.U32 => ElemWidth.U32,
+		MemKind.U16 => ElemWidth.U16,
+		MemKind.U8 => ElemWidth.U8,
+		_ => ElemWidth.Wide,
+	};
+}
+
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType), isUncountedElement(elementType)));
+	const cls = regClassOf(s, elementType);
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(cls, isCyclicType(elementType), isUncountedElement(elementType), elemWidthOf(cls, elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

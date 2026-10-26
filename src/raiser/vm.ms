@@ -1,16 +1,17 @@
-import { wlen, wat, wput, wpush, watIn, wputIn } from "./vmSeq";
+import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset } from "./vmSeq";
+import { isLiveCell } from "./memory";
 // Raiser VM — Bytecode executor
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, arrayClassSlot
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
@@ -3150,61 +3151,60 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 function fastLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
 	const idx = vm.regs.words[vm.wordBase + (ic >> 3)];
-	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
-	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
-	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (!isSeqHandle(handle)) return false;
+	const cell = seqCellOf(handle);
+	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ia & 7;
-	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (arr.words.wlen() as int64)) return false;
-	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), arr.words.watIn(idx as number));
-	else vm.regs.words[vm.wordBase + (ia >> 3)] = arr.words.watIn(idx as number);
+	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
+	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), seqLoad(cell, idx as number));
+	else vm.regs.words[vm.wordBase + (ia >> 3)] = seqLoad(cell, idx as number);
 	return true;
 }
 
 function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
 	const idx = vm.regs.words[vm.wordBase + (ib >> 3)];
-	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
-	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
-	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (!isSeqHandle(handle)) return false;
+	const cell = seqCellOf(handle);
+	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ic & 7;
-	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (arr.words.wlen() as int64)) return false;
+	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.refs[vm.refBase + (ic >> 3)];
-		const old = arr.words.watIn(idx as number);
+		const old = seqLoad(cell, idx as number);
 		if (old != held) {
 			holdShell(vm, held);
-			arr.words.wputIn(idx as number, held);
+			seqStore(cell, idx as number, held);
 			releaseShell(vm, old);
 		}
 	} else {
-		arr.words.wputIn(idx as number, vm.regs.words[vm.wordBase + (ic >> 3)]);
+		seqStore(cell, idx as number, vm.regs.words[vm.wordBase + (ic >> 3)]);
 	}
 	return true;
 }
 
 function fastArrayLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
-	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
-	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
-	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
-	if (arr.viewOff >= 0) return false;
-	vm.regs.words[vm.wordBase + (ia >> 3)] = arrayHeldCount(arr) as int64;
+	if (!isSeqHandle(handle)) return false;
+	const cell = seqCellOf(handle);
+	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
+	vm.regs.words[vm.wordBase + (ia >> 3)] = seqLen(cell) as int64;
 	return true;
 }
 
 function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
-	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
-	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
-	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (!isSeqHandle(handle)) return false;
+	const cell = seqCellOf(handle);
+	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ib & 7;
-	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN) return false;
+	if ((seqClass(cell) as int32) != cls || seqBase(cell) != 0) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.refs[vm.refBase + (ib >> 3)];
-		arr.words.wpush(held);
+		seqPush(vm.arrayHeap.mem, cell, held);
 		holdShell(vm, held);
 	} else {
-		arr.words.wpush(vm.regs.words[vm.wordBase + (ib >> 3)]);
+		seqPush(vm.arrayHeap.mem, cell, vm.regs.words[vm.wordBase + (ib >> 3)]);
 	}
 	return true;
 }
@@ -3449,12 +3449,12 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.ArrayReverse => {
 			const handle = vmPlainArray(vm, ia, "reverse");
-			if (handle >= 0) arrayHeldReverse(vm.arrayHeap.arrays[handleIndex(handle)]);
+			if (handle >= 0) arrayHeldReverse(vm.arrayHeap, handle);
 		},
 		RaiserOpcode.ArraySort => {
 			const handle = vmPlainArray(vm, ia, "sort");
 			if (handle < 0) return;
-			const refused = arrayHeldSort(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(handle)]);
+			const refused = arrayHeldSort(vm.arrayHeap, handle);
 			if (refused != "") vmError(vm, refused);
 		},
 		RaiserOpcode.ArrayFill => {
@@ -3773,16 +3773,23 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 				}
 			}
 		},
+		RaiserHeapKind.Seq => {
+			const c = seqCellOf(handle);
+			const base = seqBase(c);
+			if (base != 0) {
+				vmReleaseChild(vm, base, false);
+			} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
+				const cyclic = seqCyclic(c);
+				for (let i = 0; i < seqLen(c); i += 1) {
+					const child = seqLoad(c, i);
+					seqStore(c, i, 0);
+					if (child != 0) vmReleaseChild(vm, child, cyclic);
+				}
+			}
+		},
 		RaiserHeapKind.Array => {
 			const data = vm.arrayHeap.arrays[index];
 			if (!data.elemUncounted) {
-				if (data.elemClass == RaiserRegClass.Ref) {
-					for (let i = 0; i < data.words.wlen(); i += 1) {
-						const child = data.words.wat(i);
-						data.words.wput(i, 0);
-						vmReleaseChild(vm, child, data.elemCyclic);
-					}
-				}
 				for (let i = 0; i < data.items.length; i += 1) {
 					const held = data.items[i];
 					if (held.kind >= RaiserValueKind.String) {
@@ -3895,16 +3902,22 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 	const plan = plans[planIndex];
 	const kind = handleHeapKind(handle);
 	const index = handleIndex(handle);
-	if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Array) {
-		const data = vm.arrayHeap.arrays[index];
-		if (data.elemUncounted) return;
-		if (data.elemClass == RaiserRegClass.Ref) {
-			for (let i = 0; i < data.words.wlen(); i += 1) {
-				const held = data.words.wat(i);
-				data.words.wput(i, 0);
-				vmReleasePlanned(vm, held, plans, plan.children[0], data.elemCyclic);
+	if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Seq) {
+		const c = seqCellOf(handle);
+		const base = seqBase(c);
+		if (base != 0) {
+			vmReleaseChild(vm, base, false);
+		} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
+			const cyclic = seqCyclic(c);
+			for (let i = 0; i < seqLen(c); i += 1) {
+				const held = seqLoad(c, i);
+				seqStore(c, i, 0);
+				vmReleasePlanned(vm, held, plans, plan.children[0], cyclic);
 			}
 		}
+	} else if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Array) {
+		const data = vm.arrayHeap.arrays[index];
+		if (data.elemUncounted) return;
 		for (let i = 0; i < data.items.length; i += 1) {
 			const held = data.items[i];
 			if (held.kind >= RaiserValueKind.String) {
@@ -3969,7 +3982,7 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 	const source = innerHandle(vm, sourceShell);
 	if (dest == source) return;
 	const kind = handleHeapKind(dest);
-	if (dest == 0 || source == 0 || kind != handleHeapKind(source) || (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Object)) {
+	if (dest == 0 || source == 0 || kind != handleHeapKind(source) || (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object)) {
 		vmError(vm, "internal: AssignInPlace needs two cells of one aggregate kind");
 		return;
 	}
@@ -3981,12 +3994,19 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 	vmReleaseByPlan(vm, dest, plans, planIndex);
 	const d = handleIndex(dest);
 	const s = handleIndex(source);
-	if (kind == RaiserHeapKind.Array) {
+	if (kind == RaiserHeapKind.Seq) {
+		const dc = seqCellOf(dest);
+		const sc = seqCellOf(source);
+		if (seqBase(dc) != 0 || seqBase(sc) != 0) throw new Error("internal: AssignInPlace over a view");
+		const views = vm.arrayHeap.seqViews.get(dest);
+		const offsets: int64[] = [];
+		if (views != null) for (const view of views) offsets.push(seqViewOffset(seqCellOf(view)));
+		seqSwapContents(dc, sc);
+		if (views != null) for (let v = 0; v < views.length; v += 1) seqPointViewInto(seqCellOf(views[v]), offsets[v]);
+	} else if (kind == RaiserHeapKind.Array) {
 		const to = vm.arrayHeap.arrays[d];
 		const from = vm.arrayHeap.arrays[s];
 		const items = to.items; to.items = from.items; from.items = items;
-		const words = to.words; to.words = from.words; from.words = words;
-		const elemClass = to.elemClass; to.elemClass = from.elemClass; from.elemClass = elemClass;
 		const viewOff = to.viewOff; to.viewOff = from.viewOff; from.viewOff = viewOff;
 		const viewLen = to.viewLen; to.viewLen = from.viewLen; from.viewLen = viewLen;
 		const elemCyclic = to.elemCyclic; to.elemCyclic = from.elemCyclic; from.elemCyclic = elemCyclic;
@@ -4039,9 +4059,8 @@ function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 
 function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
 	const slot = ((func.packed[pc] >> 56) & 255) as number;
-	const handle = heapAllocArrayOf(vm.arrayHeap, slotArrayClass(slot));
-	vm.arrayHeap.arrays[handleIndex(handle)].elemCyclic = slotArrayCyclic(slot);
-	vm.arrayHeap.arrays[handleIndex(handle)].elemUncounted = slotArrayUncounted(slot);
+	const handle = heapAllocArrayOf(vm.arrayHeap, slotArrayClass(slot), slotArrayWidth(slot));
+	heapArraySetFlags(vm.arrayHeap, handle, slotArrayCyclic(slot), slotArrayUncounted(slot));
 	const elemCount = ib;
 	for (let i = 0; i < elemCount; i = i + 1) {
 		const elem = getDyn(vm, func.blocks[ic + 4 + i] as int32);
@@ -4064,16 +4083,20 @@ function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expe
 
 // Whether the array cannot hold the value; the run stops with the reason. A view holds what the array it stands on does.
 function vmElemRefused(vm: RaiserVM, handle: int64, val: RaiserValue): boolean {
-	const refused = arrayRefusal(arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(handle)]), val);
+	const refused = arrayRefusal(vm.arrayHeap, handle, val);
 	if (refused == "") return false;
 	vmError(vm, refused);
 	return true;
 }
 
+function vmArrayHandleOk(vm: RaiserVM, handle: int64): boolean {
+	if (isSeqHandle(handle) ? isLiveCell(seqCellOf(handle)) : handleIndex(handle) < vm.arrayHeap.arrays.length) return true;
+	vmError(vm, `array handle out of bounds: ${handle}`);
+	return false;
+}
+
 function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return false;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return false;
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return false;
@@ -4086,10 +4109,18 @@ function vmHandleAddrIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (vm.halted) return;
 	const idx = getDyn(vm, ic).intVal;
 	if (!vmElemIndex(vm, handle, idx)) return;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) {
-		setRegConform(vm, ia, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
-		return;
+	if (isSeqHandle(handle)) {
+		const cell = seqCellOf(handle);
+		if (seqBase(cell) != 0) {
+			setRegConform(vm, ia, raiserElemAddr(seqBase(cell), seqViewOffset(cell) + idx));
+			return;
+		}
+	} else {
+		const data = vm.arrayHeap.arrays[handleIndex(handle)];
+		if (data.viewOff >= 0) {
+			setRegConform(vm, ia, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
+			return;
+		}
 	}
 	setRegConform(vm, ia, raiserElemAddr(handle, idx));
 }
@@ -4153,9 +4184,7 @@ function vmHandleLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	const idx = idxVal.intVal;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return;
@@ -4170,9 +4199,7 @@ function vmHandleStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	const idx = idxVal.intVal;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return;
@@ -4187,9 +4214,7 @@ function vmHandleArrayLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const arrVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	const len = heapArrayLen(vm.arrayHeap, handle);
 	setRegInt(vm, ia, len as int64);
 }
@@ -4199,9 +4224,7 @@ function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	const val = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot push to a slice"); return;
 	}
@@ -4217,9 +4240,7 @@ function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 function vmPlainArray(vm: RaiserVM, t: int32, verb: string): int64 {
 	const handle = vmHeapOperand(vm, getDyn(vm, t), RaiserValueKind.Array, "an array");
 	if (vm.halted) return -1;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return -1;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return -1;
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, `cannot ${verb} a slice`); return -1;
 	}
@@ -4244,12 +4265,11 @@ function vmEvictAll(vm: RaiserVM, evicted: RaiserValue[], cyclic: boolean): void
 function vmHandleArrayPop(vm: RaiserVM, ia: int32, ib: int32): void {
 	const handle = vmPlainArray(vm, ib, "pop from");
 	if (handle < 0) return;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
-	const n = arrayHeldCount(data);
+	const n = arrayHeldCount(vm.arrayHeap, handle);
 	if (n == 0) {
 		vmError(vm, "index -1 out of bounds (length 0)"); return;
 	}
-	const val = arrayHeldAt(data, n - 1);
+	const val = arrayHeldAt(vm.arrayHeap, handle, n - 1);
 	heapArraySetLen(vm.arrayHeap, handle, (n - 1) as int64);
 	setRegConform(vm, ia, val);
 	vmDecref(vm, val);
@@ -4258,18 +4278,18 @@ function vmHandleArrayPop(vm: RaiserVM, ia: int32, ib: int32): void {
 function vmHandleArrayShift(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const handle = vmPlainArray(vm, ib, "shift");
 	if (handle < 0) return;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
-	if (arrayHeldCount(data) == 0) {
+	const cls = heapArrayClass(vm.arrayHeap, handle);
+	if (arrayHeldCount(vm.arrayHeap, handle) == 0) {
 		let zero = raiserNil();
-		if (data.elemClass == RaiserRegClass.Word) zero = raiserInt(0);
-		else if (data.elemClass == RaiserRegClass.Float) zero = raiserFloat(0.0);
-		else if (data.elemClass == RaiserRegClass.Bool) zero = raiserBool(false);
+		if (cls == RaiserRegClass.Word) zero = raiserInt(0);
+		else if (cls == RaiserRegClass.Float) zero = raiserFloat(0.0);
+		else if (cls == RaiserRegClass.Bool) zero = raiserBool(false);
 		else if (ic == 1) zero = heapAllocString(vm.arrayHeap, "");
 		setRegConform(vm, ia, zero);
 		return;
 	}
-	const val = arrayHeldAt(data, 0);
-	arrayHeldRemove(data, 0, 1);
+	const val = arrayHeldAt(vm.arrayHeap, handle, 0);
+	arrayHeldRemove(vm.arrayHeap, handle, 0, 1);
 	setRegConform(vm, ia, val);
 	vmDecref(vm, val);
 }
@@ -4278,7 +4298,7 @@ function vmHandleArrayShift(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32): void {
 	const handle = vmPlainArray(vm, ia, "splice");
 	if (handle < 0) return;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	const uncounted = heapArrayUncounted(vm.arrayHeap, handle);
 	let start = getDyn(vm, ic).intVal;
 	let count = getDyn(vm, ic + 8).intVal;
 	const inserting = itemReg >= 0;
@@ -4288,20 +4308,20 @@ function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32)
 		if (vmElemRefused(vm, handle, item)) return;
 		if (start < 0) start = 0;
 	}
-	const n = arrayHeldCount(data) as int64;
+	const n = arrayHeldCount(vm.arrayHeap, handle) as int64;
 	const evicted: RaiserValue[] = [];
 	if (start >= 0 && start < n && count > 0) {
 		if (count > n - start) count = n - start;
-		for (let i = 0; i < count; i += 1) evicted.push(arrayHeldAt(data, (start + i) as number));
-		arrayHeldRemove(data, start as number, count as number);
+		for (let i = 0; i < count; i += 1) evicted.push(arrayHeldAt(vm.arrayHeap, handle, (start + i) as number));
+		arrayHeldRemove(vm.arrayHeap, handle, start as number, count as number);
 	}
 	if (inserting) {
-		const length = arrayHeldCount(data) as int64;
+		const length = arrayHeldCount(vm.arrayHeap, handle) as int64;
 		const at = start < length ? start : length;
-		if (!data.elemUncounted) vmShareHold(vm, item);
-		arrayHeldInsert(data, at as number, item);
+		if (!uncounted) vmShareHold(vm, item);
+		arrayHeldInsert(vm.arrayHeap, handle, at as number, item);
 	}
-	vmEvictAll(vm, data.elemUncounted ? [] : evicted, data.elemCyclic);
+	vmEvictAll(vm, uncounted ? [] : evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }
 
 function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
@@ -4309,38 +4329,32 @@ function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
 	if (handle < 0) return;
 	const val = getDyn(vm, ib);
 	if (vmElemRefused(vm, handle, val)) return;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
+	const uncounted = heapArrayUncounted(vm.arrayHeap, handle);
 	const evicted: RaiserValue[] = [];
-	for (let i = 0; i < arrayHeldCount(data); i += 1) {
-		evicted.push(arrayHeldAt(data, i));
-		if (!data.elemUncounted) vmShareHold(vm, val);
+	for (let i = 0; i < arrayHeldCount(vm.arrayHeap, handle); i += 1) {
+		evicted.push(arrayHeldAt(vm.arrayHeap, handle, i));
+		if (!uncounted) vmShareHold(vm, val);
 		heapArraySet(vm.arrayHeap, handle, i as int64, val);
 	}
-	vmEvictAll(vm, data.elemUncounted ? [] : evicted, data.elemCyclic);
+	vmEvictAll(vm, uncounted ? [] : evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }
 
 function vmSourceArray(vm: RaiserVM, t: int32): int64 {
 	const handle = vmHeapOperand(vm, getDyn(vm, t), RaiserValueKind.Array, "an array");
 	if (vm.halted) return -1;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return -1;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return -1;
 	return handle;
 }
 
 function vmNewArrayLike(vm: RaiserVM, source: int64): int64 {
-	const base = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(source)]);
-	const handle = heapAllocArrayOf(vm.arrayHeap, base.elemClass);
-	vm.arrayHeap.arrays[handleIndex(handle)].elemCyclic = base.elemCyclic;
-	vm.arrayHeap.arrays[handleIndex(handle)].elemUncounted = base.elemUncounted;
-	return handle;
+	return heapAllocArrayLike(vm.arrayHeap, vm.arrayHeap, source);
 }
 
 function vmCopyElements(vm: RaiserVM, from: int64, start: int64, end: int64, into: int64): void {
 	for (let i = start; i < end; i += 1) {
 		const val = heapArrayGet(vm.arrayHeap, from, i);
 		heapArrayPush(vm.arrayHeap, into, val);
-		if (!vm.arrayHeap.arrays[handleIndex(into)].elemUncounted) vmShareHold(vm, val);
+		if (!heapArrayUncounted(vm.arrayHeap, into)) vmShareHold(vm, val);
 	}
 }
 
@@ -4364,8 +4378,8 @@ function vmHandleArrayConcat(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (left < 0) return;
 	const right = vmSourceArray(vm, ic);
 	if (right < 0) return;
-	const leftClass = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(left)]).elemClass;
-	const rightClass = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(right)]).elemClass;
+	const leftClass = heapArrayClass(vm.arrayHeap, left);
+	const rightClass = heapArrayClass(vm.arrayHeap, right);
 	if (leftClass != rightClass) {
 		vmError(vm, `internal: concat of an array of ${regClassLetter(leftClass)} elements with one of ${regClassLetter(rightClass)} elements`); return;
 	}
@@ -4380,9 +4394,7 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	const lenVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
@@ -4393,9 +4405,8 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
 	}
-	const held = vm.arrayHeap.arrays[handleIndex(handle)];
-	if (arrayHoldsHandles(held)) {
-		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(held); i += 1) vmDecref(vm, arrayHeldAt(held, i));
+	if (arrayHoldsHandles(vm.arrayHeap, handle)) {
+		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(vm.arrayHeap, handle); i += 1) vmDecref(vm, arrayHeldAt(vm.arrayHeap, handle, i));
 	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
 }
@@ -4406,19 +4417,25 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	const end = getDyn(vm, ic + 8).intVal;
 	const handle = vmHeapOperand(vm, srcVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
-	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
-		vmError(vm, `array handle out of bounds: ${handle}`); return;
-	}
+	if (!vmArrayHandleOk(vm, handle)) return;
 	const len = heapArrayLen(vm.arrayHeap, handle);
 	if (end != start && (start < 0 || end < start || end > len)) {
 		vmError(vm, `slice ${start}..${end} out of bounds (length ${len})`); return;
 	}
 	let base = srcVal;
 	let off = start;
-	const data = vm.arrayHeap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) {
-		base = data.items[0];
-		off = data.viewOff + start;
+	if (isSeqHandle(handle)) {
+		const cell = seqCellOf(handle);
+		if (seqBase(cell) != 0) {
+			base = handleValue(seqBase(cell));
+			off = seqViewOffset(cell) + start;
+		}
+	} else {
+		const data = vm.arrayHeap.arrays[handleIndex(handle)];
+		if (data.viewOff >= 0) {
+			base = data.items[0];
+			off = data.viewOff + start;
+		}
 	}
 	const view = heapAllocView(vm.arrayHeap, base, off, (end - start) as int32);
 	vmIncref(vm, base);
@@ -7597,7 +7614,7 @@ function slotted(inst: RaiserInstruction, slot: number): RaiserInstruction {
 
 function vmLiveCount(vm: RaiserVM): number {
 	return (vm.objectHeap.objects.length - vm.objectHeap.freeList.length)
-		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length);
+		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length) + heapSeqHandles(vm.arrayHeap).length;
 }
 
 function fieldNames(names: string[]): RaiserValue[] {
@@ -7657,7 +7674,7 @@ test "placed: the last RcDec of an array releases its elements and frees the arr
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.arrayHeap.arrays.length == 1 && vm.objectHeap.objects.length == 1 && vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
+	assert vm.objectHeap.objects.length == 1 && vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
 }
 
 test "placed: the last RcDec of an array of uncounted elements leaves the elements to their owner" {
@@ -7765,7 +7782,7 @@ test "placed: stores and moves leave every count where it was" {
 
 test "placed: an array push counts nothing" {
 	const vm = storeSequence(true);
-	assert vm.objectHeap.objects[0].rc == 1 && vm.arrayHeap.arrays[0].rc == 1;
+	assert vm.objectHeap.objects[0].rc == 1 && heapArrayRc(vm.arrayHeap, heapSeqHandles(vm.arrayHeap)[0]) == 1;
 }
 
 function copyPlan(kind: RaiserCopyKind, names: string[], children: int32[]): RaiserCopyPlan {
@@ -7806,7 +7823,7 @@ test "placed: DestroyValue by an array plan frees the array and every aggregate 
 	main.copyPlans = [copyPlan(RaiserCopyKind.Array, [], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vmLiveCount(vm) == 0 && vm.objectHeap.objects.length == 1 && vm.arrayHeap.arrays.length == 1, `${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 0 && vm.objectHeap.objects.length == 1, `${vmLiveCount(vm)}`;
 }
 
 test "placed: SinkValue destroys the old aggregate and takes the source, and a destination that already holds it stays" {
@@ -8201,7 +8218,7 @@ test "array kernels: slice, concat, splice, pop and fill count string elements" 
 	execLoop(sliced);
 	assert heldText(sliced, sliced.regs.refs[1]) == "[q,r]";
 	assert stringRc(sliced, slicedFrom) == 1 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 1)) == 2 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 2;
-	assert sliced.arrayHeap.arrays[handleIndex(sliced.regs.refs[1])].rc == 1;
+	assert heapArrayRc(sliced.arrayHeap, sliced.regs.refs[1]) == 1;
 
 	const joined = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayConcat, 1, 0, 0), halt], []);
 	execLoop(joined);
@@ -8359,9 +8376,9 @@ test "placed: AssignInPlace gives an array behind a pointer the source's element
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
-	const dest = vm.arrayHeap.arrays[handleIndex(vm.regs.refs[0])];
-	assert dest.words.wlen() == 2 && dest.rc == 2, `${dest.words.wlen()} ${dest.rc}`;
-	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 1 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
+	const dest = vm.regs.refs[0];
+	assert heapArrayLen(vm.arrayHeap, dest) == 2 && heapArrayRc(vm.arrayHeap, dest) == 2, `${heapArrayLen(vm.arrayHeap, dest)} ${heapArrayRc(vm.arrayHeap, dest)}`;
+	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 0 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
 }
 
 test "placed: AssignInPlace gives a union behind a pointer the source's tag and payload, releases the old payload and frees the source cell" {
