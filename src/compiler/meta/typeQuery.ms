@@ -3,7 +3,8 @@ import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, ScopeKind, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { isReadonlyView, withoutReadonlyView, typeDisplayName, instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
-import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool } from "../../raiser/value";
+import { wireGet } from "./wire";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap, raiseFromHost } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, builtNodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
@@ -156,8 +157,8 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 function namesBuiltinType(ctx: CheckerContext, v: RaiserValue): boolean {
 	const heap = activeHostObjectHeap();
 	if (heap == null || v.kind != RaiserValueKind.Object) return false;
-	if (heapObjectGetField(heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
-	const name = heapObjectGetField(heap, v.intVal, "name");
+	if (wireGet(heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
+	const name = wireGet(heap, v.intVal, "name");
 	return name.kind == RaiserValueKind.String && builtinTypeNamed(ctx, unboxString(name)) != null;
 }
 

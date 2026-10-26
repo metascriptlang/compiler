@@ -38,9 +38,9 @@
 
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
-	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
+	heapObjectFieldCount, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
-	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
+	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
@@ -52,7 +52,7 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
-import { isNodeWireMetaField } from "./wire";
+import { isNodeWireMetaSlot, allocWireObject, wireGet, wireSet, WIRE_UNION } from "./wire";
 import { registerBigIntKernels } from "./bigintHost";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
 import { nodeKindName } from "../../ast/fieldspec";
@@ -783,16 +783,14 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // shared between macros can walk nodes without engine-mode flat-field reads.
 // A child slot is any Object field carrying a numeric "kind" (a Node), or
 // each such element of an Array field (recursively, so Node[][] fields like
-// typExprFieldDecorators are reachable), in field-insertion order — the order
-// addKindFields (compiler/meta/expand.ms) wrote them. Metadata fields are
+// typExprFieldDecorators are reachable), in field order. Metadata fields are
 // never children; resolvedSym and nodeType ARE node-shaped, so telling them
-// apart rests on isNodeWireMetaField (wire.ms) — the one list the wire
-// writer and this reader share. childAt returns the live heap ref, not a
+// apart rests on isNodeWireMetaSlot (wire.ms). childAt returns the live heap ref, not a
 // copy — mutations through it stick.
 
 function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	if (v.kind != RaiserValueKind.Object) return false;
-	const kindField = heapObjectGetField(objHeap, v.intVal, "kind");
+	const kindField = wireGet(objHeap, v.intVal, "kind");
 	return kindField.kind == RaiserValueKind.Int || kindField.kind == RaiserValueKind.Float;
 }
 
@@ -817,8 +815,7 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
-		const name = heapObjectFieldNameAt(objHeap, h, i);
-		if (isNodeWireMetaField(name)) continue;
+		if (isNodeWireMetaSlot(objHeap, h, i)) continue;
 		const v = heapObjectFieldValueAt(objHeap, h, i);
 		if (_isNodeShaped(objHeap, v)) {
 			out.push(v);
@@ -1040,7 +1037,7 @@ function _bridgeMsTimeNow(args: RaiserValue[]): RaiserValue {
 
 function isWireNode(objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
 	if (n.kind != RaiserValueKind.Object) return false;
-	const k = heapObjectGetField(objHeap, n.intVal, "kind");
+	const k = wireGet(objHeap, n.intVal, "kind");
 	return k.kind == RaiserValueKind.Int && k.intVal == (kind as int64);
 }
 
@@ -1060,7 +1057,7 @@ function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 
 function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
 	if (n.kind != RaiserValueKind.Object) return "null";
-	const kind = heapObjectGetField(objHeap, n.intVal, "kind");
+	const kind = wireGet(objHeap, n.intVal, "kind");
 	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
 }
 
@@ -1125,13 +1122,13 @@ function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	if (isWireNode(objHeap, n, NodeKind.Identifier)) {
 		const sym = boundSymOfObject(objHeap, n.intVal);
 		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
-		return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "name")));
+		return boxString(unboxString(wireGet(objHeap, n.intVal, "name")));
 	}
 	if (!isWireNode(objHeap, n, NodeKind.StringLiteral)) {
 		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(objHeap, n), true);
 		return boxString("");
 	}
-	return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "value")));
+	return boxString(unboxString(wireGet(objHeap, n.intVal, "value")));
 }
 
 function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
@@ -1440,13 +1437,13 @@ function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
 	if (objHeap == null || arrHeap == null) return raiserNil();
 	const u = args[0];
 	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
-	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
+	const tag = wireGet(objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
 		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
 		raiseFromHost(unboxString(args[2]) + unboxString(label) + "'", true);
 		return raiserNil();
 	}
-	return heapObjectGetField(objHeap, u.intVal, "$v");
+	return wireGet(objHeap, u.intVal, "$v");
 }
 
 function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
@@ -1509,9 +1506,9 @@ function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
-	const handle = heapAllocObject(objHeap);
-	heapObjectSetField(objHeap, handle, "$tag", args[1]);
-	heapObjectSetField(objHeap, handle, "$v", args[0]);
+	const handle = allocWireObject(objHeap, WIRE_UNION);
+	wireSet(objHeap, handle, "$tag", args[1]);
+	wireSet(objHeap, handle, "$v", args[0]);
 	const arrHeap = activeHostArrayHeap();
 	if (arrHeap != null) {
 		rcIncref(arrHeap, objHeap, args[0]);
