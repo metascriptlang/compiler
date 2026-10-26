@@ -8,7 +8,7 @@ import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCop
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isUncountedElement, isPlainFunctionPointer } from "../../checker/types";
+import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
@@ -43,6 +43,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	} else if (valueType.kind == TypeKind.Union && raiserFlatCellUnion(valueType)) {
 		plan.kind = RaiserCopyKind.Object;
 		for (const arm of valueType.typeChildren) {
+			if (arm.kind == TypeKind.Function) continue;
 			for (let i = 0; i < arm.typeNames.length; i += 1) {
 				const child = copyPlan(s, arm.typeChildren[i]);
 				const at = plan.names.indexOf(arm.typeNames[i]);
@@ -266,6 +267,14 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 		}
 		return array;
 	}
+	if (t != null && t.kind == TypeKind.Tuple) {
+		const tuple = allocRef(s);
+		emitInst(s, newArrayInst(s, tuple, 0, getElementType(t)));
+		for (const member of t.typeChildren) {
+			emitInst(s, raiserABC(RaiserOpcode.ArrayPush, tuple, emitZeroOf(s, member, open), 0));
+		}
+		return tuple;
+	}
 	if (t != null && isValueStruct(t)) {
 		for (const outer of open) {
 			if (outer == t) {
@@ -338,10 +347,12 @@ const MAX_TYPE_DEPTH = 32;
 
 function isStructSlotUnion(t: Type): boolean {
 	if (!isSlotUnion(t)) return false;
+	let structs = 0;
 	for (const child of t.typeChildren) {
-		if (child.kind != TypeKind.Struct) return false;
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind != TypeKind.Function) return false;
 	}
-	return true;
+	return structs > 0;
 }
 
 export function isUnionCell(t: Type): boolean {

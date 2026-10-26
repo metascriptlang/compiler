@@ -1,4 +1,3 @@
-// @xfail(raiser): the copies now match c, but 4 array items stay live at exit (a T[N] inside a struct or a returned T[N] is not destroyed)
 class Item {
 	name: string;
 	constructor(n: string) { this.name = n; }

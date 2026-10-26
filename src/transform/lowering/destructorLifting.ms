@@ -754,6 +754,12 @@ function positionalMember(obj: Node, position: number, loc: SourceLocation): Nod
 	return makeArrayAccess(obj, makeNumber(position, loc), loc);
 }
 
+function releaseArrayCell(hook: string, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	if (!lctx.raiserBackend) return;
+	if (hook == "destroy") genCall("msArrayDestroy", "destroy", clonePath(xf, loc), clonePath(xf, loc), buf, loc);
+	else if (hook == "sink") genCall("msArrayDestroy", "destroy", clonePath(yf, loc), clonePath(yf, loc), buf, loc);
+}
+
 function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: NodeBuf, visited: NameSet, loc: SourceLocation, tuplePosition: number = -1): void {
 	if (fieldType == null) return;
 	// Skip void-typed fields (e.g. `Result<void, E>` variant has `void value`)
@@ -781,6 +787,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const visited2: NameSet = createNameSet();
 			fillBody(hook, xf, yf, "_" + ti.toString(), fieldType.typeChildren[ti], lctx, buf, visited2, loc, ti);
 		}
+		releaseArrayCell(hook, xf, yf, lctx, buf, loc);
 		return;
 	}
 
@@ -801,6 +808,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			} else {
 				defaultOp(hook, xf, yf, buf, loc);
 			}
+			releaseArrayCell(hook, xf, yf, lctx, buf, loc);
 		},
 		TypeKind.Struct => {
 			// Anon structs from `{...}` type annotations have empty typeName (created
