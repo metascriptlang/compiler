@@ -1,13 +1,14 @@
-import { Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
+import { getOpByKey } from "../c/types";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
-import { raiserPlaced, RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
+import { raiserPlaced, RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
@@ -144,6 +145,46 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	return result;
 }
 
+export function isInPlaceCell(s: RaiserCompState, valueType: Type | null): boolean {
+	const t = valueShape(valueType);
+	return t != null && t.kind == TypeKind.Struct && needsValueAssign(s, t);
+}
+
+export function isNilBranch(s: RaiserCompState, reg: int32): int32 {
+	const isNil = allocBool(s);
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, reg, RaiserValueKind.Nil as number));
+	return emitBranchIfFalsy(s, isNil);
+}
+
+export function emitCellSwap(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): void {
+	const t = valueShape(valueType);
+	if (t == null || t.kind != TypeKind.Struct) throw new Error("internal: Raiser exchanges the cells of a struct only");
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		const fieldType = i < t.typeChildren.length ? t.typeChildren[i] : null;
+		const name = addConst(s, raiserConstString(t.typeNames[i]));
+		const held = allocFor(s, fieldType);
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, destination, name));
+		const next = allocFor(s, fieldType);
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, next, source, name));
+		const toNext: int32[] = [];
+		const toExchange: int32[] = [];
+		if (isInPlaceCell(s, fieldType)) {
+			const heldPresent = isNilBranch(s, held);
+			toExchange.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, heldPresent, codeLen(s));
+			const nextPresent = isNilBranch(s, next);
+			toExchange.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, nextPresent, codeLen(s));
+			emitCellSwap(s, held, next, fieldType);
+			toNext.push(emitJumpPlaceholder(s));
+		}
+		for (const jump of toExchange) patchJumpTo(s, jump, codeLen(s));
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, destination, name, next));
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, source, name, held));
+		for (const jump of toNext) patchJumpTo(s, jump, codeLen(s));
+	}
+}
+
 function zeroShape(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) return zeroShape(t.typeReturn);
@@ -168,6 +209,18 @@ function isValueStruct(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Struct && !t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
+export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: string[], kinds: RaiserRegClass[]): int32 {
+	if (!raiserPlaced()) return layoutOperand(s, fields, kinds);
+	const destroyOp = t != null ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
+	if (fields.length == 0 && destroyOp == null) return 0;
+	const classType = createClassType("", -1, [], fields, kinds);
+	const cyclic = slotCyclicOf(t);
+	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
+	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
+	s.classTypes.push(classType);
+	return s.classTypes.length;
+}
+
 function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): int32 {
 	const t = zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
@@ -189,7 +242,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 			}
 		}
 		const object = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames, slotClassesOf(s, t)), 0));
+		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, structShapeOperand(s, valueType, t.typeNames, slotClassesOf(s, t)), 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);

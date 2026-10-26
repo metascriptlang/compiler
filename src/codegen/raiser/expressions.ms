@@ -3,7 +3,7 @@
 
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
-import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD } from "./drcRows";
+import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT } from "./drcRows";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol, AttachedOp,
@@ -21,7 +21,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitStoreCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
+import { structShapeOperand, emitStoreCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
@@ -1648,6 +1648,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.RcHeld, compileExpr(s, d.arguments[0]), held, 0));
 		return held;
 	}
+	if (raiserPlaced() && ownershipRow(d.callee.resolvedSym) == ROW_STR_CONCAT) {
+		const dest = allocRef(s);
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, compileExpr(s, d.arguments[0]), compileExpr(s, d.arguments[1])));
+		return dest;
+	}
+	if (raiserPlaced() && ownershipRow(d.callee.resolvedSym) == ROW_STR_TEXT) return compileTextOf(s, d.arguments[0]);
 	if (raiserPlaced()) refuseOwnershipCall(node);
 	const nsCallee = namespaceMemberIdent(d.callee);
 	if (nsCallee != null) {
@@ -2657,10 +2663,6 @@ function emitObjectShell(s: RaiserCompState, dest: int32, t: Type | null): void 
 	const classSym = literalClass(t);
 	const decl = classSym != null ? classDeclNodeOf(classSym) : null;
 	const className = decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).className : "";
-	const shape = classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : layoutOperand(s, layoutOf(t), slotKindsOf(s, t));
-	if (classSym == null && raiserPlaced() && shape > 0 && t != null && t.kind == TypeKind.Struct) {
-		const destroyOp = getOpByKey(t, AttachedOp.AttachedDestructor);
-		if (destroyOp != null) s.classTypes[shape - 1].destroyFn = resolveRoutine(s, destroyOp);
-	}
+	const shape = classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : structShapeOperand(s, t, layoutOf(t), slotKindsOf(s, t));
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, shape, 0));
 }
