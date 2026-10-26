@@ -1541,8 +1541,7 @@ export interface RaiserCopyMap {
 	globalSlots: Map<int64, int64>;
 	jobs: RaiserCopyJob[];
 	viewFixups: int64[];
-	sourceWords: int64[] | null;
-	sourceRefs: int64[] | null;
+	sourceSlots: int64[] | null;
 	sourceGlobals: RaiserValue[] | null;
 	destGlobals: RaiserValue[] | null;
 }
@@ -1555,8 +1554,7 @@ export function createCopyMap(): RaiserCopyMap {
 		globalSlots: new Map<int64, int64>(),
 		jobs: [],
 		viewFixups: [],
-		sourceWords: null,
-		sourceRefs: null,
+		sourceSlots: null,
 		sourceGlobals: null,
 		destGlobals: null,
 	};
@@ -1571,18 +1569,12 @@ export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dst
 function copiedRegisterValue(map: RaiserCopyMap, address: int64): RaiserValue {
 	const cls = (address & 7) as RaiserRegClass;
 	const abs = address >> 3;
-	const words = map.sourceWords;
-	const refs = map.sourceRefs;
-	if (words == null || refs == null) throw new Error("internal: a copied slot address must have its source storage");
-	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) {
-		if (abs >= refs.length) throw new Error("internal: a copied slot address must have its source storage");
-		const h = refs[abs];
-		return handleValue(h);
-	}
-	if (abs >= words.length) throw new Error("internal: a copied slot address must have its source storage");
-	if (cls == RaiserRegClass.Word) return raiserInt(words[abs]);
-	if (cls == RaiserRegClass.Bool) return raiserBool(words[abs] != 0);
-	return raiserFloat(bitsToFloat(words[abs]));
+	const slots = map.sourceSlots;
+	if (slots == null || abs >= slots.length) throw new Error("internal: a copied slot address must have its source storage");
+	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) return handleValue(slots[abs]);
+	if (cls == RaiserRegClass.Word) return raiserInt(slots[abs]);
+	if (cls == RaiserRegClass.Bool) return raiserBool(slots[abs] != 0);
+	return raiserFloat(bitsToFloat(slots[abs]));
 }
 
 function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: int64): void {
@@ -1771,8 +1763,7 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	heapArrayPush(sArr, owner, raiserRegAddr(1));
 	heapArrayPush(sArr, owner, raiserRegAddr(1));
 	const map = createCopyMap();
-	map.sourceWords = [];
-	map.sourceRefs = refs;
+	map.sourceSlots = refs;
 	const copied = copyGraphWith(sArr, sObj, dArr, dObj, raiserArray(owner), map);
 	const first = heapArrayGet(dArr, copied.intVal, 0);
 	const second = heapArrayGet(dArr, copied.intVal, 1);
