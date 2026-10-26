@@ -16,7 +16,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
-	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD
+	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
 
@@ -293,13 +293,15 @@ function pushSlot(env: OrcEnv, owner: int64, index: int32, held: RaiserValue): v
 function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64): void {
 	if (handleHeapKind(h) == RaiserHeapKind.Array) {
 		const data = arrHeap.arrays[handleIndex(h)];
-		if (!arrayHoldsHandles(data)) return;
+		if (!data.elemCyclic || !arrayHoldsHandles(data)) return;
 		const count = arrayHeldCount(data);
 		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, arrayHeldAt(data, i));
 	} else {
 		const obj = objHeap.objects[handleIndex(h)];
-		const count = objectFieldCount(obj);
-		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, fieldValueAt(obj, i));
+		const cyclic = obj.classType.cyclic;
+		for (let i = 0; i < obj.slots.length; i += 1) {
+			if (cyclic[i]) pushSlot(env, h, i as int32, fieldValueAt(obj, i));
+		}
 	}
 }
 
@@ -312,8 +314,6 @@ function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: i
 		return;
 	}
 	const obj = objHeap.objects[handleIndex(owner)];
-	const laid = obj.slots.length;
-	if (index >= laid) { obj.values[obj.values.length - obj.added.length + index - laid] = raiserNil(); return; }
 	const kind = obj.classType.kinds[index];
 	if (kind == RaiserRegClass.Ref) { obj.slots[index] = 0; }
 	else if (kind == RaiserRegClass.Dyn) { obj.values[obj.slots[index]] = raiserNil(); }
@@ -423,7 +423,9 @@ export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserOb
 }
 
 export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
-	if (handle == 0 || !registered(arrHeap, objHeap, handle)) return;
+	const kind = handleHeapKind(handle);
+	if (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Object) return;
+	if (!registered(arrHeap, objHeap, handle)) return;
 	unregisterAt(arrHeap, objHeap, handle);
 }
 
@@ -560,6 +562,18 @@ test "orc frees a node reachable from two garbage roots once" {
 	assert arr.freeList.length == 3 && obj.freeList.length == 1;
 }
 
+function nodeType(): RaiserClassType {
+	const type = createClassType("Node", -1, [], ["next", "kids", "more", "spare", "items"], [RaiserRegClass.Dyn, RaiserRegClass.Dyn, RaiserRegClass.Dyn, RaiserRegClass.Dyn, RaiserRegClass.Dyn]);
+	for (let i = 0; i < 5; i += 1) type.cyclic[i] = true;
+	return type;
+}
+
+function allocNode(obj: RaiserObjectHeap): int64 {
+	const h = heapAllocObject(obj);
+	layOutObject(obj.objects[handleIndex(h)], nodeType());
+	return h;
+}
+
 function linkObjects(arr: RaiserArrayHeap, obj: RaiserObjectHeap, from: int64, to: int64, name: string): void {
 	rcIncref(arr, obj, raiserObject(to));
 	heapObjectSetField(obj, from, name, raiserObject(to));
@@ -572,15 +586,15 @@ function freeByCount(arr: RaiserArrayHeap, obj: RaiserObjectHeap): OrcDestroy {
 test "orcCollect frees a registered garbage cycle and leaves unregistered cells alone" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
 	linkObjects(arr, obj, a, b, "next");
 	linkObjects(arr, obj, b, a, "next");
-	const c = heapAllocObject(obj);
-	const d = heapAllocObject(obj);
+	const c = allocNode(obj);
+	const d = allocNode(obj);
 	linkObjects(arr, obj, c, d, "next");
 	linkObjects(arr, obj, d, c, "next");
-	const live = heapAllocObject(obj);
+	const live = allocNode(obj);
 	rcIncref(arr, obj, raiserObject(live));
 	assert !orcRegisterCandidate(arr, obj, a);
 	assert arr.orcRoots.length == 1;
@@ -594,8 +608,8 @@ test "orcCollect frees a registered garbage cycle and leaves unregistered cells 
 test "orcCollect keeps an externally referenced registered cycle and drops it from the roots" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
 	linkObjects(arr, obj, a, b, "next");
 	linkObjects(arr, obj, b, a, "next");
 	rcIncref(arr, obj, raiserObject(a));
@@ -611,9 +625,9 @@ test "orcCollect keeps an externally referenced registered cycle and drops it fr
 test "orcCollect clears each slot of a three-node ring before its destroy runs, once per cell" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
-	const c = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
+	const c = allocNode(obj);
 	linkObjects(arr, obj, a, b, "next");
 	linkObjects(arr, obj, b, c, "next");
 	linkObjects(arr, obj, c, a, "next");
@@ -635,9 +649,11 @@ test "orcCollect clears each slot of a three-node ring before its destroy runs, 
 test "orcCollect frees a cycle that runs through an array, holding handles as items and as words" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const o = heapAllocObject(obj);
+	const o = allocNode(obj);
 	const items = heapAllocArray(arr);
 	const words = heapAllocArrayOf(arr, RaiserRegClass.Ref);
+	arr.arrays[handleIndex(items)].elemCyclic = true;
+	arr.arrays[handleIndex(words)].elemCyclic = true;
 	rcIncref(arr, obj, raiserArray(items));
 	heapObjectSetField(obj, o, "items", raiserArray(items));
 	rcIncref(arr, obj, raiserArray(words));
@@ -653,19 +669,19 @@ test "orcRegisterCandidate asks for a collection at 128 plus the threshold and t
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	for (let i = 0; i < 255; i += 1) {
-		const h = heapAllocObject(obj);
+		const h = allocNode(obj);
 		rcIncref(arr, obj, raiserObject(h));
 		assert !orcRegisterCandidate(arr, obj, h);
 	}
-	const last = heapAllocObject(obj);
+	const last = allocNode(obj);
 	rcIncref(arr, obj, raiserObject(last));
 	assert orcRegisterCandidate(arr, obj, last);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
 	assert arr.orcThreshold == 192;
 	assert arr.orcRoots.length == 0;
 
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
 	linkObjects(arr, obj, a, b, "next");
 	linkObjects(arr, obj, b, a, "next");
 	orcRegisterCandidate(arr, obj, a);
@@ -677,8 +693,8 @@ test "orcRegisterCandidate asks for a collection at 128 plus the threshold and t
 test "orcCollect keeps the threshold when every reference of the roots is internal" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
 	linkObjects(arr, obj, a, b, "next");
 	linkObjects(arr, obj, b, a, "next");
 	orcRegisterCandidate(arr, obj, a);
@@ -689,9 +705,9 @@ test "orcCollect keeps the threshold when every reference of the roots is intern
 test "orcUnregister swaps the last root into the freed slot and a freed cell stays out of the collection" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
-	const a = heapAllocObject(obj);
-	const b = heapAllocObject(obj);
-	const c = heapAllocObject(obj);
+	const a = allocNode(obj);
+	const b = allocNode(obj);
+	const c = allocNode(obj);
 	rcIncref(arr, obj, raiserObject(a));
 	rcIncref(arr, obj, raiserObject(b));
 	rcIncref(arr, obj, raiserObject(c));
