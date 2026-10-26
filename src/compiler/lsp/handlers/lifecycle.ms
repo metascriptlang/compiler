@@ -541,7 +541,8 @@ test "definition on JSX tag with attributes resolves" {
 }
 
 // Fixture modules on disk: html.ms declares IntrinsicElements, ui.ms is a JSX consumer with
-// `export * as JSX` beside it, uiPlain.ms the same consumer without it.
+// `export * as JSX` beside it, uiPlain.ms the same consumer without it, uiAlias.ms one whose
+// JSX names `IntrinsicElements` as an alias of htmlNamed.ms's HtmlElements.
 const JSX_DIR = "src/test/fixtures/lsp/jsxNamespace";
 
 // Opened as a client opens it, so the imports it names are recorded before the check.
@@ -586,6 +587,12 @@ test "a JSX argument of an explicit macro call reads the macro module's JSX" {
 	const db = jsxDb("import { ui } from \"./ui\";\nconst w = ui(<a href=\"z\"/>);");
 	assert jsxQuery(db, 1, 14, false).indexOf("The anchor element.") >= 0;
 	assert jsxQuery(db, 1, 16, false).indexOf("The URL the link points to.") >= 0;
+}
+
+test "an IntrinsicElements alias shows the field doc of the interface it names" {
+	const r = jsxQuery(jsxDb("import { view } from \"./uiAlias\";\nconst v: number = <a href=\"x\" id=\"y\"/>;"), 1, 19, false);
+	assert r.indexOf("HtmlElements.a") >= 0;
+	assert r.indexOf("The anchor element.") >= 0;
 }
 
 test "a consumer without a JSX export falls back to the JSX in scope" {
