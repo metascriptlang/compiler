@@ -94,13 +94,12 @@ export function split(this s: string, delimiter: string): string[] {
 }
 
 export function replace(this s: string, search: string, replacement: string): string {
-	@emit(`var at = ${s}.indexOf(${search});
-	return at < 0 ? ${s} : ${s}.slice(0, at) + ${replacement} + ${s}.slice(at + ${search}.length);`);
+	@emit(`return ${s}.replace(${search}, ${replacement});`);
 	unreachable;
 }
 
 export function replaceAll(this s: string, search: string, replacement: string): string {
-	@emit(`return ${s}.indexOf(${search}) < 0 ? ${s} : ${s}.replaceAll(${search}, () => ${replacement});`);
+	@emit(`return ${s}.replaceAll(${search}, ${replacement});`);
 	unreachable;
 }
 

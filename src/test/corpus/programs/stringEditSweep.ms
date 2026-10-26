@@ -1,5 +1,5 @@
-// @stdout: replace aXYc -abc ba e🚀é éé |ab$&$$$1$'
-// @stdout: replaceAll bb ba abababababab éRéR eee |a$&$$$1$'b$&$$$1$'
+// @stdout: replace aXYc -abc ba e🚀é éé |abc$$1
+// @stdout: replaceAll bb ba abababababab éRéR eee |a.$$1b.b.$$1
 // @stdout: replaceAll empty needle -a-b-c- - 7:124,233,124,55357,124,56960,124 ab
 // @stdout: replace identity true true 0
 // @stdout: split ends 5 [|a||b|]

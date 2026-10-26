@@ -3,8 +3,8 @@
 // @stdout: split overlap 3 [||]
 // @stdout: split uni sep 3 [a|b|c]
 // @stdout: replaceAll empty -a-b-c- -
-// @stdout: replaceAll overlap bb dollar a$&$1b long ab uni e🚀e éRé
-// @stdout: replace +bc -abc abc é$&
+// @stdout: replaceAll overlap bb dollar a.$1b long ab uni e🚀e éRé
+// @stdout: replace +bc -abc abc é🚀
 // @stdout: to empty [] [] [] [b]
 // @stdout: includes true true false true true
 // @stdout: count 2 4 2 0
