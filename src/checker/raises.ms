@@ -64,7 +64,11 @@ function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null
 function tempOf(target: Node | null): Symbol | null {
 	if (target == null || target.kind != NodeKind.Identifier) return null;
 	const sym = target.resolvedSym;
-	return sym != null && sym.symbolKind == SymbolKind.Temp ? sym : null;
+	return sym != null && tracksWrites(sym) ? sym : null;
+}
+
+function tracksWrites(sym: Readonly<Symbol>): boolean {
+	return sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Variable;
 }
 
 function noteTempWrite(sym: Symbol, value: Node | null): void {
@@ -77,7 +81,7 @@ function noteTempWrite(sym: Symbol, value: Node | null): void {
 function noteTempWrites(node: Node): void {
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (node.resolvedSym != null && node.resolvedSym!.symbolKind == SymbolKind.Temp && d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
+		if (node.resolvedSym != null && tracksWrites(node.resolvedSym!) && d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
 			noteTempWrite(node.resolvedSym!, d.initializer);
 		}
 	} else if (node.kind == NodeKind.BinaryExpr) {
