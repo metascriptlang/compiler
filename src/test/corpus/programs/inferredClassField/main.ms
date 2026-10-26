@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser cannot read a static class field ('cannot evaluate 'P' at comptime: symbol kind is Class') (inbox 2026-10-09-raiser-cannot-read-a-static-class-field)
 // Differential program: a class field typed only by its initializer has that
 // type for every reader: a direct read, a read through a narrowed `P | null`,
 // a read before the class is declared, and a read from a
