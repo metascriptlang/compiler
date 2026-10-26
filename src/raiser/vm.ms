@@ -1286,7 +1286,7 @@ function freePendingBox(vm: RaiserVM, abs: int64): void {
 
 // A pending value dropped without being re-raised or returned loses the one count it held in flight.
 function discardPendingBox(vm: RaiserVM, abs: int64): void {
-	const inner = innerHandle(vm, vm.regs.refs[abs]);
+	const inner = innerHandle(vm, vm.regs.slots[abs]);
 	freePendingBox(vm, abs);
 	if (inner == 0) return;
 	if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, inner)) vmDestroyTop(vm, inner);
@@ -4583,6 +4583,9 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (replaced != 0 && rcDecIsLast(vm.arrayHeap, vm.objectHeap, replaced)) vmDestroyTop(vm, replaced);
 }
 
+// With the destination also the left operand, the register owns one count of the text it held: an append extends
+// that string in place while it is held once, as msStringAppend does, and otherwise swaps in the joined copy and
+// releases the old one.
 function vmHandleConcatStrR(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const lhs = vm.regs.slots[(ib >> 3) + vm.base];
 	const rhs = vm.regs.slots[(ic >> 3) + vm.base];
@@ -4591,6 +4594,7 @@ function vmHandleConcatStrR(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 		return;
 	}
 	writeRef(vm, (ia >> 3) + vm.base, heapConcatHandles(vm.arrayHeap, lhs, rhs));
+	if (ia == ib && handleHeapKind(lhs) == RaiserHeapKind.String && rcDecIsLast(vm.arrayHeap, vm.objectHeap, lhs)) vmDestroyTop(vm, lhs);
 }
 
 function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {

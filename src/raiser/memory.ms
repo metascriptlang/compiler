@@ -60,6 +60,7 @@ export interface VmMemory {
 	globals: BumpArea;
 	consts: BumpArea;
 	bytesInUse: int64;
+	allocations: int64;   // blocks handed out since the heap was made; counted outside danger builds so a test can tell an in-place append from a copy per append
 }
 
 export interface HeapAudit {
@@ -86,7 +87,7 @@ export function createVmMemory(): VmMemory {
 	return {
 		blocks: [], regions: [], lastHit: 0, freeLists: [], heapCur: 0, heapLeft: 0, stack: [],
 		sp: { seg: 0, used: 0, boxes: 0 }, boxes: [],
-		globals: { cur: 0, left: 0, kind: RegionKind.Globals }, consts: { cur: 0, left: 0, kind: RegionKind.Const }, bytesInUse: 0,
+		globals: { cur: 0, left: 0, kind: RegionKind.Globals }, consts: { cur: 0, left: 0, kind: RegionKind.Const }, bytesInUse: 0, allocations: 0,
 	};
 }
 
@@ -292,6 +293,7 @@ function allocBlock(mem: VmMemory, size: int64, zeroed: boolean): int64 {
 	st64(b, bs);
 	st64(b + 8, STATE_ALLOCATED);
 	mem.bytesInUse = mem.bytesInUse + bs;
+	when (mode != "danger") { mem.allocations += 1; }
 	return b + BLOCK_HEADER_SIZE;
 }
 
