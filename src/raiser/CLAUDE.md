@@ -11,7 +11,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | `valueCopy.ms` | `copyTypedValue`: runs the copy plans `CopyValue` carries |
 | `module.ms` | `RaiserFunction`, `RaiserModule` |
 | `regs.ms` | register layout: class inference, the operand verifier, renumbering into the word file and the ref file |
-| `memory.ms` / `vmString.ms` | VM memory at host addresses (regions, size-class heap, ref cell header) and the string cells built on it |
+| `memory.ms` / `vmString.ms` / `vmSeq.ms` | VM memory at host addresses (regions, size-class heap, ref cell header), the string cells and the word-element sequences (`{len, p}` over a `{cap, data}` payload) built on it |
 | `ledger.ms` | live-0 audit: finds heap items whose count exceeds the references that remain |
 | `vm.ms` | dispatch loop, strands and scheduler, futures, safepoints, loop budget |
 | `orc.ms` | `orcRegisterCandidate` / `orcCollect`: the registered-root cycle collector |
