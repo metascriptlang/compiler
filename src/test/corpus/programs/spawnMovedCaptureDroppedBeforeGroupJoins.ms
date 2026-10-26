@@ -1,4 +1,4 @@
-// @xfail(raiser): the Raiser std declares no Date, so the busy-wait on Date.now stops at the type check with exit 1 before any task runs
+// @xfail(raiser): Date now works on the Raiser; the program stops at `new Locked`: Arc and Locked cells are not built on the Raiser VM yet
 // @stdout: group ok
 // @stdout: cyclic ok
 // @serial

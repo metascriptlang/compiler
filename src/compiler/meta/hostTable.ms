@@ -1034,6 +1034,10 @@ function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(performance.now());
 }
 
+function _bridgeMsTimeNow(args: RaiserValue[]): RaiserValue {
+	return boxFloat(Date.now());
+}
+
 function isWireNode(objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
 	if (n.kind != RaiserValueKind.Object) return false;
 	const k = heapObjectGetField(objHeap, n.intVal, "kind");
@@ -1604,6 +1608,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
 	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
 	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
+	registerHostFn("msTimeNow",             _bridgeMsTimeNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
