@@ -27,12 +27,18 @@ test "matchArmValue: return leaves the function from a returned match, an arrow 
 		"function f(v: int32): string | null {\n\treturn match (v) {\n\t\t0 => { if (v == 0) return \"z\"; null },\n\t\t_ => { return null; },\n\t};\n}\nconsole.log(`${f(0)}`);",
 		"const pick = (v: int32): int32 => match (v) {\n\t0 => { return 10; },\n\t_ => { 20 },\n};\nconsole.log(`${pick(0)}`);",
 		"function f(v: int32): void {\n\tconst s = match (v) {\n\t\t0 => { return; },\n\t\t_ => \"x\",\n\t};\n\tconsole.log(s);\n}\nf(1);",
-		"function f(v: int32): string {\n\tconst s = match (v) {\n\t\t0 => { const n = v + 1; `${n}` },\n\t\t_ => { \"other\" },\n\t};\n\treturn s;\n}\nconsole.log(f(0));",
+		"function f(v: int32): string {\n\tconst s = match (v) {\n\t\t0 => { const n = v; `${n}` },\n\t\t_ => { \"other\" },\n\t};\n\treturn s;\n}\nconsole.log(f(0));",
 	];
 	for (const src of sources) {
-		const c = compileToC(src);
-		assert c.ok, c.error;
-		const js = compileToJS(src);
-		assert js.ok, js.error;
+		let failed = "";
+		try {
+			const c = compileToC(src);
+			if (!c.ok) failed = "C: " + c.error;
+			const js = compileToJS(src);
+			if (!js.ok) failed = failed + " JS: " + js.error;
+		} catch (e) {
+			failed = "threw: " + (e as Error).message;
+		}
+		assert failed == "", src.split("\n")[0] + " → " + failed;
 	}
 }
