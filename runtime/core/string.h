@@ -261,12 +261,29 @@ static inline bool msMemEqAt(const uint8_t* hay, int64_t hayLen, int64_t at, con
 	return memcmp(hay + at, needle, (size_t)needleLen) == 0;
 }
 
+/* A string of `len` bytes whose content the caller fills before use (no zeroing). */
+static inline msString msStringNewUninit(int64_t len) {
+	msString r = msStringNewCap(len);
+	if (len > 0) {
+		r.len = len;
+		r.p->data[len] = '\0';
+	}
+	return r;
+}
+
+static inline void msMemCopyTo(uint8_t* dst, int64_t at, const uint8_t* src, int64_t srcLen, int64_t from, int64_t n) {
+	(void)srcLen;
+	if (n > 0) memcpy(dst + at, src + from, (size_t)n);
+}
+
 /* ===== Extraction ===== */
 
 /* Single character as new string */
 msString msStringCharAtSlow(msString s, int64_t idx);
 
 extern const msString msCharTable[128];
+
+static inline msString msCharTableAt(uint8_t byte) { return msCharTable[byte & 0x7F]; }
 
 /* An already-verified-ASCII string indexes by byte, so the interned table
    answers without a call. Unknown/false flag, non-ASCII or out of range goes
@@ -301,10 +318,6 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
 /* ===== Transformation ===== */
 
-msString msStringReplace(msString s, msString search, msString replacement);
-msString msStringReplaceAll(msString s, msString search, msString replacement);
-msString msStringPadStart(msString s, int64_t targetLen, msString pad);
-msString msStringPadEnd(msString s, int64_t targetLen, msString pad);
 
 /* ===== Length (Encoding-Aware) ===== */
 
@@ -352,11 +365,8 @@ msString msBoolToString(int value);
 
 /* ===== Splitting & Joining ===== */
 
-/* Split string by delimiter */
-msStringArray msStringSplit(msString s, msString delimiter);
-
-/* Join string array with separator */
-msString msStringJoin(msStringArray arr, msString sep);
+/* Join string array with separator; the body is std/core/string/editNative.ms */
+msString msStringJoin(msStringArray* arr, msString sep);
 
 /* ===== Parsing ===== */
 

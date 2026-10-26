@@ -460,7 +460,7 @@ void msStringArrayFill(msStringArray* arr, msString value) {
 }
 
 msString msStringArrayJoin(msStringArray* arr, msString sep) {
-	return msStringJoin(*arr, sep);
+	return msStringJoin(arr, sep);
 }
 
 void msStringArrayShrink(msStringArray* arr, int64_t newLen) {
