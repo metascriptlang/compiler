@@ -6,6 +6,7 @@ extern function prepareStore(ref value: string): void from "msStringPrepareMutat
 extern const stringLengthMax: uint64 from "MS_LEN_MAX";
 
 export type EncodingIndex = int64;
+export type EncodingBytes = Ptr<uint8>;
 export extern const emptyEncoding: string from "MS_EMPTY_STRING";
 
 @noinline

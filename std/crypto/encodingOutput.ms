@@ -1,4 +1,5 @@
 export type EncodingIndex = float64;
+export type EncodingBytes = uint8[];
 export const emptyEncoding = "";
 
 const MAX_EXACT_ENCODING_LENGTH: int64 = 9007199254740991;
