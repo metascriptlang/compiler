@@ -96,6 +96,15 @@ export function cloneNodeKeepSem(node: Node): Node {
 // The mode distinction ensures that dbTypeCheck can safely mutate the clone without
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
+export function bindsSignatureTypes(node: Node): boolean {
+	if (node.typeExpr != null && node.typeExpr.flags.has(NodeFlag.BoundSym)) return true;
+	if (node.typeExprs == null) return false;
+	for (const operand of node.typeExprs) {
+		if (operand != null && operand.flags.has(NodeFlag.BoundSym)) return true;
+	}
+	return false;
+}
+
 function copyNodeMeta(src: Node, dst: Node): Node {
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
@@ -127,7 +136,10 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		// substitution. replaceTypeVars substitutes this field in substNodeLocal.
 		dst.typeArg = src.typeArg;
 		if (src.kind == NodeKind.CallExpr || src.kind == NodeKind.NewExpr) dst.typeExprs = src.typeExprs;
-		if (src.typeExpr != null && src.typeExpr.flags.has(NodeFlag.BoundSym)) dst.typeExpr = src.typeExpr;
+		if (bindsSignatureTypes(src)) {
+			dst.typeExpr = src.typeExpr;
+			dst.typeExprs = src.typeExprs;
+		}
 	} else {
 		// Check mode: preserve all parse-time side channels the checker reads
 		// (typeExpr/typeExprs for resolvePass, paramLocations for function
