@@ -19,7 +19,7 @@ export enum BreakState {
 // Intersection count entry for branch merging.
 class NameCount {
 	name: string;
-	count: number;
+	count: int32;
 }
 
 // ===== Core Set Operations =====
