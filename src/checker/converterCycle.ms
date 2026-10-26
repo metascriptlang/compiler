@@ -1,6 +1,5 @@
-import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, SymbolFlag, CallExprData, FunctionDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, CallExprData, FunctionDeclData, MethodDeclData } from "../ast/node";
 import { CheckerContext, addError } from "./context";
-import { hasFlag } from "./symbol";
 import { forEachChild } from "../ast/visitor";
 
 interface CycleWalk {
@@ -13,9 +12,11 @@ interface CycleWalk {
 function routineBody(sym: Symbol): Node | null {
 	const decl = sym.declNode;
 	if (decl == null) return null;
-	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).fnBody;
-	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodBody;
-	return null;
+	return match (decl.kind) {
+		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnBody,
+		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodBody,
+		_ => null,
+	};
 }
 
 function isRoutine(sym: Symbol): boolean {
@@ -29,11 +30,15 @@ function appliesConverter(node: Node, conv: Symbol): boolean {
 }
 
 function visitForCycle(ctx: CheckerContext, walk: CycleWalk, node: Node): void {
-	if (node == null) return;
 	if (walk.routine != walk.conv && walk.routine.modulePath == ctx.modulePath && appliesConverter(node, walk.conv)) {
-		addError(ctx, "'" + walk.conv.name + "' is applied implicitly in '" + walk.routine.name + "', which '" + walk.conv.name
-			+ "' reaches through its calls — the conversion would recurse; convert explicitly here or inside '" + walk.conv.name + "'",
-			node.location.line, node.location.column);
+		const conv = walk.conv.name;
+		addError(
+			ctx,
+			`'${conv}' is applied implicitly in '${walk.routine.name}', which '${conv}' reaches through its calls`
+				+ ` — the conversion would recurse; convert explicitly here or inside '${conv}'`,
+			node.location.line,
+			node.location.column,
+		);
 	}
 	const target = node.resolvedSym;
 	if (target != null && isRoutine(target) && routineBody(target) != null) {
@@ -48,7 +53,7 @@ function visitForCycle(ctx: CheckerContext, walk: CycleWalk, node: Node): void {
 }
 
 function reportCycleSites(ctx: CheckerContext, conv: Symbol): void {
-	const walk: CycleWalk = { conv: conv, routine: conv, seen: new HashSet<Node>(), pending: [conv] };
+	const walk: CycleWalk = { conv, routine: conv, seen: new HashSet<Node>(), pending: [conv] };
 	if (conv.declNode != null) walk.seen.add(conv.declNode);
 	while (walk.pending.length > 0) {
 		const routine = walk.pending[walk.pending.length - 1];
