@@ -393,10 +393,17 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 	});
 }
 
+function ordersTuples(node: Node): boolean {
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	const d = node.data as BinaryExprData;
+	if (d.operator != "<" && d.operator != "<=" && d.operator != ">" && d.operator != ">=") return false;
+	return d.left.nodeType != null && peelTransparentInstance(d.left.nodeType).kind == TypeKind.Tuple;
+}
+
 export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
 	requireChecker(ctx);
 	return walkNode(program, (node: Node): Node => {
-		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
+		return node.flags.has(NodeFlag.UserOp) || ordersTuples(node) ? lowerOperatorNode(node, ctx) : node;
 	});
 }
 
