@@ -1,6 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
+import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
 import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT } from "./drcRows";
@@ -1222,6 +1223,26 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 
 function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const refusedOp = refusePointerOp(s, node);
+function writesLocals(node: Node): boolean {
+	if (node.kind == NodeKind.UpdateExpr || node.kind == NodeKind.OutExpr || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.BlockStmt) return true;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const op = (node.data as BinaryExprData).operator;
+		if (op == "=" || isCompoundAssignOp(op)) return true;
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = writesLocals(child);
+	});
+	return found;
+}
+
+function keepAcross(s: RaiserCompState, reg: int32, writes: boolean): int32 {
+	if (!writes) return reg;
+	const copy = allocReg(s, classOfReg(s, reg));
+	emitInst(s, raiserABC(RaiserOpcode.Move, copy, reg, 0));
+	return copy;
+}
+
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
@@ -1246,6 +1267,23 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const startPc = codeLen(s);
 		const firstTemp = s.nextReg;
+		if (d.left.kind == NodeKind.ArrayAccess) {
+			const ad = d.left.data as ArrayAccessData;
+			const writes = writesLocals(d.right);
+			const arrReg = keepAcross(s, compileExpr(s, ad.array), writes);
+			const idxReg = keepAcross(s, compileIndex(s, ad.index), writes);
+			const srcReg = compileExpr(s, d.right);
+			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
+			return srcReg;
+		}
+		if (d.left.kind == NodeKind.MemberExpr) {
+			const md = d.left.data as MemberExprData;
+			const objReg = keepAcross(s, compileExpr(s, md.object), writesLocals(d.right));
+			const nameIdx = addConst(s, raiserConstString(md.property));
+			const srcReg = compileExpr(s, d.right);
+			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
+			return srcReg;
+		}
 		const srcReg = compileExpr(s, d.right);
 		if (d.left.kind == NodeKind.Identifier) {
 			const global = resolveGlobal(s, d.left.resolvedSym);
@@ -1258,20 +1296,6 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 				landResult(s, targetReg, startPc, firstTemp, srcReg);
 				return targetReg;
 			}
-		}
-		if (d.left.kind == NodeKind.ArrayAccess) {
-			const ad = d.left.data as ArrayAccessData;
-			const arrReg = compileExpr(s, ad.array);
-			const idxReg = compileIndex(s, ad.index);
-			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
-			return srcReg;
-		}
-		if (d.left.kind == NodeKind.MemberExpr) {
-			const md = d.left.data as MemberExprData;
-			const objReg = compileExpr(s, md.object);
-			const nameIdx = addConst(s, raiserConstString(md.property));
-			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
-			return srcReg;
 		}
 		return srcReg;
 	}
