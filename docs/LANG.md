@@ -1109,7 +1109,7 @@ continuation, while C and the bundle evaluate it before the continuation. Measur
 | JS bundle | `start` `a body` `b body` `main got 1` `a got 2` |
 | `--split` (5 of 5 runs) | `start` `a body` `main got 1` `b body` `a got 2` |
 
-The Raiser stops on this program with "deadlock: no runnable strand" (inbox card
+The Raiser ends this program as an unsettled await, exit 13 after printing `a body` (measured 2026-10-26; inbox card
 `2026-10-16-raiser-import-awaited-inside-a-module-body-deadlocks`).
 
 ### Converter Declarations
@@ -2344,6 +2344,8 @@ function borrowing(d: Data): Promise<int32> {
 - **Borrowing** — the thunk reads a reference the parent lends it. Every exit of the scope cancels the tasks no worker has started and waits for the rest, so the handle stays in that scope: returning it, storing it in a field, a module variable or an object, or passing it to a function or a constructor is a compile error. Keeping it in a local array or `Map` and passing it to `Promise.all` stays inside the scope and is accepted.
 
 The same `Promise<T>` produced by `async function`s, actor CALLs, and `spawn(...)` all interoperate: you can mix them in arrays, pass them through generic code, etc. When a spawn-origin `Promise<T>` flows into a context that drops the affine guarantee (mixed array, generic parameter, explicit upcast), the compiler emits a lint so the safety loss is visible.
+
+**An await nothing can settle** ends the program with exit code 13 and the warning `Detected unsettled await` on stderr, as Node does for a top-level await, instead of waiting forever. The program is ended when the awaiting thread finds no pending task, timer, interval, loop message, actor run, actor idle timeout, pending stop or I/O request; a suspended actor counts only through what will settle its own await. So an actor CALL cycle (A awaits B, and B awaits a CALL back into A, which stays frozen under A2) ends with exit 13 on C and the Raiser. Pinned by the corpus programs `unsettledAwaitExits`, `unsettledAwaitActorCycle`, `unsettledAwaitLiveSources` and `unsettledAwaitLiveActors`.
 
 **Spawn groups** — parallel fan-out with structured results:
 
