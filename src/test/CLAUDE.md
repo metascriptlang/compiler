@@ -2,6 +2,8 @@
 
 Examples per tier, the corpus directive contract, the two-tree convention and the emit-diff recipe: [`docs/TESTING.md`](../../docs/TESTING.md).
 
+When measuring TypeScript compatibility, read [`compat/typescript/README.md`](compat/typescript/README.md) for the optional oracle lane's commands and interpretation, because backend parity alone does not establish TS compatibility.
+
 ## Where a test goes
 
 | Tier | Lives in | Use for |
