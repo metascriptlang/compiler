@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
@@ -150,12 +150,14 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	return { type: isRefBase ? createRef(instType) : instType, instance };
 }
 
-// Inherit modulePath + location from a container type onto a synthetic field symbol.
-// Used for cross-file go-to-definition on object literal keys and member access properties.
+// Inherit modulePath + location from the type that declares the field, walking up from the
+// container, onto a synthetic field symbol: go-to-definition and the field doc read them.
 export function inheritContainerInfo(fieldSym: Symbol, container: Symbol | null): void {
-	if (container == null || container.modulePath == "") return;
-	fieldSym.modulePath = container.modulePath;
-	if (container.location != null) fieldSym.location = container.location;
+	const declarer = fieldDeclarer(container, fieldSym.name);
+	const owner = declarer != null ? declarer : container;
+	if (owner == null || owner.modulePath == "") return;
+	fieldSym.modulePath = owner.modulePath;
+	if (owner.location != null) fieldSym.location = owner.location;
 }
 
 // Public API: check expression, store type on node. Callers read node.nodeType.
