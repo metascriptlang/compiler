@@ -3063,3 +3063,16 @@ test "engine: a host call keeps its argument order and takes one register twice"
 	assert vm.error == "", vm.error;
 	assert vm.output == "true false 0.7853981633974483 0.7853981633974483\nfalse false 0 0\n", vm.output;
 }
+
+test "engine: an else-if condition with a call on the right of && or || reads nothing while an earlier branch is taken" {
+	const code = "function same(a: int32, b: int32): boolean { return a == b; }"
+		+ " class K { v: int32; constructor(v: int32) { this.v = v; } is(n: int32): boolean { return this.v == n; } }"
+		+ " function free(slot: int32, e: int32[]): int32 { if (slot == -2) { return 1; } else if (e[slot] == 5 && same(slot, 0)) { return 2; } return 0; }"
+		+ " function method(slot: int32, e: int32[], k: K): int32 { if (slot == -2) { return 1; } else if (e[slot] == 5 && k.is(5)) { return 2; } return 0; }"
+		+ " function deeper(slot: int32, e: int32[]): int32 { if (slot == -2) { return 1; } else if (slot == -3) { return 3; } else if (e[slot] == 5 || same(e[slot], 6)) { return 2; } return 0; }"
+		+ " const e: int32[] = [5, 6, 7]; const k = new K(5);"
+		+ " console.log(`${free(-2, e)} ${free(0, e)} ${method(-2, e, k)} ${method(0, e, k)} ${deeper(-2, e)} ${deeper(-3, e)} ${deeper(1, e)}`);";
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 2 1 2 1 3 2\n", vm.output;
+}
