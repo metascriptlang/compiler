@@ -20,10 +20,11 @@ import {
 	isStdImport,
 	ResolverConfig,
 	Backend,
+	backendName,
 	createDefaultConfig,
 } from "./resolver";
 import { lex } from "../lexer/lexer";
-import { getParserDefines, setParserDefines } from "../parser/context";
+import { getParserDefines, setParserDefines, parseAsBuildOf } from "../parser/context";
 import { createState } from "../parser/cursor";
 import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -357,7 +358,9 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		return false;
 	}
 	const parseState = createState(lr.value);
-	const parseResult = callStateProgramParser(parseState);
+	const parseResult = useConfig == 1
+		? parseAsBuildOf(backendName(config.backend), () => callStateProgramParser(parseState))
+		: callStateProgramParser(parseState);
 	for (const parseErr of parseState.errors) {
 		mod.errors.push(createModuleError(`Parse: ${parseErr}`, 0, 0, ErrorSeverity.Error));
 	}
@@ -854,6 +857,22 @@ test "an absolute import with an explicit extension loads the module it names" {
 	assert mod.errors.length == 0;
 	assert mod.imports[0].sourcePath == "/vendor/m.ms";
 	assert mod.imports[1].sourcePath == "/vendor/pkg/index.ms";
+}
+
+test "a module loaded for a backend is parsed as that backend's build" {
+	const app = "when (c) { import { x } from \"/vendor/c.ms\"; } else { import { x } from \"/vendor/js.ms\"; }";
+	const backends: Backend[] = [Backend.C, Backend.JS];
+	const picked: string[] = ["/vendor/c.ms", "/vendor/js.ms"];
+	for (let i = 0; i < backends.length; i++) {
+		const entries: MapEntry[] = [];
+		entries.push(makeEntry("/src/a.ms", app));
+		entries.push(makeEntry("/vendor/c.ms", "export const x = 1;"));
+		entries.push(makeEntry("/vendor/js.ms", "export const x = 2;"));
+		const graph = loadModuleGraphWithConfig("/src/a.ms", createMapProvider(entries), createDefaultConfig(backends[i], ""));
+		const mod = findModule(graph, "/src/a.ms");
+		assert mod != null && mod.errors.length == 0 && mod.imports.length == 1;
+		assert mod.imports[0].sourcePath == picked[i], `${picked[i]}: ${mod.imports[0].sourcePath}`;
+	}
 }
 
 function importsHeaderModule(appSource: string): boolean {

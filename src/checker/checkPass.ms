@@ -14,9 +14,9 @@ import { collectFunction, collectClass, collectActor, collectInterface, collectS
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
-import { env, cwd, platform, arch } from "std/process";
-import { getParserDefines, setParserDefines } from "../parser/context";
-import { createDefineTable, definedValue, initDefines, DefineTable } from "../compiler/defines";
+import { env, cwd } from "std/process";
+import { parseAsBuildOf } from "../parser/context";
+import { backendName, backendOfExtension } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
@@ -3899,29 +3899,7 @@ export function checkPreludeFromSource(stdPath: string, backendExt: string): Che
 }
 
 function asPreludeBuild(backendExt: string, check: () => CheckerContext): CheckerContext {
-	const defines = getParserDefines();
-	if (definedValue(defines, "backend") != "") return check();
-	// No build seeded the defines (an in-process check): parse the prelude as the host's debug build of
-	// the backend its extension names, so a `when` in std picks the branch that module set was written for.
-	setParserDefines(hostBuildDefines(backendExt));
-	try {
-		return check();
-	} finally {
-		setParserDefines(defines);
-	}
-}
-
-function hostBuildDefines(backendExt: string): DefineTable {
-	const backend = match (backendExt) {
-		".cms" => "c",
-		".jms" => "js",
-		".rms" => "raiser",
-		_ => "",
-	};
-	if (backend == "") throw new Error(`internal: no backend for the prelude extension '${backendExt}'`);
-	const t = createDefineTable();
-	initDefines(t, backend, platform, arch, "drc", 0);
-	return t;
+	return parseAsBuildOf(backendName(backendOfExtension(backendExt)), check);
 }
 
 function buildPreludeUnderDefines(stdPath: string, backendExt: string): CheckerContext {
