@@ -7,7 +7,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
 	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, stringHandleRc,
-	heapArrayIsView, arrayBaseOf, heapArrayRc, makeHandle
+	heapArrayIsView, heapArrayRc, makeHandle
 } from "./value";
 
 interface LedgerTally {
@@ -69,9 +69,8 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	}
 	const seqHandles = heapSeqHandles(arr);
 	for (const handle of seqHandles) {
-		if (heapArrayIsView(arr, handle)) {
-			tallyRef(tally, raiserArray(arrayBaseOf(arr, handle)));
-		} else if (arrayHoldsHandles(arr, handle)) {
+		if (heapArrayIsView(arr, handle)) continue;
+		if (arrayHoldsHandles(arr, handle)) {
 			const held = arrayHeldCount(arr, handle);
 			for (let k = 0; k < held; k += 1) tallyRef(tally, arrayHeldAt(arr, handle, k));
 		}
@@ -96,6 +95,7 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		if (counted > holders) leakedStrings += 1;
 	}
 	for (const handle of seqHandles) {
+		if (heapArrayIsView(arr, handle)) continue;
 		const held = tally.seqs.get(handle);
 		const holders = held != null ? held : 0;
 		const counted = heapArrayRc(arr, handle);

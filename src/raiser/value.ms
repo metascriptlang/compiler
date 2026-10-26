@@ -1468,7 +1468,6 @@ function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handl
 	const base = seqBase(c);
 	if (base != 0) {
 		removeSeqView(arrHeap, base, handle);
-		rcDecrefHandle(arrHeap, objHeap, base);
 	} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 		for (let i = 0; i < seqLen(c); i += 1) {
 			const child = seqLoad(c, i);
@@ -1641,15 +1640,10 @@ function copySeqViewShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, view
 	} else {
 		held.push(dstView);
 	}
-	heapArrayIncref(dstArr, baseCopy);
 	map.arrays.set(view, dstView);
 	map.viewFixups.push(dstView);
 	map.viewFixups.push(seqViewOffset(sc));
 	return dstView;
-}
-
-function heapArrayIncref(heap: RaiserArrayHeap, handle: int64): void {
-	heapArraySetRc(heap, handle, heapArrayRc(heap, handle) + 1);
 }
 
 function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
