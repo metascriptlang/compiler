@@ -265,3 +265,38 @@ export function msActorStop(pid: int64, reason: ExitReason): void {
 	const hook = cell.terminate;
 	if (hook != null && reason != ExitReason.Killed) hook(reason);
 }
+
+const timersLive: Map<int64, boolean> = new Map<int64, boolean>();
+let timerNext: int64 = 1;
+
+function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void {
+	sleepAsync(ms).then((): void => {
+		if (!timersLive.has(id)) return;
+		if (!repeat) timersLive.delete(id);
+		fn();
+		if (repeat) timerTick(id, fn, ms, true);
+	});
+}
+
+function timerStart(fn: () => void, ms: number, repeat: boolean): number {
+	const id = timerNext;
+	timerNext = timerNext + 1;
+	timersLive.set(id, true);
+	timerTick(id, fn, ms, repeat);
+	return id as number;
+}
+
+@compilerFunc
+export function msTimerSetTimeout(fn: () => void, ms: number): number {
+	return timerStart(fn, ms, false);
+}
+
+@compilerFunc
+export function msTimerSetInterval(fn: () => void, ms: number): number {
+	return timerStart(fn, ms, true);
+}
+
+@compilerFunc
+export function msTimerClear(id: number): void {
+	timersLive.delete(id as int64);
+}
