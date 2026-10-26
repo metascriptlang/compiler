@@ -334,8 +334,7 @@ static void msFutureCatchCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}
-	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected);
-	free(e);
+	msFutureCatchEnvFree(e);
 }
 
 msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
@@ -344,19 +343,13 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv));
+	msFutureCatchEnv* env = (msFutureCatchEnv*)msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo);
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = typeTag;
 	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env}, msFutureCatchEnvDrop, NULL));
 	return output;
 }
 
 /* ===== Promise.finally ===== */
-
-static void msFutureFinallyEnvDrop(void* raw) {
-	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
-	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
-	free(e);
-}
 
 static void msFutureFinallyCb(void* raw) {
 	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
@@ -370,13 +363,12 @@ static void msFutureFinallyCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}
-	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
-	free(e);
+	msFutureFinallyEnvFree(e);
 }
 
 void* msFutureFinally(void* input, msClosure onSettled) {
 	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureFinallyEnv* env = (msFutureFinallyEnv*)msMemAlloc(sizeof(msFutureFinallyEnv));
+	msFutureFinallyEnv* env = (msFutureFinallyEnv*)msAllocTyped(sizeof(msFutureFinallyEnv), &msFutureFinallyEnvTypeInfo);
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled;
 	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env}, msFutureFinallyEnvDrop, NULL));
 	return output;
