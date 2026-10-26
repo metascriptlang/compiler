@@ -68,13 +68,44 @@ export function repeat(this s: string, count: int32): string {
 	return result.asString();
 }
 
-// Byte reverse — mangles multi-byte UTF-8 on both backends.
 export function reverse(this s: string): string {
 	const sb = s.asBytes();
-	const result: uint8[] = [];
-	let i = sb.length - 1;
-	while (i >= 0) { result.push(sb[i]); i = i - 1; }
+	const n = sb.length;
+	const result = new Array<uint8>(n);
+	const out: Span<uint8> = result;
+	let newPos = n;
+	let blockEnd = 0;
+	let i = 0;
+	while (i < n) {
+		const start = i;
+		const lead = sb[i] as int32;
+		let width = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : lead < 0xF8 ? 4 : 1;
+		if (start + width > n) width = 1;
+		i = start + width;
+		if (!isCombiningAt(sb, start, width)) {
+			newPos = copyBlock(sb, blockEnd, start, out, newPos);
+			blockEnd = start;
+		}
+	}
+	copyBlock(sb, blockEnd, n, out, newPos);
 	return result.asString();
+}
+
+function copyBlock(sb: Readonly<Span<uint8>>, from: int32, to: int32, out: Span<uint8>, newPos: int32): int32 {
+	let pos = newPos - (to - from);
+	let j = from;
+	while (j < to) { out[pos + j - from] = sb[j]; j = j + 1; }
+	return pos;
+}
+
+function isCombiningAt(sb: Readonly<Span<uint8>>, start: int32, width: int32): boolean {
+	if (width == 2) {
+		const c = (((sb[start] as int32) & 0x1F) << 6) | ((sb[start + 1] as int32) & 0x3F);
+		return c >= 0x0300 && c <= 0x036F;
+	}
+	if (width != 3) return false;
+	const c = (((sb[start] as int32) & 0x0F) << 12) | (((sb[start + 1] as int32) & 0x3F) << 6) | ((sb[start + 2] as int32) & 0x3F);
+	return (c >= 0x1AB0 && c <= 0x1AFF) || (c >= 0x1DC0 && c <= 0x1DFF) || (c >= 0x20D0 && c <= 0x20FF) || (c >= 0xFE20 && c <= 0xFE2F);
 }
 
 export function equalsIgnoreCase(this s: string, other: string): boolean {
