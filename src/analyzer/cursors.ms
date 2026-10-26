@@ -722,15 +722,21 @@ function levelHolders(body: Node, out: Symbol[]): void {
 	step(body);
 }
 
-function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: Symbol[]): void {
-	if (body == null) return;
+function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: HashSet<Symbol>[]): void {
+	if (body == null || (!top && envEscapes)) return;
 	const level: Symbol[] = [];
 	levelHolders(body, level);
 	const holders = new HashSet<Symbol>();
 	for (const h of level) holders.add(h);
-	const visible: Symbol[] = [];
+	const visible: HashSet<Symbol>[] = [];
 	for (const h of outer) visible.push(h);
-	for (const h of level) visible.push(h);
+	visible.push(holders);
+	const isVisible = (sym: Symbol): boolean => {
+		for (const s of visible) {
+			if (s.has(sym)) return true;
+		}
+		return false;
+	};
 	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
 	const routine = (lit: Node, holder: Symbol | null): void => {
 		if (top) {
@@ -753,7 +759,7 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: S
 				routine(n, null);
 			},
 			NodeKind.Identifier => {
-				if (n.resolvedSym != null && visible.includes(n.resolvedSym!)) envEscapes = true;
+				if (n.resolvedSym != null && isVisible(n.resolvedSym!)) envEscapes = true;
 			},
 			NodeKind.VariableDecl => {
 				const lit = closureLiteral((n.data as VariableDeclData).initializer);
