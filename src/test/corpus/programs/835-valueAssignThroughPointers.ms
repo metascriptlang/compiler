@@ -1,5 +1,4 @@
 // @stdout: through deref=20/20 elem=30 field=5 ref=9 vec=3/3 swap=21 interior=2 global=2 classField=5 refParam=6 refField=6
-// @xfail(raiser): a Vec assigned through a pointer keeps its old length: placed mode has no in-place array opcode (stdout reads vec=0/0)
 // note: a whole value assigned into a location — through `p[]`, into an element or a field, into a global, a class field or a `ref` parameter — is seen through every pointer to that location, and a Vec takes the new length in place. The Raiser VM used to rebind (the old object stayed behind every pointer) and dropped `p[] = v`; JS left a Vec behind a pointer at its old length.
 struct Pet { hunger: int32; name: string; }
 struct In { v: int32; }
