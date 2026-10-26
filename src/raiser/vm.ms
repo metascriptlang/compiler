@@ -238,6 +238,7 @@ export interface RaiserVM {
 	error: string;    // Non-empty when VM stopped due to error
 	unsettled: boolean;   // stopped with a strand parked on a future nothing can complete (exit 13)
 	comptime: boolean;
+	auditLedger: boolean;
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
@@ -352,7 +353,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
@@ -1412,13 +1413,13 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
 	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
-		when (mode != "danger") { vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand"); }
+		vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand");
 	}
 	return vm.current != 0;
 }
 
 function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string): void {
-	if (vm.comptime || vm.error != "") return;
+	if (vm.comptime || !vm.auditLedger || vm.error != "") return;
 	vmLedgerCollect(vm);
 	const roots: RaiserValue[] = [];
 	roots.push(vm.currentException);
@@ -2016,7 +2017,7 @@ export function execLoop(vm: RaiserVM): void {
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
 		vm.globals = main.globals;
-		when (mode != "danger") { if (vm.halted) vmProgramLedger(vm); }
+		if (vm.halted) vmProgramLedger(vm);
 	}
 }
 
@@ -7659,6 +7660,10 @@ test "placed: a program that allocates and halts without its RcDec fails the led
 	assert audited.error.indexOf("object items live after program end") >= 0, audited.error;
 	const unaudited = execModule(createRaiserModule("placed", [main], 0), true);
 	assert unaudited.error == "", unaudited.error;
+	const declined = createVM(createRaiserModule("placed", [main], 0), false);
+	declined.auditLedger = false;
+	execLoop(declined);
+	assert declined.error == "", declined.error;
 }
 
 test "placed: the last RcDec of an array releases its elements and frees the array and the element" {

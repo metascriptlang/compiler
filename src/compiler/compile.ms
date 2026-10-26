@@ -5043,8 +5043,9 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	return raiserMod;
 }
 
-export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink): RaiserContext {
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true): RaiserContext {
 	const ctx = createRaiserContext(false);
+	ctx.auditLedger = auditLedger;
 	ctx.programArgv = programArgv;
 	ctx.printSink = printSink;
 	raiserLoad(ctx, mod);
@@ -5060,7 +5061,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string =
 
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
 	for (const a of opts.extraArgs) programArgv.push(a);
-	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); });
+	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); }, opts.mode != MODE_DANGER);
 
 	if (ctx.lastError != "") {
 		const vm = ctx.vm;
