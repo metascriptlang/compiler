@@ -52,7 +52,7 @@
 //
 // MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
 // directive on purpose and names the red it must produce (`// @selftest-red <substr>`
-// on one of its FAIL lines); a fixture that stays green, or that is red for another
+// on one of its FAIL lines, or `// @selftest-red none` for a fixture that must stay green); a fixture that stays green, or that is red for another
 // reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/,
 // with MSCORPUS_TSAN=1 every fixture in selftest-tsan/ (no threaded list).
 //
@@ -1662,15 +1662,17 @@ function judgeSelftest(specs: Spec[]): int32 {
 	let bad = 0;
 	for (const spec of specs) {
 		const mine = redLines.filter((l: string): boolean => l.contains(" " + spec.name + " ["));
-		let verdict = "red as declared";
+		const clean = spec.selftestRed == "none";
+		let verdict = clean ? "clean as declared" : "red as declared";
 		if (spec.selftestRed == "") { verdict = "no // @selftest-red line"; }
+		else if (clean) { if (mine.length > 0) { verdict = "declared clean, but red: " + mine[0]; } }
 		else if (mine.length == 0) { verdict = "stayed green, the directive it breaks is hollow"; }
 		else if (!mine.some((l: string): boolean => l.contains(spec.selftestRed))) { verdict = "red for another reason, wanted '" + spec.selftestRed + "'"; }
-		if (verdict != "red as declared") { bad = bad + 1; }
-		console.log((verdict == "red as declared" ? "red  " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
+		if (verdict != "red as declared" && verdict != "clean as declared") { bad = bad + 1; }
+		console.log((verdict == "red as declared" || verdict == "clean as declared" ? "ok   " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
 	}
 	if (specs.length == 0) { bad = bad + 1; console.log("BAD  selftest: no fixtures under " + PROG_DIR); }
-	console.log(bad == 0 ? "corpus selftest: ALL RED AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
+	console.log(bad == 0 ? "corpus selftest: ALL AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
 	return bad == 0 ? 0 : 1;
 }
 
