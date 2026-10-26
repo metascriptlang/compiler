@@ -39,7 +39,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
+	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
@@ -1253,6 +1253,114 @@ function _callbackByteLastIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), startIdx));
 }
 
+function _hostArrayHeap(): RaiserArrayHeap {
+	const heap = activeHostArrayHeap();
+	if (heap == null) throw new Error("internal: an array kernel ran with no active array heap");
+	return heap;
+}
+
+function _arrayArg(v: RaiserValue): int64 {
+	if (v.kind != RaiserValueKind.Array) throw new Error("internal: an array kernel was handed a non-array");
+	return v.intVal;
+}
+
+function _numbersOf(v: RaiserValue): number[] {
+	const heap = _hostArrayHeap();
+	const h = _arrayArg(v);
+	const out: number[] = [];
+	const n = heapArrayLen(heap, h);
+	for (let i = 0; i < n; i = i + 1) out.push(unboxFloat(heapArrayGet(heap, h, i)));
+	return out;
+}
+
+function _stringsOf(v: RaiserValue): string[] {
+	const heap = _hostArrayHeap();
+	const h = _arrayArg(v);
+	const out: string[] = [];
+	const n = heapArrayLen(heap, h);
+	for (let i = 0; i < n; i = i + 1) out.push(heapStringText(heap, heapArrayGet(heap, h, i)));
+	return out;
+}
+
+function _bridgeNumberArrayIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_numbersOf(args[0]).indexOf(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayIncludes(args: RaiserValue[]): RaiserValue {
+	return boxBool(_numbersOf(args[0]).includes(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayCount(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_numbersOf(args[0]).count(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayJoin(args: RaiserValue[]): RaiserValue {
+	return boxString(_numbersOf(args[0]).join(unboxString(args[1])));
+}
+
+function _bridgeNumberArrayAt(args: RaiserValue[]): RaiserValue {
+	const xs = _numbersOf(args[0]);
+	const idx = unboxFloat(args[1]);
+	const i = idx < 0.0 ? xs.length + idx : idx;
+	if (i < 0.0 || i >= xs.length) {
+		raiseFromHost(`index ${idx} out of bounds (length ${xs.length})`, true);
+		return boxFloat(0.0);
+	}
+	return boxFloat(xs[i as int32]);
+}
+
+function _bridgeStringArrayIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_stringsOf(args[0]).indexOf(unboxString(args[1])));
+}
+
+function _bridgeStringArrayIncludes(args: RaiserValue[]): RaiserValue {
+	return boxBool(_stringsOf(args[0]).includes(unboxString(args[1])));
+}
+
+function _bridgeStringArrayLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const from = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxFloat(_stringsOf(args[0]).lastIndexOf(unboxString(args[1]), from));
+}
+
+function _bridgeStringArrayCount(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_stringsOf(args[0]).count(unboxString(args[1])));
+}
+
+function _bridgeStringArrayJoin(args: RaiserValue[]): RaiserValue {
+	return boxString(_stringsOf(args[0]).join(unboxString(args[1])));
+}
+
+function _bridgeGenericArrayCheckedIndex(args: RaiserValue[]): RaiserValue {
+	const len = heapArrayLen(_hostArrayHeap(), _arrayArg(args[0]));
+	const idx = unboxFloat(args[1]);
+	const i = idx < 0.0 ? len + idx : idx;
+	if (i < 0.0 || i >= len) {
+		raiseFromHost(`index ${idx} out of bounds (length ${len})`, true);
+		return boxInt(0);
+	}
+	return boxInt(i);
+}
+
+function _bridgeStringLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const start = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxInt(unboxString(args[0]).lastIndexOf(unboxString(args[1]), start));
+}
+
+function registerArrayKernels(): void {
+	registerHostFn("msStringLastIndexOf", _bridgeStringLastIndexOf, HostCapability.Pure);
+	registerHostFn("&msNumberArrayIndexOf", _bridgeNumberArrayIndexOf, HostCapability.Pure);
+	registerHostFn("&msNumberArrayIncludes", _bridgeNumberArrayIncludes, HostCapability.Pure);
+	registerHostFn("&msNumberArrayCount", _bridgeNumberArrayCount, HostCapability.Pure);
+	registerHostFn("&msNumberArrayJoin", _bridgeNumberArrayJoin, HostCapability.Pure);
+	registerHostFn("&msNumberArrayAt", _bridgeNumberArrayAt, HostCapability.Pure);
+	registerHostFn("&msStringArrayIndexOf", _bridgeStringArrayIndexOf, HostCapability.Pure);
+	registerHostFn("&msStringArrayIncludes", _bridgeStringArrayIncludes, HostCapability.Pure);
+	registerHostFn("&msStringArrayLastIndexOf", _bridgeStringArrayLastIndexOf, HostCapability.Pure);
+	registerHostFn("&msStringArrayCount", _bridgeStringArrayCount, HostCapability.Pure);
+	registerHostFn("&msStringArrayJoin", _bridgeStringArrayJoin, HostCapability.Pure);
+	registerHostFn("&msGenericArrayCheckedIndex", _bridgeGenericArrayCheckedIndex, HostCapability.Pure);
+}
+
 function registerStringCallbacks(): void {
 	registerHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
 	registerHostFn("std/core/string/shared.trim",         _bridgeMsStringTrim, HostCapability.Pure);
@@ -1536,6 +1644,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerStringCallbacks();
+	registerArrayKernels();
 	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
 	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
@@ -1919,4 +2028,48 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		}
 	}
 	assert checked >= 14;
+}
+
+test "cms extern closure: declared externs are bridged, intercepted, or listed unserved" {
+	const root = resolveRuntimeDir();
+	const stdPath = root != "" ? join(root, "std") : "std";
+	const cmsFiles = [
+		join(stdPath, "core/string/index.cms"),
+		join(stdPath, "core/string/bytes.cms"),
+		join(stdPath, "core/array/index.cms"),
+	];
+	const intercepted: string[] = [
+		"msStringEquals", "msStringCompareLt", "msStringCompareLe", "msStringCharAt", "msStringSlice", "msStringCharCodeAt",
+		"&msNumberArrayPush", "&msStringArrayPush", "&msUint8ArrayPush", "&msGenericArrayPush",
+		"&msNumberArraySetLen", "&msStringArraySetLen", "&msGenericArraySetLen",
+	];
+	const unserved: string[] = [
+		"&msGenericArrayCapacity", "&msNumberArrayCapacity", "&msStringArrayCapacity", "msStringCapacity",
+		"&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop",
+		"&msNumberArrayShift", "&msStringArrayShift",
+		"&msNumberArrayConcat", "&msStringArrayConcat",
+		"&msNumberArrayFill", "&msStringArrayFill",
+		"&msNumberArrayReverse", "&msStringArrayReverse",
+		"&msNumberArraySlice", "&msStringArraySlice",
+		"&msNumberArraySort", "&msStringArraySort",
+		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
+		"&msRefArraySplice3", "&msUint8ArraySplice3",
+		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "&msStringStripInPlace",
+		"msRaiseRangeError",
+	];
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	let checked = 0;
+	for (const f of cmsFiles) {
+		const r = readFile(f);
+		assert r.ok;
+		if (!r.ok) continue;
+		for (const name of scanRmsExternNames(r.value)) {
+			checked = checked + 1;
+			const served = lookupHost(name) != null || nameListed(intercepted, name);
+			assert served || nameListed(unserved, name), `${f}: ${name}`;
+			if (nameListed(unserved, name)) assert lookupHost(name) == null, `${f}: ${name} is bridged now, drop it from the unserved list`;
+		}
+	}
+	assert checked >= 60;
 }
