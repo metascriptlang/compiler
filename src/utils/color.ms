@@ -1,48 +1,25 @@
-// Terminal Color Utilities — ANSI escape code helpers for CLI output
-//
-// Usage: red("error"), bold(green("ok")), dim("hint")
-// Composable: bold(red("fatal")) → "\x1b[1m\x1b[31mfatal\x1b[0m\x1b[0m"
-// Honors NO_COLOR env var (https://no-color.org) and --colors flag
-
 import { env } from "std/process";
 
-
-// ===== Color enable/disable =====
-
-// Wrap in interface to avoid DRC module-level let string reassignment bug
-interface ColorState {
-	enabled: boolean;
-	initialized: boolean;
-}
-
-const state: ColorState = { enabled: true, initialized: false };
+let enabled = true;
+let initialized = false;
 
 function isEnabled(): boolean {
-	if (!state.initialized) {
-		state.initialized = true;
-		// Respect NO_COLOR (https://no-color.org)
-		const noColor = env.get("NO_COLOR");
-		if (noColor.length > 0) {
-			state.enabled = false;
-		}
+	if (!initialized) {
+		initialized = true;
+		if (env.get("NO_COLOR").length > 0) enabled = false;
 	}
-	return state.enabled;
+	return enabled;
 }
 
-// Set color mode explicitly (called from CLI --colors flag)
-export function setColorEnabled(enabled: boolean): void {
-	state.enabled = enabled;
-	state.initialized = true;
+export function setColorEnabled(on: boolean): void {
+	enabled = on;
+	initialized = true;
 }
-
-// ===== Core wrap function =====
 
 function wrap(code: string, text: string): string {
 	if (!isEnabled()) return text;
 	return `\x1b[${code}m${text}\x1b[0m`;
 }
-
-// ===== Style modifiers =====
 
 export function bold(text: string): string {
 	return wrap("1", text);
@@ -55,8 +32,6 @@ export function dim(text: string): string {
 export function underline(text: string): string {
 	return wrap("4", text);
 }
-
-// ===== Foreground colors =====
 
 export function red(text: string): string {
 	return wrap("31", text);
@@ -78,8 +53,6 @@ export function cyan(text: string): string {
 	return wrap("36", text);
 }
 
-// ===== Semantic helpers (CLI-oriented) =====
-
 export function error(text: string): string {
 	return bold(red(text));
 }
@@ -92,7 +65,6 @@ export function path(text: string): string {
 	return underline(cyan(text));
 }
 
-// ===== Tests =====
 test "red wraps text" {
 	const result = red("hello");
 	assert result.length > 5;
@@ -131,4 +103,12 @@ test "success is bold green" {
 test "path is underline cyan" {
 	const p = path("/foo/bar");
 	assert p.length > 8;
+}
+
+test "setColorEnabled switches the escape codes on and off" {
+	setColorEnabled(true);
+	assert red("x") == "\x1b[31mx\x1b[0m";
+	setColorEnabled(false);
+	assert red("x") == "x";
+	setColorEnabled(true);
 }
