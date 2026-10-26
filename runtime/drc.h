@@ -490,7 +490,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	msRefHeader* h = msHeader(p);
-	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
+	bool isLast = (h->rc & ~MS_RC_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
