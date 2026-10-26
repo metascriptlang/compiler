@@ -750,19 +750,24 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 // ===== fillBody — pure routing table (Standard pattern) =====
 // Routes TypeKind to type family helper. No inline hook logic.
 
-function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: NodeBuf, visited: NameSet, loc: SourceLocation): void {
+function positionalMember(obj: Node, position: number, loc: SourceLocation): Node {
+	return makeArrayAccess(obj, makeNumber(position, loc), loc);
+}
+
+function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: NodeBuf, visited: NameSet, loc: SourceLocation, tuplePosition: number = -1): void {
 	if (fieldType == null) return;
 	// Skip void-typed fields (e.g. `Result<void, E>` variant has `void value`)
 	// — typedef emit drops them too, so generating copy/destroy for a missing
 	// field would produce invalid C (`(*dest).v0.value` on a void slot).
 	if (fieldType.kind == TypeKind.Void) return;
+	const arrayTuple = lctx.raiserBackend && tuplePosition >= 0;
 	let xf = fieldName != ""
-		? makeMember(clonePath(x, loc), fieldName, loc)
+		? (arrayTuple ? positionalMember(clonePath(x, loc), tuplePosition, loc) : makeMember(clonePath(x, loc), fieldName, loc))
 		: x;
 	if (fieldName != "") { xf.nodeType = fieldType; }
 	// reference parity: trace keeps y as raw callback, not y.field
 	let yf = (fieldName != "" && !walksCells(hook))
-		? makeMember(clonePath(y, loc), fieldName, loc)
+		? (arrayTuple ? positionalMember(clonePath(y, loc), tuplePosition, loc) : makeMember(clonePath(y, loc), fieldName, loc))
 		: walksCells(hook) ? clonePath(y, loc) : y;
 	if (fieldName != "" && !walksCells(hook)) { yf.nodeType = fieldType; }
 	const empties = emptiesSlot(hook, x, fieldName);
@@ -774,7 +779,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		ensureTupleHooks(tupleTypeName(fieldType), fieldType, lctx, loc);
 		for (let ti = 0; ti < fieldType.typeChildren.length; ti += 1) {
 			const visited2: NameSet = createNameSet();
-			fillBody(hook, xf, yf, "_" + ti.toString(), fieldType.typeChildren[ti], lctx, buf, visited2, loc);
+			fillBody(hook, xf, yf, "_" + ti.toString(), fieldType.typeChildren[ti], lctx, buf, visited2, loc, ti);
 		}
 		return;
 	}
@@ -1794,12 +1799,12 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	if (hook == "destroy") {
 		for (let i = t.typeChildren.length - 1; i >= 0; i -= 1) {
 			const visited: NameSet = createNameSet();
-			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc);
+			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc, i);
 		}
 	} else {
 		for (let i = 0; i < t.typeChildren.length; i += 1) {
 			const visited: NameSet = createNameSet();
-			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc);
+			fillBody(hook, x1, x2, "_" + i.toString(), t.typeChildren[i], lctx, buf, visited, loc, i);
 		}
 	}
 
@@ -1820,7 +1825,7 @@ function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const visited: NameSet = createNameSet();
-		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
+		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc, i);
 		if (probe.items.length > 0) return true;
 	}
 	return false;
@@ -1920,7 +1925,7 @@ function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): voi
 
 // Tuple field access helper: a._0, a._1, etc.
 function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation): Node {
-	const field = lctx.jsBackend ? makeArrayAccess(obj, makeNumber(idx, loc), loc) : makeMember(obj, "_" + idx.toString(), loc);
+	const field = lctx.jsBackend || lctx.raiserBackend ? makeArrayAccess(obj, makeNumber(idx, loc), loc) : makeMember(obj, "_" + idx.toString(), loc);
 	const t = obj.nodeType;
 	if (t != null && t.kind == TypeKind.Tuple && idx < t.typeChildren.length) field.nodeType = t.typeChildren[idx];
 	return field;
