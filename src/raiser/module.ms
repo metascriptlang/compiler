@@ -60,6 +60,7 @@ export interface RaiserModule {
 	globalInit: RaiserValue[];
 	records: RaiserModuleRecord[];
 	exports: RaiserExport[];
+	drcPlaced: boolean;   // the bytecode carries every count itself (RcInc, RcDec, lifted hooks): the VM counts nothing of its own
 }
 
 // --- Constructors ---
@@ -94,7 +95,7 @@ export function createRaiserModule(name: string, functions: RaiserFunction[], en
 		assertPacked(func);
 		bindDirectCalls(func, functions);
 	}
-	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
+	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [], drcPlaced: false };
 }
 
 function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): void {
