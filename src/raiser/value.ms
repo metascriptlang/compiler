@@ -586,6 +586,7 @@ export interface RaiserArrayData {
 	color: int32;
 	viewOff: int64;
 	viewLen: int32;
+	views: int64[];   // a placed module's slice cells over this array: they stand for borrowed pointers, so they go when it does
 	elemUncounted: boolean;   // the elements are borrowed (a cursor): destroy and copy never count them
 	elemCyclic: boolean;   // the element type can reach the array again: a release that leaves the element alive registers it with the cycle collector
 }
@@ -625,6 +626,7 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 		data.color = 0;
 		data.viewOff = -1;
 		data.viewLen = 0;
+		data.views.length = 0;
 		data.elemCyclic = false;
 		data.elemUncounted = false;
 		return makeHandle(reused, RaiserHeapKind.Array);
@@ -632,7 +634,8 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
 	const words: int64[] = [];
-	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, elemCyclic: false, elemUncounted: false };
+	const views: int64[] = [];
+	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -644,6 +647,7 @@ export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int
 	heapArrayPush(heap, handle, base);
 	heap.arrays[handleIndex(handle)].viewOff = off;
 	heap.arrays[handleIndex(handle)].viewLen = len;
+	if (heap.allocRc != 0) heap.arrays[handleIndex(base.intVal)].views.push(handle);
 	return handle;
 }
 
@@ -1301,6 +1305,15 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => {
 			const data = arrHeap.arrays[index];
+			for (let v = 0; v < data.views.length; v += 1) {
+				const view = arrHeap.arrays[handleIndex(data.views[v])];
+				if (view.viewOff < 0) continue;
+				view.items.length = 0;
+				view.viewOff = -1;
+				arrHeap.freeList.push(handleIndex(data.views[v]));
+			}
+			data.views.length = 0;
+			data.viewOff = -1;
 			data.items.length = 0;
 			data.words.length = 0;
 			arrHeap.freeList.push(index);
