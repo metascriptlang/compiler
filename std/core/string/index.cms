@@ -115,6 +115,23 @@ export extern function setSlice(this s: string, start: number, end: number): voi
 /** Strips whitespace from both ends of the string in place. */
 export extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
 
+extern function setSliceOf(ref s: string, start: int64, end: int64): void from "msStringSetSlice";
+
+function isCSpace(byte: uint8): boolean {
+	return byte == 32 || (byte >= 9 && byte <= 13);
+}
+
+@exportName("msStringStripInPlace")
+function stripInPlaceOf(ref s: string): void {
+	const b = s.asBytes();
+	let first: int64 = 0;
+	let last = (b.length as int64) - 1;
+	if (last < 0) return;
+	while (first <= last && isCSpace(b[first])) first += 1;
+	while (last >= first && isCSpace(b[last])) last -= 1;
+	setSliceOf(s, first, last + 1);
+}
+
 // ===== Character Construction =====
 
 /** Returns a string created from the specified Unicode code point. */

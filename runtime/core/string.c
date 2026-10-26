@@ -336,11 +336,3 @@ void msStringSetSlice(msString* s, int64_t start, int64_t end) {
 	s->p->data[newLen] = '\0';
 }
 
-void msStringStripInPlace(msString* s) {
-	if (s->len == 0 || s->p == NULL) return;
-	int64_t first = 0;
-	int64_t last = s->len - 1;
-	while (first <= last && isspace((unsigned char)s->p->data[first])) first++;
-	while (last >= first && isspace((unsigned char)s->p->data[last])) last--;
-	msStringSetSlice(s, first, last + 1);
-}
