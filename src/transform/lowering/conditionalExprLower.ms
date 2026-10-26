@@ -38,7 +38,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef, isValueLayoutType } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive, isStringLike } from "../../checker/types";
@@ -759,11 +759,15 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
 	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
+	let rhsCalls = holdsCall(bd.right);
+	for (const s of rhsPre) { if (holdsCall(s)) rhsCalls = true; }
 	const writes: Symbol[] = [];
 	for (const s of rhsPre) { collectWrites(s, writes); }
 	collectWrites(bd.right, writes);
+	if (rhsCalls) collectCalleeWritable(bd.left, writes);
 	const readFirst = compoundReadsTargetFirst(bd, rhsPre, writes, ctx);
-	if (rhsPre.length > 0 || readFirst) bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
+	const callRebinds = rhsCalls && (holdsCall(bd.left) || readsAnyOf(bd.left, writes));
+	if (rhsPre.length > 0 || readFirst || callRebinds) bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
 	if (readFirst) readCompoundTarget(bd, pre, ctx, stmt.location);
 	for (const s of rhsPre) { pre.push(s); }
 	if (guardedWrite) guardWrite(bd, pre, ctx);
@@ -826,7 +830,9 @@ function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformConte
 	}
 	if (target.kind == NodeKind.MemberExpr) {
 		const md = target.data as MemberExprData;
-		md.object = hoistAssignTargetEffects(md.object, pre, ctx, writes);
+		md.object = md.object.kind == NodeKind.Identifier && !isValueLayoutType(md.object.nodeType) && readsAnyOf(md.object, writes)
+			? hoistRvalueToTemp(md.object, pre, ctx, writes)
+			: hoistAssignTargetEffects(md.object, pre, ctx, writes);
 		return target;
 	}
 	if (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
@@ -838,6 +844,13 @@ function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformConte
 		return hoistRvalueToTemp(target, pre, ctx, writes);
 	}
 	return target;
+}
+
+function collectCalleeWritable(n: Node, writes: Symbol[]): void {
+	if (n == null || isFunctionNode(n)) return;
+	if (n.kind == NodeKind.Identifier && n.resolvedSym != null && n.resolvedSym.symFlags.has(SymbolFlag.Mutable)
+		&& (n.resolvedSym.symFlags.has(SymbolFlag.Global) || n.resolvedSym.symFlags.has(SymbolFlag.Static))) writes.push(n.resolvedSym);
+	forEachChild(n, (c: Node): void => collectCalleeWritable(c, writes));
 }
 
 function hoistRvalueToTemp(expr: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
