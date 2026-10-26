@@ -1464,6 +1464,7 @@ export class CheckerContext {
 	conversionOperand: Node;     // the operand of the numeric `as` being checked: a ternary or `??` there converts each arm the target does not take implicitly, as converting the joined value would
 	conversionTarget: Type;
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
+	disambAfterCheck: HashMap<string, int32> | null; // copy of disambTable when the check finished; every lowering of the module starts from it
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
 	localTypeNames: HashMap<string, boolean>; // names claimed by local (non-module-scope) type decls, module-wide — C keys struct emission and its include guard by bare name, so same-named locals in sibling scopes would silently merge into one definition
@@ -1556,6 +1557,7 @@ export function createContext(): CheckerContext {
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
+		disambAfterCheck: null,
 		itemModule: -1,
 		nextItem: 0,
 		localTypeNames: new HashMap<string, boolean>(),

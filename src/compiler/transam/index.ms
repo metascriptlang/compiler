@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CheckerError, CancelCtx, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -1012,6 +1012,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		return checkerCtx;
 	}
 
+	checkerCtx.disambAfterCheck = copyDisambTable(checkerCtx.disambTable);
 	db.contexts.set(checkCtxKey(fileId), checkerCtx);
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
@@ -1039,6 +1040,12 @@ export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
 	return tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, fileId), db.revision.value);
 }
 
+function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> {
+	const copy = new HashMap<string, int32>();
+	for (const [name, count] of table) copy.set(name, count);
+	return copy;
+}
+
 export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
@@ -1052,7 +1059,12 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	const checkEntry = cacheGet(db.cache, checkKey);
 	recordDependency(db.depStack, checkKey, checkEntry != null ? checkEntry.outputHash : 0);
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+	const afterCheck = ctx.disambAfterCheck;
+	if (afterCheck == null) throw new Error(`internal: ${filePath} is lowered from a context with no post-check disambiguation table`);
+	const checkTable = ctx.disambTable;
+	ctx.disambTable = copyDisambTable(afterCheck);
 	const lowered = lower(checked, ctx, arg);
+	ctx.disambTable = checkTable;
 	db.trees.set(lowerNodeKey(fileId), lowered);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
 	return lowered;
@@ -1364,6 +1376,35 @@ test "unused .h import identifier gets warning via Phase B" {
 }
 
 // ===== Salsa Early Cutoff Integration Tests =====
+
+function lowerMinting(db: TransAmDb, path: string, names: string[]): int32[] {
+	const minted: int32[] = [];
+	cacheRemove(db.cache, createQueryKey(TaQueryKind.Lower, getFileId(db.fileInput, path)));
+	dbLower(db, path, (checked: Node, ctx: CheckerContext, arg: string[]): Node => {
+		for (const name of arg) minted.push(nextDisamb(ctx, "/t.ms", name));
+		return checked;
+	}, names);
+	return minted;
+}
+
+test "lowering a checked module twice mints the same disamb for a clone" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/t.ms", "function f(a: int32): int32 { return a; }");
+	const first = lowerMinting(db, "/t.ms", ["f$lent", "f$lent"]);
+	const second = lowerMinting(db, "/t.ms", ["f$lent", "f$lent"]);
+	assert first.join(",") == "0,1";
+	assert second.join(",") == first.join(",");
+}
+
+test "a relowering continues a name the check declared from the check's count, not the last lowering's" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/t.ms", "function f(a: int32): int32 { return a; } function f(a: string): string { return a; }");
+	const first = lowerMinting(db, "/t.ms", ["f", "g$lent"]);
+	const second = lowerMinting(db, "/t.ms", ["f", "g$lent"]);
+	assert first.join(",") == "2,0";
+	assert second.join(",") == first.join(",");
+	assert dbTypeCheck(db, "/t.ms").disambTable.get("/t.ms\tf") == 2;
+}
 
 test "a comment-only edit rechecks the module" {
 	const db = createTransAmDb(100);
