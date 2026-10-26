@@ -100,3 +100,4 @@ import "./logicalAssignment";
 import "./raiseCheckBeforeEnclosingCall";
 import "./generatorInlineInPlace";
 import "./numberVecFieldCopy";
+import "./forOfConstArrayBorrow";
