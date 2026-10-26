@@ -20,6 +20,7 @@ export function stdioTransport(): LspTransport {
 export enum FrameEnd {
 	Closed,
 	Truncated,
+	EmptyBody,
 }
 
 export function lspReadFrame(io: LspTransport): Result<string, FrameEnd> {
@@ -31,7 +32,8 @@ export function lspReadFrame(io: LspTransport): Result<string, FrameEnd> {
 	}
 	let separator = io.readLine();
 	while (separator.byteLength > 0) separator = io.readLine();
-	const body = contentLength == 0 ? "" : io.readBytes(contentLength);
+	if (contentLength == 0) return Result.err(FrameEnd.EmptyBody);
+	const body = io.readBytes(contentLength);
 	if (body.byteLength == 0) return Result.err(FrameEnd.Closed);
 	if (body.byteLength < contentLength) return Result.err(FrameEnd.Truncated);
 	return Result.ok(body);
@@ -189,6 +191,13 @@ test "frame read reports a body cut short by EOF as truncated" {
 	const r = lspReadFrame(io);
 	assert !r.ok;
 	if (!r.ok) assert r.error == FrameEnd.Truncated;
+}
+
+test "frame read reports Content-Length 0 as an empty body, not a closed stream" {
+	const io = memoryTransport(createMemoryWire(["Content-Length: 0\r\n\r\n" + frame("{}")]));
+	const r = lspReadFrame(io);
+	assert !r.ok;
+	if (!r.ok) assert r.error == FrameEnd.EmptyBody;
 }
 
 test "split frames uses byte lengths for multibyte bodies" {
