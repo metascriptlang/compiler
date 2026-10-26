@@ -597,9 +597,24 @@ function processShortCircuitValue(node: Node, dctx: DrcContext, mode: DrcMode): 
 	return processConditional(asConditional, dctx, mode, true);
 }
 
+function isCountedAssignValue(node: Node, dctx: DrcContext): boolean {
+	const bd = node.data as BinaryExprData;
+	return bd.operator == "=" && bd.left.kind == NodeKind.Identifier && bd.left.nodeType != null && classifyRc(bd.left.nodeType, dctx).needsCleanup;
+}
+
+function processAssignValue(node: Node, dctx: DrcContext): Node {
+	const bd = node.data as BinaryExprData;
+	const read = cloneIfPure(bd.left);
+	if (read == null) throw new Error("internal: a counted assignment value reached the analyzer with an impure target");
+	const stmt = makeExprStmt(node, node.location);
+	addPre(dctx, processAssignment(stmt, -1, [stmt], dctx, node.location));
+	return read;
+}
+
 function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const bd = node.data as BinaryExprData;
 	if (mode != DrcMode.Normal && isCountedShortCircuitValue(node, dctx)) return processShortCircuitValue(node, dctx, mode);
+	if (isCountedAssignValue(node, dctx)) return processAssignValue(node, dctx);
 	bd.left = processNode(bd.left, dctx, bd.operator == "=" ? DrcMode.Consumed : DrcMode.Normal);
 	const ordered = !isAssignOp(bd.operator) && bd.operator != "&&" && bd.operator != "||" && bd.operator != "??";
 	if (!ordered) {

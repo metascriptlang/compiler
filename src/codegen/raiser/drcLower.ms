@@ -1,6 +1,6 @@
 import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
-import { isStructType, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
+import { isMaybeType, isStructType, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
@@ -168,14 +168,18 @@ function emitCopyValue(s: RaiserCompState, name: string, dest: Node, src: Node):
 	emitStoreInto(s, name, dest, copied);
 }
 
+function isMaybeHeld(type: Type | null): boolean {
+	return isMaybeType(skipModifier(type));
+}
+
 function isCellType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
-	return isStructType(t) || (t != null && isUnionCell(t));
+	return isMaybeHeld(type) || isStructType(t) || (t != null && isUnionCell(t));
 }
 
 function isCopiedAsValue(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
-	return t != null && t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t));
+	return isMaybeHeld(type) || (t != null && t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t)));
 }
 
 function isSizedArrayType(type: Type | null): boolean {
