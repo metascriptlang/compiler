@@ -3814,7 +3814,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			continue;
 		}
-		if (arg.kind == NodeKind.NullLiteral) {
+		const widenedPayload = arg.kind == NodeKind.NullLiteral || arg.nodeType == null ? null as unknown as Node : widenMaybePayload(arg, maybeSubstituted, arg.nodeType);
+		if (widenedPayload != null as unknown as Node) {
+			cd.arguments[pi] = widenedPayload;
+			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
+		} else if (arg.kind == NodeKind.NullLiteral) {
 			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!, ctx);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
