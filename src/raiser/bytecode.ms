@@ -233,16 +233,18 @@ export enum RaiserOpcode {
 	ArrayConcat,      // ABC: R[A] = a new array of the elements of R[B] then those of R[C]
 	AssignInPlace,    // ABC: the aggregate in refs[A] takes the contents of the one in refs[B] and keeps its own cell: its old contents are released by copy plan C, B's cell is emptied and freed, refs[B] = nil; a destination that is B's cell stays
 	UnionConv,        // ABC: fatal unless the member of the union that R[A] holds is marked allowed in the plan K[B] (`+`/`-`, a kind token, `len:display` per member, in match order); the message is K[C] then the held member's display
-	FutureThen,       // ABC: R[A] = a future settled by what R[A+2] (R[A+3] for a rejection) does with the value of the future R[A+1] after the code that registered it, as msFutureThen does; C arguments
+	FutureThen,       // ABC: R[A] = a future settled by what R[A+2] (R[A+3] for a rejection) does with the value of the future R[A+1] after the code that registered it, as msFutureThen does; B = 1 makes R[A+2] the rejection handler and passes a fulfilled value through, as msFutureCatch does; C arguments
+	TimerCtl,         // ABC: B = 0 setTimeout, 1 setInterval, 2 clear: the arguments are the callback and the delay, or the handle to clear; R[A] = the handle as a number; C arguments
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.FutureThen;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.TimerCtl;
 
-// How FutureCombine settles its result from its inputs (Promise.all, race, any).
+// How FutureCombine settles its result from its inputs (Promise.all, race, any, allSettled).
 export enum RaiserCombine {
 	All,
 	Race,
 	Any,
+	AllSettled,
 }
 
 // A register holds one class for the whole function and is one slot of its frame: Word, Float and Bool hold a word,
@@ -389,7 +391,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.AddrField => "dr-",
 		RaiserOpcode.LoadDeref => "xx-",
 		RaiserOpcode.StoreDeref => "x-x",
-		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine | RaiserOpcode.FutureThen => "x--",
+		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine | RaiserOpcode.FutureThen | RaiserOpcode.TimerCtl => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
 		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
@@ -435,7 +437,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.FutureThen || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.FutureThen || op == RaiserOpcode.TimerCtl || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
