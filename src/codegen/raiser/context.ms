@@ -26,6 +26,16 @@ export function setRaiserModulePath(path: string): void {
 	_raiserModulePath = path;
 }
 
+let _raiserPlaced: boolean = false;
+
+export function setRaiserPlaced(placed: boolean): void {
+	_raiserPlaced = placed;
+}
+
+export function raiserPlaced(): boolean {
+	return _raiserPlaced;
+}
+
 export function getRaiserModulePath(): string {
 	return _raiserModulePath;
 }

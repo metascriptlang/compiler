@@ -2,9 +2,11 @@
 // AST expression nodes → typed bytecode instructions.
 
 import { resolveOverloadWinner, overloadAt } from "../c/names";
+import { getOpByKey, hasLiftedOp } from "../c/types";
+import { refuseOwnershipCall } from "./drcRows";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
-	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
+	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol, AttachedOp,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
@@ -32,7 +34,7 @@ import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
-	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
+	callRaiserOnDemand, raiserPlaced, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
@@ -293,7 +295,7 @@ function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32, fromCls: int3
 	return dest;
 }
 
-function compileIndex(s: RaiserCompState, index: Node): int32 {
+export function compileIndex(s: RaiserCompState, index: Node): int32 {
 	const reg = compileExpr(s, index);
 	if (!isFloatExpr(index)) return reg;
 	return emitConvTo(s, reg, RaiserConvClass.I64 as int32, RaiserConvClass.F64 as int32);
@@ -1640,6 +1642,7 @@ function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
+	if (raiserPlaced()) refuseOwnershipCall(node);
 	const nsCallee = namespaceMemberIdent(d.callee);
 	if (nsCallee != null) {
 		compileNamespaceObject(s, d.callee);
@@ -2613,7 +2616,11 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	}
 	const display: int64[] = [];
 	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
-	s.classTypes.push(createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType)));
+	const classType = createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
+	if (raiserPlaced() && hasLiftedOp(classSym.symbolType, AttachedOp.AttachedDestructor)) {
+		classType.destroyFn = routineIndex(s, getOpByKey(classSym.symbolType, AttachedOp.AttachedDestructor));
+	}
+	s.classTypes.push(classType);
 	return s.classTypes.length;
 }
 

@@ -20,10 +20,11 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
+	registerRaiserStmtCompiler, raiserPlaced, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
+import { compileOwnershipStmt } from "./drcLower";
 import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 
@@ -46,6 +47,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				const mi = d.expr.data as MacroInvocationData;
 				if (mi.macroName != "emit") { return; }
 			}
+			if (raiserPlaced() && compileOwnershipStmt(s, d.expr)) return;
 			compileExprForEffect(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
