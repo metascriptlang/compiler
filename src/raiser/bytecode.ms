@@ -232,9 +232,10 @@ export enum RaiserOpcode {
 	ArraySliceCopy,   // ABC: R[A] = a new array of R[B] over [R[C], R[C+1]); a negative bound counts from the end, both clamp
 	ArrayConcat,      // ABC: R[A] = a new array of the elements of R[B] then those of R[C]
 	AssignInPlace,    // ABC: the aggregate in refs[A] takes the contents of the one in refs[B] and keeps its own cell: its old contents are released by copy plan C, B's cell is emptied and freed, refs[B] = nil; a destination that is B's cell stays
+	UnionConv,        // ABC: fatal unless the member of the union that R[A] holds is marked allowed in the plan K[B] (`+`/`-`, a kind token, `len:display` per member, in match order); the message is K[C] then the held member's display
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.AssignInPlace;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.UnionConv;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -319,7 +320,7 @@ function roleOf(letter: string): RaiserRole {
 export function opRoleLetters(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
-			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv => "x--",
+			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv | RaiserOpcode.UnionConv => "x--",
 		RaiserOpcode.Move => "xx-",
 		RaiserOpcode.MoveW => "ww-",
 		RaiserOpcode.MoveR => "yy-",
@@ -821,5 +822,6 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.ArrayPop, 0) == RaiserRole.Any && opRole(RaiserOpcode.ArrayPop, 1) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.ArraySplice3, 1) == RaiserRole.Any && opRole(RaiserOpcode.ArraySplice3, 2) == RaiserRole.IntPair;
 	assert opRole(RaiserOpcode.ArrayConcat, 2) == RaiserRole.Ref;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.None;
+	assert opRole(RaiserOpcode.AssignInPlace, 0) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 1) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 2) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Any && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
 }
