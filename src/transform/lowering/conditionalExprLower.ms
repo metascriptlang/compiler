@@ -577,7 +577,22 @@ function hasGuardedImpureArrayOp(node: Node, guarded: boolean = false): boolean 
 	return found;
 }
 
+function isCompoundStmt(n: Node): boolean {
+	return n.kind == NodeKind.BlockStmt || n.kind == NodeKind.IfStmt || n.kind == NodeKind.WhileStmt || n.kind == NodeKind.ForStmt
+		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.DoWhileStmt;
+}
+
+function ownExpressionsNeedPass(stmt: Node): boolean {
+	let found = false;
+	forEachChild(stmt, (child: Node): void => {
+		if (found || isCompoundStmt(child)) return;
+		found = anyDescendant(child, (n: Node): Visit => n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr ? Visit.Hit : isFunctionNode(n) ? Visit.Skip : Visit.Descend);
+	});
+	return found;
+}
+
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
+	if (ctx.raiserBackend && !ownExpressionsNeedPass(stmt)) return [stmt];
 // On JS, ternaries and short-circuits are native and need no statement
 	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
 	// expression after newExprLower refused it, a guarded impure array op
