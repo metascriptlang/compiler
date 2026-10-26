@@ -13,6 +13,8 @@
 // copyTo, never stored or returned.
 
 import { Math } from "std/core/math";
+import { encodeHex, encodeBase64 } from "std/crypto/encoding";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 
 export type Buffer = uint8[];
 
@@ -34,25 +36,6 @@ export extern function alloc(this typeof Buffer, size: number): Buffer from "new
 export extern function allocUnsafe(this typeof Buffer, size: number): Buffer from "new Uint8Array(#)";
 
 export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "new Uint8Array(#)";
-
-const HEX_DIGITS: string = "0123456789abcdef";
-const B64_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-function hexVal(c: int32): int32 {
-	if (c >= 48 && c <= 57) return c - 48;
-	if (c >= 97 && c <= 102) return c - 87;
-	if (c >= 65 && c <= 70) return c - 55;
-	return -1;
-}
-
-function b64Val(c: int32): int32 {
-	if (c >= 65 && c <= 90) return c - 65;
-	if (c >= 97 && c <= 122) return c - 71;
-	if (c >= 48 && c <= 57) return c + 4;
-	if (c == 43) return 62;
-	if (c == 47) return 63;
-	return -1;
-}
 
 // utf8 (or binary/latin1 char codes < 128 — identical bytes) of a string.
 function encodeUtf8(s: string): Buffer {
@@ -94,57 +77,27 @@ function encodeUtf8(s: string): Buffer {
 
 extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(#.subarray(#, #))";
 
+extern function prefixOf(b: Buffer, length: number): Buffer from "#.subarray(0, #)";
+
+function isHex(encoding: string): boolean {
+	return encoding.equalsIgnoreCase("hex");
+}
+
+function isBase64(encoding: string): boolean {
+	return encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
+}
+
+function decodeText(value: string, base64: boolean): Buffer {
+	const text = value.asBytes();
+	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
+	const buf = Buffer.alloc(capacity as number);
+	const written = base64 ? writeBase64(text, buf, 0, capacity) : writeHex(text, buf, 0, capacity);
+	return written < capacity ? prefixOf(buf, written as number) : buf;
+}
+
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (encoding == "hex") {
-		let n = 0;
-		let i = 0;
-		while (i + 1 < value.length) {
-			if (hexVal(value.charCodeAt(i)) < 0 || hexVal(value.charCodeAt(i + 1)) < 0) break;
-			n += 1;
-			i += 2;
-		}
-		const out = Buffer.alloc(n);
-		i = 0;
-		let j = 0;
-		while (j < n) {
-			out.set(j, hexVal(value.charCodeAt(i)) * 16 + hexVal(value.charCodeAt(i + 1)));
-			i += 2;
-			j += 1;
-		}
-		return out;
-	}
-	if (encoding == "base64") {
-		let count = 0;
-		let i = 0;
-		while (i < value.length) {
-			const c = value.charCodeAt(i);
-			if (c == 61 || b64Val(c) < 0) break;
-			count += 1;
-			i += 1;
-		}
-		const rem = count % 4;
-		let n = ((count / 4) | 0) * 3;
-		if (rem == 2) n += 1;
-		if (rem == 3) n += 2;
-		const out = Buffer.alloc(n);
-		let acc = 0;
-		let bits = 0;
-		let j = 0;
-		i = 0;
-		while (i < count) {
-			acc = (acc << 6) | b64Val(value.charCodeAt(i));
-			bits += 6;
-			if (bits >= 8) {
-				bits -= 8;
-				if (j < n) {
-					out.set(j, (acc >> bits) & 255);
-					j += 1;
-				}
-			}
-			i += 1;
-		}
-		return out;
-	}
+	if (isHex(encoding)) return decodeText(value, false);
+	if (isBase64(encoding)) return decodeText(value, true);
 	// utf8 — and every other name takes the same fallback as the C side.
 	return encodeUtf8(value);
 }
@@ -260,79 +213,35 @@ export extern function byteLength(this b: Buffer): number from "#.length";
 export extern function set(this b: Buffer, i: number, v: number): void from "#[#] = #";
 
 export function toHex(this b: Buffer): string {
-	let out = "";
-	let i = 0;
-	while (i < b.length) {
-		const v = b.byteAt(i);
-		out = out + HEX_DIGITS.charAt((v >> 4) & 15) + HEX_DIGITS.charAt(v & 15);
-		i += 1;
-	}
-	return out;
+	return encodeHex(b);
 }
 
 export function toBase64(this b: Buffer): string {
-	let out = "";
-	const n = b.length;
-	let i = 0;
-	while (i + 2 < n) {
-		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8) | b.byteAt(i + 2);
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
-			B64_ALPHABET.charAt((v >> 6) & 63) + B64_ALPHABET.charAt(v & 63);
-		i += 3;
-	}
-	const rem = n - i;
-	if (rem == 1) {
-		const v = b.byteAt(i) << 16;
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
-	} else if (rem == 2) {
-		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
-			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
-	}
-	return out;
+	return encodeBase64(b);
 }
 
 export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
-	if (encoding == "hex") {
-		const h = b.toHex();
-		return h.slice((start * 2) as int32, (end * 2) as int32);
-	}
-	if (encoding == "base64") {
-		return toBase64Range(b, start, end);
-	}
-	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
-		const mask: int32 = encoding == "ascii" ? 127 : 255;
+	const length = b.length as int64;
+	const first = start as int64;
+	const last = end as int64;
+	const from = first < 0 ? 0 : first;
+	const to = last < 0 || last > length ? length : last;
+	if (from >= to) return "";
+	if (isHex(encoding) || isBase64(encoding)) return encodeRange(b, from, to, encoding);
+	const ascii = encoding.equalsIgnoreCase("ascii");
+	if (ascii || encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) {
+		const mask: int32 = ascii ? 127 : 255;
 		let out = "";
-		let i = start;
-		while (i < end) {
-			out = out + String.fromCharCode(b.byteAt(i) & mask);
-			i += 1;
-		}
+		for (let i = from; i < to; i++) out = out + String.fromCharCode(b.byteAt(i as number) & mask);
 		return out;
 	}
-	return decodeUtf8Range(b, start, end);
+	return decodeUtf8Range(b, from as number, to as number);
 }
 
-function toBase64Range(b: Buffer, start: number, end: number): string {
-	let out = "";
-	const n = end - start;
-	let i = start;
-	while (i + 2 < end) {
-		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8) | b.byteAt(i + 2);
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
-			B64_ALPHABET.charAt((v >> 6) & 63) + B64_ALPHABET.charAt(v & 63);
-		i += 3;
-	}
-	const rem = n % 3;
-	if (rem == 1) {
-		const v = b.byteAt(i) << 16;
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
-	} else if (rem == 2) {
-		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
-		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
-			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
-	}
-	return out;
+function encodeRange(data: Readonly<Span<uint8>>, from: int64, to: int64, encoding: string): string {
+	const range = data[from..to];
+	if (isHex(encoding)) return encodeHex(range);
+	return encoding.equalsIgnoreCase("base64url") ? encodeBase64Url(range) : encodeBase64(range);
 }
 
 export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
@@ -395,13 +304,14 @@ export function write(this b: Buffer, str: string, offset: number, length: numbe
 		}
 		return i;
 	}
-	if (encoding == "hex") {
-		let i = 0;
-		while (i + 1 < str.length && i / 2 < length && hexVal(str.charCodeAt(i)) >= 0 && hexVal(str.charCodeAt(i + 1)) >= 0) {
-			b.set(offset + i / 2, hexVal(str.charCodeAt(i)) * 16 + hexVal(str.charCodeAt(i + 1)));
-			i += 2;
-		}
-		return i / 2;
+	if (isHex(encoding) || isBase64(encoding)) {
+		const total = b.length as int64;
+		const at = offset as int64;
+		const limit = length as int64;
+		if (str.length == 0 || at < 0 || at >= total) return 0;
+		const room = limit < 0 || limit > total - at ? total - at : limit;
+		const text = str.asBytes();
+		return (isHex(encoding) ? writeHex(text, b, at, room) : writeBase64(text, b, at, room)) as number;
 	}
 	// utf8 fallback.
 	const enc = encodeUtf8(str);

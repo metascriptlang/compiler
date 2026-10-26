@@ -2,6 +2,9 @@
 @compile("runtime/core/buffer.c");
 
 import { Math } from "std/core/math";
+import { encodeHex, encodeBase64 } from "std/crypto/encoding";
+import { newEncodingOutput, freshEncodingOutputBytes } from "std/crypto/encodingOutput";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 
 // Buffer = string. Same raw bytes, different semantics.
 // String methods interpret UTF-8/UTF-16. Buffer methods treat raw bytes.
@@ -25,32 +28,15 @@ export function allocUnsafe(this typeof Buffer, size: number): Buffer {
 	return bufferAllocUnsafe(size);
 }
 
-// Encoding
-extern function msBufferFromHex(hex: string): Buffer;
-extern function msBufferFromBase64(b64: string): Buffer;
+extern function shrinkTo(ref value: string, length: int64): void from "msStringSetLength";
+extern function msStringFromUtf8Lossy(data: Readonly<Ptr<uint8>>, length: int64): string;
+extern function msStringFromLatin1(data: Readonly<Ptr<uint8>>, length: int64): string;
 
 when (!bare && !solana) {
 	extern function msBigIntFromInt64(v: int64): bigint;
 	extern function msBigIntFromUint64(v: uint64): bigint;
 	extern function msBigIntToInt64(b: bigint): int64;
 }
-
-// Hex and base64 decode in place; the other encodings are written below.
-extern function msBufferWriteString(
-	buf: Buffer,
-	str: string,
-	offset: number,
-	length: number,
-	encoding: string,
-): number;
-
-// toString with encoding + range
-extern function msBufferToStringRange(
-	buf: Buffer,
-	start: number,
-	end: number,
-	encoding: string,
-): string;
 
 extern function msStringConcat(a: string, b: string): string;
 extern function msStringCompareBytes(a: string, b: string): number;
@@ -242,28 +228,33 @@ function findBytes(
 	return found;
 }
 
-function startsWithIgnoreCase(this text: string, prefix: string): boolean {
-	const size = prefix.byteCount();
-	if (text.byteCount() < size) return false;
-	const given = text.bytePointer();
-	const expected = prefix.bytePointer();
-	let i: int64 = 0;
-	while (i < size &&
-			(given[i] >= 0x41 && given[i] <= 0x5A ? given[i] + 32 : given[i]) == expected[i]) {
-		i += 1;
-	}
-	return i == size;
-}
-
 // ===== Free Functions (constructors / static-like) =====
 
 function copyOf(this value: string): Buffer {
 	return msStringNew(value as cstring, value.byteCount());
 }
 
+function isHex(encoding: string): boolean {
+	return encoding.equalsIgnoreCase("hex");
+}
+
+function isBase64(encoding: string): boolean {
+	return encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
+}
+
+function decodeText(value: string, base64: boolean): Buffer {
+	const text = value.asBytes();
+	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
+	let buf = bufferAllocUnsafe(capacity as number);
+	const bytes = buf.bytePointer();
+	const written = base64 ? writeBase64(text, bytes, 0, capacity) : writeHex(text, bytes, 0, capacity);
+	if (written < capacity) shrinkTo(buf, written);
+	return buf;
+}
+
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (encoding == "hex") return msBufferFromHex(value);
-	if (encoding == "base64") return msBufferFromBase64(value);
+	if (isHex(encoding)) return decodeText(value, false);
+	if (isBase64(encoding)) return decodeText(value, true);
 	return value.copyOf();
 }
 
@@ -428,9 +419,13 @@ export function set(this buf: Buffer, index: number, value: number): void {
 
 // --- Hex/Base64 conversion ---
 
-export extern function toHex(this buf: Buffer): string from "msBufferToHex";
+export function toHex(this buf: Buffer): string {
+	return encodeHex(buf.asBytes());
+}
 
-export extern function toBase64(this buf: Buffer): string from "msBufferToBase64";
+export function toBase64(this buf: Buffer): string {
+	return encodeBase64(buf.asBytes());
+}
 
 export function toStringEncoded(
 	this buf: Buffer,
@@ -438,7 +433,29 @@ export function toStringEncoded(
 	start: number,
 	end: number,
 ): string {
-	return msBufferToStringRange(buf, start, end, encoding);
+	const data = buf.asBytes();
+	const length = data.length as int64;
+	const first = start as int64;
+	const last = end as int64;
+	const from = first < 0 ? 0 : first;
+	const to = last < 0 || last > length ? length : last;
+	if (from >= to) return "";
+	const range = data[from..to];
+	if (isHex(encoding)) return encodeHex(range);
+	if (encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
+	if (encoding.equalsIgnoreCase("base64url")) return encodeBase64Url(range);
+	if (encoding.equalsIgnoreCase("ascii")) return asciiOf(range);
+	const head = buf.bytePointer() + from;
+	if (encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return msStringFromLatin1(head, to - from);
+	return msStringFromUtf8Lossy(head, to - from);
+}
+
+function asciiOf(range: Readonly<Span<uint8>>): string {
+	const length = range.length as int64;
+	const result = newEncodingOutput(length);
+	const bytes = freshEncodingOutputBytes(result);
+	for (let i: int64 = 0; i < length; i++) bytes[i] = range[i] & 0x7F;
+	return result;
 }
 
 // --- Cross-buffer copy ---
@@ -567,15 +584,14 @@ export function write(
 	const size = str.byteCount();
 	const at = offset as int64;
 	if (size == 0 || at < 0 || at >= total) return 0;
-	if (encoding.startsWithIgnoreCase("hex") || encoding.startsWithIgnoreCase("base64")) {
-		return msBufferWriteString(buf, str, offset, length, encoding);
-	}
 	const limit = length as int64;
 	const room = limit < 0 || limit > total - at ? total - at : limit;
+	if (isHex(encoding)) return writeHex(str.asBytes(), buf.bytePointer(), at, room) as number;
+	if (isBase64(encoding)) return writeBase64(str.asBytes(), buf.bytePointer(), at, room) as number;
 	const count = size < room ? size : room;
 	const to = buf.bytePointer() + at;
 	const from = str.bytePointer();
-	if (encoding.startsWithIgnoreCase("ascii")) {
+	if (encoding.equalsIgnoreCase("ascii")) {
 		for (let i: int64 = 0; i < count; i++) to[i] = from[i] & 0x7F;
 	} else {
 		cMemcpy(to, from, count as uint64);
@@ -614,11 +630,11 @@ export function fillString(
 	if (from >= to) return;
 	// The plain path holds no string temporary: binding the text to a `let` copied a literal to the
 	// heap, and a temporary costs a destroy call on every fill.
-	if (encoding.startsWithIgnoreCase("hex")) {
-		buf.fillDecoded(from, to, value, msBufferFromHex(value));
+	if (isHex(encoding)) {
+		buf.fillDecoded(from, to, value, decodeText(value, false));
 	}
-	else if (encoding.startsWithIgnoreCase("base64")) {
-		buf.fillDecoded(from, to, value, msBufferFromBase64(value));
+	else if (isBase64(encoding)) {
+		buf.fillDecoded(from, to, value, decodeText(value, true));
 	}
 	else buf.fillRepeated(from, to, value.bytePointer(), value.byteCount());
 }

@@ -22,19 +22,4 @@ typedef msString msBuffer;
 msBuffer msBufferAlloc(int64_t size);
 msBuffer msBufferAllocUnsafe(int64_t size);
 
-/* ===== Encoding ===== */
-
-msBuffer msBufferFromHex(msString hex);
-msBuffer msBufferFromBase64(msString b64);
-msString msBufferToHex(msBuffer buf);
-msString msBufferToBase64(msBuffer buf);
-
-/* ===== Hex/Base64 String Write ===== */
-
-int64_t msBufferWriteString(msBuffer buf, msString str, int64_t offset, int64_t length, msString encoding);
-
-/* ===== toString with encoding + range ===== */
-
-msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msString encoding);
-
 #endif

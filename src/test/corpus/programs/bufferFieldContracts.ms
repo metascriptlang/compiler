@@ -3,8 +3,8 @@
 // @stdout: bounds entries=1620 digest=484407731
 // @stdout: byteLength rejects=96 rejectedMessages=96 accepted=48 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
-// @stdout: ranges entries=224 digest=615181003
-// @stdout: strings entries=2880 digest=331562034
+// @stdout: ranges entries=224 digest=470707350
+// @stdout: strings entries=2880 digest=522388381
 
 let log = "";
 let entries: int32 = 0;
