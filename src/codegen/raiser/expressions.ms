@@ -2142,7 +2142,15 @@ function compileFutureThen(s: RaiserCompState, node: Node): int32 {
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
+	const calleeLiteral = closureLiteralOf(d.callee);
+	const calleeHeld = calleeLiteral != null ? allocRef(s) : -1;
 	const closureReg = compileExpr(s, d.callee);
+	if (calleeLiteral != null) {
+		const env = allocRef(s);
+		emitInst(s, fieldInst(s, calleeLiteral.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, closureReg, addConst(s, raiserConstString("env"))));
+		emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, calleeHeld, closureReg, 0));
+	}
 
 	let argCount = 0;
 	for (const a of d.arguments) {
@@ -2176,6 +2184,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	}
 	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	releaseClosureArgs(s, closures);
+	if (calleeHeld >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, calleeHeld, 0, 0));
 	return dest;
 }
 
