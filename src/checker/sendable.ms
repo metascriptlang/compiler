@@ -275,12 +275,17 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, d
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.
+function isActorRef(t: Type): boolean {
+	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
 function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	if (t == null) return true;
 	// move always transfers ownership safely
 	if (argNode != null && argNode.kind == NodeKind.MoveExpr) return true;
 	// If the type itself contains no refs, it's always sendable (value copy)
 	if (isTypeSendable(t)) return true;
+	if (isActorRef(t)) return true;
 	if (t.kind == TypeKind.Ref) {
 		// SHARE — Arc<T> only: atomic rc at the actor boundary makes the binding's
 		// mutability irrelevant (rebinding the handle never writes the pointee).
@@ -299,7 +304,7 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
-	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
+	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
 		const path = plainFunctionPath(t, []);
@@ -312,7 +317,7 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	}
 	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, argNode, sendClass)) {
-		if (isPlainRefBorrow && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor)) refuseKeptBorrow(call, argNode, pi);
+		if (isPlainRefBorrow) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
 	}
 	const argLabel = argNode.kind == NodeKind.Identifier
