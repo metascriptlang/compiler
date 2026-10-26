@@ -7,7 +7,9 @@
 //   checker cannot see that it settled. Awaiting one runs: corpus spawnEdgeLessPileUpFailsLoud.
 //
 // WHAT IT CATCHES: each callback verb on a borrowed promise (pending and settled), a borrowed
-//   promise passed on, and a promise held inside a borrowed object.
+//   promise passed on, and a promise held inside a borrowed object. A routine the task passes
+//   the promise to counts as the task itself when it attaches a callback, directly, one routine
+//   deeper, or through a field it reads; a routine that only awaits the promise stays legal.
 //
 // RED MEANS: one of the shapes compiled.
 //
@@ -15,6 +17,9 @@
 // GUARD-CHECK-FAIL spawn's task uses 'p', a promise it only borrows, other than by awaiting it
 // GUARD-CHECK-FAIL spawn's task uses 's', a promise it only borrows
 // GUARD-CHECK-FAIL spawn's task uses 'h.p', a promise it only borrows
+// GUARD-CHECK-FAIL spawn's task uses 'p' (passed to 'attach', which attaches a callback to it)
+// GUARD-CHECK-FAIL spawn's task uses 'p' (passed to 'forward', which attaches a callback to it)
+// GUARD-CHECK-FAIL spawn's task uses 'h' (passed to 'attachField', which attaches a callback to it)
 
 class Holder { p: Promise<int32> | null = null; }
 
@@ -23,6 +28,11 @@ function later(ms: int32): Promise<int32> {
 }
 
 async function now(k: int32): Promise<int32> { return k; }
+
+function attach(p: Promise<int32>): void { p.then((x: int32) => x + 1); }
+function forward(p: Promise<int32>): void { attach(p); }
+function attachField(h: Readonly<Holder>): void { const q = h.p; if (q != null) q.catch((e: Error) => 0); }
+async function waits(p: Promise<int32>): Promise<int32> { return await p; }
 
 async function main(): Promise<void> {
 	const p = later(1);
@@ -36,7 +46,11 @@ async function main(): Promise<void> {
 	h.p = later(1);
 	const e = spawn(() => { const q = h.p; if (q != null) q.then((x: int32) => x); return 1; }); // GUARD-REFUSED
 	const f = spawn(() => { Promise.all([p]); return 1; }); // GUARD-REFUSED
-	console.log(`${await a + await b + await c + await d + await e + await f + await p}`);
+	const g = spawn(() => { attach(p); return 1; }); // GUARD-REFUSED
+	const i = spawn(() => { forward(p); return 1; }); // GUARD-REFUSED
+	const j = spawn(() => { attachField(h); return 1; }); // GUARD-REFUSED
+	const k = spawn(() => { waits(p); return 1; });
+	console.log(`${await a + await b + await c + await d + await e + await f + await g + await i + await j + await k + await p}`);
 }
 
 await main();

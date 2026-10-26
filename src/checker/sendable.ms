@@ -706,7 +706,7 @@ function borrowedRoot(n: Node, borrowed: Symbol[]): Symbol | null {
 	return sym != null && borrowed.includes(sym) ? sym : null;
 }
 
-function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | null {
+function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[], seen: Node[], via: string[]): Node | null {
 	if (node == null) return null;
 	const p = peelView(node);
 	if (p.kind == NodeKind.AwaitExpr) {
@@ -721,12 +721,19 @@ function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | nul
 			if (borrowedRoot(receiver, borrowed) != null && reachesAwaitable(receiver.nodeType, [])) return receiver;
 		}
 		if (!keepsArgumentsInFrame(p)) {
-			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
+			const inCallee = borrowedAwaitableUse(d.callee, borrowed, seen, via);
 			if (inCallee != null) return inCallee;
-			for (const a of d.arguments) {
-				// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-spawn-task-passes-a-borrowed-promise-to-a-routine-that-attaches-a-callback.md
-				if (borrowedRoot(a, borrowed) != null) continue;
-				const inArg = borrowedAwaitableUse(a, borrowed);
+			const routine = routineParts(p.resolvedSym != null ? p.resolvedSym : callee.resolvedSym);
+			for (let i = 0; i < d.arguments.length; i += 1) {
+				const a = d.arguments[i];
+				if (borrowedRoot(a, borrowed) != null) {
+					if (routine == null || routine.paramSyms == null || seen.includes(routine) || firstArgParam(routine, p) + i >= routine.paramSyms!.length) continue;
+					const inner = borrowedAwaitableUse(routineBody(routine), [routine.paramSyms![firstArgParam(routine, p) + i]], seen.concat([routine]), via);
+					if (inner == null) continue;
+					via.push(callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name : describeExpr(callee));
+					return a;
+				}
+				const inArg = borrowedAwaitableUse(a, borrowed, seen, via);
 				if (inArg != null) return inArg;
 			}
 			return null;
@@ -736,7 +743,7 @@ function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | nul
 		return reachesAwaitable(p.nodeType, []) ? p : null;
 	}
 	let found: Node | null = null;
-	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed); });
+	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed, seen, via); });
 	return found;
 }
 
@@ -747,11 +754,16 @@ function refuseBorrowedAwaitable(ctx: CheckerContext, fn: Node, at: Node): void 
 	collectBorrowCaptures(ctx, thunk, views, moved);
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v) && reachesAwaitable(v.symbolType, []));
 	if (borrowed.length == 0) return;
-	const use = borrowedAwaitableUse(routineParamsAndBody(thunk).body, borrowed);
-	if (use == null) return;
-	const name = describeExpr(use);
-	addError(ctx, `spawn's task uses '${name}', a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
-		use.location.line, use.location.column);
+	const body = routineParamsAndBody(thunk).body;
+	deferEffectCheck(at, "borrowedAwaitable", (later: CheckerContext): void => {
+		const via: string[] = [];
+		const use = borrowedAwaitableUse(body, borrowed, [], via);
+		if (use == null) return;
+		const name = describeExpr(use);
+		const through = via.length > 0 ? ` (passed to '${via[via.length - 1]}', which attaches a callback to it)` : "";
+		addError(later, `spawn's task uses '${name}'${through}, a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
+			use.location.line, use.location.column);
+	});
 }
 
 function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {
