@@ -7,7 +7,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode,
 	JSXElementData, JSXFragmentData, JSXTextData,
 	JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../cursor";
+import { ParserState, current, advance, isAtEnd, addError } from "../cursor";
 import { exprNode, exprKind, parseOk } from "./testUtil";
 
 type ExprResult = Result<Expression, string>;
@@ -77,7 +77,8 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 					if (current(state).kind != TokenKind.RBrace) return Result.err("Expected '}' after JSX attribute expression");
 					advance(state);
 				} else {
-					return Result.err("Expected string or '{' for JSX attribute value");
+					addError(state, "Expected string or '{' for JSX attribute value");
+					valNode = createNode(NodeKind.BooleanLiteral, { boolValue: true }, tok);
 				}
 			} else {
 				valNode = createNode(NodeKind.BooleanLiteral, { boolValue: true }, tok);
@@ -86,7 +87,8 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 			continue;
 		}
 
-		return Result.err(`Unexpected token in JSX attributes at line ${tok.line}`);
+		addError(state, `Unexpected token in JSX attributes at line ${tok.line}`);
+		break;
 	}
 	return Result.ok(attrs);
 }
@@ -141,16 +143,18 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	// uppercase component tag to its function symbol — see recordJsxTagSym for go-to-def / rename.
 	const tagNode = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
 
-	if (current(state).kind == TokenKind.Slash) {
-		advance(state);
-		if (current(state).kind != TokenKind.Gt) return Result.err("Expected '>' after '/' in self-closing JSX element");
-		advance(state);
+	if (current(state).kind != TokenKind.Gt) {
+		if (current(state).kind == TokenKind.Slash) advance(state);
+		if (current(state).kind == TokenKind.Gt) {
+			advance(state);
+		} else {
+			addError(state, "Expected '>' or '/>' to end JSX opening tag");
+		}
 		const selfNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: [], jsxSelfClosing: true }, start);
 		selfNode.typeExpr = tagNode;
 		return Result.ok(selfNode);
 	}
 
-	if (current(state).kind != TokenKind.Gt) return Result.err("Expected '>' or '/>' to end JSX opening tag");
 	advance(state);
 	const children = try parseJsxChildren(state, parseExpr);
 	const closeTag = try parseJsxClose(state);
@@ -189,6 +193,19 @@ test "jsx parse self-closing element" {
 	assert d.jsxSelfClosing;
 	assert d.jsxChildren.length == 0;
 	assert d.jsxAttrs.length == 0;
+}
+
+test "jsx tag left open still parses as a self-closing element" {
+	const d = exprNode("<d").data as JSXElementData;
+	assert d.jsxTag == "d";
+	assert d.jsxSelfClosing;
+}
+
+test "jsx attribute left without a value keeps the element and its attributes" {
+	const d = exprNode("<a href=").data as JSXElementData;
+	assert d.jsxTag == "a";
+	assert d.jsxAttrs.length == 1;
+	assert (d.jsxAttrs[0].data as JSXAttributeData).jsxAttrName == "href";
 }
 
 test "jsx parse element with text child" {

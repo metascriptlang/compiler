@@ -689,6 +689,16 @@ test "completion on a function component's JSX attribute offers its props fields
 	assert jsxComplete(JSX_COMPONENT, 6, 29).indexOf("The heading the card shows.") >= 0;
 }
 
+test "completion on a JSX tag not closed yet offers the IntrinsicElements fields" {
+	const r = jsxComplete("import { view } from \"./ui\";\nconst v: number = <a\nconst w = 1;", 1, 20);
+	assert r.indexOf("The anchor element.") >= 0;
+}
+
+test "completion on an attribute of a JSX tag not closed yet offers the props fields" {
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a hr\nconst w = 1;", 1, 23).indexOf("The URL the link points to.") >= 0;
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a ", 1, 21).indexOf("Unique id of the element.") >= 0;
+}
+
 test "completion among JSX attributes with no JSX namespace anywhere offers nothing" {
 	assert jsxComplete("import { view } from \"./uiPlain\";\nconst v: number = <a href=\"x\" />;", 1, 30).indexOf("\"label\"") < 0;
 }
