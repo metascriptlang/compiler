@@ -7,7 +7,6 @@
 // @stdout: block 2
 // @stdout: deep 2
 // @stdout: top 2
-// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // note: A `.then` callback on a `Promise<void>` that captures a local reads it through its env. A void parameter has no runtime slot, so the callback's C signature is `(env)`; the runtime called it as `(value, env)`, the callback read the NULL value as its env and crashed on C (drc and orc) while JS printed the right result.
 
 async function work(log: string[]): Promise<void> {
