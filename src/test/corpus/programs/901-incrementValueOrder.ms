@@ -1,5 +1,4 @@
 // @stdout: 10 20 30 0|0 1 0|12|11|4 3
-// @xfail(raiser): the Raiser VM evaluates an assignment right side before the target index (`a[j] = j++` stores at j + 1)
 function two(a: int32, b: int32): int32 {
 	return a * 10 + b;
 }
