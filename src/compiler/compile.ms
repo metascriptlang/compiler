@@ -4955,7 +4955,7 @@ function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: WriteSumma
 	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
 	try {
 		ctx.gcMode = GcMode.Drc;
-		return analyzeProgram(program, ctx, tables);
+		return analyzeProgram(program, ctx, tables, true);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}

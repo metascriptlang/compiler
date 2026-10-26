@@ -25,11 +25,12 @@ import { transformProgram } from "../transform/index";
 
 // ===== Public Entry Point =====
 
-export function analyzeProgram(program: Node, checkerCtx: CheckerContext, tables: WriteSummaries): Node {
+export function analyzeProgram(program: Node, checkerCtx: CheckerContext, tables: WriteSummaries, raiserBackend: boolean = false): Node {
 	if (checkerCtx == null) return program;  // test mode — skip analysis
 	if (checkerCtx.gcMode == GcMode.None || checkerCtx.gcMode == GcMode.Manual) return program;
 	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
+	ctx.raiserBackend = raiserBackend;
 	const dctx = createDrcContext(ctx, tables);
 	noteRoutineDecls(dctx.writes, program);
 	cloneCallbackReaders(dctx.writes, program);

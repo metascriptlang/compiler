@@ -68,6 +68,10 @@ export function emitValueCopy(
 	return destination;
 }
 
+export function emitStoreCopy(s: RaiserCompState, source: int32, valueType: Readonly<Type | null>): int32 {
+	return raiserPlaced() ? source : emitValueCopy(s, source, valueType);
+}
+
 export function needsValueAssign(s: RaiserCompState, valueType: Type | null): boolean {
 	const index = copyPlan(s, valueType);
 	if (index < 0) return false;
@@ -87,7 +91,7 @@ function valueShape(t: Type | null): Type | null {
 export function emitValueAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): int32 {
 	const t = valueShape(valueType);
 	if (t == null) return source;
-	if (!needsValueAssign(s, t)) return emitValueCopy(s, source, t);
+	if (!needsValueAssign(s, t)) return emitStoreCopy(s, source, t);
 	const index = copyPlan(s, t);
 	const result = allocRef(s);
 	const toEnd: int32[] = [];
@@ -100,7 +104,8 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	const destinationNil = allocBool(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, destinationNil, destination, RaiserValueKind.Nil as number));
 	const destinationHeld = emitBranchIfFalsy(s, destinationNil);
-	emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
+	if (raiserPlaced()) emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
+	else emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
 	toEnd.push(emitJumpPlaceholder(s));
 	patchJumpTo(s, destinationHeld, codeLen(s));
 	if (t.kind == TypeKind.Struct) {

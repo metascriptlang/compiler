@@ -19,22 +19,22 @@ function define(row: int32, names: string[]): void {
 
 define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
 define(ROW_DECREF, [
-	"msDecref", "msAtomicDecref", "msStringDecref", "msClosureDestroy",
+	"msDecref", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
 	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayAtomicRefDestroy",
 	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msAtomicRefArrayDestroy",
 ]);
 define(ROW_DECREF_CYCLIC, ["msDecrefCyclic"]);
 define(ROW_CLEAR, [
-	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
+	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msStructCellWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
 ]);
-define(ROW_SINK, ["msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink"]);
+define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink"]);
 define(ROW_SHARE, ["msStringCopy"]);
 define(ROW_HELD, ["msHeldCount"]);
 define(ROW_KEPT, ["msDestroyLeftNoRef"]);
 define(ROW_COPY_VALUE, [
 	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayAtomicRefCopy",
-	"msArrayClosureCopy",
+	"msArrayClosureCopy", "msStructCellCopy",
 ]);
 
 export function ownershipName(sym: Symbol | null): string {
@@ -51,4 +51,9 @@ export function refuseOwnershipCall(call: Node): void {
 	if (call.kind != NodeKind.CallExpr) return;
 	const sym = (call.data as CallExprData).callee.resolvedSym;
 	if (ownershipRow(sym) != 0) throw new Error(`internal: Raiser has no lowering for ${ownershipName(sym)} outside statement position`);
+}
+
+export function refuseUnknownRuntimeProc(sym: Symbol | null): void {
+	if (sym == null || sym.declNode != null || !hasFlag(sym, SymbolFlag.CompilerProc)) return;
+	throw new Error(`internal: Raiser has no lowering for ${ownershipName(sym)}`);
 }

@@ -8,7 +8,7 @@
 import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
-import { attachedOpSym } from "../transform/util";
+import { attachedOpSym, generatedProcSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp, CallingConvention } from "../ast/node";
 import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
@@ -236,7 +236,28 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 			return makeOpsInfo(RcKind.Named, resolvedName, t, false, requireOps);
 		}
 	}
+	if (ctx.raiserBackend) return structCellInfo();
 	return noRcInfo();
+}
+
+// A Raiser struct is a heap cell until typed memory lays structs inline, so a struct with no hook of its own
+// still has a cell to release, copy and move.
+function structCellInfo(): RcInfo {
+	return {
+		rcKind: RcKind.Named, typeName: "", needsCleanup: true, seqLike: false,
+		destroyFn: cellOpSym("msStructCellDestroy", AttachedOp.AttachedDestructor),
+		copyFn: cellOpSym("msStructCellCopy", AttachedOp.AttachedAsgn),
+		wasMovedFn: cellOpSym("msStructCellWasMoved", AttachedOp.AttachedWasMoved),
+		sinkFn: cellOpSym("msStructCellSink", AttachedOp.AttachedSink),
+		dupFn: null,
+	};
+}
+
+function cellOpSym(name: string, op: AttachedOp): Symbol {
+	const sym = generatedProcSym(name);
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	return sym;
 }
 
 // ===== Main Classification Entry Point =====
@@ -344,6 +365,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				const an = anonUnionCName(t);
 				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
+			if (ctx.raiserBackend && t.typeFlags.has(TypeFlag.ValueUnion)) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {

@@ -25,7 +25,7 @@ import {
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { compileOwnershipStmt } from "./drcLower";
-import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
+import { emitStoreCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 
 // --- Statement compilation ---
@@ -35,7 +35,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
 			if (d.argument != null) {
-				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
+				const reg = emitStoreCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				emitRet(s, reg);
 			} else {
 				emitReturnNothing(s);
@@ -168,7 +168,7 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			}
 		}
 		const isStr = exprIsString(s, d.initializer);
-		const reg = emitValueCopy(s, compileExpr(s, d.initializer), node.nodeType);
+		const reg = emitStoreCopy(s, compileExpr(s, d.initializer), node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
