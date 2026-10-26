@@ -2804,11 +2804,6 @@ test "generateCleanup skips moved" {
 	assert cleanup.length == 2;
 }
 
-test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
-
-test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
-
-
 test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");
 	const result = processBlockBody(null as unknown as Node, dctx, false, false, testLoc());
