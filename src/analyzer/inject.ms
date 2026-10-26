@@ -19,7 +19,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, Ro
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -36,6 +36,7 @@ import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
+import { cloneIfPure } from "../transform/place";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { checkedCtx, bindCStd } from "../transform/testUtil";
@@ -579,8 +580,26 @@ function keepArgumentAlive(arg: Node, dctx: DrcContext): Node {
 	return copied;
 }
 
+function isCountedShortCircuitValue(node: Node, dctx: DrcContext): boolean {
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	const op = (node.data as BinaryExprData).operator;
+	return (op == "||" || op == "&&") && node.nodeType != null && classifyRc(node.nodeType, dctx).needsCleanup;
+}
+
+function processShortCircuitValue(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const bd = node.data as BinaryExprData;
+	bd.left = isCountedShortCircuitValue(bd.left, dctx) ? processShortCircuitValue(bd.left, dctx, DrcMode.Normal) : processNode(bd.left, dctx, DrcMode.Normal);
+	const held = cloneIfPure(bd.left);
+	const test = cloneIfPure(bd.left);
+	if (held == null || test == null) throw new Error("internal: a counted `" + bd.operator + "` value reached the analyzer with an impure left operand");
+	const asConditional = bd.operator == "||" ? makeConditional(test, held, bd.right, node.location) : makeConditional(test, bd.right, held, node.location);
+	asConditional.nodeType = node.nodeType;
+	return processConditional(asConditional, dctx, mode, true);
+}
+
 function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const bd = node.data as BinaryExprData;
+	if (mode != DrcMode.Normal && isCountedShortCircuitValue(node, dctx)) return processShortCircuitValue(node, dctx, mode);
 	bd.left = processNode(bd.left, dctx, bd.operator == "=" ? DrcMode.Consumed : DrcMode.Normal);
 	const ordered = !isAssignOp(bd.operator) && bd.operator != "&&" && bd.operator != "||" && bd.operator != "??";
 	if (!ordered) {
@@ -968,11 +987,11 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
-function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+function processConditional(node: Node, dctx: DrcContext, mode: DrcMode, perBranch: boolean = false): Node {
 	const cd = node.data as ConditionalExprData;
 	const loc = node.location;
 	cd.ternaryCondition = processNode(cd.ternaryCondition, dctx, DrcMode.Normal);
-	if (mode == DrcMode.Normal) {
+	if (mode == DrcMode.Normal && !perBranch) {
 		cd.ternaryConsequent = processNode(cd.ternaryConsequent, dctx, mode);
 		cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
 		return node;
