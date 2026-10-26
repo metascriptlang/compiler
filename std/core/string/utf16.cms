@@ -1,0 +1,257 @@
+// MetaScript String UTF-16 Tier — C Backend
+// Strings hold UTF-8 (WTF-8 for a lone surrogate); the TS-visible positions are
+// UTF-16 units, an astral code point being two. The C runtime and the codegen call
+// these by their runtime names.
+
+@include("runtime/core/string.h");
+
+import { asBytes, byteSlice, byteIsAscii } from "./bytes";
+
+extern function msStringNew(data: cstring, length: int64): string;
+extern function msStringLength(s: string): int64;
+extern function msStringAsciiChar(byte: uint8): string;
+extern function msStringMarkAscii(s: string): void;
+extern function msStringMarkNonAscii(s: string): void;
+extern function msStringPrepareAdd(dest: Ptr<string>, addLen: int64): void;
+extern function msStringAppendChar(dest: Ptr<string>, c: char): void;
+
+const astralBase = 0x10000;
+const replacement = 0xFFFD;
+
+// Length of the sequence at `p`; a truncated or stray lead byte is one byte.
+@inline
+function seqLenAt(sb: Readonly<Span<uint8>>, p: int32): int32 {
+	const b = sb[p];
+	const n = sb.length;
+	if (b < 0x80) return 1;
+	if (b < 0xE0 && p + 1 < n) return 2;
+	if (b < 0xF0 && p + 2 < n) return 3;
+	if (b >= 0xF0 && p + 3 < n) return 4;
+	return 1;
+}
+
+function decodeAt(sb: Readonly<Span<uint8>>, p: int32, seq: int32): int32 {
+	const b = sb[p] as int32;
+	if (seq == 1) return b < 0x80 ? b : replacement;
+	if (seq == 2) return ((b & 0x1F) << 6) | ((sb[p + 1] as int32) & 0x3F);
+	if (seq == 3) return ((b & 0x0F) << 12) | (((sb[p + 1] as int32) & 0x3F) << 6) | ((sb[p + 2] as int32) & 0x3F);
+	return ((b & 0x07) << 18) | (((sb[p + 1] as int32) & 0x3F) << 12) | (((sb[p + 2] as int32) & 0x3F) << 6) | ((sb[p + 3] as int32) & 0x3F);
+}
+
+@inline
+function highHalf(cp: int32): int32 {
+	return 0xD800 + ((cp - astralBase) >> 10);
+}
+
+@inline
+function lowHalf(cp: int32): int32 {
+	return 0xDC00 + ((cp - astralBase) & 0x3FF);
+}
+
+function putSurrogate(out: Span<uint8>, at: int32, unit: int32): void {
+	out[at] = (0xE0 | (unit >> 12)) as uint8;
+	out[at + 1] = (0x80 | ((unit >> 6) & 0x3F)) as uint8;
+	out[at + 2] = (0x80 | (unit & 0x3F)) as uint8;
+}
+
+function surrogateString(unit: int32): string {
+	let scratch: uint8[3] = [];
+	const out: Span<uint8> = scratch;
+	putSurrogate(out, 0, unit);
+	return msStringNew(((scratch as Span<uint8>) as Ptr<uint8>) as cstring, 3);
+}
+
+@exportName("msStringCharAtSlow")
+export function stringCharAtSlow(s: string, idx: int64): string {
+	const sb = s.asBytes();
+	const n = sb.length;
+	if (idx < 0 || idx >= n) return "";
+	if (byteIsAscii(s)) return msStringAsciiChar(sb[idx]);
+	const target = idx as int32;
+	let p = 0;
+	let unit = 0;
+	while (p < n) {
+		const seq = seqLenAt(sb, p);
+		if (seq == 4) {
+			const cp = decodeAt(sb, p, seq);
+			if (cp >= astralBase) {
+				if (unit == target) return surrogateString(highHalf(cp));
+				if (unit + 1 == target) return surrogateString(lowHalf(cp));
+				unit = unit + 2;
+				p = p + seq;
+				continue;
+			}
+		}
+		if (unit == target) return s.byteSlice(p, p + seq);
+		unit = unit + 1;
+		p = p + seq;
+	}
+	return "";
+}
+
+@exportName("msStringCharCodeAt")
+export function stringCharCodeAt(s: string, idx: int64): int64 {
+	const sb = s.asBytes();
+	const n = sb.length;
+	if (idx < 0 || idx >= n) return -1;
+	if (byteIsAscii(s)) return sb[idx] as int64;
+	const target = idx as int32;
+	let p = 0;
+	let unit = 0;
+	while (p < n) {
+		const seq = seqLenAt(sb, p);
+		if (seq == 4) {
+			const cp = decodeAt(sb, p, seq);
+			if (cp >= astralBase) {
+				if (unit == target) return highHalf(cp);
+				if (unit + 1 == target) return lowHalf(cp);
+				unit = unit + 2;
+				p = p + seq;
+				continue;
+			}
+		}
+		if (unit == target) return decodeAt(sb, p, seq);
+		unit = unit + 1;
+		p = p + seq;
+	}
+	return -1;
+}
+
+// Positions are UTF-16 units; a boundary inside an astral pair keeps the TS half
+// (the low half at `start`, the high half at `end`), WTF-8 encoded.
+@exportName("msStringSlice")
+export function stringSlice(s: string, start: int64, end: int64): string {
+	const sb = s.asBytes();
+	const n = sb.length;
+	if (n == 0) return "";
+	const ascii = byteIsAscii(s);
+	const units = ascii ? n as int64 : msStringLength(s);
+	let from = start < 0 ? units + start : start;
+	let to = end < 0 ? units + end : end;
+	if (from < 0) from = 0;
+	if (to > units) to = units;
+	if (from >= to) return "";
+	if (ascii) return s.byteSlice(from as int32, to as int32);
+	const first = from as int32;
+	const last = to as int32;
+	let p = 0;
+	let unit = 0;
+	let bs = -1;
+	let be = 0;
+	let lowPrefix = false;
+	let highSuffix = false;
+	let loCp = 0;
+	let hiCp = 0;
+	while (p < n && unit < last) {
+		const seq = seqLenAt(sb, p);
+		if (seq == 4) {
+			const cp = decodeAt(sb, p, seq);
+			if (cp >= astralBase) {
+				const hasHigh = unit >= first;
+				const hasLow = unit + 1 >= first && unit + 1 < last;
+				if (hasHigh && hasLow) {
+					if (bs < 0) bs = p;
+					be = p + seq;
+				} else if (hasHigh) {
+					highSuffix = true;
+					hiCp = cp;
+				} else if (hasLow) {
+					lowPrefix = true;
+					loCp = cp;
+				}
+				unit = unit + 2;
+				p = p + seq;
+				continue;
+			}
+		}
+		if (unit >= first) {
+			if (bs < 0) bs = p;
+			be = p + seq;
+		}
+		unit = unit + 1;
+		p = p + seq;
+	}
+	const middle = bs < 0 ? 0 : be - bs;
+	if (!lowPrefix && !highSuffix) return s.byteSlice(bs < 0 ? 0 : bs, bs < 0 ? 0 : be);
+	const buf = new Array<uint8>((lowPrefix ? 3 : 0) + middle + (highSuffix ? 3 : 0));
+	const out: Span<uint8> = buf;
+	let at = 0;
+	if (lowPrefix) {
+		putSurrogate(out, 0, lowHalf(loCp));
+		at = 3;
+	}
+	let k = 0;
+	while (k < middle) {
+		out[at + k] = sb[bs + k];
+		k = k + 1;
+	}
+	if (highSuffix) putSurrogate(out, at + middle, highHalf(hiCp));
+	return buf.asString();
+}
+
+function encodeCodePoint(out: Span<uint8>, cp: int64): int32 {
+	if (cp < 0x80) {
+		out[0] = cp as uint8;
+		return 1;
+	}
+	if (cp < 0x800) {
+		out[0] = (0xC0 | (cp >> 6)) as uint8;
+		out[1] = (0x80 | (cp & 0x3F)) as uint8;
+		return 2;
+	}
+	if (cp < 0x10000) {
+		out[0] = (0xE0 | (cp >> 12)) as uint8;
+		out[1] = (0x80 | ((cp >> 6) & 0x3F)) as uint8;
+		out[2] = (0x80 | (cp & 0x3F)) as uint8;
+		return 3;
+	}
+	if (cp < 0x110000) {
+		out[0] = (0xF0 | (cp >> 18)) as uint8;
+		out[1] = (0x80 | ((cp >> 12) & 0x3F)) as uint8;
+		out[2] = (0x80 | ((cp >> 6) & 0x3F)) as uint8;
+		out[3] = (0x80 | (cp & 0x3F)) as uint8;
+		return 4;
+	}
+	out[0] = 0xEF;
+	out[1] = 0xBF;
+	out[2] = 0xBD;
+	return 3;
+}
+
+@exportName("msStringFromCodePoint")
+export function stringFromCodePoint(cp: int64): string {
+	let scratch: uint8[4] = [];
+	const out: Span<uint8> = scratch;
+	const len = encodeCodePoint(out, cp);
+	const s = msStringNew(((scratch as Span<uint8>) as Ptr<uint8>) as cstring, len as int64);
+	if (len == 1) msStringMarkAscii(s);
+	else msStringMarkNonAscii(s);
+	return s;
+}
+
+@exportName("msStringAppendCodePoint")
+export function stringAppendCodePoint(dest: Ptr<string>, cp: int64): void {
+	let scratch: uint8[4] = [];
+	const out: Span<uint8> = scratch;
+	const len = encodeCodePoint(out, cp);
+	if (len > 1) msStringPrepareAdd(dest, len as int64);
+	let k = 0;
+	while (k < len) {
+		msStringAppendChar(dest, out[k] as char);
+		k = k + 1;
+	}
+}
+
+@exportName("msStringUnicodeLength")
+export function stringUnicodeLength(s: string): int64 {
+	const sb = s.asBytes();
+	const n = sb.length;
+	let p = 0;
+	let count: int64 = 0;
+	while (p < n) {
+		const c = sb[p];
+		p = p + (c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4);
+		count = count + 1;
+	}
+	return count;
+}

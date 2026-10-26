@@ -77,6 +77,21 @@ static inline bool msStringIsAscii(msString s) {
 	return ascii;
 }
 
+static inline void msStrMarkAscii(msStrPayload* p) {
+	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
+		p->cap |= MS_ASCII_CHECKED | MS_ASCII_FLAG;
+	}
+}
+
+static inline void msStrMarkNonAscii(msStrPayload* p) {
+	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
+		p->cap = (p->cap | MS_ASCII_CHECKED) & ~MS_ASCII_FLAG;
+	}
+}
+
+static inline void msStringMarkAscii(msString s) { msStrMarkAscii(s.p); }
+static inline void msStringMarkNonAscii(msString s) { msStrMarkNonAscii(s.p); }
+
 /*
  * Static string literal constructor.
  * Codegen emits a const payload struct (.rodata), then uses this to make msString.
@@ -256,6 +271,8 @@ extern const msString msCharTable[128];
 /* An already-verified-ASCII string indexes by byte, so the interned table
    answers without a call. Unknown/false flag, non-ASCII or out of range goes
    out of line — including the flag-computing path, which must stay one place. */
+static inline msString msStringAsciiChar(uint8_t byte) { return msCharTable[byte]; }
+
 static inline msString msStringCharAt(msString s, int64_t idx) {
 	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len) {
 		const int64_t cap = msStrCapLoad(s.p);

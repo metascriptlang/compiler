@@ -110,18 +110,6 @@ static inline void msStrInvalidateAscii(msStrPayload* p) {
 	}
 }
 
-static inline void msStrMarkAscii(msStrPayload* p) {
-	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
-		p->cap |= MS_ASCII_CHECKED | MS_ASCII_FLAG;
-	}
-}
-
-static inline void msStrMarkNonAscii(msStrPayload* p) {
-	if (p != NULL && (p->cap & MS_STRLIT_FLAG) == 0) {
-		p->cap = (p->cap | MS_ASCII_CHECKED) & ~MS_ASCII_FLAG;
-	}
-}
-
 /* ===== Lifecycle ===== */
 
 msString msStringNew(const char* data, int64_t len) {
@@ -470,118 +458,6 @@ static msStringArray msStringCodeUnits(msString s) {
 	return units;
 }
 
-msString msStringCharAtSlow(msString s, int64_t idx) {
-	if (idx < 0 || s.p == NULL || idx >= s.len) return MS_EMPTY_STRING;
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	const unsigned char* end = p + s.len;
-	/* ASCII fast path: O(1) when string is known ASCII (cached check) */
-	if (msStringIsAscii(s)) {
-		return msCharTable[p[idx]];  /* zero alloc — interned */
-	}
-	/* Full scan: find the idx-th UTF-16 code unit */
-	int64_t charPos = 0;
-	while (p < end) {
-		int seqlen;
-		uint32_t cp = msUtf8Decode(p, end, &seqlen);
-		if (cp >= 0x10000) {
-			/* Surrogate pair: 2 UTF-16 code units — return the exact half */
-			if (charPos == idx || charPos + 1 == idx) {
-				uint32_t unit = (charPos == idx)
-					? 0xD800 + ((cp - 0x10000) >> 10)
-					: 0xDC00 + ((cp - 0x10000) & 0x3FF);
-				char half[3];
-				msWtf8EncodeSurrogate(unit, half);
-				return msStringNew(half, 3);
-			}
-			charPos += 2;
-		} else {
-			if (charPos == idx) {
-				return msStringNew((const char*)(p), seqlen);
-			}
-			charPos++;
-		}
-		p += seqlen;
-	}
-	return MS_EMPTY_STRING;
-}
-
-int64_t msStringCharCodeAt(msString s, int64_t idx) {
-	if (idx < 0 || s.p == NULL || idx >= s.len) return -1;
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	/* ASCII fast path: O(1) when string is known ASCII (cached check) */
-	if (msStringIsAscii(s)) {
-		return (int64_t)p[idx];
-	}
-	/* Full scan: find the idx-th UTF-16 code unit */
-	const unsigned char* end = p + s.len;
-	int64_t charPos = 0;
-	while (p < end) {
-		int seqlen;
-		uint32_t cp = msUtf8Decode(p, end, &seqlen);
-		if (cp >= 0x10000) {
-			/* Surrogate pair */
-			uint32_t hi = 0xD800 + ((cp - 0x10000) >> 10);
-			uint32_t lo = 0xDC00 + ((cp - 0x10000) & 0x3FF);
-			if (charPos == idx) return (int64_t)hi;
-			if (charPos + 1 == idx) return (int64_t)lo;
-			charPos += 2;
-		} else {
-			if (charPos == idx) return (int64_t)cp;
-			charPos++;
-		}
-		p += seqlen;
-	}
-	return -1;
-}
-
-static int msEncodeCodePoint(int64_t cp, uint8_t buf[4]) {
-	int len;
-	if (cp < 0x80) {
-		buf[0] = (uint8_t)cp;
-		len = 1;
-	} else if (cp < 0x800) {
-		buf[0] = 0xC0 | (uint8_t)(cp >> 6);
-		buf[1] = 0x80 | (uint8_t)(cp & 0x3F);
-		len = 2;
-	} else if (cp < 0x10000) {
-		buf[0] = 0xE0 | (uint8_t)(cp >> 12);
-		buf[1] = 0x80 | (uint8_t)((cp >> 6) & 0x3F);
-		buf[2] = 0x80 | (uint8_t)(cp & 0x3F);
-		len = 3;
-	} else if (cp < 0x110000) {
-		buf[0] = 0xF0 | (uint8_t)(cp >> 18);
-		buf[1] = 0x80 | (uint8_t)((cp >> 12) & 0x3F);
-		buf[2] = 0x80 | (uint8_t)((cp >> 6) & 0x3F);
-		buf[3] = 0x80 | (uint8_t)(cp & 0x3F);
-		len = 4;
-	} else {
-		/* Invalid codepoint — replacement character U+FFFD */
-		buf[0] = 0xEF; buf[1] = 0xBF; buf[2] = 0xBD;
-		len = 3;
-	}
-	return len;
-}
-
-msString msStringFromCodePoint(int64_t cp) {
-	uint8_t buf[4];
-	int len = msEncodeCodePoint(cp, buf);
-	msString s = msStringNew((const char*)buf, len);
-	if (len == 1 && buf[0] < 0x80) msStrMarkAscii(s.p);
-	else msStrMarkNonAscii(s.p);
-	return s;
-}
-
-void msStringAppendCodePoint(msString* dest, int64_t cp) {
-	uint8_t buf[4];
-	int len = msEncodeCodePoint(cp, buf);
-	if (len == 1) { msStringAppendChar(dest, (char)buf[0]); return; }
-	msStringPrepareAdd(dest, len);
-	memcpy(dest->p->data + dest->len, buf, len);
-	dest->len += len;
-	dest->p->data[dest->len] = '\0';
-	msStrMarkNonAscii(dest->p);
-}
-
 /* Byte-level slice: direct byte offsets into the underlying buffer.
  * Used by lexer, hashing, protocol parsing via .byteSlice() extension. */
 msString msStringByteSlice(msString s, int64_t start, int64_t end) {
@@ -593,69 +469,6 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end) {
 	msString slice = msStringNew(s.p->data + start, end - start);
 	if (msStrKnownAscii(s.p)) msStrMarkAscii(slice.p);
 	return slice;
-}
-
-/* Character-level slice: TypeScript String.prototype.slice() parity.
- * Positions are UTF-16 code unit indices. ASCII fast path for O(1). */
-msString msStringSlice(msString s, int64_t start, int64_t end) {
-	if (s.p == NULL || s.len == 0) return MS_EMPTY_STRING;
-
-	/* ASCII fast path: char positions == byte positions, skip msStringLength */
-	if (msStringIsAscii(s)) {
-		if (start < 0) start = s.len + start;
-		if (end < 0) end = s.len + end;
-		if (start < 0) start = 0;
-		if (end > s.len) end = s.len;
-		if (start >= end) return MS_EMPTY_STRING;
-		return msStringNew(s.p->data + start, end - start);
-	}
-
-	int64_t charLen = msStringLength(s);
-
-	/* Handle negative indices (from end) */
-	if (start < 0) start = charLen + start;
-	if (end < 0) end = charLen + end;
-	if (start < 0) start = 0;
-	if (end > charLen) end = charLen;
-	if (start >= end) return MS_EMPTY_STRING;
-
-	/* Full path: walk UTF-8 in UTF-16 unit space. A boundary landing inside an
-	 * astral pair keeps the TS half: the low half at `start`, the high half at
-	 * `end` (WTF-8-encoded, mirroring what native JS slice yields). */
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	const unsigned char* pend = p + s.len;
-	msString result = msStringNewCap(s.len + 6);
-	int64_t rlen = 0;
-	int64_t charPos = 0;
-
-	while (p < pend && charPos < end) {
-		int seqlen;
-		uint32_t cp = msUtf8Decode(p, pend, &seqlen);
-		if (cp >= 0x10000) {
-			int inHi = charPos >= start && charPos < end;
-			int inLo = charPos + 1 >= start && charPos + 1 < end;
-			if (inHi && inLo) {
-				memcpy(result.p->data + rlen, p, seqlen);
-				rlen += seqlen;
-			} else if (inHi) {
-				rlen += msWtf8EncodeSurrogate(0xD800 + ((cp - 0x10000) >> 10), result.p->data + rlen);
-			} else if (inLo) {
-				rlen += msWtf8EncodeSurrogate(0xDC00 + ((cp - 0x10000) & 0x3FF), result.p->data + rlen);
-			}
-			charPos += 2;
-		} else {
-			if (charPos >= start) {
-				memcpy(result.p->data + rlen, p, seqlen);
-				rlen += seqlen;
-			}
-			charPos += 1;
-		}
-		p += seqlen;
-	}
-
-	result.len = rlen;
-	result.p->data[rlen] = '\0';
-	return result;
 }
 
 /* ===== Transformation ===== */
@@ -821,23 +634,6 @@ int64_t msStringLength(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0;
 	if (msStringIsAscii(s)) return s.len;  /* O(1) for ASCII strings */
 	return msStringLengthWalk((const unsigned char*)s.p->data, s.len);
-}
-
-/* Count Unicode scalar values (codepoints) */
-int64_t msStringUnicodeLength(msString s) {
-	if (s.len == 0 || s.p == NULL) return 0;
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	const unsigned char* end = p + s.len;
-	int64_t count = 0;
-	while (p < end) {
-		unsigned char c = *p;
-		if (c < 0x80) p += 1;
-		else if ((c & 0xE0) == 0xC0) p += 2;
-		else if ((c & 0xF0) == 0xE0) p += 3;
-		else p += 4;
-		count += 1;
-	}
-	return count;
 }
 
 /* ===== Building ===== */
