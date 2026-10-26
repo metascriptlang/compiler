@@ -103,15 +103,12 @@ test "the audit accepts a graph whose counts are its references" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "kept");
-	rcIncref(arr, obj, s);
 	const a = heapAllocArray(arr);
 	heapArrayPush(arr, a, s);
 	rcIncref(arr, obj, s);
-	rcIncref(arr, obj, raiserArray(a));
 	const b = heapAllocBox(arr, raiserArray(a));
 	rcIncref(arr, obj, raiserArray(a));
-	rcIncref(arr, obj, { kind: RaiserValueKind.Box, intVal: b, floatVal: 0.0 });
-		const boxed: RaiserValue = { kind: RaiserValueKind.Box, intVal: b, floatVal: 0.0 };
+	const boxed: RaiserValue = { kind: RaiserValueKind.Box, intVal: b, floatVal: 0.0 };
 	const roots: RaiserValue[] = [s, raiserArray(a), boxed];
 	assert ledgerAudit(arr, obj, roots, "program") == "";
 }
@@ -120,9 +117,7 @@ test "the audit names a heap whose item outlives its roots" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "leaked");
-	rcIncref(arr, obj, s);
 	const o = heapAllocObject(obj);
-	rcIncref(arr, obj, raiserObject(o));
 	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "internal: 1 string items live after strand end";
 	rcDecref(arr, obj, s);
 	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "";
@@ -133,6 +128,5 @@ test "the audit names an item held more often than it is counted" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "twice");
-	rcIncref(arr, obj, s);
 	assert ledgerAudit(arr, obj, [s, s], "program") == "internal: string 0 counts 1 holders but 2 hold it at program end";
 }
