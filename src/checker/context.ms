@@ -1440,9 +1440,11 @@ export class CheckerContext {
 	modulePath: string;          // Implementation parity: source path for name mangling
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	symRecordsOff: boolean;      // true while checking a node macro expansion built
-	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
+	matchExprDepth: number;      // >0 inside a block arm of a match used as a value, where `return <value>` is refused
 	compileTimeBodyDepth: number;
 	matchArmExpected: Type | null;
+	armTails: Node[];
+	returnedMatches: Node[];
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
 	ctorExits: string[][] | null; // the `this.<field>` names assigned on each exit of the constructor body being checked
 	ctorExitsNext: string[][] | null;
@@ -1543,6 +1545,8 @@ export function createContext(): CheckerContext {
 		matchExprDepth: 0,
 		compileTimeBodyDepth: 0,
 		matchArmExpected: null,
+		armTails: [],
+		returnedMatches: [],
 		initTracker: createInitTracker(),
 		ctorExits: null,
 		ctorExitsNext: null,

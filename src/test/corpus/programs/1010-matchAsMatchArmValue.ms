@@ -63,10 +63,10 @@ function inBlock(side: Side, step: int32): int32 {
 	const r = match (side) {
 		Side.Left => {
 			const bump = step + 1;
-			return match (bump) {
+			match (bump) {
 				3 => 2,
 				_ => 1,
-			};
+			}
 		},
 		Side.Right => 0,
 	};

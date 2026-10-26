@@ -3726,7 +3726,7 @@ function checkYield(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.yieldArg, null);
 	const t = d.yieldArg.nodeType;
-	if (t == null || ctx.matchExprDepth > 0) return;
+	if (t == null) return;
 	if (ctx.inferredReturn.kind == TypeKind.Inferred) ctx.inferredReturn = t;
 	else if (ctx.inferredReturn != t) {
 		const joined = joinBranchTypes([ctx.inferredReturn, t]);
@@ -3737,7 +3737,7 @@ function checkYield(ctx: CheckerContext, node: Node): void {
 
 export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boolean {
 	const fn = ctx.currentFunction;
-	if (ctx.matchExprDepth > 0 || !yieldsInferred(fn) || !isUnresolvedType(declaredReturnOf(fn!))) return false;
+	if (!yieldsInferred(fn) || !isUnresolvedType(declaredReturnOf(fn!))) return false;
 	const arg = (node.data as ReturnStmtData).argument;
 	if (arg != null) {
 		addError(ctx, "a generator's 'return' ends it and carries no value: its values are what it yields; write 'return;'", node.location.line, node.location.column);
@@ -3747,7 +3747,7 @@ export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boo
 
 export function checkBareReturn(ctx: CheckerContext, node: Node): void {
 	const fn = ctx.currentFunction;
-	if (fn == null || ctx.matchExprDepth > 0 || ctx.inferredReturn == null) return;
+	if (fn == null || ctx.inferredReturn == null) return;
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.ConstructorDecl) return;
 	if (isGeneratorFlags(routineFlags(fn.declNode))) return;
 	const declared = declaredReturnOf(fn);
@@ -3984,6 +3984,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		let bodyExpected = explicitReturnType;
 		if (isAsync && bodyExpected != null) bodyExpected = asyncBodyType(bodyExpected);
 		const hoistMark = ctx.pendingHoisted.length;
+		if (body.kind == NodeKind.MatchExpr) ctx.returnedMatches.push(body);
 		checkExpr(ctx, body, bodyExpected);
 		let result = body;
 		if (fnNode.kind == NodeKind.ArrowFunction && returnsFromAsyncBody(ctx)) {

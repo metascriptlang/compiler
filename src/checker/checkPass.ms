@@ -609,6 +609,10 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop", node.location.line, node.location.column); } },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
+			if (ctx.armTails.includes(node)) {
+				checkExpr(ctx, d.expr, ctx.matchArmExpected);
+				return;
+			}
 			const prevStmtPos = ctx.stmtPosExpr;
 			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
@@ -2711,6 +2715,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		checkBareReturn(ctx, node);
 		return;
 	}
+	if (ctx.matchExprDepth > 0) {
+		addError(ctx, "`return` here would leave the function, not give this match arm its value: write the value as the arm's last expression",
+			node.location.line, node.location.column);
+		checkExpr(ctx, d.argument, null);
+		return;
+	}
+	if (d.argument.kind == NodeKind.MatchExpr) ctx.returnedMatches.push(d.argument);
 
 	// `return null`: validate assignability with retType=Null FIRST, then stamp
 	// d.argument.nodeType with the declared return type for codegen. The fast-path
@@ -2719,13 +2730,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// `Foo` is non-nullable. Order matters: stamp BEFORE check would compare
 	// the expected type against itself (trivially passes); check BEFORE stamp
 	// compares Null against expected, which is the real safety question.
-	if (d.argument.kind == NodeKind.NullLiteral && ctx.matchExprDepth == 0) {
+	if (d.argument.kind == NodeKind.NullLiteral) {
 		const fnType = ctx.currentFunction != null ? ctx.currentFunction.symbolType : null;
 		const declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
 		if (declared != null) {
 			d.argument.nodeType = nullType();
 			if (isUnresolvedType(declared)) {
-				if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
+				if (ctx.inferredReturn != null) {
 					if (ctx.inferredReturn.kind == TypeKind.Inferred) {
 						ctx.inferredReturn = nullType();
 					} else if (ctx.inferredReturn.kind != TypeKind.Null) {
@@ -2752,16 +2763,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 
 	// Compute the effective expected return type once, use everywhere below.
 	// Rules:
-	//   - Inside a match expression block arm, `return` targets the match result
-	//     (not the enclosing function) — no contextual type flows from the function.
 	//   - For async functions, declared return is Promise<T> but `return X` returns T.
 	//     Unwrap one Awaitable layer so contextual typing (checkExpr), node fitting
 	//     (fitNode), and assignability checking all agree on T — without this, an
 	//     object literal returned from an async function would be matched against
 	//     Promise's fields, not T's.
 	let returnExpected: Type | null = null;
-	if (ctx.matchExprDepth == 0
-		&& ctx.currentFunction != null
+	if (ctx.currentFunction != null
 		&& ctx.currentFunction.symbolType.kind == TypeKind.Function
 		&& ctx.currentFunction.symbolType.typeReturn != null
 		&& !isUnresolvedType(ctx.currentFunction.symbolType.typeReturn)) {
@@ -2772,8 +2780,8 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (errSentinel) {
 		checkExpr(ctx, d.argument, null);
 	} else {
-		checkExpr(ctx, d.argument, ctx.matchExprDepth > 0 ? ctx.matchArmExpected : returnExpected);
-		if (ctx.matchExprDepth == 0 && returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, d.argument, returnExpected));
+		checkExpr(ctx, d.argument, returnExpected);
+		if (returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, d.argument, returnExpected));
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	if (retType != null && isAffineAwaitable(retType) && d.argument.kind == NodeKind.Identifier && d.argument.resolvedSym != null) {

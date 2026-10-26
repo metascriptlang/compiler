@@ -202,6 +202,7 @@ import "./numberLiteralFieldLayout";
 import "./variantIntoObject";
 import "./valueUnionParamWrite";
 import "./asPrecedence";
+import "./matchArmValue";
 import "./unclosedDelimiter";
 import "./keyedAccess";
 import "./literalTypeAssign";

@@ -57,14 +57,14 @@ function matchInsideArm(value: uint32, flag: boolean): Result<uint64, Failure> {
 		0 => {
 			const inner: Result<uint64, Failure> = match (flag) {
 				true => {
-					return Result.ok(1);
+					Result.ok(1)
 				},
 				false => Result.err(Failure.Rejected),
 			};
-			return inner;
+			inner
 		},
 		_ => {
-			return Result.ok(9);
+			Result.ok(9)
 		},
 	};
 	return outer;
@@ -85,7 +85,7 @@ function statementMatch(value: uint32): Result<uint64, Failure> {
 function nullInArm(value: uint32): uint64 {
 	const box: Box | null = match (value) {
 		0 => {
-			return null;
+			null
 		},
 		_ => new Box(),
 	};
