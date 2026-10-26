@@ -824,6 +824,7 @@ export interface RaiserClassType {
 	zeroWordSlots: int64;
 	zeroRefSlots: int64;
 	dynCount: int32;   // the nil values a fresh object holds, one per Dyn slot
+	destroyFn: int32;   // function index of the lifted destroy routine of the type, -1 when the VM destroys its cells by walking them
 }
 
 // A class type with its zero object computed once, so NewObject copies it instead of laying out each slot.
@@ -844,7 +845,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount };
+	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, destroyFn: -1 };
 }
 
 export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
@@ -1111,6 +1112,51 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 			if (data.rc <= 0) { rcDestroyBox(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+	}
+}
+
+// The decrement of a counted handle that reports whether it was the last holder, leaving the destroying to the caller;
+// a nil, constant or future handle is never last.
+export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
+	if (handle == 0) return false;
+	when (mode != "danger") { checkHeapKind(handle); }
+	const index = handleIndex(handle);
+	let last = false;
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Array => { const data: Cursor<RaiserArrayData> = arrHeap.arrays[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.String => { const strings: Cursor<RaiserStringHeap> = arrHeap.strings; strings.rc[index] = strings.rc[index] - 1; last = strings.rc[index] <= 0; },
+		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+	}
+	return last;
+}
+
+// Returns a cell's storage to its heap without touching what it held: the caller has released the contents.
+export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	const index = handleIndex(handle);
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Array => {
+			const data = arrHeap.arrays[index];
+			data.items.length = 0;
+			data.words.length = 0;
+			arrHeap.freeList.push(index);
+		},
+		RaiserHeapKind.Object => {
+			const data: Cursor<RaiserObjectData> = objHeap.objects[index];
+			data.slots.length = 0;
+			data.wordSlots = 0;
+			data.refSlots = 0;
+			data.values.length = 0;
+			data.added.length = 0;
+			objHeap.freeList.push(index);
+		},
+		RaiserHeapKind.String => rcDestroyString(arrHeap, index),
+		RaiserHeapKind.Box => {
+			arrHeap.boxes.items[index].value = raiserNil();
+			arrHeap.boxes.freeList.push(index);
+		},
+		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => { throw new Error(`internal: handle ${handle} names no cell to free`); },
 	}
 }
 
