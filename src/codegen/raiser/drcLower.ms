@@ -7,7 +7,7 @@ import { RaiserCompState, emitInst, allocBlock, allocRef, emitLoadConst, emitBra
 import { getOpByKey } from "../c/types";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
-import { fieldInst, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
+import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
 import {
 	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT,
 	ownershipName, ownershipRow,
@@ -73,8 +73,30 @@ function emitRebind(s: RaiserCompState, name: string, dest: Node, incoming: int3
 	emitInst(s, raiserABC(RaiserOpcode.RcDec, old, 0, 0));
 }
 
+function emitAssignInPlace(s: RaiserCompState, name: string, dest: Node, incoming: int32, oldSource: int32, plan: int32): void {
+	if (placeOf(dest).kind == NodeKind.HiddenDeref) {
+		emitInst(s, raiserABC(RaiserOpcode.AssignInPlace, oldSource, incoming, plan));
+		return;
+	}
+	const incomingHeld = isNilBranch(s, incoming);
+	const rebindIncomingNil = emitJumpPlaceholder(s);
+	patchJumpTo(s, incomingHeld, codeLen(s));
+	const destinationHeld = isNilBranch(s, oldSource);
+	patchJumpTo(s, rebindIncomingNil, codeLen(s));
+	emitRebind(s, name, dest, incoming, oldSource);
+	const toEnd = emitJumpPlaceholder(s);
+	patchJumpTo(s, destinationHeld, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.AssignInPlace, oldSource, incoming, plan));
+	patchJumpTo(s, toEnd, codeLen(s));
+}
+
 function emitStoreInto(s: RaiserCompState, name: string, dest: Node, incoming: int32): void {
 	const oldSource = refRegister(s, name, dest);
+	const plan = aggregateAssignPlan(s, placeOf(dest).nodeType);
+	if (plan >= 0) {
+		emitAssignInPlace(s, name, dest, incoming, oldSource, plan);
+		return;
+	}
 	if (!isInPlaceCell(s, placeOf(dest).nodeType)) {
 		emitRebind(s, name, dest, incoming, oldSource);
 		return;
@@ -141,10 +163,16 @@ function isCellType(type: Type | null): boolean {
 	return isStructType(t) || (t != null && t.kind == TypeKind.Union && isUnionCell(t));
 }
 
+function isSizedArrayType(type: Type | null): boolean {
+	const t = valueCopyRepr(type);
+	return t != null && t.kind == TypeKind.SizedArray;
+}
+
 function isCellHook(call: CallExprData, flag: SymbolFlag): boolean {
 	const sym = call.callee.resolvedSym;
-	return sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && hasFlag(sym, flag) && call.arguments.length == 1
-		&& isCellType(placeOf(call.arguments[0]).nodeType);
+	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || !hasFlag(sym, flag) || call.arguments.length != 1) return false;
+	const type = placeOf(call.arguments[0]).nodeType;
+	return isCellType(type) || isSizedArrayType(type);
 }
 
 function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {

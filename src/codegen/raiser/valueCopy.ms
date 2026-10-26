@@ -152,6 +152,22 @@ export function isInPlaceCell(s: RaiserCompState, valueType: Type | null): boole
 	return t != null && t.kind == TypeKind.Struct && needsValueAssign(s, t);
 }
 
+export function aggregateAssignPlan(s: RaiserCompState, valueType: Type | null): int32 {
+	const t = valueShape(valueType);
+	if (t == null) return -1;
+	if (t.kind == TypeKind.Array) return copyPlan(s, t);
+	if (t.kind == TypeKind.Union && isUnionCell(t) && userHookOf(t, AttachedOp.AttachedDestructor) == null) return copyPlan(s, t);
+	return -1;
+}
+
+export function emitAggregateAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null, sourceIsFresh: boolean): int32 {
+	const plan = aggregateAssignPlan(s, valueType);
+	if (plan < 0) return -1;
+	const incoming = sourceIsFresh ? source : emitValueCopy(s, source, valueType);
+	emitInst(s, raiserABC(RaiserOpcode.AssignInPlace, destination, incoming, plan));
+	return destination;
+}
+
 export function isNilBranch(s: RaiserCompState, reg: int32): int32 {
 	const isNil = allocBool(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, reg, RaiserValueKind.Nil as number));
@@ -325,7 +341,7 @@ export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolea
 		const body = peelToStructOrUnion(t);
 		if (body != null && body.kind == TypeKind.Struct) return false;
 	}
-	if (raiserPlaced() && isUnionCell(t)) return false;
+	if (raiserPlaced() && (isUnionCell(t) || t.kind == TypeKind.SizedArray)) return false;
 	return !needsValueAssign(s, t);
 }
 
