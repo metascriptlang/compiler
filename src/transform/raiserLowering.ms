@@ -23,6 +23,7 @@ import { eraseVoidParamReads } from "./desugar/voidBindLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
+import { lowerTailCall } from "./lowering/tailCallLower";
 import { lowerObjectSpreadEager } from "./desugar/objectSpreadLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
@@ -49,6 +50,7 @@ import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
+import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
@@ -102,6 +104,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
+	result = lowerTailCall(result, ctx);
 	if (placed) result = lowerParamReassign(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
@@ -118,6 +121,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerValueParamSnapshot(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
+	result = lowerBigIntOps(result, ctx);
 	result = lowerUnionTags(result, ctx);
 	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
