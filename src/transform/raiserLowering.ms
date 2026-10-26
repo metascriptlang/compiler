@@ -36,6 +36,7 @@ import { planModuleTdz, guardModuleTdzRaiser } from "./lowering/moduleTdz";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerActorClasses, registerActorTerminators } from "./lowering/actorClassLower";
+import { lowerTimers } from "./lowering/timerLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
@@ -112,6 +113,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerTailCall(result, ctx);
 	if (placed) result = lowerParamReassign(result, ctx);
 	result = lowerActorClasses(result, ctx);
+	result = lowerTimers(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = registerActorTerminators(result, ctx);
