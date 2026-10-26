@@ -415,6 +415,11 @@ export function isIterator(t: Readonly<Type | null>): boolean {
 	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Iterator";
 }
 
+export function isIteratorResult(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "IteratorResult";
+}
+
 export function getIteratorNextFnType(t: Type | null): Type | null {
 	if (t == null || !isIterator(t)) return null;
 	return getProperty(t, "next");
