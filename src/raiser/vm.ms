@@ -388,13 +388,27 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 // because arrays and objects live until the heap is dropped but a string freed by
 // its last holder keeps a long-running loop's memory bounded ---
 
+function isScalarBox(vm: RaiserVM, h: int64): boolean {
+	if (handleHeapKind(h) != RaiserHeapKind.Box) return false;
+	const inner = vm.arrayHeap.boxes.items[handleIndex(h)].value.kind;
+	return inner != RaiserValueKind.Nil && inner < RaiserValueKind.String;
+}
+
+function holdScalarBox(vm: RaiserVM, h: int64): void {
+	if (h != 0 && isScalarBox(vm, h)) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
+}
+
+function releaseScalarBox(vm: RaiserVM, h: int64): void {
+	if (h != 0 && isScalarBox(vm, h)) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
+}
+
 function vmHold(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
-	if (vm.placed) return;
+	if (vm.placed) { if (kind == RaiserValueKind.Box) holdScalarBox(vm, handle); return; }
 	if (vm.orc || kind == RaiserValueKind.String) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
 function vmRelease(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
-	if (vm.placed) return;
+	if (vm.placed) { if (kind == RaiserValueKind.Box) releaseScalarBox(vm, handle); return; }
 	if (vm.orc || kind == RaiserValueKind.String) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
@@ -431,12 +445,14 @@ function isStringHandle(h: int64): boolean {
 
 @inline
 function holdHandle(vm: RaiserVM, h: int64): void {
-	if (h != 0 && !vm.placed && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
+	if (vm.placed) { holdScalarBox(vm, h); return; }
+	if (h != 0 && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 @inline
 function releaseHandle(vm: RaiserVM, h: int64): void {
-	if (h != 0 && !vm.placed && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
+	if (vm.placed) { releaseScalarBox(vm, h); return; }
+	if (h != 0 && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 // The counted store of a handle into the ref file: storing the handle a register already holds
@@ -485,7 +501,9 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs as int64, 0); return; }
 		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs as int64, val.intVal); return; }
 		vmIncref(vm, val);
-		writeRef(vm, abs as int64, heapAllocBox(vm.arrayHeap, val));
+		const box = heapAllocBox(vm.arrayHeap, val);
+		if (vm.placed && isScalarBox(vm, box)) vm.arrayHeap.boxes.items[handleIndex(box)].rc = 0;
+		writeRef(vm, abs as int64, box);
 		return;
 	}
 	if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Int) {
@@ -8394,4 +8412,49 @@ test "a frame unwound by a throw from its finally frees the box of the return it
 		assert vm.error == "" && vm.exitValue.intVal == 8, `${placed} ${vm.error} ${vm.exitValue.intVal}`;
 		assert heapBoxLive(vm.arrayHeap) == 0 && vm.safePoints.length == 0, `${placed} ${heapBoxLive(vm.arrayHeap)} ${vm.safePoints.length}`;
 	}
+}
+
+test "placed: a tag read by LoadField into a Dyn register inside a destroy routine leaves no box behind" {
+	const cell = createClassType("Cell", -1, [], ["n", "child"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	cell.destroyFn = 1;
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 2, 0),
+		raiserABC(RaiserOpcode.LoadInt, 2, immField(7), 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 2), 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 1, 1), 1),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word], [cell, leaf], ["n", "child"]);
+	const destroy = createRaiserFunction("destroy", [
+		raiserABC(RaiserOpcode.LoadField, 1, 0, 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.LoadSlot, 2, 0, 1), 1),
+		raiserABC(RaiserOpcode.RcDec, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], fieldNames(["n", "child"]), 1, 1, 3, [RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Ref]);
+	const vm = execModule(placedModule([main, destroy], true), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.output == "7\n", vm.output;
+	assert heapBoxLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0, `${heapBoxLive(vm.arrayHeap)} ${vmLiveCount(vm)}`;
+}
+
+test "placed: a Dyn register overwritten again and again frees the box each overwrite replaces" {
+	const main = createRaiserFunction("main", [
+		raiserABC(RaiserOpcode.LoadInt, 2, immField(5), 0),
+		raiserABC(RaiserOpcode.Box, 1, 2, 0),
+		raiserABC(RaiserOpcode.Box, 1, 2, 0),
+		raiserABC(RaiserOpcode.Box, 1, 2, 0),
+		raiserABC(RaiserOpcode.Box, 1, 2, 0),
+		raiserABC(RaiserOpcode.Box, 1, 2, 0),
+		raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	], [raiserInt(5)], 0, 0, 3, [RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Word]);
+	const vm = execModule(placedModule([main], true), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.exitValue.intVal == 5, `${vm.exitValue.intVal}`;
+	assert heapBoxLive(vm.arrayHeap) == 0 && vm.arrayHeap.boxes.items.length <= 3, `${heapBoxLive(vm.arrayHeap)} ${vm.arrayHeap.boxes.items.length}`;
 }
