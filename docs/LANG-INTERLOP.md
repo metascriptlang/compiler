@@ -91,6 +91,8 @@ type.
 | `char` | `int8` |
 | `bool` | `boolean` |
 | `char*`, `const char*`, `uint8_t*`, `const uint8_t*` | `cstring` |
+| `char**` parameter | `ref p: Ptr<cchar>`, `cchar` being the header module's `extern type cchar: int8 from "char"` (`uint8` where the target's `char` is unsigned) |
+| `size_t`, `ssize_t`, `uintptr_t`, `intptr_t` | the typedef's own name, declared `extern type size_t: uint64 from "size_t"`; it interchanges with its base, and a pointer to it is `size_t *` in the emitted C |
 | `void*` | `Ptr<void> \| null` |
 | `T*`, `T[N]` (scalar or enum `T`) | `Ptr<T> \| null` |
 | `const T*` (scalar `T`) | `Borrow<T>` |
@@ -101,6 +103,11 @@ type.
 | `enum E { … }` | `E` |
 | function pointer | a function type |
 | `#define FOO 42` | not imported (`Undefined variable 'FOO'` from a named import) |
+
+A variable passed through `Ptr<size_t>` or `ref Ptr<cchar>` is declared with that imported type, because the emitted C spells it `size_t` and `char *`
+and C compares the pointee of `size_t *` and `char **` exactly (`size_t` is `unsigned long` where `uint64_t` is `unsigned long long` on macOS).
+Measured 2026-10-27 with `./msc-cand` and gcc 15.2 on macOS arm64: `src/test/corpus/programs/cImportPointeeIdentity` builds under
+`--cc=gcc-15` (not measured on a GNU host or Windows).
 
 A return type maps the same way without `| null` (`void*` → `Ptr<void>`, read in
 `src/module/cimport/emit.ms`, not measured). Struct field types were not re-measured.
