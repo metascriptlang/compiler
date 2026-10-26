@@ -1208,6 +1208,16 @@ export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int
 	return objectFieldCount(heap.objects[handleIndex(handle)]);
 }
 
+export function heapObjectSetRc(heap: RaiserObjectHeap, handle: int64, rc: int64): void {
+	if (isObjectCell(handle)) setCellRc(seqCellOf(handle), rc);
+	else heap.objects[handleIndex(handle)].rc = rc as int32;
+}
+
+// The count of fields laid out by the class: all of a cell's, and the slots NewObject has laid of a heap object.
+export function heapObjectLaidCount(heap: RaiserObjectHeap, handle: int64): number {
+	return isObjectCell(handle) ? objectCellClass(handle).fields.length : heap.objects[handleIndex(handle)].slots.length;
+}
+
 export function objectCellClass(handle: int64): RaiserClassType {
 	return classTypeAt(cellTypeIndex(seqCellOf(handle)));
 }
