@@ -511,7 +511,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	const sym = node.resolvedSym;
 
-	const sinkParams = calledRoutineType(node)?.typeChildren ?? null;
+	let sinkParams = calledRoutineType(node)?.typeChildren ?? null;
+	if (sinkParams != null && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr && sinkParams.length > 0) sinkParams = sinkParams.slice(1);
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
