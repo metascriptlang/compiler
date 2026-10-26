@@ -28,7 +28,6 @@ import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, c
 import { isSlotUnion, storesUnionTag } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
-import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
@@ -171,7 +170,7 @@ function holdsUnion(node: Node): boolean {
 }
 
 function immLiteral(node: Node): boolean {
-	if (node.kind != NodeKind.NumberLiteral || isFloatExpr(node) || carriesBigInt(node.nodeType)) return false;
+	if (node.kind != NodeKind.NumberLiteral || isFloatExpr(node)) return false;
 	const d = node.data as NumberLiteralData;
 	return d.outOfRangeText == "" && fitsImm(d.intVal);
 }
@@ -560,7 +559,6 @@ function holdsLocation(node: Node): boolean {
 }
 
 function compileExprRaw(s: RaiserCompState, node: Node): int32 {
-	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
@@ -904,11 +902,6 @@ function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, tar
 	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
 	return emitTrapValue(s, msg, node.nodeType);
-}
-
-function refuseBigInt(s: RaiserCompState, node: Node): int32 {
-	queueRaiserCompileError(RAISER_NO_BIGINT_MSG, node.location.line, node.location.column);
-	return emitTrapValue(s, RAISER_NO_BIGINT_MSG, node.nodeType);
 }
 
 function refusePointerOp(s: RaiserCompState, node: Node): int32 {
@@ -2790,7 +2783,8 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	}
 	const display: int64[] = [];
 	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
-	const classType = createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
+	const shown = typeDisplayName(unwrapRef(classSym.symbolType));
+	const classType = createClassType(shown, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
 	const cyclic = slotCyclicOf(classSym.symbolType);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
 	const destroyOp = getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedDestructor);

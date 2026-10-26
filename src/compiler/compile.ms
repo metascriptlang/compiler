@@ -43,7 +43,6 @@ import { inferRaises, markEveryBodyMayRaise } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
-import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
@@ -4969,7 +4968,6 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 		const checked = graphCheckedModule(graph, modPath, mod, opts);
 		checked.ctx.errors = [];
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
-			refuseBigIntOnRaiser(checked.ctx, checked.program);
 			exitOnCheckerErrors(checked.ctx, modPath, mod.rawSource);
 		}
 		unitPaths.push(modPath);
@@ -5051,7 +5049,9 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); });
 
 	if (ctx.lastError != "") {
-		printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
+		const vm = ctx.vm;
+		if (vm == null) throw new Error("internal: a Raiser run reported an error without a VM");
+		console.log(`Error: ${vm.error}`);
 		exit(1);
 	}
 
@@ -5059,7 +5059,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	// rejection — same contract and exit code as msReportOrphanFailures on C.
 	if (ctx.orphanFailures.length > 0) {
 		for (const msg of ctx.orphanFailures) {
-			console.log(`${error("Error")}: unhandled rejection: ${msg}`);
+			console.log(`Error: unhandled rejection: ${msg}`);
 		}
 		exit(1);
 	}
