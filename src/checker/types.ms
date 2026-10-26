@@ -3686,7 +3686,7 @@ function genericHeadKey(roots: Readonly<ModuleNameRoots>, gi: Readonly<Type>): s
 
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
-function typeKey(t: Readonly<Type>): string {
+export function typeKey(t: Readonly<Type>): string {
 	return typeKeyIn(buildModuleNameRoots(), t, []);
 }
 
@@ -5938,7 +5938,26 @@ function sizeOfUnion(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32 {
 		}
 	}
 	const maxAlign = tagAlign > payloadAlign ? tagAlign : payloadAlign;
-	return alignTo(alignTo(tagSize, payloadAlign) + payload, maxAlign);
+	return alignTo(unionPayloadAt(tagSize, payloadAlign) + payload, maxAlign);
+}
+
+function unionPayloadAt(tagSize: int32, payloadAlign: int32): int32 {
+	return alignTo(tagSize, payloadAlign);
+}
+
+export function offsetOfUnionPayload(tg: TargetInfo, t: Readonly<Type>): int32 {
+	if (tg.ptrSize < 4 || t.kind != TypeKind.Union) return SIZE_NOT_COMPUTABLE;
+	const tag = unionTagType(t);
+	const tagSize = tag != null ? sizeOfTypeAt(tg, tag, 1) : 4;
+	if (tagSize < 0) return tagSize;
+	let payloadAlign = 1;
+	if (t.typeChildren != null) {
+		for (const variant of t.typeChildren) {
+			const va = alignOfTypeAt(tg, variant, 1);
+			if (va > payloadAlign) payloadAlign = va;
+		}
+	}
+	return unionPayloadAt(tagSize, payloadAlign);
 }
 
 function alignOfUnion(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32 {
