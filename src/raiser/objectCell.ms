@@ -1,6 +1,5 @@
 import { VmMemory, createVmMemory, newCell, disposeCell, cellRc, setCellRc, setCellRootIdx, cellTypeIndex, cellAllocSize, isLiveCell, liveCellBlocks, ld64, st64 } from "./memory";
-import { RaiserRegClass } from "./bytecode";
-import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, raiserInt, raiserFloat, heapObjectSetField, heapObjectGetField, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldRefusal, heapObjectFieldIndex, heapObjectClass, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
+import { RaiserRegClass } from "./bytecode";import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, objectCellHandle, raiserObject, RAISER_NO_CLASS, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, raiserInt, raiserFloat, heapObjectSetField, heapObjectGetField, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldRefusal, heapObjectFieldIndex, heapObjectClass, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
 
 // An object with a layout is a cell: the reference header, then one 8 byte slot per laid field in layout order.
 // The header's type word indexes the class type table, so a cell knows its class and its destroy routine without a handle
@@ -55,33 +54,29 @@ test "an object cell starts zeroed, keeps its slots and names its class through 
 	assert liveCellBlocks(mem).length == 0;
 }
 
-function cellHandle(cell: int64): int64 {
-	return cell | (RaiserHeapKind.Seq as int64);
-}
-
 test "an object cell's handle reads as an object and a release of the last holder frees the cells it holds" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const t = pointType();
 	const inner = objectCellNew(arr.mem, t, 1);
 	const outer = objectCellNew(arr.mem, t, 1);
-	objectCellSetSlot(outer, 2, cellHandle(inner));
-	assert handleKind(cellHandle(outer)) == RaiserValueKind.Object;
-	assert handleAgrees(RaiserValueKind.Object, cellHandle(outer)) && !handleAgrees(RaiserValueKind.Array, cellHandle(outer));
-	rcIncrefHandle(arr, obj, cellHandle(inner));
-	assert rcCountOf(arr, obj, cellHandle(inner)) == 2;
-	rcDecrefHandle(arr, obj, cellHandle(outer));
-	assert rcCountOf(arr, obj, cellHandle(inner)) == 1;
+	objectCellSetSlot(outer, 2, objectCellHandle(inner));
+	assert handleKind(objectCellHandle(outer)) == RaiserValueKind.Object;
+	assert handleAgrees(RaiserValueKind.Object, objectCellHandle(outer)) && !handleAgrees(RaiserValueKind.Array, objectCellHandle(outer));
+	rcIncrefHandle(arr, obj, objectCellHandle(inner));
+	assert rcCountOf(arr, obj, objectCellHandle(inner)) == 2;
+	rcDecrefHandle(arr, obj, objectCellHandle(outer));
+	assert rcCountOf(arr, obj, objectCellHandle(inner)) == 1;
 	assert liveCellBlocks(arr.mem).length == 1;
-	assert rcDecIsLast(arr, obj, cellHandle(inner));
-	rcFreeHandle(arr, obj, cellHandle(inner));
+	assert rcDecIsLast(arr, obj, objectCellHandle(inner));
+	rcFreeHandle(arr, obj, objectCellHandle(inner));
 	assert liveCellBlocks(arr.mem).length == 0;
 }
 
 test "the host field accessors read and store a cell's laid slots in their classes" {
 	const obj = createStructHeap();
 	const cell = objectCellNew(createArrayHeap().mem, pointType(), 0);
-	const h = cellHandle(cell);
+	const h = objectCellHandle(cell);
 	heapObjectSetField(obj, h, "x", raiserInt(7));
 	heapObjectSetField(obj, h, "y", raiserInt(2));
 	assert heapObjectFieldCount(obj, h) == 3 && heapObjectFieldNameAt(obj, h, 1) == "y";

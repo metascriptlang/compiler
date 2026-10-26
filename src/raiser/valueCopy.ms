@@ -2,10 +2,12 @@ import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
 	heapAllocArray, heapAllocArrayLike, heapArrayUncounted, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	isObjectCell, objectCellClass, objectCellHandle, seqCellOf, handleValue, rcCountOf, OWNED_BY_RECEIVER_RC,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
 	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, raiserFloat, raiserBool
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
+import { objectCellNew, objectCellSlot, objectCellSetSlot } from "./objectCell";
 
 export enum RaiserCopyKind {
 	Preserve,
@@ -68,6 +70,26 @@ function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: Ra
 	return raiserObject(handle);
 }
 
+// A cell copies like a laid heap object: word, float and bool slots as their bits, the others through their plan child.
+function copyCell(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: int64, plans: RaiserCopyPlan[], plan: RaiserCopyPlan): RaiserValue {
+	const cls = objectCellClass(source);
+	const children = laidChildrenOf(plan, cls);
+	const from = seqCellOf(source);
+	const cell = objectCellNew(arrays.mem, cls, OWNED_BY_RECEIVER_RC as int64);
+	for (let f = 0; f < children.length; f += 1) {
+		if (cls.kinds[f] == RaiserRegClass.Ref) {
+			const original = handleValue(objectCellSlot(from, f));
+			let copied = original;
+			if (children[f] >= 0 && !cls.uncounted[f]) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
+			objectCellSetSlot(cell, f, copied.kind == RaiserValueKind.Nil ? 0 : copied.intVal);
+			if (!cls.uncounted[f]) holdCopied(arrays, objects, original, copied);
+		} else {
+			objectCellSetSlot(cell, f, objectCellSlot(from, f));
+		}
+	}
+	return raiserObject(objectCellHandle(cell));
+}
+
 export function copyTypedValue(
 	arrays: RaiserArrayHeap,
 	objects: RaiserObjectHeap,
@@ -94,6 +116,9 @@ export function copyTypedValue(
 			holdCopied(arrays, objects, original, copied);
 		}
 		return raiserArray(handle);
+	}
+	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object && isObjectCell(value.intVal)) {
+		return copyCell(arrays, objects, value.intVal, plans, plan);
 	}
 	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object) {
 		const source = objects.objects[handleIndex(value.intVal)];
@@ -218,4 +243,20 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	}
 	assert outerPlan.laid == outerClass;
 	assert outerPlan.laidChildren.length == 5 && outerPlan.laidChildren[0] == 0 && outerPlan.laidChildren[3] == 1 && outerPlan.laidChildren[4] == 0;
+}
+
+test "a typed copy of an object cell copies its words and holds the references it shares" {
+	const arrays = createArrayHeap();
+	const objects = createStructHeap();
+	const cls: RaiserClassType = createClassType("Node", -1, [], ["w", "next"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const inner = objectCellNew(arrays.mem, cls, 1);
+	const outer = objectCellNew(arrays.mem, cls, 1);
+	objectCellSetSlot(outer, 0, 5);
+	objectCellSetSlot(outer, 1, objectCellHandle(inner));
+	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
+	const copied = copyTypedValue(arrays, objects, raiserObject(objectCellHandle(outer)), [plan], 0);
+	assert copied.intVal != objectCellHandle(outer);
+	assert heapObjectGetField(objects, copied.intVal, "w").intVal == 5;
+	assert heapObjectGetField(objects, copied.intVal, "next").intVal == objectCellHandle(inner);
+	assert rcCountOf(arrays, objects, objectCellHandle(inner)) == 2;
 }
