@@ -1,0 +1,51 @@
+import { Node, NodeKind, CallExprData, Symbol } from "../../ast/node";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
+
+export const ROW_INCREF: int32 = 1;
+export const ROW_DECREF: int32 = 2;
+export const ROW_DECREF_CYCLIC: int32 = 3;
+export const ROW_CLEAR: int32 = 4;
+export const ROW_SINK: int32 = 5;
+export const ROW_NO_LOWERING: int32 = 6;
+export const ROW_SHARE: int32 = 7;
+
+const rows = new HashMap<string, int32>();
+
+function define(row: int32, names: string[]): void {
+	for (const name of names) rows.set(name, row);
+}
+
+define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
+define(ROW_DECREF, [
+	"msDecref", "msAtomicDecref", "msStringDecref", "msClosureDestroy",
+	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayAtomicRefDestroy",
+	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msAtomicRefArrayDestroy",
+]);
+define(ROW_DECREF_CYCLIC, ["msDecrefCyclic"]);
+define(ROW_CLEAR, [
+	"msPtrWasMoved", "msClosureWasMoved", "msStringWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
+	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
+]);
+define(ROW_SINK, ["msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink"]);
+define(ROW_SHARE, ["msStringCopy"]);
+define(ROW_NO_LOWERING, [
+	"msPlainWasMoved", "msHeldCount", "msDestroyLeftNoRef", "msDecrefCyclicEdge", "msDropDefer", "msOrcTraceRef",
+	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayAtomicRefCopy",
+	"msArrayClosureCopy",
+]);
+
+export function ownershipName(sym: Symbol | null): string {
+	if (sym == null || !hasFlag(sym, SymbolFlag.CompilerProc)) return "";
+	return sym.nativeName != "" ? sym.nativeName : sym.name;
+}
+
+export function ownershipRow(sym: Symbol | null): int32 {
+	const name = ownershipName(sym);
+	return name != "" && rows.has(name) ? rows.get(name)! : 0;
+}
+
+export function refuseOwnershipCall(call: Node): void {
+	if (call.kind != NodeKind.CallExpr) return;
+	const sym = (call.data as CallExprData).callee.resolvedSym;
+	if (ownershipRow(sym) != 0) throw new Error(`internal: Raiser has no lowering for ${ownershipName(sym)} outside statement position`);
+}

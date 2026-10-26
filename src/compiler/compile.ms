@@ -48,7 +48,7 @@ import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
 import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps, rankOpModules, enterModuleOps, leaveModuleOps } from "../codegen/c/types";
-import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
+import { sealRuntimeProcs, compilerFuncSym, enterCompilerFuncs, leaveCompilerFuncs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag, sealRoutineFlags } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
@@ -5232,7 +5232,17 @@ function entryExports(unitCtxs: CheckerContext[], unitPaths: string[], entryPath
 	return entry != null ? entry.symbols : [];
 }
 
-export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
+function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: WriteSummaries): Node {
+	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
+	try {
+		ctx.gcMode = GcMode.Drc;
+		return analyzeProgram(program, ctx, tables);
+	} finally {
+		leaveCompilerFuncs(outer);
+	}
+}
+
+export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false, placed: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
@@ -5275,6 +5285,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	} else {
 		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	}
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
@@ -5282,10 +5293,12 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const mod = findModule(graph, unitPaths[i]);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformForRaiser(comptimeResolved, modCtx, true, true, opts.mode != MODE_DANGER);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, placed, true, opts.mode != MODE_DANGER);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
+		const analyzed = placed ? analyzeForRaiser(transformed, modCtx, writeTables) : transformed;
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
-		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
+		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: analyzed };
 		modules.push(input);
 	}
 
@@ -5294,7 +5307,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : [], placed);
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
@@ -5320,7 +5333,7 @@ export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: R
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string = ""): void {
 	const t0 = performance.now();
-	const raiserMod = compileRaiser(filePath, opts);
+	const raiserMod = compileRaiser(filePath, opts, null, false, true);
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
