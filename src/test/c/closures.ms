@@ -120,3 +120,49 @@ test "E2E C: a closure env whose closure goes to a native method named by its ow
 	const info = envTypeInfo(c.ok ? c.value : "", "outer_arrow");
 	assert info.contains(".destroyFn = dollarEnv_outer_arrow"), info;
 }
+
+const ROUTINE_AT_USE = (decl: string, use: string) => `class Tree { v: int32 = 0; kids: Tree[] = []; }
+function eachKid(t: Tree, f: (k: Tree) => void): void { for (const k of t.kids) f(k); }
+${decl} {
+	let total: int32 = 0;
+	const walk = (t: Tree): void => { total += weight(t); eachKid(t, walk); };
+	${use}
+}`;
+
+function ownsRoutineLocal(c: string): boolean {
+	return c.contains("msClosure walk_") || c.contains("msClosureDestroy(walk_");
+}
+
+function lineBefore(c: string, marker: string): string {
+	const lines = c.split("\n");
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i].contains(marker)) return lines[i - 1];
+	}
+	return `<no line ${marker}>`;
+}
+
+test "E2E C: a nested routine that never escapes is rebuilt from its frame env at each use, with no owning closure local" {
+	const c = compileToC(ROUTINE_AT_USE("function sum(root: Tree, weight: (t: Tree) => int32): int32", "walk(root); eachKid(root, walk); return total + weight(root);") + "\nconsole.log(sum(new Tree(), (t: Tree): int32 => t.v));");
+	assert c.ok, c.ok ? "" : c.error;
+	assert !ownsRoutineLocal(c.ok ? c.value : ""), c.ok ? c.value : "";
+}
+
+test "E2E C: a nested routine of a generator is rebuilt from its resume env at each use, with no owning closure local" {
+	const c = compileToC(ROUTINE_AT_USE("function* sums(root: Tree, weight: (t: Tree) => int32): Iterator<int32>", "walk(root); yield total; eachKid(root, walk); yield total + weight(root);") + "\nfor (const s of sums(new Tree(), (t: Tree): int32 => t.v)) console.log(s);");
+	assert c.ok, c.ok ? "" : c.error;
+	assert !ownsRoutineLocal(c.ok ? c.value : ""), c.ok ? c.value : "";
+}
+
+test "E2E C: a nested routine of an async function is rebuilt from its resume env at each use, with no owning closure local" {
+	const c = compileToC(ROUTINE_AT_USE("async function sum(root: Tree, weight: (t: Tree) => int32): Promise<int32>", "walk(root); await Promise.resolve(0); eachKid(root, walk); return total + weight(root);") + "\nconsole.log(await sum(new Tree(), (t: Tree): int32 => t.v));");
+	assert c.ok, c.ok ? "" : c.error;
+	assert !ownsRoutineLocal(c.ok ? c.value : ""), c.ok ? c.value : "";
+}
+
+test "E2E C: a nested routine stored into an array is pushed as a counted copy of its frame env" {
+	const c = compileToC(ROUTINE_AT_USE("const kept: ((t: Tree) => void)[] = [];\nfunction keep(root: Tree, weight: (t: Tree) => int32): int32", "kept.push(walk); walk(root); return total;") + "\nconsole.log(keep(new Tree(), (t: Tree): int32 => t.v));");
+	assert c.ok, c.ok ? "" : c.error;
+	const text = c.ok ? c.value : "";
+	assert !ownsRoutineLocal(text), text;
+	assert lineBefore(text, "msGenericArrayPush(kept").contains("msIncrefCyclic("), text;
+}
