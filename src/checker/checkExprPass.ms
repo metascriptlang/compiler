@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes } from "./resolvePass";
+import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes, refuseViewField } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -2653,6 +2653,9 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			pi = pi + 1;
 		}
 		judgeSpreadFields(ctx, d, null);
+		for (let fi = 0; fi < fieldNames.length && fi < fieldTypes.length; fi += 1) {
+			refuseViewField(ctx, fieldNames[fi], "object literal", fieldTypes[fi], node.location.line, node.location.column);
+		}
 		const anonName = anonStructName(fieldNames, fieldTypes);
 		const built = spelled(createStruct(anonName, fieldNames, fieldTypes, false));
 		if (optionalNames.length > 0) built.optionalFields = optionalNames;
