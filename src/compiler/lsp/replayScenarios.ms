@@ -64,7 +64,7 @@ export function projectUri(dir: string): string {
 // Every frame of `wire` with `from` replaced by `to`, framed again.
 export function replaceInFrames(wire: string, from: string, to: string): string {
 	let out = "";
-	for (const body of lspSplitFrames(wire)) out += lspFormatMessage(body.replaceAll(from, to));
+	for (const body of lspSplitFrames(wire)) out += lspFormatMessage(body.split(from).join(to));
 	return out;
 }
 

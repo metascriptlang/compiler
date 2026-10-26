@@ -1071,9 +1071,9 @@ function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps
 		} else if (plan.outputStem == "" && token == basename(plan.input)) {
 			args.push(basename(inputs[0]));
 		} else if (plan.implibStub != "" && token.indexOf(plan.implibStub, 0) >= 0) {
-			args.push(token.replaceAll(plan.implibStub, plan.implib));
+			args.push(token.split(plan.implibStub).join(plan.implib));
 		} else if (plan.outputStem != "" && token.indexOf(basename(plan.outputStem), 0) >= 0) {
-			args.push(token.replaceAll(plan.outputStem, realStem).replaceAll(basename(plan.outputStem), basename(realStem)));
+			args.push(token.split(plan.outputStem).join(realStem).split(basename(plan.outputStem)).join(basename(realStem)));
 		} else {
 			args.push(token);
 		}
