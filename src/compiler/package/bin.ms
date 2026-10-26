@@ -38,7 +38,7 @@ export function isAbsoluteEntry(entry: string): boolean {
 }
 
 export function leavesPackage(entry: string): boolean {
-	return entry.contains("..");
+	return entry.split("/").includes("..");
 }
 
 export function commandEntryError(cmd: string, entry: string): string {
@@ -119,6 +119,13 @@ test "an entry must be a relative .ms path inside the package" {
 	assert commandEntryError("c", "../outside/cli.ms") != "";
 	assert commandEntryError("c", "tooling\\cli.ms") != "";
 	assert commandEntryError("c", "tooling/cli") != "";
+}
+
+test "a parent segment leaves the package and a dotted name does not" {
+	assert leavesPackage("../a.ms");
+	assert leavesPackage("src/../../a.ms");
+	assert !leavesPackage("src/a..b.ms");
+	assert commandEntryError("x", "src/a..b.ms") == "";
 }
 
 test "validateBin reports one error per bad entry" {
