@@ -231,9 +231,10 @@ export enum RaiserOpcode {
 	ArrayFill,        // ABC: every element of R[A] becomes R[B], each evicted element released
 	ArraySliceCopy,   // ABC: R[A] = a new array of R[B] over [R[C], R[C+1]); a negative bound counts from the end, both clamp
 	ArrayConcat,      // ABC: R[A] = a new array of the elements of R[B] then those of R[C]
+	AssignInPlace,    // ABC: the aggregate in refs[A] takes the contents of the one in refs[B] and keeps its own cell: its old contents are released by copy plan C, B's cell is emptied and freed, refs[B] = nil; a destination that is B's cell stays
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.ArrayConcat;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.AssignInPlace;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -374,6 +375,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue => "y--",
 		RaiserOpcode.WasMoved => "x--",
 		RaiserOpcode.SinkValue => "yy-",
+		RaiserOpcode.AssignInPlace => "yy-",
 		RaiserOpcode.RcHeld | RaiserOpcode.RcKeptCheck => "yi-",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
@@ -811,5 +813,6 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.RcKeptCheck, 1) == RaiserRole.Int;
 	assert opRole(RaiserOpcode.ArrayPop, 0) == RaiserRole.Any && opRole(RaiserOpcode.ArrayPop, 1) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.ArraySplice3, 1) == RaiserRole.Any && opRole(RaiserOpcode.ArraySplice3, 2) == RaiserRole.IntPair;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.ArrayConcat, 2) == RaiserRole.Ref;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.None;
 }

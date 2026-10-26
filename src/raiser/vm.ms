@@ -2892,7 +2892,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3207,6 +3207,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.SinkValue => {
 			vmSinkValue(vm, ia, ib, func.copyPlans, ic);
+		},
+		RaiserOpcode.AssignInPlace => {
+			vmAssignInPlace(vm, ia, ib, func.copyPlans, ic);
 		},
 		RaiserOpcode.RcHeld => {
 			vm.regs.words[vm.wordBase + ib] = rcCountOf(vm.arrayHeap, vm.objectHeap, vm.regs.refs[vm.refBase + ia]);
@@ -3707,6 +3710,48 @@ function vmSinkValue(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPlan[]
 	if (old == next) return;
 	vm.regs.refs[vm.refBase + ia] = next;
 	vmDestroyAggregate(vm, old, plans, planIndex);
+	vmDrain(vm);
+}
+
+function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPlan[], planIndex: int32): void {
+	const dest = vm.regs.refs[vm.refBase + ia];
+	const source = vm.regs.refs[vm.refBase + ib];
+	if (dest == source) return;
+	const kind = handleHeapKind(dest);
+	if (dest == 0 || source == 0 || kind != handleHeapKind(source) || (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Object)) {
+		vmError(vm, "internal: AssignInPlace needs two cells of one aggregate kind");
+		return;
+	}
+	if (!vm.placed || rcCountOf(vm.arrayHeap, vm.objectHeap, source) != 1) {
+		vmError(vm, "internal: AssignInPlace takes a sole-owned source in a placed module");
+		return;
+	}
+	vm.dropNest += 1;
+	vmReleaseByPlan(vm, dest, plans, planIndex);
+	const d = handleIndex(dest);
+	const s = handleIndex(source);
+	if (kind == RaiserHeapKind.Array) {
+		const to = vm.arrayHeap.arrays[d];
+		const from = vm.arrayHeap.arrays[s];
+		const items = to.items; to.items = from.items; from.items = items;
+		const words = to.words; to.words = from.words; from.words = words;
+		const elemClass = to.elemClass; to.elemClass = from.elemClass; from.elemClass = elemClass;
+		const viewOff = to.viewOff; to.viewOff = from.viewOff; from.viewOff = viewOff;
+		const viewLen = to.viewLen; to.viewLen = from.viewLen; from.viewLen = viewLen;
+		const elemCyclic = to.elemCyclic; to.elemCyclic = from.elemCyclic; from.elemCyclic = elemCyclic;
+	} else {
+		const to: Cursor<RaiserObjectData> = vm.objectHeap.objects[d];
+		const from: Cursor<RaiserObjectData> = vm.objectHeap.objects[s];
+		const slots = to.slots; to.slots = from.slots; from.slots = slots;
+		const wordSlots = to.wordSlots; to.wordSlots = from.wordSlots; from.wordSlots = wordSlots;
+		const refSlots = to.refSlots; to.refSlots = from.refSlots; from.refSlots = refSlots;
+		const values = to.values; to.values = from.values; from.values = values;
+		const added = to.added; to.added = from.added; from.added = added;
+		const classType = to.classType; to.classType = from.classType; from.classType = classType;
+	}
+	vm.regs.refs[vm.refBase + ib] = 0;
+	vmFreeCell(vm, source);
+	vm.dropNest -= 1;
 	vmDrain(vm);
 }
 
@@ -8198,4 +8243,60 @@ test "a return through a finally frees the box that held it, placed or not" {
 	const plain = returnThroughFinally(false);
 	assert plain.error == "" && plain.exitValue.intVal == 7, plain.error;
 	assert heapBoxLive(plain.arrayHeap) == 0, `${heapBoxLive(plain.arrayHeap)}`;
+}
+
+test "placed: AssignInPlace gives an array behind a pointer the source's elements, releases the old ones and frees the source cell" {
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+		raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),
+		raiserABC(RaiserOpcode.WasMoved, 1, 0, 0),
+		raiserABC(RaiserOpcode.Move, 2, 0, 0),
+		raiserABC(RaiserOpcode.RcInc, 2, 0, 0),
+		slotted(raiserABC(RaiserOpcode.NewArray, 3, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.ArrayPush, 3, 1, 0),
+		raiserABC(RaiserOpcode.WasMoved, 1, 0, 0),
+		raiserABC(RaiserOpcode.NewObject, 4, 1, 0),
+		raiserABC(RaiserOpcode.ArrayPush, 3, 4, 0),
+		raiserABC(RaiserOpcode.WasMoved, 4, 0, 0),
+		raiserABC(RaiserOpcode.AssignInPlace, 0, 3, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
+	main.copyPlans = [copyPlan(RaiserCopyKind.Array, [], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
+	const vm = execModule(placedModule([main], true), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
+	const dest = vm.arrayHeap.arrays[handleIndex(vm.regs.refs[0])];
+	assert dest.words.length == 2 && dest.rc == 2, `${dest.words.length} ${dest.rc}`;
+	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 1 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
+}
+
+test "placed: AssignInPlace gives a union behind a pointer the source's tag and payload, releases the old payload and frees the source cell" {
+	const union = createClassType("U", -1, [], ["_tag", "v0"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 2, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 1, 1), 1),
+		raiserABC(RaiserOpcode.WasMoved, 1, 0, 0),
+		raiserABC(RaiserOpcode.Move, 2, 0, 0),
+		raiserABC(RaiserOpcode.RcInc, 2, 0, 0),
+		raiserABC(RaiserOpcode.NewObject, 3, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 4, 2, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 3, 1, 4), 1),
+		raiserABC(RaiserOpcode.WasMoved, 4, 0, 0),
+		raiserABC(RaiserOpcode.AssignInPlace, 0, 3, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref], [union, leaf], ["_tag", "v0"]);
+	const arm = copyPlan(RaiserCopyKind.Object, ["v0"], [2]);
+	const whole: RaiserCopyPlan = { kind: RaiserCopyKind.Union, names: ["_tag"], children: [1], discriminants: [0], laid: RAISER_NO_CLASS, laidChildren: [] };
+	main.copyPlans = [whole, arm, copyPlan(RaiserCopyKind.Object, [], [])];
+	const vm = execModule(placedModule([main], true), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
+	const dest = vm.objectHeap.objects[handleIndex(vm.regs.refs[0])];
+	assert handleIndex(dest.slots[1]) == 3 && dest.rc == 2, `${handleIndex(dest.slots[1])} ${dest.rc}`;
+	assert vmLiveCount(vm) == 2 && vm.objectHeap.freeList.length == 2, `${vmLiveCount(vm)}`;
 }
