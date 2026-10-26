@@ -35,7 +35,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName, raiserRefUnion, raiserFlatCellUnion } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -895,7 +895,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				}
 				return;
 			}
-			if (lctx.raiserBackend && raiserRefUnion(fieldType)) {
+			if (lctx.raiserBackend && raiserBareUnion(fieldType)) {
 				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
 				return;
 			}
@@ -1436,7 +1436,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
 		const firstOwn = owner != null ? owner.typeNames.length : 0;
 		if (objType.kind == TypeKind.Union) {
-			if (lctx.raiserBackend && raiserRefUnion(objType)) {
+			if (lctx.raiserBackend && raiserBareUnion(objType)) {
 				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
 			} else if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
@@ -1665,7 +1665,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	for (const field of objType.typeChildren) propagateToOwner(objType, field);
 	if (userHook) objType.typeFlags = objType.typeFlags.incl(TypeFlag.HasAsgn);
 	if (hasAsgnFlag(objType)) orig.typeFlags = orig.typeFlags.incl(TypeFlag.HasAsgn);
-	if (lctx.raiserBackend && !userHook && objType.kind == TypeKind.Union && raiserRefUnion(objType)) {
+	if (lctx.raiserBackend && !userHook && objType.kind == TypeKind.Union && raiserBareUnion(objType)) {
 		nameSetAdd(lctx.trivial, typeId);
 		return;
 	}

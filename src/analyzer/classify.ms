@@ -251,12 +251,16 @@ export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
 	return true;
 }
 
-// A Raiser union whose members are all class refs stays the member's handle, with no tag beside it.
-export function raiserRefUnion(t: Type): boolean {
+// A Raiser union whose members are class refs, strings or scalars stays the member's own value, with no tag
+// beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
+export function raiserBareUnion(t: Type): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
 	for (const child of t.typeChildren) {
-		if (child.kind != TypeKind.Ref || isAtomicRef(child)) return false;
-		if (child.sym != null && child.sym.symbolKind == SymbolKind.Actor) return false;
+		if (child.kind == TypeKind.Ref) {
+			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && !isPrimitiveKind(child.kind)) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -379,7 +383,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			if (isAllStringLiteralUnion(t)) {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
-			if (ctx.raiserBackend && raiserRefUnion(t) && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
+			if (ctx.raiserBackend && raiserBareUnion(t) && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
