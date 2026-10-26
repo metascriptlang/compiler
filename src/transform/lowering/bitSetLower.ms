@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
@@ -6,7 +6,8 @@ import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
 import { hoistStmtValue } from "../blockExpand";
-import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { moveWhileTestIntoBody, moveDoWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { lowerForStmt } from "./forLoopLower";
 import { DeclKind } from "../../ast/node";
 
 function byteType(): Type { return createPrimitive(TypeKind.Uint8); }
@@ -454,7 +455,7 @@ export function isImpureArrayOp(node: Node): boolean {
 	return cloneIfPure(d.left) == null || cloneIfPure(d.right) == null;
 }
 
-export function containsImpureArrayOp(expr: Node): boolean {
+export function containsImpureArrayOp(expr: Node | null): boolean {
 	if (expr == null || expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) return false;
 	if (isImpureArrayOp(expr)) return true;
 	let found = false;
@@ -463,6 +464,13 @@ export function containsImpureArrayOp(expr: Node): boolean {
 		return child;
 	});
 	return found;
+}
+
+function forHeaderHasImpureOp(d: ForStmtData): boolean {
+	let init: Node | null = d.forInit;
+	if (init != null && init.kind == NodeKind.VariableDecl) init = (init.data as VariableDeclData).initializer;
+	else if (init != null && init.kind == NodeKind.ExprStmt) init = (init.data as ExprStmtData).expr;
+	return containsImpureArrayOp(init) || containsImpureArrayOp(d.forCondition) || containsImpureArrayOp(d.forUpdate);
 }
 
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
@@ -482,6 +490,15 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		moveWhileTestIntoBody(stmt, pre, cond);
 		return [stmt];
 	}
+	if (stmt.kind == NodeKind.DoWhileStmt) {
+		const pre: Node[] = [];
+		const d = stmt.data as DoWhileStmtData;
+		if (!containsImpureArrayOp(d.doCondition)) return [stmt];
+		const cond = hoistArrayOperands(d.doCondition, pre, ctx);
+		moveDoWhileTestIntoBody(stmt, pre, cond, ctx);
+		return [stmt];
+	}
+	if (stmt.kind == NodeKind.ForStmt) return forHeaderHasImpureOp(stmt.data as ForStmtData) ? [lowerForStmt(stmt, ctx)] : [stmt];
 	return hoistStmtValue(stmt, hoistArrayOperands, ctx);
 }
 
