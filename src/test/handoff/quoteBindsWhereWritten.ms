@@ -163,6 +163,7 @@ function typeCases(quoted: string, use: string, type: string, label: string): st
 	return failures([
 		buildFailure([lib, callerOf(callerNamesakes, use, type)], label + " beside a caller namesake"),
 		buildFailure([lib, callerOf("", use, type)], label + " with no caller namesake"),
+		buildFailure([lib, callerOf(callerNamesakes + `function inGeneric<T>(x: T): ${type} { return ${use}; }\n`, "inGeneric(\"s\")", type)], label + " inside a generic function"),
 	]);
 }
 
