@@ -6,7 +6,7 @@ import { error, dim } from "../utils/color";
 import { msModuleExtensions, stripMsModuleExtension } from "../module/resolver";
 
 
-export function printTiming(label: string, t0: number): void {
+export function printTiming(label: string, t0: float64): void {
 	const elapsed = performance.now() - t0;
 	const ms = "" + elapsed;
 	const display = ms.slice(0, ms.length < 6 ? ms.length : 6);
