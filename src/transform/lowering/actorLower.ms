@@ -51,6 +51,7 @@ function typeMsgKind(t: Type | null): string {
 	if (t == null) return "ptr";
 	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";
+	if (t.kind == TypeKind.Union && unwrapRefNullUnion(t) != null) return "ptr";
 	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) return typeMsgKind(t.typeReturn);
 	if (literalBase(t) != t) return typeMsgKind(literalBase(t));
 	const result = match (t.kind) {
