@@ -111,7 +111,7 @@ function main(): void { console.log(declared("a") + reassigned("b")); }
 `);
 	assert c.ok;
 	const declared = bodyOf(c.value, "declared");
-	assert declared.contains("(&n_1_, s);");
+	assert declared.contains("(&n_1_, s_p0);");
 	assert !declared.contains("n_1_ = T");
-	assert bodyOf(c.value, "reassigned").contains("(&n_1_, s);");
+	assert bodyOf(c.value, "reassigned").contains("(&n_1_, s_p0);");
 }
