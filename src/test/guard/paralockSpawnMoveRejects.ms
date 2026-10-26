@@ -162,3 +162,41 @@ function pushSharedIntoOwner(): int32 {
 	const f = spawn(() => { bag.items[0].n = 1; return bag.items.length; }, { move: [bag] }); // GUARD-REFUSED
 	return await f + shared.n;
 }
+
+// 16 — an alias kept before `c = move a` is an alias of c's graph.
+function aliasBeforeMoveChain(): int32 {
+	let a: Counter = { n: 0 };
+	const keep = a;
+	const c = move a;
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
+	keep.n = 2;
+	return await f;
+}
+
+// 17 — the alias is behind a second move: `b = move a; c = move b`.
+function aliasBeforeTwoStepChain(): int32 {
+	let a: Counter = { n: 0 };
+	const keep = a;
+	let b = move a;
+	const c = move b;
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
+	keep.n = 2;
+	return await f;
+}
+
+// 18 — the alias is a field store, and a closure capture, of the moved-from source.
+function fieldAliasBeforeMove(): int32 {
+	let a: Counter = { n: 0 };
+	const box: Box = { c: a };
+	const c = move a;
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
+	return await f + box.c.n;
+}
+
+function closureAliasBeforeMove(): int32 {
+	let a: Counter = { n: 0 };
+	const peek = (): int32 => a.n;
+	const c = move a;
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
+	return await f + peek();
+}

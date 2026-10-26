@@ -1757,8 +1757,24 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 			return true;
 		},
 	};
-	if (rhs == null || w.reported || isFreshValue(rhs, scope)) return;
+	if (rhs == null || w.reported) return;
+	if (followMovedSource(rhs, w)) return;
+	if (isFreshValue(rhs, scope)) return;
 	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
+}
+
+// `move a` hands over a's graph, so the receiver is the sole owner only when `a` was: the check
+// follows the chain to the source binding, whose own escapes before the move are refused.
+function followMovedSource(rhs: Node, w: OwnerWalk): boolean {
+	const p = peelView(rhs);
+	if (p.kind != NodeKind.MoveExpr) return false;
+	const arg = peelHidden((p.data as MoveExprData).moveArg);
+	const src = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (src == null || src == w.sym || !typeCarriesRef(src.symbolType)) return false;
+	const before = w.ctx.errors.length;
+	checkMoveSoleOwner(w.ctx, src, [], p, w.at);
+	if (w.ctx.errors.length > before) w.reported = true;
+	return true;
 }
 
 function requireFreshBinding(init: Node | null, w: OwnerWalk): void {
