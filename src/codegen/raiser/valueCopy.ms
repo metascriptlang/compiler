@@ -229,7 +229,8 @@ function isValueStruct(t: Type | null): boolean {
 
 export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (!raiserPlaced()) return layoutOperand(s, fields, kinds);
-	const destroyOp = t != null && (t.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
+	const body = t != null && t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
+	const destroyOp = t != null && body != null && (body.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
 	if (fields.length == 0 && destroyOp == null) return 0;
 	const classType = createClassType("", -1, [], fields, kinds);
 	const cyclic = slotCyclicOf(t);
