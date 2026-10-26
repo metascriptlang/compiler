@@ -1,3 +1,4 @@
+// @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 class Conn {
 	id: int32;
 	constructor(id: int32) { this.id = id; }
