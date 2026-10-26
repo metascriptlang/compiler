@@ -9,7 +9,7 @@ import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, routineFlags, routineSuspends, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -567,26 +567,6 @@ function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): bool
 		scope = scope.parent;
 	}
 	return false;
-}
-
-function routineFlags(decl: Node | null): string {
-	let d = decl;
-	while (d != null && d.kind == NodeKind.DecoratedDecl) {
-		d = (d.data as DecoratedDeclData).decoratedNode;
-	}
-	if (d == null) return "";
-	return match (d.kind) {
-		NodeKind.FunctionDecl => (d.data as FunctionDeclData).fnFlags,
-		NodeKind.MethodDecl => (d.data as MethodDeclData).methodFlags,
-		NodeKind.ArrowFunction => (d.data as ArrowFunctionData).arrowFlags,
-		NodeKind.FunctionExpr => (d.data as FunctionExprData).funcExprFlags,
-		_ => "",
-	};
-}
-
-function routineSuspends(fn: Symbol | null): boolean {
-	if (fn == null) return false;
-	return hasFlag(fn, SymbolFlag.Async) || isGeneratorFlags(routineFlags(fn.declNode));
 }
 
 function capturesView(ctx: CheckerContext, name: string, sym: Symbol): boolean {

@@ -4,7 +4,7 @@ import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cm
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -1056,6 +1056,26 @@ export function isGenericFn(flags: string): boolean {
 export function isGeneratorFlags(flags: string): boolean {
 	return findFlagSegment(flags, "generator") == "generator" ||
 		findFlagSegment(flags, "async_generator") == "async_generator";
+}
+
+export function routineFlags(decl: Node | null): string {
+	let d = decl;
+	while (d != null && d.kind == NodeKind.DecoratedDecl) {
+		d = (d.data as DecoratedDeclData).decoratedNode;
+	}
+	if (d == null) return "";
+	return match (d.kind) {
+		NodeKind.FunctionDecl => (d.data as FunctionDeclData).fnFlags,
+		NodeKind.MethodDecl => (d.data as MethodDeclData).methodFlags,
+		NodeKind.ArrowFunction => (d.data as ArrowFunctionData).arrowFlags,
+		NodeKind.FunctionExpr => (d.data as FunctionExprData).funcExprFlags,
+		_ => "",
+	};
+}
+
+export function routineSuspends(fn: Symbol | null): boolean {
+	if (fn == null) return false;
+	return hasFlag(fn, SymbolFlag.Async) || isGeneratorFlags(routineFlags(fn.declNode));
 }
 
 export function routineKindFlag(flags: string): string {
