@@ -437,6 +437,25 @@ void msPoolWakeWorker(int schedulerID) {
 	}
 }
 
+/* Every worker is parked with no wake, task or loop message addressed to it, and
+ * mainIdle holds. A worker parks and wakes only under the pool lock, so the answer
+ * describes one instant. */
+bool msPoolQuiescentWith(bool (*mainIdle)(void)) {
+	msThreadPool* pool = gPool;
+	if (pool == NULL) return msPoolPendingPeek() == 0 && mainIdle();
+	MS_LOCK(pool);
+	bool idle = pool->head == pool->tail && msPoolPendingPeek() == 0;
+	uint64_t parked = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
+	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_acquire);
+	for (int i = 0; idle && i < count; i++) {
+		if (msPoolThreadState[i] == MS_THREAD_RETIRED) continue;
+		idle = ((parked >> i) & 1) != 0 && !atomic_load_explicit(&msPoolActorWake[i], memory_order_acquire);
+	}
+	if (idle) idle = mainIdle();
+	MS_UNLOCK(pool);
+	return idle;
+}
+
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void) {
 	msThreadPool* pool = msPoolGet();

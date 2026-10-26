@@ -144,6 +144,7 @@ struct msIoEngine {
 /* ===== Request Pool ===== */
 
 static msIoRequest* allocRequest(msIoEngine* e) {
+	msIoOpsAdd(1);
 	if (e->freeList != NULL) {
 		msIoRequest* r = e->freeList;
 		e->freeList = r->next;
@@ -155,6 +156,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
+	msIoOpsAdd(-1);
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
