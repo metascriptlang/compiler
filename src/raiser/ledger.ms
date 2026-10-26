@@ -55,8 +55,12 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	const freeArrays = freeFlags(arr.arrays.length, arr.freeList);
 	const freeObjects = freeFlags(obj.objects.length, obj.freeList);
 	const freeBoxes = freeFlags(arr.boxes.items.length, arr.boxes.freeList);
-	for (const root of roots) tallyRef(tally, root);
-	for (const bytes of stringBytesHandles(arr)) tallyRef(tally, raiserArray(bytes));
+	const stringBytes = stringBytesHandles(arr);
+	for (const root of roots) {
+		if (root.kind == RaiserValueKind.Array && stringBytes.includes(root.intVal)) continue;
+		tallyRef(tally, root);
+	}
+	for (const bytes of stringBytes) tallyRef(tally, raiserArray(bytes));
 	for (let i = 0; i < arr.arrays.length; i += 1) {
 		const handle = makeHandle(i, RaiserHeapKind.Array);
 		if (freeArrays[i] || !arrayHoldsHandles(arr, handle)) continue;

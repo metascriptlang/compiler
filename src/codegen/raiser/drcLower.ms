@@ -299,6 +299,13 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	const row = ownershipRow(d.callee.resolvedSym);
 	if (row == 0) return false;
 	const name = ownershipName(d.callee.resolvedSym);
+	if (row == ROW_COPY_VALUE && d.arguments.length == 1) {
+		const source = refRegister(s, name, d.arguments[0]);
+		const copied = emitValueCopy(s, source, placeOf(d.arguments[0]).nodeType);
+		if (copied == source) emitInst(s, raiserABC(RaiserOpcode.RcInc, source, 0, 0));
+		else emitInst(s, raiserABC(RaiserOpcode.Move, source, copied, 0));
+		return true;
+	}
 	if (row == ROW_COPY_VALUE && d.arguments.length != 2) throw new Error(`internal: Raiser has no lowering for ${name} with ${d.arguments.length} argument(s) in statement position`);
 	if (row == ROW_INCREF) emitInst(s, raiserABC(RaiserOpcode.RcInc, refRegister(s, name, d.arguments[0]), 0, 0));
 	else if (row == ROW_DECREF) emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 0, 0));
