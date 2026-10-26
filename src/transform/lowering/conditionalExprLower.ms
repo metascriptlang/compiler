@@ -48,6 +48,7 @@ import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
+import { cloneTargetIfPure } from "../place";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
@@ -743,7 +744,7 @@ function compoundReadsTargetFirst(bd: BinaryExprData, rhsPre: Node[], writes: Sy
 }
 
 function readCompoundTarget(bd: BinaryExprData, pre: Node[], ctx: TransformContext, loc: SourceLocation): void {
-	const read = cloneIfPure(bd.left);
+	const read = cloneTargetIfPure(bd.left);
 	if (read == null) throw new Error(`internal: compound target ${bd.left.kind} is not a re-readable place`);
 	const sym = freshOwnedSym(ctx, "ord", bd.left.nodeType);
 	const decl = makeVarDecl(sym.name, read, DeclKind.Const, loc);

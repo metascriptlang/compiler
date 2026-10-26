@@ -9,12 +9,23 @@ import { makeCall, cloneIdent, makeMember, makeArrayAccess, makeNumber, makeHidd
 // anything or move anything — identifiers, field chains over them, and indexes
 // that are themselves identifiers or literals.
 export function cloneIfPure(node: Node): Node | null {
+	return cloneReread(node, false);
+}
+
+// A compound target the closure lowering rewrote to an env field sits behind a cast of the env
+// pointer; re-reading that cast evaluates nothing. Other callers use cloneIfPure, where a cast
+// receiver must stay "not a place" (bitSetLower, extension receivers).
+export function cloneTargetIfPure(node: Node): Node | null {
+	return cloneReread(node, true);
+}
+
+function cloneReread(node: Node, throughCasts: boolean): Node | null {
 	if (node.kind == NodeKind.Identifier) {
 		return cloneIdent(node, node.location);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		const obj = cloneIfPure(d.object);
+		const obj = cloneReread(d.object, throughCasts);
 		if (obj == null) return null;
 		const c = makeMember(obj, d.property, node.location);
 		c.nodeType = node.nodeType;
@@ -23,9 +34,9 @@ export function cloneIfPure(node: Node): Node | null {
 	}
 	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		const arr = cloneIfPure(d.array);
+		const arr = cloneReread(d.array, throughCasts);
 		if (arr == null) return null;
-		const idx = cloneIfPure(d.index);
+		const idx = cloneReread(d.index, throughCasts);
 		if (idx == null) return null;
 		const c = makeArrayAccess(arr, idx, node.location);
 		c.nodeType = node.nodeType;
@@ -47,24 +58,24 @@ export function cloneIfPure(node: Node): Node | null {
 	// same pair transparently when it hoists assignment-target effects.
 	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) {
 		const d = node.data as HiddenDerefData;
-		const inner = cloneIfPure(d.expr);
+		const inner = cloneReread(d.expr, throughCasts);
 		if (inner == null) return null;
 		const c = node.kind == NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
 		c.nodeType = node.nodeType;
 		return c;
 	}
-	if (node.kind == NodeKind.TypeAssertion) {
+	if (throughCasts && node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		const inner = cloneIfPure(d.asExpr);
+		const inner = cloneReread(d.asExpr, throughCasts);
 		if (inner == null) return null;
 		const c = createNodeAt(NodeKind.TypeAssertion, { asExpr: inner, asType: d.asType } as TypeAssertionData, node.location);
 		c.nodeType = node.nodeType;
 		c.flags = node.flags;
 		return c;
 	}
-	if (isVariantRead(node)) {
+	if (throughCasts && isVariantRead(node)) {
 		const d = node.data as HiddenStdConvData;
-		const inner = cloneIfPure(d.convExpr);
+		const inner = cloneReread(d.convExpr, throughCasts);
 		if (inner == null) return null;
 		const c = createNodeAt(NodeKind.HiddenSubConv, { convExpr: inner, convType: d.convType } as NodeData, node.location);
 		c.nodeType = node.nodeType;
@@ -76,7 +87,7 @@ export function cloneIfPure(node: Node): Node | null {
 		const d = node.data as CallExprData;
 		const args: Node[] = [];
 		for (const a of d.arguments) {
-			const c = cloneIfPure(a);
+			const c = cloneReread(a, throughCasts);
 			if (c == null) return null;
 			args.push(c);
 		}
