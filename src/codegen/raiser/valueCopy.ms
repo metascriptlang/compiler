@@ -1,5 +1,7 @@
 import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
+import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { getOpByKey } from "../c/types";
+import { isSlotUnion } from "../../checker/fit";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
@@ -211,7 +213,7 @@ function isValueStruct(t: Type | null): boolean {
 
 export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (!raiserPlaced()) return layoutOperand(s, fields, kinds);
-	const destroyOp = t != null ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
+	const destroyOp = t != null && (t.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
 	if (fields.length == 0 && destroyOp == null) return 0;
 	const classType = createClassType("", -1, [], fields, kinds);
 	const cyclic = slotCyclicOf(t);
@@ -303,6 +305,18 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 
 const MAX_TYPE_DEPTH = 32;
 
+function isStructSlotUnion(t: Type): boolean {
+	if (!isSlotUnion(t)) return false;
+	for (const child of t.typeChildren) {
+		if (!isStructType(child)) return false;
+	}
+	return true;
+}
+
+export function isUnionCell(t: Type): boolean {
+	return t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || isStructSlotUnion(t));
+}
+
 export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
 	const t = skipModifier(pointee);
 	if (t == null) return false;
@@ -311,6 +325,7 @@ export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolea
 		const body = peelToStructOrUnion(t);
 		if (body != null && body.kind == TypeKind.Struct) return false;
 	}
+	if (raiserPlaced() && isUnionCell(t)) return false;
 	return !needsValueAssign(s, t);
 }
 
