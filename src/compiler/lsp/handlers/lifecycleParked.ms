@@ -16,7 +16,7 @@ function testQueryResult(json: string, id: int32): JsonValue {
 	const parsed = parseJson(json);
 	if (!parsed.ok) throw new Error(parsed.error);
 	const message = parsed.value;
-	if (message.kind != JsonKind.Object || message.keys.indexOf("result") < 0
+	if (message.kind != JsonKind.Object || !message.keys.includes("result")
 		|| message.getDynamicField("jsonrpc").asString() != "2.0"
 		|| message.getDynamicField("id").asInt32(-1) != id
 		|| message.getDynamicField("error").kind != JsonKind.Null) {
