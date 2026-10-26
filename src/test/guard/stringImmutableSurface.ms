@@ -5,7 +5,7 @@
 //   every backend. The checker rejects index-assign (`s[i] = c`, compound
 //   forms too) and length-assign; the byte-mutation story is the uint8[]
 //   buffer tier (asBytes/asString). The C engine keeps its INTERNAL mutation
-//   tier (msStringSetChar/SetLength/SetSlice) — this guard pins the surface,
+//   tier (msStringSetLength/SetSlice) — this guard pins the surface,
 //   not the engine.
 //
 // WHAT IT CATCHES: a checker refactor dropping the surface rejection. The

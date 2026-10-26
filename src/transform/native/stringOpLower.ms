@@ -7,7 +7,6 @@
 //   s == ""      →  s.length === 0        (optimization)
 //   s < t        →  msStringCompare(s, t) < 0
 //   s + t        →  msStringConcat(s, t)  (2-part; 3+ already handled by stringConcatFlatten)
-//   s[i] = ch    →  msStringPrepareMutation(&s), msStringSetChar(&s, i, ch)
 //
 // Self-append fast paths (route to in-place amortized append):
 //   x = x + y                         → msStringAppend(&x, y)
@@ -52,14 +51,6 @@ function rewriteStringOp(node: Node, w: WriteEffects, readFirst: Node[], ctx: Tr
 	}
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
-
-	// String indexed assignment: s[i] = ch → msStringSetChar call
-	if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess) {
-		const ad = d.left.data as ArrayAccessData;
-		if (isStringTyped(ad.array)) {
-			return rewriteStringIndexAssign(ad.array, ad.index, d.right, node);
-		}
-	}
 
 	// String self-append: x = x + y → msStringAppend(&x, y)
 	// Reference parity: standard compiler recognizes this pattern and rewrites to in-place append.
@@ -232,19 +223,6 @@ function concatReadingTargetFirst(node: Node, ctx: TransformContext): void {
 	concat.nodeType = d.left.nodeType;
 	d.operator = "=";
 	d.right = concat;
-}
-
-// ===== String Index Assignment =====
-// s[i] = ch → (msStringPrepareMutation(&s), msStringSetChar(&s, i, ch))
-// Produces a comma expression wrapped in parentheses
-
-function rewriteStringIndexAssign(arr: Node, idx: Node, val: Node, original: Node): Node {
-	const loc = original.location;
-	// Build: msStringSetChar(s, i, ch) — codegen will handle & for the first arg
-	// since mutating methods use the & prefix convention
-	const setCall = makeCall(runtimeRef("msStringSetChar", loc), [arr, idx, val], loc);
-	setCall.nodeType = original.nodeType;
-	return setCall;
 }
 
 // ===== Helpers =====

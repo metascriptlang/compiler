@@ -410,7 +410,6 @@ when (mscDeclaresRuntime) {
 	extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
 
 	@compilerFunc
-	extern function msStringSetChar(s: Ptr<void>, idx: int64, ch: string): void;
 
 	@compilerFunc
 	extern function msStringConcat(a: string, b: string): string;

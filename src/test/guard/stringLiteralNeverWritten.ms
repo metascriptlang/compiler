@@ -6,7 +6,7 @@
 //   with the ASCII answer baked in, so a write is not merely wrong — it is a
 //   fault. The language surface stays immutable regardless; that half is
 //   pinned by stringImmutableSurface.ms, which deliberately excludes the
-//   ENGINE tier (msStringSetChar/SetLength/SetSlice). This guard pins the tier
+//   ENGINE tier (msStringSetLength/SetSlice). This guard pins the tier
 //   the sibling leaves out.
 //
 // WHAT IT CATCHES: an in-place op that writes a terminator or memmoves without

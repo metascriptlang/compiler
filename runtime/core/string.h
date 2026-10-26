@@ -373,9 +373,6 @@ msString msStringConcatArr(msString* arr, int64_t count);
  * msStringConcatArr. */
 void msStringAppendArr(msString* dest, const msString* arr, int64_t count);
 
-/* Set character at index (mutating) — requires prior msStringPrepareMutation */
-void msStringSetChar(msString* s, int64_t idx, msString ch);
-
 /* Number/bool to string */
 msString msIntToString(int64_t value);
 msString msUint64ToString(uint64_t value);

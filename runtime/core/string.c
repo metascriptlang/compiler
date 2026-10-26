@@ -282,16 +282,6 @@ void msStringAppendArr(msString* dest, const msString* arr, int64_t count) {
 	msStringDecref(snap);
 }
 
-void msStringSetChar(msString* s, int64_t idx, msString ch) {
-	if (idx < 0 || idx >= s->len || s->p == NULL) return;
-	msStringPrepareMutation(s);
-	if (ch.len > 0 && ch.p != NULL) {
-		s->p->data[idx] = ch.p->data[0];
-	} else {
-		s->p->data[idx] = '\0';
-	}
-}
-
 /* ===== Splitting & Joining ===== */
 
 /* ===== Parsing ===== */
