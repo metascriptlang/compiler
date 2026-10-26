@@ -78,7 +78,7 @@ export function hostTarget(): TargetInfo {
 
 // Predefined macro as a (name, value) pair. The preprocessor ingests these
 // before reading any source file so #if branches take the correct path.
-export interface MacroDef {
+interface MacroDef {
 	name: string;
 	value: string;
 }

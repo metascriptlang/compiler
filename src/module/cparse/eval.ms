@@ -10,7 +10,7 @@
 
 import { CToken, CTokenKind } from "./token";
 
-export interface EvalResult {
+interface EvalResult {
 	value: int64;
 	tok: CToken;    // token position after the evaluated expression
 	ok: boolean;

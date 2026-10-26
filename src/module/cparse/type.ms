@@ -212,7 +212,7 @@ export function isInteger(ty: CType): boolean {
 		ty.kind == CTypeKind.Enum;
 }
 
-export function isFlonum(ty: CType): boolean {
+function isFlonum(ty: CType): boolean {
 	return ty.kind == CTypeKind.Float || ty.kind == CTypeKind.Double ||
 		ty.kind == CTypeKind.LongDouble;
 }
@@ -227,10 +227,6 @@ export function isPointer(ty: CType): boolean {
 
 export function isArray(ty: CType): boolean {
 	return ty.kind == CTypeKind.Array;
-}
-
-export function isFunc(ty: CType): boolean {
-	return ty.kind == CTypeKind.Func;
 }
 
 export function isAggregate(ty: CType): boolean {

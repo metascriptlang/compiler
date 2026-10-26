@@ -351,7 +351,7 @@ function toLower(ch: int32): int32 {
 	return ch;
 }
 
-export function convertPPInt(tok: CToken): boolean {
+function convertPPInt(tok: CToken): boolean {
 	const s = tok.stringVal;
 	let p = 0;
 	const len = s.byteLength;
@@ -432,7 +432,7 @@ export function convertPPInt(tok: CToken): boolean {
 	return true;
 }
 
-export function convertPPNumber(tok: CToken, diags: Diagnostic[]): void {
+function convertPPNumber(tok: CToken, diags: Diagnostic[]): void {
 	if (convertPPInt(tok)) return;
 
 	const val = tok.stringVal.parseFloat();
@@ -622,14 +622,6 @@ export function tokenizeFile(source: string, path: string): TokenizeResult {
 
 export function equal(tok: CToken, str: string): boolean {
 	return tok.stringVal == str;
-}
-
-export function skipTok(tok: CToken, str: string, diags: Diagnostic[]): CToken {
-	if (tok.stringVal != str) {
-		diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col,
-			`expected '${str}'`));
-	}
-	return tok.next;
 }
 
 export function consume(tok: CToken, str: string): boolean {
