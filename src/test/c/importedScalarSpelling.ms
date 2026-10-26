@@ -2,6 +2,7 @@
 // name in C, so a pointer to it matches the C prototype (`size_t *`, `char **`) that a strict
 // C compiler checks. The base keeps its checker meaning: the imported name and the base interchange.
 
+import { builtinIncludeDir } from "../../utils/path";
 import { compileToC, compileProjectToCWithStd } from "../helpers";
 
 const prelude = "extern type CChar: uint8 from \"char\";\nextern type CSize: uint64 from \"size_t\";\nextern struct Node;\n";
@@ -73,4 +74,30 @@ test "importedScalarSpelling: the emitted C never includes a parse-only stub hea
 		assert !c.contains("typedef " + name), name;
 		assert !c.contains(" " + name + ";\ntypedef"), name;
 	}
+}
+
+test "importedScalarSpelling: an @include of a standard header reaches the C by the author's name" {
+	const c = compileProjectToCWithStd([
+		{ entryPath: "/proj/main.ms", entrySource: "import { sz } from \"./a.h\";\n@include(\"stdint.h\");\nconsole.log(sz(null));\n" },
+		{ entryPath: "/proj/a.h", entrySource: "#include <stdint.h>\nint64_t sz(int64_t *n);\n" },
+	], "/proj/main.ms");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("cparse/include");
+	assert c.contains("#include \"stdint.h\"") || c.contains("#include <stdint.h>");
+}
+
+test "importedScalarSpelling: std/crypto encoding emits no parse-only stub include" {
+	const c = compileProjectToCWithStd([
+		{ entryPath: "/proj/main.ms", entrySource: "import { encodeHex } from \"std/crypto/encoding\";\nconst d: uint8[] = [1, 2];\nconsole.log(d.encodeHex());\n" },
+	], "/proj/main.ms");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("cparse/include");
+}
+
+test "importedScalarSpelling: an @include that names a parse-only stub header never reaches the emitted C" {
+	const c = compileProjectToCWithStd([
+		{ entryPath: "/proj/main.ms", entrySource: "@include(\"" + builtinIncludeDir() + "/stdint.h\");\nconsole.log(1);\n" },
+	], "/proj/main.ms");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("cparse/include");
 }

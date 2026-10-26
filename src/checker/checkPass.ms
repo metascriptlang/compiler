@@ -17,7 +17,7 @@ import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
 import { env, cwd } from "std/process";
 import { parseAsBuildOf } from "../parser/context";
 import { backendName, backendOfExtension } from "../module/resolver";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, isBuiltinStubHeader } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
@@ -3618,8 +3618,10 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	const name = md.macroName;
 	if (name == "include") {
 		const modDir = getModuleDir(ctx.modulePath);
+		const header = moduleRelativeHeader(arg0Str, modDir);
+		if (isBuiltinStubHeader(header)) return;
 		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-		ctx.includeDirectives = ctx.includeDirectives + moduleRelativeHeader(arg0Str, modDir);
+		ctx.includeDirectives = ctx.includeDirectives + header;
 		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + modDir));
 	} else if (name == "compile") {
 		if (ctx.compileDirectives != "") ctx.compileDirectives = ctx.compileDirectives + "\n";
