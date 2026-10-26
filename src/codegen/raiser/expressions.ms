@@ -2,8 +2,8 @@
 // AST expression nodes → typed bytecode instructions.
 
 import { resolveOverloadWinner, overloadAt } from "../c/names";
-import { getOpByKey, hasLiftedOp } from "../c/types";
-import { refuseOwnershipCall } from "./drcRows";
+import { getOpByKey } from "../c/types";
+import { refuseOwnershipCall, ownershipRow, ROW_HELD } from "./drcRows";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol, AttachedOp,
@@ -21,7 +21,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
@@ -1642,6 +1642,11 @@ function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
+	if (raiserPlaced() && ownershipRow(d.callee.resolvedSym) == ROW_HELD) {
+		const held = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.RcHeld, compileExpr(s, d.arguments[0]), held, 0));
+		return held;
+	}
 	if (raiserPlaced()) refuseOwnershipCall(node);
 	const nsCallee = namespaceMemberIdent(d.callee);
 	if (nsCallee != null) {
@@ -2617,9 +2622,12 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	const display: int64[] = [];
 	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
 	const classType = createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
-	if (raiserPlaced() && hasLiftedOp(classSym.symbolType, AttachedOp.AttachedDestructor)) {
-		classType.destroyFn = routineIndex(s, getOpByKey(classSym.symbolType, AttachedOp.AttachedDestructor));
+	if (raiserPlaced()) {
+		const cyclic = slotCyclicOf(classSym.symbolType);
+		for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
 	}
+	const destroyOp = raiserPlaced() ? getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedDestructor) : null;
+	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
 	s.classTypes.push(classType);
 	return s.classTypes.length;
 }

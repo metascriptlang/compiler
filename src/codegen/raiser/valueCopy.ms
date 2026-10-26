@@ -5,7 +5,9 @@ import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, M
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isPlainFunctionPointer } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
+import { createNameSet } from "../../transform/context";
+import { canFormAcycle } from "../../transform/cycles";
+import { raiserPlaced, RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
@@ -281,6 +283,21 @@ export function layoutOf(t: Type | null): string[] {
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }
 
+const cyclicTypes = createNameSet();
+const acyclicTypes = createNameSet();
+
+export function isCyclicType(t: Type | null): boolean {
+	return raiserPlaced() && canFormAcycle(t, cyclicTypes, acyclicTypes);
+}
+
+export function slotCyclicOf(t: Type | null): boolean[] {
+	const shape = peelToStructOrUnion(t);
+	const flags: boolean[] = [];
+	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && isCyclicType(shape.typeChildren[i]));
+	return flags;
+}
+
 // The register class each slot of layoutOf(t) holds.
 export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
@@ -301,7 +318,7 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 
 // An array holds its elements in the register class of their type.
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType)));
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {
