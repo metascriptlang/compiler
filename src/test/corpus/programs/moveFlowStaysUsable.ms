@@ -6,6 +6,7 @@
 // @stdout: loop-break 1
 // @stdout: spawn-if-return 6
 // @stdout: spawn-loop-rebind 16
+// @stdout: top-level 2
 // @exit: 0
 // note: a `move` that no later path uses stays accepted: the join keeps a move only on a path that reaches the use, a loop may move a binding it rebinds before the next iteration, and a move followed by `break` or `return` ends the path
 
@@ -86,3 +87,9 @@ console.log(`loop-rebind ${await loopRebind(io)}`);
 console.log(`loop-break ${await loopBreak(io)}`);
 console.log(`spawn-if-return ${await spawnIfReturn(true)}`);
 console.log(`spawn-loop-rebind ${await spawnLoopRebind()}`);
+let topLevel = 0;
+for (let r = 0; r < 2; r = r + 1) {
+	const fresh = new T();
+	topLevel = topLevel + await io.bump(move fresh);
+}
+console.log(`top-level ${topLevel}`);

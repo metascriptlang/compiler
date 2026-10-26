@@ -3227,6 +3227,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 // ===== Check Program Body =====
 
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
+	ctx.topProgram = program;
 	const stmts = program.data as ProgramData;
 	const hoistMark = ctx.pendingHoisted.length;
 	let i = 0;

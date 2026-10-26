@@ -21,6 +21,7 @@
 // GUARD-CHECK-FAIL 'inLoop' is moved inside a loop
 // GUARD-CHECK-FAIL 'spawnFor' is moved inside a loop
 // GUARD-CHECK-FAIL 'spawnWhile' is moved inside a loop
+// GUARD-CHECK-FAIL cannot move 'topAlias': it is not the sole owner
 // GUARD-CHECK-FAIL cannot move 'viaAlias': it is not the sole owner
 
 interface Counter { n: int32; }
@@ -101,3 +102,9 @@ await actorAlias(io);
 console.log(await spawnIf(true));
 await spawnForLoop();
 await spawnWhileLoop();
+for (let r = 0; r < 2; r = r + 1) {
+	const topHeld = new T();
+	let topAlias = topHeld;
+	await io.bump(move topAlias);
+	topHeld.n = 100;
+}

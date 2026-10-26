@@ -1414,6 +1414,7 @@ export class CheckerContext {
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
 	currentModule: Module;
+	topProgram: Node | null;   // the module body being checked: the owner walk of a move in top-level code
 	exportRegistry: ExportRegistry;
 	adoptedDecls: HashMap<Node, Symbol>;
 	adoptedParams: HashMap<Node, Symbol[]>;
@@ -1512,6 +1513,7 @@ export function createContext(): CheckerContext {
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
+		topProgram: null,
 		exportRegistry: createExportRegistry(),
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		adoptedParams: new HashMap<Node, Symbol[]>(),

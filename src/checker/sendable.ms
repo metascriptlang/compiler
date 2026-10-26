@@ -1895,7 +1895,7 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 		addError(ctx, "cannot move '" + sym.name + "': it is a module-level binding that every function in the module can reach — move a binding local to one function" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
-	const body = enclosingBody(ctx);
+	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
 	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: false, reported: false };
 	if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {
