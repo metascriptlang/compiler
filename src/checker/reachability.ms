@@ -1133,9 +1133,9 @@ test "source dependencies keep callees without demanding unlifted runtime ops" {
 	callee.modulePath = "native.ms";
 	callee.builtinKind = "BoxRefArray";
 	call.callee.resolvedSym = callee;
-	call.arguments[0].nodeType = createArray(
-		createStruct("SourceDependencyElement", ["label"], [stringType()], true),
-	);
+	const element = createStruct("SourceDependencyElement", ["label"], [stringType()], true);
+	element.sym = makeSymbol("SourceDependencyElement", SymbolKind.Interface, element, false);
+	call.arguments[0].nodeType = createArray(element);
 	const graph = createModuleGraph();
 	const source = computeAliveSet([parsed.value], ["engine.ms"], "engine.ms", false,
 		graph, [], [], [], true, true);
