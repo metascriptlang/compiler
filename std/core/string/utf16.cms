@@ -8,12 +8,28 @@
 import { asBytes, byteSlice, byteIsAscii } from "./bytes";
 
 extern function msStringNew(data: cstring, length: int64): string;
-extern function msStringLength(s: string): int64;
 extern function msStringAsciiChar(byte: uint8): string;
 extern function msStringMarkAscii(s: string): void;
 extern function msStringMarkNonAscii(s: string): void;
 extern function msStringPrepareAdd(dest: Ptr<string>, addLen: int64): void;
 extern function msStringAppendChar(dest: Ptr<string>, c: char): void;
+
+// Stride-1 on purpose: a lead-byte skip loop gets if-converted to a select under LTO, which
+// serializes every step on the load (~6x); with a fixed advance there is nothing to serialize.
+@noinline
+function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
+	let count: int64 = 0;
+	for (let i: int64 = 0; i < b.length; i++) {
+		const c = b[i];
+		count += ((c & 0xC0) != 0x80 ? 1 : 0) + (c >= 0xF0 ? 1 : 0);
+	}
+	return count;
+}
+
+@exportName("msStringLength")
+function msStringLength(s: string): int64 {
+	return byteIsAscii(s) ? s.asBytes().length : utf16UnitsOf(s.asBytes());
+}
 
 const astralBase = 0x10000;
 const replacement = 0xFFFD;
