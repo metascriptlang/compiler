@@ -12,9 +12,10 @@ import {
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
 	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
-	isSeqHandle, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
+	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
-import { cellRootIdx, setCellRootIdx } from "./memory";
+import { cellRootIdx, setCellRootIdx, liveCellBlocks } from "./memory";
+import { objectCellNew, objectCellSlot, objectCellSetSlot } from "./objectCell";
 import { RaiserRegClass } from "./bytecode";
 
 const COL_BLACK = 0;   // in use / alive (alloc default)
@@ -99,7 +100,12 @@ function pushSlot(env: OrcEnv, owner: int64, index: int32, held: RaiserValue): v
 
 function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64): void {
 	const kind = handleHeapKind(h);
-	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) {
+	if (isObjectCell(h)) {
+		const cyclic = objectCellClass(h).cyclic;
+		for (let i = 0; i < cyclic.length; i += 1) {
+			if (cyclic[i]) pushSlot(env, h, i as int32, handleValue(objectCellSlot(seqCellOf(h), i)));
+		}
+	} else if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) {
 		if (!heapArrayCyclic(arrHeap, h) || !arrayHoldsHandles(arrHeap, h)) return;
 		const count = arrayHeldCount(arrHeap, h);
 		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, arrayHeldAt(arrHeap, h, i));
@@ -113,6 +119,10 @@ function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: Orc
 }
 
 function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: int64, index: int32): void {
+	if (isObjectCell(owner)) {
+		objectCellSetSlot(seqCellOf(owner), index, 0);
+		return;
+	}
 	if (isSeqHandle(owner)) {
 		arrayHeldStore(arrHeap, owner, index, raiserNil());
 		return;
@@ -458,4 +468,38 @@ test "orcUnregister swaps the last root into the freed slot and a freed cell sta
 	assert obj.objects[handleIndex(b)].color >> 2 == 1;
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
 	assert obj.objects[handleIndex(a)].rc == 1 && obj.objects[handleIndex(c)].rc == 1;
+}
+
+test "orcCollect frees a ring of object cells, clearing each slot before its destroy runs" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const ring = createClassType("Ring", -1, [], ["next"], [RaiserRegClass.Ref]);
+	ring.cyclic[0] = true;
+	const a = objectCellNew(arr.mem, ring, 1);
+	const b = objectCellNew(arr.mem, ring, 1);
+	objectCellSetSlot(a, 0, objectCellHandle(b));
+	objectCellSetSlot(b, 0, objectCellHandle(a));
+	orcRegisterCandidate(arr, obj, objectCellHandle(a));
+	const calls: int64[] = [];
+	const destroy: OrcDestroy = (h: int64): void => {
+		assert objectCellSlot(seqCellOf(h), 0) == 0;
+		calls.push(h);
+		rcDecrefHandle(arr, obj, h);
+	};
+	assert orcCollect(arr, obj, destroy) == 2;
+	assert calls.length == 2 && liveCellBlocks(arr.mem).length == 0;
+}
+
+test "orcCollect keeps an object cell ring that an outside holder still counts" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const ring = createClassType("Ring", -1, [], ["next"], [RaiserRegClass.Ref]);
+	ring.cyclic[0] = true;
+	const a = objectCellNew(arr.mem, ring, 2);
+	const b = objectCellNew(arr.mem, ring, 1);
+	objectCellSetSlot(a, 0, objectCellHandle(b));
+	objectCellSetSlot(b, 0, objectCellHandle(a));
+	orcRegisterCandidate(arr, obj, objectCellHandle(a));
+	assert orcCollect(arr, obj, (h: int64): void => { assert false; }) == 0;
+	assert liveCellBlocks(arr.mem).length == 2 && objectCellSlot(a, 0) == objectCellHandle(b);
 }
