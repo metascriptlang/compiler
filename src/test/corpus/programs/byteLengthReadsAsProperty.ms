@@ -1,5 +1,3 @@
-// @xfail(js): `.byteLength` on a plain uint8[] literal reads the missing typed-array property; the rewrite to `.length` awaits a candidate build
-// @xfail(esm): `.byteLength` on a plain uint8[] literal reads the missing typed-array property; the rewrite to `.length` awaits a candidate build
 // @stdout: 3 3 6 3 | 4 4 | 5 5 | 7 | 0
 // note: byteLength on a Buffer, on a uint8[] and on a string is a number property, as on a node Buffer; on the raiser (and js) the extension method of the same name used to be returned as a function value, so `b.byteLength as int32` miscompiled.
 
