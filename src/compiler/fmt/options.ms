@@ -9,11 +9,6 @@ export enum TrailingComma {
 	None,
 }
 
-export enum ArrowParens {
-	Always,
-	Avoid,
-}
-
 export interface FormatOptions {
 	printWidth: int32;      // Default: 80
 	tabWidth: int32;        // Default: 2
@@ -21,8 +16,6 @@ export interface FormatOptions {
 	semi: boolean;           // Default: true
 	singleQuote: boolean;    // Default: false
 	trailingComma: TrailingComma; // Default: All
-	bracketSpacing: boolean; // Default: true
-	arrowParens: ArrowParens; // Default: Always
 	source: string;          // Original source text (for raw token extraction)
 }
 
@@ -35,8 +28,6 @@ export function defaultFormatOptions(): FormatOptions {
 		semi: true,
 		singleQuote: false,
 		trailingComma: TrailingComma.All,
-		bracketSpacing: true,
-		arrowParens: ArrowParens.Always,
 	};
 }
 
