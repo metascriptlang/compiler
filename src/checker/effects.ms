@@ -155,6 +155,14 @@ function checkHookEffects(ctx: CheckerContext): void {
 	}
 }
 
+export function checkActorHookEffects(hook: Node, hookName: string, actorName: string): void {
+	deferEffectCheck(hook, "actorHook", (ctx: CheckerContext): void => {
+		const c = walkRoutine(hook, Effect.Suspends);
+		if (c == null) return;
+		addError(ctx, "lifecycle hook '" + hookName + "' of '" + actorName + "' must not spawn, await or call a function value, but it " + c.text, hook.location.line, hook.location.column);
+	});
+}
+
 function cause(site: Node, what: string): EffectCause {
 	return { site, text: what + " at " + site.location.line + ":" + site.location.column };
 }
@@ -680,6 +688,23 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
 }
 
+function isMessageToAnotherActor(call: Node): boolean {
+	const recv = receiverOf(call);
+	if (recv == null || (recv.kind == NodeKind.Identifier && (recv.data as IdentifierData).name == "this")) return false;
+	const t = recv.nodeType;
+	return t != null && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
+function messageOperandsEffect(call: Node, e: Effect): EffectCause | null {
+	const c = walkEffect(receiverOf(call), e);
+	if (c != null) return c;
+	for (const arg of (call.data as CallExprData).arguments) {
+		const a = walkEffect(arg, e);
+		if (a != null) return a;
+	}
+	return null;
+}
+
 function isStdBuiltinWritingNothing(sym: Symbol): boolean {
 	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind);
 }
@@ -728,6 +753,7 @@ function useEffect(node: Node, e: Effect): EffectCause | null {
 export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (node == null) return null;
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
+	if (e == Effect.Suspends && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e)

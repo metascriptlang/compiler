@@ -1078,6 +1078,7 @@ export function isNativePattern(native: string): boolean {
 }
 
 export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
+export const ACTOR_HOOK_NAMES: string[] = ["onTerminate", "onExit", "onDown", "onIdle"];
 
 export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
