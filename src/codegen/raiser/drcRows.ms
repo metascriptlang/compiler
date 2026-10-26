@@ -10,6 +10,11 @@ export const ROW_SHARE: int32 = 7;
 export const ROW_HELD: int32 = 8;
 export const ROW_KEPT: int32 = 9;
 export const ROW_COPY_VALUE: int32 = 10;
+export const ROW_STR_CONCAT: int32 = 11;
+export const ROW_STR_TEXT: int32 = 12;
+export const ROW_STR_APPEND: int32 = 13;
+export const ROW_STR_APPEND_CHAR: int32 = 14;
+export const ROW_STR_APPEND_CODEPOINT: int32 = 15;
 
 const rows = new HashMap<string, int32>();
 
@@ -36,6 +41,12 @@ define(ROW_COPY_VALUE, [
 	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayAtomicRefCopy",
 	"msArrayClosureCopy", "msStructCellCopy",
 ]);
+
+define(ROW_STR_CONCAT, ["msStringConcat"]);
+define(ROW_STR_TEXT, ["msNumberToString", "msIntToString", "msUint64ToString", "msBoolToString", "msCharToString"]);
+define(ROW_STR_APPEND, ["msStringAppend"]);
+define(ROW_STR_APPEND_CHAR, ["msStringAppendChar"]);
+define(ROW_STR_APPEND_CODEPOINT, ["msStringAppendCodePoint"]);
 
 export function ownershipName(sym: Symbol | null): string {
 	if (sym == null || !hasFlag(sym, SymbolFlag.CompilerProc)) return "";
