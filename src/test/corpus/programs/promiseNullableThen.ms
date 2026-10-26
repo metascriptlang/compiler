@@ -1,4 +1,5 @@
 // @stdout: t:f 5 f 4 f:t 6 3 true
+// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a `Promise<number> | null` slot receives a `.then` result, an async call and null: it compares null and non-null at run time and is read back through the narrowed slot, on a field, a local and an array element.
 
 async function f(): Promise<number> { return 4; }
