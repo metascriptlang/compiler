@@ -755,6 +755,7 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 	const ptr = nonNullMemberOfNullable(target);
 	if (ptr == null || ptr.kind != TypeKind.Ptr || ptr.typeReturn == null) return false;
 	const isCValue = isNumeric(source) || source.kind == TypeKind.Boolean || source.kind == TypeKind.Enum || source.kind == TypeKind.Struct;
+	if (source.kind == TypeKind.Ptr || source.kind == TypeKind.CString) return sameType(source, ptr.typeReturn);
 	return isCValue && (ptr.typeReturn.kind == TypeKind.Void || sameType(source, ptr.typeReturn));
 }
 

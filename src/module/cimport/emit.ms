@@ -132,7 +132,6 @@ function emitParams(t: CType, outHandles: boolean): string {
 		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
 		const p = t.params[i];
 		if (outHandles && isOutHandle(p)) result = result + `out ${pName}: ${cTypeToMs(p.base)}`;
-		else if (outHandles && isMutableChar(p.base)) result = result + `ref ${pName}: Ptr<${C_CHAR}>`;
 		else result = result + `${pName}: ${nullablePointer(p, cTypeToMs(p))}`;
 	}
 	return result;
@@ -588,7 +587,7 @@ test "handle written through a pointer param binds as out" {
 	assert ms.indexOf("mk(out out: H)") >= 0;
 	assert ms.indexOf("mk2(out out: Ptr<S>)") >= 0;
 	assert ms.indexOf("mk3(out out: Ptr<void>)") >= 0;
-	assert ms.indexOf("argv(ref v: Ptr<cchar>)") >= 0;
+	assert ms.indexOf("argv(v: Ptr<Ptr<cchar>> | null)") >= 0;
 	assert ms.indexOf("out h") < 0;
 }
 
@@ -610,7 +609,7 @@ function plainCharPointersAreCString(os: string, cpu: string): boolean {
 	const ms = emitFor(os, cpu, src);
 	return ms.indexOf("function a(): cstring") >= 0
 		&& ms.indexOf("function b(): cstring") >= 0
-		&& ms.indexOf("c(ref v: Ptr<cchar>)") >= 0
+		&& ms.indexOf("c(v: Ptr<Ptr<cchar>> | null)") >= 0
 		&& ms.indexOf("function d(): cstring") >= 0;
 }
 
@@ -672,7 +671,7 @@ test "a pointer to size_t, char* or const char* keeps the exact C pointee" {
 		+ "ssize_t getline(char **line, size_t *cap, void *file);\nint names(const char **cv, const char *s, char *m);\n"
 		+ "int nodes(Node **out, struct Node **sp);";
 	const ms = translateHeaderModule(src, "header.h", [], null, null, targetFor("linux", "x86_64")).source;
-	assert ms.includes("getline(ref line: Ptr<cchar>, cap: Ptr<size_t> | null, file: Ptr<void> | null): ssize_t;"), ms;
+	assert ms.includes("getline(line: Ptr<Ptr<cchar>> | null, cap: Ptr<size_t> | null, file: Ptr<void> | null): ssize_t;"), ms;
 	assert ms.includes("names(cv: Ptr<cstring> | null, s: cstring, m: cstring)"), ms;
 	assert ms.includes("export extern type cchar: int8 from \"char\";"), ms;
 	assert ms.includes("extern type ssize_t: int64 from \"ssize_t\""), ms;

@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "pointee.h"
@@ -27,3 +28,13 @@ int pointeeNode(struct Pointee0Node **out) {
 }
 int pointeeNodeValue(struct Pointee0Node *node) { return node->v; }
 void pointeeNodeFree(struct Pointee0Node *node) { free(node); }
+
+long pointeeGetline(char **line, size_t *cap) {
+	FILE *f = tmpfile();
+	if (f == NULL) return -2;
+	fputs("seven\nnext\n", f);
+	rewind(f);
+	long n = (long)getline(line, cap, f);
+	fclose(f);
+	return n;
+}

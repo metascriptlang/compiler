@@ -46,3 +46,17 @@ test "importedScalarSpelling: the imported name and its base interchange" {
 	const result = compileToC(prelude + "let a: CSize = 3;\nconst b: uint64 = a + 1;\nlet c: CSize = b;\nlet p: Ptr<CChar> = null as Ptr<CChar>;\nconst q: Ptr<uint8> = p;\nconsole.log(c);");
 	assert result.ok;
 }
+
+test "importedScalarSpelling: a char ** parameter takes null or the address of a pointer variable" {
+	const result = compileToC(prelude + "extern function strtol(s: cstring, end: Ptr<Ptr<CChar>> | null, base: int32): int64;\n"
+		+ "let end: Ptr<CChar> = null as Ptr<CChar>;\nconsole.log(strtol(\"42x\", null, 10));\nconsole.log(strtol(\"42x\", end, 10));");
+	assert result.ok;
+	assert result.value.contains("char* end__");
+	assert result.value.contains("strtol(") && result.value.contains("(&(end__");
+}
+
+test "importedScalarSpelling: the address of a pointer local does not outlive its frame" {
+	const result = compileToC(prelude + "function leak(): Ptr<Ptr<CChar>> {\n\tlet p: Ptr<CChar> = null as Ptr<CChar>;\n\treturn p as Ptr<Ptr<CChar>>;\n}\nconsole.log(leak() == null);");
+	assert !result.ok;
+	assert result.error.contains("escapes its stack frame");
+}

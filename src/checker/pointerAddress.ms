@@ -34,7 +34,8 @@ export function pointerAddressElement(source: Type | null, target: Type | null):
 	const src = bareSource(source);
 	const elem = pointee(target);
 	if (src == null || elem == null) return null;
-	if (src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr || src.kind == TypeKind.Null) return null;
+	if (src.kind == TypeKind.Ref || src.kind == TypeKind.Null) return null;
+	if (src.kind == TypeKind.Ptr) return sameType(src, elem) ? src : null;
 	if (src.kind == TypeKind.Span) {
 		const item = skipModifier(src.typeReturn);
 		if (item != null && item.kind == TypeKind.Ref) return null;
@@ -134,7 +135,7 @@ function frameRoot(node: Node | null): Symbol | null {
 		match (n.kind) {
 			NodeKind.Identifier => {
 				const sym = n.resolvedSym;
-				if (sym == null || hasFlag(sym, SymbolFlag.Global) || throughHeap(sym.symbolType)) return null;
+				if (sym == null || hasFlag(sym, SymbolFlag.Global)) return null;
 				if (sym.symbolKind == SymbolKind.Parameter && sym.symbolType != null && sym.symbolType.kind == TypeKind.Var) return null;
 				if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return null;
 				return sym;
