@@ -1,16 +1,12 @@
 import { VmMemory, createVmMemory, newCell, disposeCell, cellRc, setCellRc, setCellRootIdx, cellTypeIndex, cellAllocSize, isLiveCell, liveCellBlocks, ld64, st64 } from "./memory";
-import { RaiserRegClass } from "./bytecode";import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, objectCellHandle, raiserObject, RAISER_NO_CLASS, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, raiserInt, raiserFloat, heapObjectSetField, heapObjectGetField, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldRefusal, heapObjectFieldIndex, heapObjectClass, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
+import { RaiserRegClass } from "./bytecode";
+import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, copyGraph, heapNewObjectCell, objectCellHandle, raiserObject, RAISER_NO_CLASS, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, raiserInt, raiserFloat, heapObjectSetField, heapObjectGetField, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldRefusal, heapObjectFieldIndex, heapObjectClass, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
 
 // An object with a layout is a cell: the reference header, then one 8 byte slot per laid field in layout order.
 // The header's type word indexes the class type table, so a cell knows its class and its destroy routine without a handle
 // heap. A Dyn slot holds the handle of its box, as a Dyn register does; every other slot holds the word its class holds.
 export function objectCellNew(mem: VmMemory, t: RaiserClassType, rc: int64): int64 {
-	when (mode != "danger") { if (t.kinds.length != t.fields.length) throw new Error(`internal: class ${t.name} has ${t.fields.length} fields and ${t.kinds.length} slot classes`); }
-	when (mode != "danger") { if (t.kinds.includes(RaiserRegClass.Dyn)) throw new Error(`internal: class ${t.name} has a Dyn slot, which a cell holds only once Dyn values are cells`); }
-	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_CELL_SLOT_BYTES, 8, classTypeIndex(t) as int64, true);
-	setCellRc(cell, rc);
-	setCellRootIdx(cell, 0);
-	return cell;
+	return heapNewObjectCell(mem, t, rc);
 }
 
 export function objectCellType(cell: int64): RaiserClassType {
@@ -84,6 +80,24 @@ test "the host field accessors read and store a cell's laid slots in their class
 	assert heapObjectGetField(obj, h, "name").kind == RaiserValueKind.Nil && heapObjectGetField(obj, h, "none").kind == RaiserValueKind.Nil;
 	assert heapObjectFieldRefusal(obj, h, 0, raiserFloat(1.5)) != "" && heapObjectFieldRefusal(obj, h, 1, raiserInt(1)) == "";
 	assert heapObjectFieldIndex(obj, h, "name") == 2 && heapObjectClass(obj, h).name == "Point";
+}
+
+test "copyGraph copies a ring of cells into another heap, keeping the ring and leaving the source alone" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const a = objectCellNew(sArr.mem, pointType(), 1);
+	const b = objectCellNew(sArr.mem, pointType(), 1);
+	objectCellSetSlot(a, 0, 3);
+	objectCellSetSlot(a, 2, objectCellHandle(b));
+	objectCellSetSlot(b, 2, objectCellHandle(a));
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(objectCellHandle(a)));
+	assert copied.intVal != objectCellHandle(a) && heapObjectGetField(dObj, copied.intVal, "x").intVal == 3;
+	const next = heapObjectGetField(dObj, copied.intVal, "name");
+	assert next.intVal != objectCellHandle(b) && heapObjectGetField(dObj, next.intVal, "name").intVal == copied.intVal;
+	assert liveCellBlocks(dArr.mem).length == 2 && liveCellBlocks(sArr.mem).length == 2;
+	assert objectCellSlot(a, 2) == objectCellHandle(b);
 }
 
 test "one class type shares a table index however many cells hold it" {

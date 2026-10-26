@@ -4,7 +4,7 @@ import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqLen, seqClass, seqWidth
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell } from "./memory";
+import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx } from "./memory";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -1229,6 +1229,16 @@ export function heapObjectLaidCount(heap: RaiserObjectHeap, handle: int64): numb
 	return isObjectCell(handle) ? objectCellClass(handle).fields.length : heap.objects[handleIndex(handle)].slots.length;
 }
 
+// A zeroed cell of class `t` on `mem` holding `rc` counts; its header names the class through the type table.
+export function heapNewObjectCell(mem: VmMemory, t: RaiserClassType, rc: int64): int64 {
+	when (mode != "danger") { if (t.kinds.length != t.fields.length) throw new Error(`internal: class ${t.name} has ${t.fields.length} fields and ${t.kinds.length} slot classes`); }
+	when (mode != "danger") { if (t.kinds.includes(RaiserRegClass.Dyn)) throw new Error(`internal: class ${t.name} has a Dyn slot, which a cell holds only once Dyn values are cells`); }
+	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_CELL_SLOT_BYTES, 8, classTypeIndex(t) as int64, true);
+	setCellRc(cell, rc);
+	setCellRootIdx(cell, 0);
+	return cell;
+}
+
 // The handle of an object cell: its address with the generic cell tag.
 export function objectCellHandle(cell: int64): int64 {
 	return cell | (RaiserHeapKind.Seq as int64);
@@ -1793,11 +1803,17 @@ function copySeqViewShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, view
 	return dstView;
 }
 
-function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+function copyObjectShell(srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	const isObject = val.kind == RaiserValueKind.Object;
 	if (map.objects.has(val.intVal)) {
 		const known = map.objects.get(val.intVal)!;
 		return isObject ? raiserObject(known) : raiserFieldAddrAt(known, val.floatVal as int64);
+	}
+	if (isObjectCell(val.intVal)) {
+		const cellCopy = objectCellHandle(heapNewObjectCell(dstArr.mem, objectCellClass(val.intVal), 0));
+		map.objects.set(val.intVal, cellCopy);
+		map.jobs.push({ kind: RaiserCopyKind.Object, source: raiserObject(val.intVal), dst: cellCopy });
+		return isObject ? raiserObject(cellCopy) : raiserFieldAddrAt(cellCopy, val.floatVal as int64);
 	}
 	if (handleIndex(val.intVal) >= srcObj.objects.length) {
 		if (!isObject) throw new Error("internal: a copied field address must have an object owner");
@@ -1815,7 +1831,7 @@ function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val
 function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) return copySlotShell(dstArr, val, map);
 	if (val.kind == RaiserValueKind.Array || val.kind == RaiserValueKind.ElemAddr) return copyArrayShell(srcArr, dstArr, val, map);
-	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) return copyObjectShell(srcObj, dstObj, val, map);
+	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) return copyObjectShell(srcObj, dstArr, dstObj, val, map);
 	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) {
 		const text = heapAllocString(dstArr, heapStringText(srcArr, val));
 		disownFresh(dstArr, dstObj, text.intVal);
@@ -1847,6 +1863,22 @@ function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 }
 
 function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
+	if (isObjectCell(job.source.intVal)) {
+		const kinds = objectCellClass(job.source.intVal).kinds;
+		const from = seqCellOf(job.source.intVal);
+		const to = seqCellOf(job.dst);
+		for (let i = 0; i < kinds.length; i += 1) {
+			const at = (i as int64) * OBJECT_CELL_SLOT_BYTES;
+			if (kinds[i] != RaiserRegClass.Ref) {
+				st64(to + at, ld64(from + at));
+				continue;
+			}
+			const copied = copyShell(srcArr, srcObj, dstArr, dstObj, handleValue(ld64(from + at)), map);
+			st64(to + at, copied.kind == RaiserValueKind.Nil ? 0 : copied.intVal);
+			rcIncref(dstArr, dstObj, copied);
+		}
+		return;
+	}
 	const source = srcObj.objects[handleIndex(job.source.intVal)];
 	const count = objectFieldCount(source);
 	for (let i = 0; i < count; i = i + 1) {
