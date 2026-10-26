@@ -1258,7 +1258,7 @@ function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
