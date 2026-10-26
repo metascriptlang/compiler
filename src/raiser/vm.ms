@@ -11,14 +11,13 @@ import {
 	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
+	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
-import { orcCollectCycles } from "./orc";
-import { orcRegisterCandidate } from "./orcCandidate";
+import { orcCollectCycles, orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, RaiserCopyPlan, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
@@ -3445,7 +3444,8 @@ function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
 		vmDestroyTop(vm, handle);
 		vmDrain(vm);
 	} else if (cyclic) {
-		orcRegisterCandidate(vm.arrayHeap, vm.objectHeap, handle);
+		vmRegisterCyclic(vm, handle);
+		vmDrain(vm);
 	}
 }
 
@@ -3458,6 +3458,7 @@ function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 
 // Every cell is freed here, so a collector that tracks cells has one place to forget them.
 function vmFreeCell(vm: RaiserVM, handle: int64): void {
+	orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
 	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
@@ -3485,7 +3486,12 @@ function vmDestroyChild(vm: RaiserVM, handle: int64): void {
 function vmReleaseChild(vm: RaiserVM, handle: int64, cyclic: boolean): void {
 	if (handle == 0) return;
 	if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) vmDestroyChild(vm, handle);
-	else if (cyclic) orcRegisterCandidate(vm.arrayHeap, vm.objectHeap, handle);
+	else if (cyclic) vmRegisterCyclic(vm, handle);
+}
+
+function vmRegisterCyclic(vm: RaiserVM, handle: int64): void {
+	if (!orcRegisterCandidate(vm.arrayHeap, vm.objectHeap, handle)) return;
+	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
 }
 
 function dynSlotCyclic(data: Cursor<RaiserObjectData>, valueIndex: int32): boolean {
@@ -7646,7 +7652,7 @@ test "placed: CopyValue counts an alias and leaves a fresh copy with its allocat
 	assert vm.objectHeap.objects[0].rc == 2 && vm.objectHeap.objects[1].rc == 1, `${vm.objectHeap.objects[0].rc} ${vm.objectHeap.objects[1].rc}`;
 }
 
-function cyclicRelease(cyclic: boolean, viaRcDec: boolean): string {
+function cyclicRelease(cyclic: boolean, viaRcDec: boolean): RaiserVM {
 	const node = createClassType("Node", -1, [], ["next"], nodeClass);
 	node.cyclic[0] = cyclic;
 	const release = viaRcDec
@@ -7658,18 +7664,94 @@ function cyclicRelease(cyclic: boolean, viaRcDec: boolean): string {
 		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
 		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 1), 0),
 		...release,
-		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [node], ["next"]);
-	let raised = "";
-	try { execModule(placedModule([main], true)); } catch (e) { raised = e.message; }
-	return raised;
+	return execModule(placedModule([main], true));
 }
 
-test "placed: a release that leaves a cyclic referent alive hands it to the cycle collector's candidate hook" {
-	assert cyclicRelease(false, false) == "";
-	assert cyclicRelease(false, true).includes("orcRegisterCandidate");
-	assert cyclicRelease(true, false).includes("orcRegisterCandidate");
+function cyclicRoots(cyclic: boolean, viaRcDec: boolean): number {
+	const vm = cyclicRelease(cyclic, viaRcDec);
+	return vm.error == "" ? vm.arrayHeap.orcRoots.length : -1;
+}
+
+test "placed: a release that leaves a cyclic referent alive registers it with the cycle collector" {
+	assert cyclicRoots(false, false) == 0;
+	assert cyclicRoots(true, false) == 1;
+	assert cyclicRoots(true, true) == 1;
+}
+
+function garbageCycle(): RaiserVM {
+	const node = createClassType("Node", -1, [], ["next"], nodeClass);
+	node.cyclic[0] = true;
+	node.destroyFn = 1;
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 1), 0),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 1, 0, 0), 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [node], ["next"]);
+	const destroy = createRaiserFunction("destroy", [
+		raiserABC(RaiserOpcode.LoadInt, 1, immField(1), 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], [], 1, 1, 2, [RaiserRegClass.Ref, RaiserRegClass.Word]);
+	const vm = createVM(placedModule([main, destroy], true), "arena");
+	vm.arrayHeap.orcThreshold = -ORC_DEFAULT_THRESHOLD;
+	execLoop(vm);
+	return vm;
+}
+
+test "placed: a garbage cycle is freed by the collector, each cell's destroy routine runs once" {
+	const vm = garbageCycle();
+	assert vm.error == "", vm.error;
+	assert vm.output == "1\n1\n", vm.output;
+	assert vmLiveCount(vm) == 0 && vm.objectHeap.freeList.length == 2 && vm.arrayHeap.orcRoots.length == 0, `${vmLiveCount(vm)} ${vm.objectHeap.freeList.length}`;
+	assert vm.dropped.length == 0 && vm.disposing.length == 0;
+}
+
+test "placed: a cycle a register still holds is kept by the collector" {
+	const vm = garbageCycleHeld();
+	assert vm.error == "", vm.error;
+	assert vm.output == "" && vmLiveCount(vm) == 2 && vm.arrayHeap.orcRoots.length == 0, `${vm.output} ${vmLiveCount(vm)}`;
+}
+
+function garbageCycleHeld(): RaiserVM {
+	const node = createClassType("Node", -1, [], ["next"], nodeClass);
+	node.cyclic[0] = true;
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 1), 0),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 1, 0, 0), 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [node], ["next"]);
+	const vm = createVM(placedModule([main], true), "arena");
+	vm.arrayHeap.orcThreshold = -ORC_DEFAULT_THRESHOLD;
+	execLoop(vm);
+	return vm;
+}
+
+test "placed: 300 registered candidates trip the threshold once, then keep counting" {
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	const code: RaiserInstruction[] = [];
+	for (let i = 0; i < 300; i += 1) {
+		code.push(raiserABC(RaiserOpcode.NewObject, 0, 1, 0));
+		code.push(raiserABC(RaiserOpcode.RcInc, 0, 0, 0));
+		code.push(raiserABC(RaiserOpcode.RcDec, 0, 1, 0));
+	}
+	code.push(raiserABC(RaiserOpcode.Halt, 0, 0, 0));
+	const main = mainWithClasses(code, [RaiserRegClass.Ref], [leaf], []);
+	const vm = execModule(placedModule([main], true));
+	assert vm.error == "", vm.error;
+	assert vm.arrayHeap.orcRoots.length == 300 - 2 * ORC_DEFAULT_THRESHOLD, `${vm.arrayHeap.orcRoots.length}`;
 }
 
 function keptRoutine(keep: boolean): RaiserVM {
