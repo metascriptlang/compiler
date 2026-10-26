@@ -591,6 +591,10 @@ EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
 GATE_SELECT_LEDGER=${GATE_SELECT_LEDGER:-$HOME/.metascript/gate-select.tsv}
 
+noresult_cause() {
+  sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^(error|Error|internal|fatal)|: error: ' | head -3
+}
+
 reds_of() {
   local lane=$1 log=$2 rc=$3
   case "$lane" in
@@ -1758,6 +1762,10 @@ CASES
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
   want="src/test/c/json.ms > parses numbers|src/test/handoff/index.ms > no result"
   [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  got=$(printf '%s\n' "warning: circular import" "Error: unhandled exception: internal: custody walk" \
+    "/r/src/test/lang/valueStorage.ms:579:15: error: call to undeclared function 'incl'" | noresult_cause | paste -sd'|' -)
+  want="Error: unhandled exception: internal: custody walk|/r/src/test/lang/valueStorage.ms:579:15: error: call to undeclared function 'incl'"
+  [ "$got" = "$want" ] || { printf 'FAIL noresult cause: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf ' FAIL  %s/src/test/c/json.ms\n  × parses numbers\n\342\234[LSP-OPEN] /a.ms parse=1ms\n\223 %s/src/test/c/ok.ms\n FAIL  %s/src/test/c/bigint.ms\n  × unary plus\n' \
     "$TOP" "$TOP" "$TOP" >"$log"
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
@@ -2210,7 +2218,7 @@ run_test_lane() {
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^ *Test Files +[0-9]' >/dev/null; then
       case "$noresult" in *" $f "*) ;; *) printf 'NORESULT %s > no result\n' "$f"; noresult="$noresult$f " ;; esac
-      sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
+      noresult_cause <"$part"
       rc=1
     fi
     rm -f "$part" "$part.rc"

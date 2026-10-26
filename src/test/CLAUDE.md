@@ -54,7 +54,9 @@ Build the candidate once per compiler edit: `msc build src/index.ms --danger --l
 | one lifecycle invariant | `MSC=./msc GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms`; keep its ledger oracle (`guard/README.md`) | 1–5 s per guard |
 | what one program emits | `./msc build <prog.ms> --emit=c`, then read that module's C | seconds |
 | the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/test/perf/run.ms`, read the rows of the flow you changed (`docs/BUILD-PERF.md` §Measuring by flow) | one program per arm |
-| Solana, native boundary, HCR or formatter | the named failing consumer with its host and backend; recipes in `docs/TESTING.md` | not measured |
+| formatting | `MSFMT_ROOTS=<dir> msc run src/test/fmt/run.ms` on the directories you changed | 6.6–13.5 s for `src/utils` |
+| LSP behaviour | `msc run src/test/lsp/run.ms` (38 replay scenarios) | 37–44 s |
+| Solana, native boundary or HCR | the named failing consumer with its host and backend; recipes in `docs/TESTING.md` | not measured |
 | `std/` or `runtime/` inputs | the checks above, with a candidate beside the changed support trees; `tools/syncLocalBinary.ms` belongs to delivery | as above |
 
 - **`msc test <file>` without `--tests-in-dir` also runs the tests of every module the file imports.** For `src/analyzer/inject.ms` that is 102 test files in 85–122 s, against 7 files with the flag (lc-1, tree 651e100ee).
@@ -69,9 +71,11 @@ Build the candidate once per compiler edit: `msc build src/index.ms --danger --l
   | `--release`, cold | 9828 | 20222 | 5421 | 3569 | 80089 | 145 | 847 | 120121 |
 
   The front end (graph and phase A) is three quarters of a warm check. `--release` saves 5.5 s warm and costs 52 s of clang cold, so test builds stay at the default.
-- **Over budget now:**
-  - `src/checker/checkPass.ms` took 65 s with the flag, 30 s of it its own tests (tree 651e100ee, before its prelude tests shared one std check; not remeasured).
-  - `src/codegen/raiser/eval.ms` took 76 s with the flag, 19 s of it its own tests, mostly `numericCondsFailure` (tree 651e100ee).
+- **`msc test <file> --tests-in-dir` per owner, lc-1 alone, tree 3f19df9e0, seconds cold / warm:** `src/test/lang/accessorContexts.ms` 4.9 / 2.4, `src/codegen/c/types.ms` 53 / 25, `src/checker/checkPass.ms` 87 / 47, `src/test/js/accessCheck.ms` 81 / 55, `src/codegen/raiser/eval.ms` 98 / 62, `src/compiler/compile.ms` 138 / 79. One corpus program with `MSCORPUS_RAISER=1` took 9.8 / 4.1.
+- **Over budget now, warm:**
+  - `src/compiler/compile.ms`: 79 s.
+  - `src/codegen/raiser/eval.ms`: 62 s, mostly `numericCondsFailure`.
+  - A first run of a compiler-module test is over 60 s for every file that imports most of the compiler, because its test build redoes the front end of that graph. Making the front end reachability-driven, as the reference transforms a routine only when codegen first needs it, saves an estimated 3–4 s: the `inject.ms` test build still reaches 72% of the function-body nodes. The remaining lever is reusing each module's front-end output across builds.
 - **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 
 ### Land gate
