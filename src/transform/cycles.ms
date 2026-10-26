@@ -226,7 +226,8 @@ function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acycli
 	if (t == null) return false;
 	if (!top && (t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null)) {
 		const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t)!;
-		if (ref.kind != TypeKind.Ref || isAtomicRef(ref)) return false;
+		if (ref.kind != TypeKind.Ref) return traceEdgeAux(ref, false, cyclicCache, acyclicCache, marker);
+		if (isAtomicRef(ref)) return false;
 		return canFormAcycle(ref, cyclicCache, acyclicCache);
 	}
 	return match (t.kind) {

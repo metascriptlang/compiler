@@ -124,6 +124,30 @@ console.log(s.tag);
 	assert cyclicFlag(c, "Holder") == "cyclic";
 }
 
+test "E2E C: a class whose only edges are nullable unknown fields stays registered" {
+	const c = compiled(`class Parent { child: unknown | null = null; }
+class Child { back: unknown | null = null; }
+const p = new Parent();
+const k = new Child();
+p.child = k;
+k.back = p;
+console.log("linked");
+`);
+	assert cyclicFlag(c, "Parent") == "cyclic";
+	assert cyclicFlag(c, "Child") == "cyclic";
+}
+
+test "E2E C: a record cell holding a nullable unknown stays registered behind an open slot" {
+	const c = compiled(`type Tagged = { tag: string, any: unknown | null };
+type D = Tagged | { k: number };
+class Holder { data: D = { k: 1 }; }
+const h = new Holder();
+h.data = { tag: "a", any: h };
+console.log("set");
+`);
+	assert cyclicFlag(c, anonWithFields(c, "msString tag; void* any;")) == "cyclic";
+}
+
 test "E2E C: a generic over an interface registers the cycle" {
 	const c = compiled(SHAPE + `class Box<T> { value: T; constructor(value: T) { this.value = value; } }
 class Holder { box: Box<Shape> | null = null; }
