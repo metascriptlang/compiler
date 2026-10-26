@@ -73,7 +73,7 @@ import {
 	RaiserObjectHeap, RaiserArrayHeap, handleIndex,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
 	heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
-	createStructHeap, createArrayHeap, fieldNameAt, objectFieldCount, fieldValueAt
+	createStructHeap, createArrayHeap, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldValueAt
 } from "../../raiser/value";
 import { allocWireObject, nodeWireClass, wireGet, wireSet, WIRE_LOC, WIRE_SYMBOL } from "./wire";
 
@@ -1802,15 +1802,14 @@ function fromTemplate(n: Node): Node {
 }
 
 function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
-	const obj = objHeap.objects[handleIndex(handle)];
 	const record = materialType(shape);
 	const keys: string[] = [];
 	const values: Node[] = [];
-	const count = objectFieldCount(obj);
+	const count = heapObjectFieldCount(objHeap, handle);
 	for (let i = 0; i < count; i += 1) {
-		const name = fieldNameAt(obj, i);
+		const name = heapObjectFieldNameAt(objHeap, handle, i as int64);
 		keys.push(name);
-		values.push(valueToTypedNode(fieldValueAt(obj, i), record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
+		values.push(valueToTypedNode(heapObjectFieldValueAt(objHeap, handle, i as int64), record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
 	}
 	return fromTemplate(createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc));
 }
