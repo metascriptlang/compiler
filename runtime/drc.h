@@ -5,10 +5,10 @@
  * ORC: cycle collector (Bacon's trial deletion), linked in every --mm=drc build.
  *
  * RefHeader prepended to all heap-allocated RC objects.
- * Layout: [rc:4][rootIdx:4][type:8] = 16 bytes on 64-bit
+ * Layout: msRefHeader below, [rc:8][type:8][rootIdx:4][allocSize:4] = 24 bytes on 64-bit
  *
  * ORC supplements ARC for cyclic data structures. Non-cyclic objects
- * use plain ARC (zero overhead). Cyclic objects get registered in the
+ * use plain ARC and never touch the root set. Cyclic objects get registered in the
  * root set; periodically the collector runs a 3-phase mark-scan-collect.
  */
 
@@ -25,7 +25,7 @@
 #include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
-/* rc field = [count:28][flags:4].
+/* rc field = [count:60][flags:4] (intptr_t).
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
  * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits. */
 #define MS_RC_INCREMENT 16
@@ -366,9 +366,8 @@ static inline void msDestroyAndDispose(void* p) {
 		msRefHeader* h = msHeader(p);
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
-		 * scrub it from msRoots — every free path, including codegen's sole-owner
-		 * direct dispose that bypasses msOrcDecRefIsLast. Else msOrcCollect later
-		 * walks a dangling root (UAF in markGray/getColor). */
+		 * scrub it from msRoots, else msOrcCollect later walks a dangling root
+		 * (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
