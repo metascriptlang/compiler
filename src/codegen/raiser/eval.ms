@@ -682,6 +682,11 @@ test "engine: an extern routine with no host bridge read as a value is refused b
 	assert vm.error.indexOf("no host bridge for 'nowhere'") >= 0, vm.error;
 }
 
+// The program stops on a trap before its globals are destroyed, so the cells it built are still in the heap.
+function evalLive(code: string): RaiserVM {
+	return evalVM(code + " const stopper: int32[] = []; console.log(stopper[1]);");
+}
+
 test "engine: an enum converts to an integer type as its ordinal does, as on C and JS" {
 	const decl = "enum E { Neg = -5, Big = 1000000000 } let e: E[] = [E.Neg, E.Big];";
 	const ok = evalVM(decl + " console.log(`${e[0] as uint8} ${e[0] as uint16} ${e[1] as uint8} ${e[0] as int64} ${e[1] as float64}`);");
@@ -1488,10 +1493,10 @@ test "orc: shared ref survives (stored in array)" {
 }
 
 test "untag: an object holds its scalar fields as raw words, a reference as its handle and a union as a value" {
-	const vm = evalVM("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
+	const vm = evalLive("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
 		+ " const p = new P(); p.n = 7; p.f = 2.5; p.b = true; p.s = 'x' + p.n.toString(); p.u = 9;"
 		+ " console.log(`${p.n} ${p.f} ${p.b} ${p.s} ${p.u}`);");
-	assert vm.error == "", vm.error;
+	assert vm.error.includes("out of bounds"), vm.error;
 	assert vm.output == "7 2.5 true x7 9\n", vm.output;
 	let found = 0;
 	for (const obj of vm.objectHeap.objects) {
@@ -1627,10 +1632,10 @@ test "orc: a ring through three plain array fields frees each array once" {
 }
 
 test "untag: an array holds scalar elements as raw words, references as handles and a union as values" {
-	const vm = evalVM("const n: int32[] = [1, 2, 3]; const f: float64[] = [1.5, 2.5]; const b: boolean[] = [true, false]; const s: string[] = ['x' + n.length.toString()]; const u: (int32 | string | null)[] = [7, 'y', null];"
+	const vm = evalLive("const n: int32[] = [1, 2, 3]; const f: float64[] = [1.5, 2.5]; const b: boolean[] = [true, false]; const s: string[] = ['x' + n.length.toString()]; const u: (int32 | string | null)[] = [7, 'y', null];"
 		+ " n.push(4); f[1] = 3.5; const sl = n[1..3];"
 		+ " console.log(`${n[3]} ${f[1]} ${b[0]} ${s[0]} ${u[0]} ${u[1]} ${u[2]} ${sl.length} ${sl[0]} ${sl[1]}`);");
-	assert vm.error == "", vm.error;
+	assert vm.error.includes("out of bounds"), vm.error;
 	assert vm.output == "4 3.5 true x3 7 y null 2 2 3\n", vm.output;
 	let words = 0;
 	let floats = 0;
