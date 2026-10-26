@@ -114,6 +114,34 @@ function compoundRaiseKeepsTarget(): string {
 	return `${bits} ${n} ${captured}`;
 }
 
+let compoundBits: number = 6;
+
+function compoundSetBits(): number {
+	compoundBits = 100;
+	return 3;
+}
+
+function compoundBitwiseNumber(): string {
+	compoundBits = 6;
+	compoundBits &= compoundSetBits();
+	const a = compoundBits;
+	compoundBits = 6;
+	compoundBits |= compoundSetBits();
+	const o = compoundBits;
+	compoundBits = 6;
+	compoundBits ^= compoundSetBits();
+	const x = compoundBits;
+	compoundBits = 6;
+	compoundBits <<= compoundSetBits();
+	const l = compoundBits;
+	compoundBits = 6;
+	compoundBits >>= compoundSetBits();
+	const r = compoundBits;
+	compoundBits = -6;
+	compoundBits >>>= compoundSetBits();
+	return `${a} ${o} ${x} ${l} ${r} ${compoundBits}`;
+}
+
 test "compoundAssignmentEvaluation: a global target is read before a right side that writes it" {
 	assert compoundGlobals() == "3 9 9 6";
 }
@@ -136,4 +164,8 @@ test "compoundAssignmentEvaluation: a target captured by a closure is compounded
 
 test "compoundAssignmentEvaluation: a raise on the right keeps a number, an int and a closure target" {
 	assert compoundRaiseKeepsTarget() == "6 3 4";
+}
+
+test "compoundAssignmentEvaluation: a bitwise compound on a number reads the target before a right side that writes it" {
+	assert compoundBitwiseNumber() == "2 7 5 48 0 536870911";
 }
