@@ -172,8 +172,13 @@ export function aggregateAssignPlan(s: RaiserCompState, valueType: Type | null):
 
 export function emitAggregateAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null, sourceIsFresh: boolean): int32 {
 	const plan = aggregateAssignPlan(s, valueType);
-	if (plan < 0) return -1;
+	if (plan < 0 && !isInPlaceCell(s, valueType)) return -1;
 	const incoming = sourceIsFresh ? source : emitValueCopy(s, source, valueType);
+	if (plan < 0) {
+		emitCellSwap(s, destination, incoming, valueType);
+		emitInst(s, raiserABC(RaiserOpcode.RcDec, incoming, 0, 0));
+		return destination;
+	}
 	emitInst(s, raiserABC(RaiserOpcode.AssignInPlace, destination, incoming, plan));
 	return destination;
 }
