@@ -82,17 +82,8 @@ static inline int64_t msArrayResizeCap(int64_t old) {
 /* Allocate payload: header(cap) + cap*elemSize, zero-filled */
 void* msArrayPayloadNew(int64_t cap, int64_t elemSize);
 
-/* Allocate payload without zeroing — for newArrayOfCap */
-void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize);
-
 /* Grow payload if needed. Returns new payload pointer. */
 void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize);
-
-/* Grow without zeroing */
-void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elemSize);
-
-/* Raw pointer compare */
-bool msArraySamePayload(void* a, void* b);
 
 void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t elemSize);
 
@@ -118,7 +109,6 @@ void msNumberArrayShrink(msNumberArray* arr, int64_t newLen);
 void msNumberArrayGrow(msNumberArray* arr, int64_t newLen, double value);
 void msNumberArraySetLen(msNumberArray* arr, int64_t newLen);
 int64_t msNumberArrayCapacity(msNumberArray* arr);
-void msNumberArraySetLenUninit(msNumberArray* arr, int64_t newLen);
 
 /* ===== String Array ===== */
 
@@ -142,20 +132,13 @@ void msStringArrayShrink(msStringArray* arr, int64_t newLen);
 void msStringArrayGrow(msStringArray* arr, int64_t newLen, msString value);
 void msStringArraySetLen(msStringArray* arr, int64_t newLen);
 int64_t msStringArrayCapacity(msStringArray* arr);
-void msStringArraySetLenUninit(msStringArray* arr, int64_t newLen);
 
 /* ===== Ref Array ===== */
 
-msRefArray msRefArrayNew(int64_t cap);
 void msRefArrayDestroy(msRefArray* arr);
-void msRefArrayPush(msRefArray* arr, void* value);
-void* msRefArrayPop(msRefArray* arr);
-void* msRefArrayAt(msRefArray* arr, int64_t idx);
 void msRefArrayShrink(msRefArray* arr, int64_t newLen);
 void msRefArrayGrow(msRefArray* arr, int64_t newLen, void* value);
 void msRefArraySetLen(msRefArray* arr, int64_t newLen);
-int64_t msRefArrayCapacity(msRefArray* arr);
-void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen);
 void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount);
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msAtomicRefArrayDestroy(msRefArray* arr);
@@ -188,8 +171,6 @@ typedef struct {
 
 void msUint8ArrayDestroy(msUint8Array* arr);
 void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
-uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx);
-msUint8Array msUint8ArrayNew(int64_t cap);
 msString msAsString(msUint8Array* arr);
 void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, uint8_t item);
 

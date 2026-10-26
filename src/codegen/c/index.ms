@@ -383,7 +383,9 @@ export function genProjectDispatcher(
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "  msTestErrorFlag();");
+	addLine(b, "#ifdef MS_DRC_LEDGER");
 	addLine(b, "  msOrcCollect();");
+	addLine(b, "#endif");
 	addLine(b, "}");
 	addNewline(b);
 
@@ -397,7 +399,9 @@ export function genProjectDispatcher(
 		const mp = modulePaths[di];
 		if (mp != entryPath && deinits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__Deinit000();`);
 	}
+	addLine(b, "#ifdef MS_DRC_LEDGER");
 	addLine(b, "msOrcCollect();");
+	addLine(b, "#endif");
 	b.indent -= 1;
 	addLine(b, "}");
 	addNewline(b);

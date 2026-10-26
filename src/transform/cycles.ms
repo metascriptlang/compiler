@@ -216,11 +216,18 @@ export function traceReachesCycle(t: Type | null, cyclicCache: NameSet, acyclicC
 	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
 }
 
+export function cellTraceHasEdge(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	if (t == null) return false;
+	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+}
+
 function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
 	if (t == null) return false;
 	if (!top && (t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null)) {
 		const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t)!;
-		if (ref.kind != TypeKind.Ref || isAtomicRef(ref)) return false;
+		if (ref.kind != TypeKind.Ref) return traceEdgeAux(ref, false, cyclicCache, acyclicCache, marker);
+		if (isAtomicRef(ref)) return false;
 		return canFormAcycle(ref, cyclicCache, acyclicCache);
 	}
 	return match (t.kind) {

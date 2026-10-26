@@ -178,20 +178,65 @@ static inline void msFutureThenRejected(msFutureThenEnv* e) {
     }
 }
 
-static inline void msFutureThenEnvFree(msFutureThenEnv* e) {
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected); free(e);
+/* The callback envs are counted cells: the future's callback node holds the one count (rc 0 is
+ * the sole owner), destroyFn releases what the env holds, and traceFn visits those slots so a
+ * collector reaching a pending future can see through its callback list. */
+static inline void msFutureThenEnvDestroy(void* raw) {
+    msFutureThenEnv* e = (msFutureThenEnv*)raw;
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected);
 }
 
-static inline void msFutureThenEnvDrop(void* e) { msFutureThenEnvFree((msFutureThenEnv*)e); }
+static inline void msFutureThenEnvTrace(void* raw, void* visit) {
+    msFutureThenEnv* e = (msFutureThenEnv*)raw;
+    msOrcTraceRef(&e->output, visit); msOrcTraceRef(&e->input, visit);
+    msClosureTrace(e->onFulfilled, visit); msClosureTrace(e->onRejected, visit);
+}
 
-static inline void msFutureCatchEnvDrop(void* raw) {
+static inline void msFutureCatchEnvDestroy(void* raw) {
     msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected); free(e);
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected);
 }
+
+static inline void msFutureCatchEnvTrace(void* raw, void* visit) {
+    msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
+    msOrcTraceRef(&e->output, visit); msOrcTraceRef(&e->input, visit);
+    msClosureTrace(e->onRejected, visit);
+}
+
+static inline void msFutureFinallyEnvDestroy(void* raw) {
+    msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
+}
+
+static inline void msFutureFinallyEnvTrace(void* raw, void* visit) {
+    msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
+    msOrcTraceRef(&e->output, visit); msOrcTraceRef(&e->input, visit);
+    msClosureTrace(e->onSettled, visit);
+}
+
+static const msTypeInfo msFutureThenEnvTypeInfo = {
+    .name = "msFutureThenEnv", .isCyclic = true,
+    .traceFn = msFutureThenEnvTrace, .destroyFn = msFutureThenEnvDestroy,
+};
+static const msTypeInfo msFutureCatchEnvTypeInfo = {
+    .name = "msFutureCatchEnv", .isCyclic = true,
+    .traceFn = msFutureCatchEnvTrace, .destroyFn = msFutureCatchEnvDestroy,
+};
+static const msTypeInfo msFutureFinallyEnvTypeInfo = {
+    .name = "msFutureFinallyEnv", .isCyclic = true,
+    .traceFn = msFutureFinallyEnvTrace, .destroyFn = msFutureFinallyEnvDestroy,
+};
+
+static inline void msFutureThenEnvFree(msFutureThenEnv* e) { msDecrefCyclic(e); }
+static inline void msFutureThenEnvDrop(void* e) { msDecrefCyclic(e); }
+static inline void msFutureCatchEnvFree(msFutureCatchEnv* e) { msDecrefCyclic(e); }
+static inline void msFutureCatchEnvDrop(void* e) { msDecrefCyclic(e); }
+static inline void msFutureFinallyEnvFree(msFutureFinallyEnv* e) { msDecrefCyclic(e); }
+static inline void msFutureFinallyEnvDrop(void* e) { msDecrefCyclic(e); }
 
 static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, msClosureFn cb) {
     msFuture* output = (msFuture*)msFutureCreate();
-    msFutureThenEnv* env = (msFutureThenEnv*)msMemAlloc(sizeof(msFutureThenEnv));
+    msFutureThenEnv* env = (msFutureThenEnv*)msAllocTyped(sizeof(msFutureThenEnv), &msFutureThenEnvTypeInfo);
     env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output);
     msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled;
     msClosureCopy(onRejected); env->onRejected = onRejected;
@@ -308,11 +353,11 @@ static inline void name##_cb(void* raw) { \
         fut_type* dstT = (fut_type*)e->output; \
         msFutureCompleteT(dstT, srcT->value); \
     } \
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected); free(e); \
+    msFutureCatchEnvFree(e); \
 } \
 static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
-    msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv)); \
+    msFutureCatchEnv* env = (msFutureCatchEnv*)msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo); \
     env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
     msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)name##_cb, .env = env}, msFutureCatchEnvDrop, NULL)); \
     return output; \

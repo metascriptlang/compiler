@@ -11,6 +11,8 @@
 
 @include("./ffi.h");
 
+import { collectCycles } from "std/runtime";
+
 extern function corpusKeepNearWord(p: Ptr<void>): void;
 
 const kept: Peer[] = [];
@@ -34,3 +36,4 @@ function link(): void {
 }
 
 link();
+collectCycles();

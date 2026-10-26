@@ -6,6 +6,8 @@
 // @skip-js: onDestroy does not run on JS
 // note: the collector frees a cycle whose inherited onDestroy stores `this` in a global; the program stops with the freed object's own class named. Sibling: onDestroyKeepingThisStops (the plain free path).
 
+import { collectCycles } from "std/runtime";
+
 const kept: Peer[] = [];
 
 class Peer {
@@ -26,3 +28,4 @@ function link(): void {
 }
 
 link();
+collectCycles();

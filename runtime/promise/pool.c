@@ -854,7 +854,9 @@ void msPoolShutdown(void) {
 	msFutureReleaseFlush();
 	extern bool msCompletionQueueDrainAll(void);
 	while (msCompletionQueueDrainAll()) {}
+#ifdef MS_DRC_LEDGER
 	msOrcCollect();
+#endif
 
 	free(gPool);
 	gPool = NULL;
