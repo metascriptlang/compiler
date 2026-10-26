@@ -1716,7 +1716,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	}
 	if (!needsHooks && !userHook) {
 		const isPlainValueAggregate = !isClassOrInterface
-			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
+			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType) || (lctx.raiserBackend && objType.kind == TypeKind.Union && raiserFlatCellUnion(objType)));
 		if (!isPlainValueAggregate) {
 			nameSetAdd(lctx.trivial, typeId);
 			return;
