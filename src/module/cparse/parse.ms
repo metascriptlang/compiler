@@ -354,7 +354,7 @@ function layoutKnownType(t: CType): boolean {
 
 function membersLayoutKnown(members: CMember[]): boolean {
 	for (const m of members) {
-		if (m.name == "" || m.bitWidth >= 0 || !layoutKnownType(m.type)) return false;
+		if (m.name == "" || m.bitWidth != null || !layoutKnownType(m.type)) return false;
 	}
 	return true;
 }
@@ -677,7 +677,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			skipAttributes(ctx);
 
 			// Bitfield: int x : 3;
-			let bitWidth = -1;
+			let bitWidth: int32 | null = null;
 			if (consume(ctx, ":")) {
 				if (ctx.tok.kind == CTokenKind.Num) {
 					bitWidth = ctx.tok.intVal as int32;
@@ -688,7 +688,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 
 			const mem = makeMember(memName, memTy);
 			mem.bitWidth = bitWidth;
-			if (bitWidth >= 0) mem.bitOffset = 0;
+			if (bitWidth != null) mem.bitOffset = 0;
 			members.push(mem);
 
 			// Error recovery: break if no progress
