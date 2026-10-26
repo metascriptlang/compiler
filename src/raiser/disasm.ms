@@ -161,6 +161,9 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.RcDec => "RcDec",
 		RaiserOpcode.WasMoved => "WasMoved",
 		RaiserOpcode.DestroyValue => "DestroyValue",
+		RaiserOpcode.SinkValue => "SinkValue",
+		RaiserOpcode.RcHeld => "RcHeld",
+		RaiserOpcode.RcKeptCheck => "RcKeptCheck",
 	};
 }
 
@@ -197,7 +200,10 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const name = opName(op);
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
-	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved || op == RaiserOpcode.DestroyValue) return `${name} ${ra}`;
+	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved) return `${name} ${ra}`;
+	if (op == RaiserOpcode.DestroyValue) return `${name} ${ra} plan ${inst.c}`;
+	if (op == RaiserOpcode.SinkValue) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
+	if (op == RaiserOpcode.RcHeld || op == RaiserOpcode.RcKeptCheck) return `${name} ${ra} ${regText(op, 1, inst.b)}`;
 	if (op == RaiserOpcode.RcDec) return inst.b == 1 ? `${name} ${ra} cyclic` : `${name} ${ra}`;
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
 	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
@@ -268,8 +274,12 @@ test "the reference-count opcodes print their register and the cyclic flag" {
 	assert disasmInst(raiserABC(RaiserOpcode.RcInc, 3, 0, 0)) == "RcInc R3";
 	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 0, 0)) == "RcDec R3";
 	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 1, 0)) == "RcDec R3 cyclic";
-	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, 1, 0, 0)) == "WasMoved R1";
-	assert disasmInst(raiserABC(RaiserOpcode.DestroyValue, 1, 0, 0)) == "DestroyValue R1";
+	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, operandTagged(1, RaiserRegClass.Ref), 0, 0)) == "WasMoved R1";
+	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, operandTagged(2, RaiserRegClass.Word), 0, 0)) == "WasMoved W2";
+	assert disasmInst(raiserABC(RaiserOpcode.DestroyValue, 1, 0, 4)) == "DestroyValue R1 plan 4";
+	assert disasmInst(raiserABC(RaiserOpcode.SinkValue, 1, 2, 4)) == "SinkValue R1 R2 plan 4";
+	assert disasmInst(raiserABC(RaiserOpcode.RcHeld, 1, 3, 0)) == "RcHeld R1 W3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcKeptCheck, 1, 3, 0)) == "RcKeptCheck R1 W3";
 }
 
 test "immediate operands print as numbers" {

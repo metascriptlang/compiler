@@ -217,11 +217,14 @@ export enum RaiserOpcode {
 	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
 	RcInc,            // ABC: count +1 on the handle in refs[A]; nil and constant handles stay as they are
 	RcDec,            // ABC: count -1 on refs[A]; the last reference destroys the cell by its dynamic type and nils refs[A]; B = 1 registers a surviving cell with the cycle collector
-	WasMoved,         // ABC: refs[A] = nil without touching any count
-	DestroyValue,     // ABC: RcDec every ref slot of the struct aggregate in refs[A] and nil the slot
+	WasMoved,         // ABC: R[A] = nil (ref file) or 0 (word file) without touching any count
+	DestroyValue,     // ABC: destroy the aggregate in refs[A] by copy plan C: release its ref slots, destroy its nested aggregates, free its cell, nil refs[A]
+	SinkValue,        // ABC: DestroyValue the aggregate in refs[A] by copy plan C, then refs[A] = refs[B]; a destination that already holds B's handle stays
+	RcHeld,           // ABC: words[B] = the count of the cell in refs[A], 0 for nil
+	RcKeptCheck,      // ABC: fatal when the count of the cell in refs[A] exceeds words[B]: a destroy routine kept its own cell alive
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.DestroyValue;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.RcKeptCheck;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -352,7 +355,10 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
-		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.WasMoved | RaiserOpcode.DestroyValue => "y--",
+		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue => "y--",
+		RaiserOpcode.WasMoved => "x--",
+		RaiserOpcode.SinkValue => "yy-",
+		RaiserOpcode.RcHeld | RaiserOpcode.RcKeptCheck => "yi-",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
@@ -556,13 +562,21 @@ export function branchOffset(field: number): int64 {
 
 // A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
 // an instruction built without a slot makes the array that holds anything.
-export function arrayClassSlot(cls: RaiserRegClass): number {
-	return cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1;
+// A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
+export const ARRAY_CYCLIC_SLOT = 16;
+
+export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false): number {
+	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + (cyclic ? ARRAY_CYCLIC_SLOT : 0);
+}
+
+export function slotArrayCyclic(slot: number): boolean {
+	return slot >= ARRAY_CYCLIC_SLOT;
 }
 
 export function slotArrayClass(slot: number): RaiserRegClass {
-	if (slot < 0 || slot > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
-	return slot == 0 ? RaiserRegClass.Dyn : (slot - 1) as RaiserRegClass;
+	const base = slot >= ARRAY_CYCLIC_SLOT ? slot - ARRAY_CYCLIC_SLOT : slot;
+	if (base < 0 || base > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
+	return base == 0 ? RaiserRegClass.Dyn : (base - 1) as RaiserRegClass;
 }
 
 export function carriesSlot(op: RaiserOpcode): boolean {
@@ -773,6 +787,10 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.StrCharCodeAt, 0) == RaiserRole.Int;
 	assert opRole(RaiserOpcode.StrCharCodeAt, 1) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.StrCharCodeAt, 2) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.DestroyValue, 0) == RaiserRole.Slot;
+	assert opRole(RaiserOpcode.DestroyValue, 2) == RaiserRole.None;
+	assert opRole(RaiserOpcode.WasMoved, 0) == RaiserRole.Any;
+	assert opRole(RaiserOpcode.SinkValue, 1) == RaiserRole.Slot;
 	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Int;
 }
