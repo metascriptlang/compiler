@@ -137,6 +137,12 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 	if (idx >= 0) gLedgerDestroyN[idx]++;
 	pthread_mutex_unlock(&gLedgerMutex);
 }
+void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op) {
+	fprintf(stderr, "\nNIM-GUARD LEDGER: RC-FAMILY MISMATCH %s of %s at %p: the cell's rc is %s\n",
+		op, msLedgerRowName(msHeader(p)->type), p, wantAtomic ? "plain" : "atomic");
+	fflush(stderr);
+	abort();
+}
 #endif  /* MS_DRC_LEDGER */
 
 /* ===== DRC flow counters (perf-only, -DMS_DRC_STAT) ===== */

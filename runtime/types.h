@@ -37,5 +37,6 @@ typedef struct msTypeInfo {
 #define MS_TYPE_FLAG_ARITY_ADAPTER 2  /* Closure env whose first field is the closure it forwards to */
 #define MS_TYPE_FLAG_HCR 4
 #define MS_TYPE_FLAG_ARRAY_CELL 8  /* Array cell: the payload starts with int64_t len, and len 0 means no outgoing refs */
+#define MS_TYPE_FLAG_ATOMIC 16  /* The cell's own rc is atomic: Arc and Locked boxes */
 
 #endif /* MS_TYPEINFO_H */

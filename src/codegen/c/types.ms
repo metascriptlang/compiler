@@ -1258,7 +1258,7 @@ function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
@@ -1305,8 +1305,9 @@ function gateFlaglessUnknown(g: CGen, t: Readonly<Type>): void {
 	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
 }
 
-function typeInfoFlags(subject: Readonly<Type | null>): string {
-	return subject != null && subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
+function typeInfoFlags(info: Readonly<CTypeInfoDemand>): string {
+	if (info.kind == TypeInfoKind.ArcCell) return "MS_TYPE_FLAG_ATOMIC";
+	return info.subject != null && info.subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
 }
 
 export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
