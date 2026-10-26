@@ -242,7 +242,7 @@ export function lspRunServer(): void {
 }
 
 function streamExitCode(end: FrameEnd): int32 {
-	return end == FrameEnd.Truncated ? 1 : 0;
+	return end == FrameEnd.Closed ? 0 : 1;
 }
 
 export function lspServe(io: LspTransport): int32 {
@@ -1080,4 +1080,10 @@ test "dependents stopped while checked are published after the next batch, uncha
 	assert r.exitCode == 0;
 	assert publishesOf(r, userUri) == "[]";
 	assert publishesOf(r, depUri) == "[] [] []";
+}
+
+test "a stream that ends on anything but a clean close exits 1" {
+	assert streamExitCode(FrameEnd.Closed) == 0;
+	assert streamExitCode(FrameEnd.Truncated) == 1;
+	assert streamExitCode(FrameEnd.EmptyBody) == 1;
 }
