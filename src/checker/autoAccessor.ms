@@ -22,7 +22,7 @@ export function expandAutoAccessor(field: Node): Node[] {
 		methodIsStatic: false, methodFlags: "", methodVisibility: pd.propVisibility, methodReturnType: pd.propType,
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, loc);
-	getter.typeExpr = field.typeExpr == null ? null as unknown as Node : cloneNodeForCheck(field.typeExpr);
+	getter.typeExpr = field.typeExpr == null ? null : cloneNodeForCheck(field.typeExpr);
 	getter.flags = getter.flags.incl(NodeFlag.Accessor);
 	const setter = createNodeAt(NodeKind.MethodDecl, {
 		methodName: `set_${pd.propName}`, methodParams: ["value"], methodParamTypes: [pd.propType],
