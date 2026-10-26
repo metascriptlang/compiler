@@ -21,6 +21,7 @@
 // GUARD-CHECK-FAIL 'inLoop' is moved inside a loop
 // GUARD-CHECK-FAIL 'spawnFor' is moved inside a loop
 // GUARD-CHECK-FAIL 'spawnWhile' is moved inside a loop
+// GUARD-CHECK-FAIL cannot move 'fromSpawn': it is not the sole owner
 // GUARD-CHECK-FAIL cannot move 'topAlias': it is not the sole owner
 // GUARD-CHECK-FAIL cannot move 'viaAlias': it is not the sole owner
 
@@ -107,4 +108,8 @@ for (let r = 0; r < 2; r = r + 1) {
 	let topAlias = topHeld;
 	await io.bump(move topAlias);
 	topHeld.n = 100;
+}
+for (let r = 0; r < 2; r = r + 1) {
+	const fromSpawn = await spawn(() => new T());
+	await io.bump(move fromSpawn);
 }

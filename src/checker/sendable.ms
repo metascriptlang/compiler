@@ -1885,8 +1885,12 @@ function walkOwner(node: Node | null, w: OwnerWalk): void {
 	};
 }
 
+function isActorRef(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
-	if (!typeCarriesRef(sym.symbolType)) return;
+	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
 		return;

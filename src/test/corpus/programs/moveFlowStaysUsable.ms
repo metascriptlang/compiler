@@ -7,6 +7,7 @@
 // @stdout: spawn-if-return 6
 // @stdout: spawn-loop-rebind 16
 // @stdout: top-level 2
+// @stdout: actor-ref 4
 // @exit: 0
 // note: a `move` that no later path uses stays accepted: the join keeps a move only on a path that reaches the use, a loop may move a binding it rebinds before the next iteration, and a move followed by `break` or `return` ends the path
 
@@ -79,6 +80,9 @@ async function spawnLoopRebind(): Promise<number> {
 	return total;
 }
 
+actor Peer { n: int32 = 0; }
+actor Hub { hold(p: Peer): int32 { return 1; } }
+
 const io = new Io();
 console.log(`plain ${await plain(io)}`);
 console.log(`if-return ${await ifReturn(io, true)}`);
@@ -93,3 +97,12 @@ for (let r = 0; r < 2; r = r + 1) {
 	topLevel = topLevel + await io.bump(move fresh);
 }
 console.log(`top-level ${topLevel}`);
+const hub = new Hub();
+let actorRef = 0;
+for (let r = 0; r < 2; r = r + 1) {
+	const viaNew = new Peer();
+	actorRef = actorRef + await hub.hold(move viaNew);
+	const viaSpawn = await spawn(() => new Peer());
+	actorRef = actorRef + await hub.hold(move viaSpawn);
+}
+console.log(`actor-ref ${actorRef}`);
