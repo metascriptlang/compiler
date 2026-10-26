@@ -1,7 +1,24 @@
 import { MemKind } from "./layout";
 
+@include("stdlib.h")
+@include("string.h")
+@include("runtime/core/hashBits.h")
 extern function msBitsFloat64(u: int64): float64;
 extern function msFloat64Bits(d: float64): int64;
+extern function calloc(count: uint64, size: uint64): Ptr<void>;
+extern function free(p: Ptr<void>): void;
+extern function memset(p: Ptr<void>, c: int32, n: uint64): Ptr<void>;
+extern function memcpy(dst: Ptr<void>, src: Ptr<void>, n: uint64): Ptr<void>;
+extern function memmove(dst: Ptr<void>, src: Ptr<void>, n: uint64): Ptr<void>;
+
+class NativeBlock {
+	address: int64;
+	constructor(address: int64) { this.address = address; }
+}
+
+function onDestroy(this block: NativeBlock): void {
+	free(block.address as Ptr<void>);
+}
 
 export enum RegionKind { Stack, Globals, Const, Heap }
 
@@ -31,13 +48,12 @@ export interface BumpArea {
 }
 
 export interface VmMemory {
-	words: int64[];
+	blocks: NativeBlock[];
 	regions: Region[];
 	lastHit: int32;
 	freeLists: int64[];
 	heapCur: int64;
 	heapLeft: int64;
-	heapRegion: int32;
 	stack: StackSegment[];
 	sp: StackMark;
 	boxes: int64[];
@@ -59,14 +75,16 @@ export const BLOCK_HEADER_SIZE: int64 = 16;
 export const BLOCK_ALIGN: int64 = 16;
 export const STATE_ALLOCATED: int64 = 0xA110C8ED;
 export const STATE_FREE: int64 = 0xF4EEB10C;
+export const STATE_CELL: int64 = 0xCE11B10C;
 export const REF_HEADER_SIZE: int64 = 24;
 
+const LOW32: int64 = 0xFFFFFFFF;
 const SMALL_CLASSES = 8;
 const FIRST_LARGE_BLOCK: int64 = 256;
 
 export function createVmMemory(): VmMemory {
 	return {
-		words: [0, 0], regions: [], lastHit: 0, freeLists: [], heapCur: 0, heapLeft: 0, heapRegion: -1, stack: [],
+		blocks: [], regions: [], lastHit: 0, freeLists: [], heapCur: 0, heapLeft: 0, stack: [],
 		sp: { seg: 0, used: 0, boxes: 0 }, boxes: [],
 		globals: { cur: 0, left: 0, kind: RegionKind.Globals }, consts: { cur: 0, left: 0, kind: RegionKind.Const }, bytesInUse: 0,
 	};
@@ -77,15 +95,23 @@ function alignUp(x: int64, a: int64): int64 {
 }
 
 function hostGrow(mem: VmMemory, size: int64): int64 {
-	const start = mem.words.length * 8;
-	mem.words.length = (mem.words.length + size / 8) as int32;
-	return start;
+	const address = calloc(1, size as uint64) as int64;
+	if (address == 0) throw new Error(`internal: the host refused ${size} bytes of VM memory`);
+	mem.blocks.push(new NativeBlock(address));
+	return address;
 }
 
 function addRegion(mem: VmMemory, start: int64, size: int64, kind: RegionKind): int32 {
 	mem.regions.push({ start, size, kind, used: 0 });
-	mem.lastHit = mem.regions.length - 1;
-	return mem.lastHit;
+	let at = mem.regions.length - 1;
+	while (at > 0 && mem.regions[at - 1].start > start) {
+		const moved = mem.regions[at - 1];
+		mem.regions[at - 1] = mem.regions[at];
+		mem.regions[at] = moved;
+		at -= 1;
+	}
+	mem.lastHit = at;
+	return at;
 }
 
 function findRegion(mem: VmMemory, a: int64): int32 {
@@ -134,139 +160,159 @@ export function isConstMemory(mem: VmMemory, a: int64): boolean {
 	return i >= 0 && mem.regions[i].kind == RegionKind.Const;
 }
 
+@inline
 function checkAligned(a: int64, width: int64): void {
 	when (mode != "danger") {
-		if (a <= 0 || a % width != 0) throw new Error(`internal: a ${width} byte access at address ${a} is not aligned`);
+		if (a == 0 || (a & (width - 1)) != 0) throw new Error(`internal: a ${width} byte access at address ${a} is not aligned`);
 	}
 }
 
-export function ld64(mem: VmMemory, a: int64): int64 {
+@inline
+export function ld64(a: int64): int64 {
 	checkAligned(a, 8);
-	return mem.words[a >> 3];
+	return (a as Ptr<int64>)[0];
 }
 
-export function st64(mem: VmMemory, a: int64, v: int64): void {
+@inline
+export function st64(a: int64, v: int64): void {
 	checkAligned(a, 8);
-	mem.words[a >> 3] = v;
-}
-
-function laneShift(a: int64): int64 {
-	return (a & 7) * 8;
-}
-
-function laneMask(width: int64): int64 {
-	return width == 1 ? 0xFF : width == 2 ? 0xFFFF : 0xFFFFFFFF;
-}
-
-function ldUnsigned(mem: VmMemory, a: int64, width: int64): int64 {
-	checkAligned(a, width);
-	return (mem.words[a >> 3] >> laneShift(a)) & laneMask(width);
-}
-
-function stLane(mem: VmMemory, a: int64, width: int64, v: int64): void {
-	checkAligned(a, width);
-	const mask = laneMask(width);
-	const shift = laneShift(a);
-	const index = a >> 3;
-	mem.words[index] = (mem.words[index] & ~(mask << shift)) | ((v & mask) << shift);
+	(a as Ptr<int64>)[0] = v;
 }
 
 function signExtend(v: int64, width: int64): int64 {
-	const sign = laneMask(width) / 2 + 1;
+	const sign: int64 = width == 1 ? 0x80 : width == 2 ? 0x8000 : 0x80000000;
 	return (v ^ sign) - sign;
 }
 
-export function memLoad(mem: VmMemory, a: int64, kind: MemKind): int64 {
+export function memLoad(a: int64, kind: MemKind): int64 {
 	if (kind == MemKind.F32 || kind == MemKind.Block) throw new Error(`internal: a typed load of kind ${kind as number} is not provided`);
+	checkAligned(a, memKindWidth(kind));
 	return match (kind) {
-		MemKind.U8 => ldUnsigned(mem, a, 1),
-		MemKind.U16 => ldUnsigned(mem, a, 2),
-		MemKind.U32 => ldUnsigned(mem, a, 4),
-		MemKind.I8 => signExtend(ldUnsigned(mem, a, 1), 1),
-		MemKind.I16 => signExtend(ldUnsigned(mem, a, 2), 2),
-		MemKind.I32 => signExtend(ldUnsigned(mem, a, 4), 4),
-		MemKind.I64 | MemKind.U64 | MemKind.Ptr => ld64(mem, a),
-		MemKind.F64 => ld64(mem, a),
+		MemKind.U8 => (a as Ptr<uint8>)[0] as int64,
+		MemKind.U16 => (a as Ptr<uint16>)[0] as int64,
+		MemKind.U32 => (a as Ptr<uint32>)[0] as int64,
+		MemKind.I8 => (a as Ptr<int8>)[0] as int64,
+		MemKind.I16 => (a as Ptr<int16>)[0] as int64,
+		MemKind.I32 => (a as Ptr<int32>)[0] as int64,
+		MemKind.I64 | MemKind.U64 | MemKind.Ptr | MemKind.F64 => (a as Ptr<int64>)[0],
 		MemKind.F32 | MemKind.Block => 0,
 	};
 }
 
-export function memStore(mem: VmMemory, a: int64, kind: MemKind, v: int64): void {
+export function memStore(a: int64, kind: MemKind, v: int64): void {
 	if (kind == MemKind.F32 || kind == MemKind.Block) throw new Error(`internal: a typed store of kind ${kind as number} is not provided`);
+	checkAligned(a, memKindWidth(kind));
 	match (kind) {
-		MemKind.U8 | MemKind.I8 => { stLane(mem, a, 1, v); },
-		MemKind.U16 | MemKind.I16 => { stLane(mem, a, 2, v); },
-		MemKind.U32 | MemKind.I32 => { stLane(mem, a, 4, v); },
-		MemKind.I64 | MemKind.U64 | MemKind.Ptr | MemKind.F64 => { st64(mem, a, v); },
+		MemKind.U8 | MemKind.I8 => { (a as Ptr<uint8>)[0] = (v & 0xFF) as uint8; },
+		MemKind.U16 | MemKind.I16 => { (a as Ptr<uint16>)[0] = (v & 0xFFFF) as uint16; },
+		MemKind.U32 | MemKind.I32 => { (a as Ptr<uint32>)[0] = (v & 0xFFFFFFFF) as uint32; },
+		MemKind.I64 | MemKind.U64 | MemKind.Ptr | MemKind.F64 => { (a as Ptr<int64>)[0] = v; },
 		MemKind.F32 | MemKind.Block => {},
 	}
 }
 
-export function ldF64(mem: VmMemory, a: int64): float64 {
-	return msBitsFloat64(ld64(mem, a));
+function memKindWidth(kind: MemKind): int64 {
+	return match (kind) {
+		MemKind.U8 | MemKind.I8 => 1,
+		MemKind.U16 | MemKind.I16 => 2,
+		MemKind.U32 | MemKind.I32 | MemKind.F32 => 4,
+		_ => 8,
+	};
 }
 
-export function stF64(mem: VmMemory, a: int64, v: float64): void {
-	st64(mem, a, msFloat64Bits(v));
+export function ldF64(a: int64): float64 {
+	return msBitsFloat64(ld64(a));
 }
 
-function zeroRange(mem: VmMemory, a: int64, size: int64): void {
-	const end = (a + size) >> 3;
-	for (let i = a >> 3; i < end; i += 1) mem.words[i] = 0;
+export function stF64(a: int64, v: float64): void {
+	st64(a, msFloat64Bits(v));
 }
 
-function sizeClass(size: int64): int64[] {
-	if (size <= 128) {
-		const s = Math.max(alignUp(size, 16), 16);
-		return [s / 16 - 1, s];
-	}
+@inline
+export function ldByte(a: int64): int64 {
+	return (a as Ptr<uint8>)[0] as int64;
+}
+
+@inline
+export function stByte(a: int64, v: int64): void {
+	(a as Ptr<uint8>)[0] = (v & 0xFF) as uint8;
+}
+
+@inline
+export function copyBytes(dst: int64, src: int64, size: int64): void {
+	if (size > 0) memmove(dst as Ptr<void>, src as Ptr<void>, size as uint64);
+}
+
+@inline
+function zeroRange(a: int64, size: int64): void {
+	memset(a as Ptr<void>, 0, size as uint64);
+}
+
+function classBytes(size: int64): int64 {
+	if (size <= 128) return Math.max(alignUp(size, 16), 16);
+	let s = FIRST_LARGE_BLOCK;
+	while (s < size) s = s * 2;
+	return s;
+}
+
+function classIndex(bytes: int64): int32 {
+	if (bytes <= 128) return (bytes / 16 - 1) as int32;
 	let s = FIRST_LARGE_BLOCK;
 	let c = SMALL_CLASSES;
-	while (s < size) {
+	while (s < bytes) {
 		s = s * 2;
 		c += 1;
 	}
-	return [c, s];
+	return c as int32;
 }
 
-export function heapAlloc(mem: VmMemory, size: int64): int64 {
+function allocBlock(mem: VmMemory, size: int64, zeroed: boolean): int64 {
 	if (size <= 0) return 0;
-	const cls = sizeClass(size);
-	const index = cls[0] as int32;
-	const bs = cls[1];
+	const bs = classBytes(size);
+	const index = classIndex(bs);
 	while (mem.freeLists.length <= index) mem.freeLists.push(0);
 	let b = mem.freeLists[index];
 	if (b != 0) {
-		mem.freeLists[index] = ld64(mem, b + BLOCK_HEADER_SIZE);
-		zeroRange(mem, b + BLOCK_HEADER_SIZE, bs);
+		mem.freeLists[index] = ld64(b + BLOCK_HEADER_SIZE);
+		if (zeroed) zeroRange(b + BLOCK_HEADER_SIZE, bs);
 	} else {
 		const total = BLOCK_HEADER_SIZE + bs;
 		if (mem.heapLeft < total) {
 			const chunk = Math.max(HEAP_CHUNK_SIZE, total);
 			mem.heapCur = hostGrow(mem, chunk);
 			mem.heapLeft = chunk;
-			mem.heapRegion = addRegion(mem, mem.heapCur, chunk, RegionKind.Heap);
+			addRegion(mem, mem.heapCur, chunk, RegionKind.Heap);
 		}
 		b = mem.heapCur;
 		mem.heapCur = mem.heapCur + total;
 		mem.heapLeft = mem.heapLeft - total;
-		mem.regions[mem.heapRegion].used = mem.heapCur - mem.regions[mem.heapRegion].start;
+		const region = mem.regions[findRegion(mem, b)];
+		region.used = mem.heapCur - region.start;
 	}
-	st64(mem, b, bs);
-	st64(mem, b + 8, STATE_ALLOCATED);
+	st64(b, bs);
+	st64(b + 8, STATE_ALLOCATED);
 	mem.bytesInUse = mem.bytesInUse + bs;
 	return b + BLOCK_HEADER_SIZE;
+}
+
+export function heapAlloc(mem: VmMemory, size: int64): int64 {
+	return allocBlock(mem, size, true);
+}
+
+export function heapAllocUninit(mem: VmMemory, size: int64): int64 {
+	return allocBlock(mem, size, false);
 }
 
 function blockState(mem: VmMemory, p: int64): int64 {
 	if (p < BLOCK_HEADER_SIZE || (p & (BLOCK_ALIGN - 1)) != 0) return 0;
 	const i = findRegion(mem, p - BLOCK_HEADER_SIZE);
 	if (i < 0 || mem.regions[i].kind != RegionKind.Heap) return 0;
-	return ld64(mem, p - 8);
+	return ld64(p - 8);
 }
 
 export function isHeapBlock(mem: VmMemory, p: int64): boolean {
-	return blockState(mem, p) == STATE_ALLOCATED;
+	const state = blockState(mem, p);
+	return state == STATE_ALLOCATED || state == STATE_CELL;
 }
 
 export function isFreedBlock(mem: VmMemory, p: int64): boolean {
@@ -274,18 +320,18 @@ export function isFreedBlock(mem: VmMemory, p: int64): boolean {
 }
 
 export function blockSize(mem: VmMemory, p: int64): int64 {
-	return ld64(mem, p - BLOCK_HEADER_SIZE);
+	return ld64(p - BLOCK_HEADER_SIZE);
 }
 
 export function heapDealloc(mem: VmMemory, p: int64): boolean {
 	if (p == 0) return true;
 	if (!isHeapBlock(mem, p)) return false;
 	const b = p - BLOCK_HEADER_SIZE;
-	const bs = ld64(mem, b);
+	const bs = ld64(b);
 	mem.bytesInUse = mem.bytesInUse - bs;
-	const index = sizeClass(bs)[0] as int32;
-	st64(mem, b + 8, STATE_FREE);
-	st64(mem, p, mem.freeLists[index]);
+	const index = classIndex(bs);
+	st64(b + 8, STATE_FREE);
+	st64(p, mem.freeLists[index]);
 	mem.freeLists[index] = b;
 	return true;
 }
@@ -297,9 +343,9 @@ export function auditHeap(mem: VmMemory): HeapAudit {
 		let at = r.start;
 		const end = r.start + r.used;
 		while (at < end) {
-			const bs = ld64(mem, at);
-			const state = ld64(mem, at + 8);
-			if (state == STATE_ALLOCATED) {
+			const bs = ld64(at);
+			const state = ld64(at + 8);
+			if (state == STATE_ALLOCATED || state == STATE_CELL) {
 				audit.allocated += 1;
 				audit.bytes = audit.bytes + bs;
 			} else if (state == STATE_FREE) audit.free += 1;
@@ -308,6 +354,20 @@ export function auditHeap(mem: VmMemory): HeapAudit {
 		}
 	}
 	return audit;
+}
+
+export function liveCellBlocks(mem: VmMemory): int64[] {
+	const found: int64[] = [];
+	for (const r of mem.regions) {
+		if (r.kind != RegionKind.Heap) continue;
+		let at = r.start;
+		const end = r.start + r.used;
+		while (at < end) {
+			if (ld64(at + 8) == STATE_CELL) found.push(at + BLOCK_HEADER_SIZE);
+			at = at + BLOCK_HEADER_SIZE + ld64(at);
+		}
+	}
+	return found;
 }
 
 function bumpAlloc(mem: VmMemory, area: BumpArea, size: int64, align: int64): int64 {
@@ -352,7 +412,7 @@ export function pushFrame(mem: VmMemory, size: int64): int64 {
 		}
 	}
 	const frame = mem.stack[seg].base + used;
-	zeroRange(mem, frame, size);
+	zeroRange(frame, size);
 	mem.sp = { seg, used: used + size, boxes: mem.boxes.length };
 	return frame;
 }
@@ -373,38 +433,42 @@ export function refBlockOffset(align: int64): int64 {
 	return alignUp(REF_HEADER_SIZE, Math.max(align, 1));
 }
 
-export function newCell(mem: VmMemory, size: int64, align: int64, typeIndex: int64): int64 {
+export function newCell(mem: VmMemory, size: int64, align: int64, typeIndex: int64, zeroed: boolean): int64 {
 	const offset = refBlockOffset(align);
 	const total = offset + Math.max(size, 1);
-	const cell = heapAlloc(mem, total) + offset;
-	st64(mem, cell - REF_HEADER_SIZE + 8, typeIndex + 1);
-	st64(mem, cell - REF_HEADER_SIZE + 16, (total * 4294967296) | 0xFFFFFFFF);
+	const block = allocBlock(mem, total, zeroed);
+	st64(block - 8, STATE_CELL);
+	const cell = block + offset;
+	st64(cell - REF_HEADER_SIZE + 8, typeIndex + 1);
+	st64(cell - REF_HEADER_SIZE + 16, (total * 4294967296) | 0xFFFFFFFF);
 	return cell;
 }
 
-export function cellRc(mem: VmMemory, cell: int64): int64 {
-	return ld64(mem, cell - REF_HEADER_SIZE);
+@inline
+export function cellRc(cell: int64): int64 {
+	return ld64(cell - REF_HEADER_SIZE);
 }
 
-export function setCellRc(mem: VmMemory, cell: int64, rc: int64): void {
-	st64(mem, cell - REF_HEADER_SIZE, rc);
+@inline
+export function setCellRc(cell: int64, rc: int64): void {
+	st64(cell - REF_HEADER_SIZE, rc);
 }
 
-export function cellTypeIndex(mem: VmMemory, cell: int64): int64 {
-	return ld64(mem, cell - REF_HEADER_SIZE + 8) - 1;
+export function cellTypeIndex(cell: int64): int64 {
+	return ld64(cell - REF_HEADER_SIZE + 8) - 1;
 }
 
-export function cellRootIdx(mem: VmMemory, cell: int64): int64 {
-	return signExtend(ld64(mem, cell - REF_HEADER_SIZE + 16) & 0xFFFFFFFF, 4);
+export function cellRootIdx(cell: int64): int64 {
+	return signExtend(ld64(cell - REF_HEADER_SIZE + 16) & 0xFFFFFFFF, 4);
 }
 
-export function setCellRootIdx(mem: VmMemory, cell: int64, idx: int64): void {
+export function setCellRootIdx(cell: int64, idx: int64): void {
 	const w = cell - REF_HEADER_SIZE + 16;
-	st64(mem, w, (ld64(mem, w) & ~laneMask(4)) | (idx & laneMask(4)));
+	st64(w, (ld64(w) & ~LOW32) | (idx & LOW32));
 }
 
-export function cellAllocSize(mem: VmMemory, cell: int64): int64 {
-	return (ld64(mem, cell - REF_HEADER_SIZE + 16) >> 32) & laneMask(4);
+export function cellAllocSize(cell: int64): int64 {
+	return (ld64(cell - REF_HEADER_SIZE + 16) >> 32) & LOW32;
 }
 
 export function disposeCell(mem: VmMemory, cell: int64, align: int64): boolean {
@@ -436,12 +500,12 @@ test "a mixed alloc and free sequence leaves allocated blocks equal to the live 
 test "a freed block is reused by its size class and comes back zeroed, another class is not reused" {
 	const mem = createVmMemory();
 	const first = heapAlloc(mem, 20);
-	st64(mem, first, 77);
+	st64(first, 77);
 	assert heapDealloc(mem, first);
 	const other = heapAlloc(mem, 100);
 	assert other != first;
 	const again = heapAlloc(mem, 30);
-	assert again == first && ld64(mem, again) == 0 && blockSize(mem, again) == 32;
+	assert again == first && ld64(again) == 0 && blockSize(mem, again) == 32;
 	const big = heapAlloc(mem, 70000);
 	assert blockSize(mem, big) == 131072;
 	assert heapDealloc(mem, big);
@@ -468,7 +532,7 @@ test "popFrames restores the bump, frees the boxes of the popped frames and a ne
 	const mem = createVmMemory();
 	const mark = stackMark(mem);
 	const first = pushFrame(mem, 64);
-	st64(mem, first + 8, 5);
+	st64(first + 8, 5);
 	const second = pushFrame(mem, 128);
 	assert second == first + 64;
 	const box = allocBox(mem, 40);
@@ -476,7 +540,7 @@ test "popFrames restores the bump, frees the boxes of the popped frames and a ne
 	popFrames(mem, mark);
 	assert mem.sp.seg == mark.seg && mem.sp.used == mark.used && mem.sp.boxes == 0;
 	assert !isHeapBlock(mem, box) && auditHeap(mem).allocated == 0;
-	assert pushFrame(mem, 64) == first && ld64(mem, first + 8) == 0;
+	assert pushFrame(mem, 64) == first && ld64(first + 8) == 0;
 }
 
 test "a frame that does not fit starts the next stack segment and popping returns to the first" {
@@ -495,35 +559,35 @@ test "a frame that does not fit starts the next stack segment and popping return
 test "typed loads and stores keep their lane, widen by sign, and leave their neighbours alone" {
 	const mem = createVmMemory();
 	const a = heapAlloc(mem, 32);
-	memStore(mem, a, MemKind.I8, -2);
-	memStore(mem, a + 1, MemKind.U8, 200);
-	memStore(mem, a + 2, MemKind.I16, -300);
-	memStore(mem, a + 4, MemKind.U32, 4000000000);
-	assert memLoad(mem, a, MemKind.I8) == -2 && memLoad(mem, a, MemKind.U8) == 254 && memLoad(mem, a + 1, MemKind.U8) == 200 && memLoad(mem, a + 1, MemKind.I8) == -56;
-	assert memLoad(mem, a + 2, MemKind.I16) == -300 && memLoad(mem, a + 2, MemKind.U16) == 65236;
-	assert memLoad(mem, a + 4, MemKind.U32) == 4000000000 && memLoad(mem, a + 4, MemKind.I32) == -294967296;
-	memStore(mem, a, MemKind.U8, 7);
-	assert memLoad(mem, a, MemKind.U8) == 7 && memLoad(mem, a + 1, MemKind.U8) == 200 && memLoad(mem, a + 2, MemKind.I16) == -300;
-	memStore(mem, a + 8, MemKind.I64, -9);
-	memStore(mem, a + 16, MemKind.Ptr, a);
-	stF64(mem, a + 24, 2.5);
-	assert memLoad(mem, a + 8, MemKind.I64) == -9 && memLoad(mem, a + 16, MemKind.Ptr) == a && ldF64(mem, a + 24) == 2.5;
+	memStore(a, MemKind.I8, -2);
+	memStore(a + 1, MemKind.U8, 200);
+	memStore(a + 2, MemKind.I16, -300);
+	memStore(a + 4, MemKind.U32, 4000000000);
+	assert memLoad(a, MemKind.I8) == -2 && memLoad(a, MemKind.U8) == 254 && memLoad(a + 1, MemKind.U8) == 200 && memLoad(a + 1, MemKind.I8) == -56;
+	assert memLoad(a + 2, MemKind.I16) == -300 && memLoad(a + 2, MemKind.U16) == 65236;
+	assert memLoad(a + 4, MemKind.U32) == 4000000000 && memLoad(a + 4, MemKind.I32) == -294967296;
+	memStore(a, MemKind.U8, 7);
+	assert memLoad(a, MemKind.U8) == 7 && memLoad(a + 1, MemKind.U8) == 200 && memLoad(a + 2, MemKind.I16) == -300;
+	memStore(a + 8, MemKind.I64, -9);
+	memStore(a + 16, MemKind.Ptr, a);
+	stF64(a + 24, 2.5);
+	assert memLoad(a + 8, MemKind.I64) == -9 && memLoad(a + 16, MemKind.Ptr) == a && ldF64(a + 24) == 2.5;
 	let refused = "";
-	try { memLoad(mem, a, MemKind.Block); } catch (e) { refused = e.message; }
+	try { memLoad(a, MemKind.Block); } catch (e) { refused = e.message; }
 	assert refused.includes("is not provided"), refused;
 }
 
 test "a ref cell carries the 24 byte header: count, type index, root index and allocation size ahead of the object" {
 	const mem = createVmMemory();
-	const cell = newCell(mem, 24, 8, 5);
+	const cell = newCell(mem, 24, 8, 5, true);
 	assert cell % 8 == 0 && isHeapBlock(mem, cell - refBlockOffset(8)) && refBlockOffset(8) == REF_HEADER_SIZE && refBlockOffset(16) == 32;
-	assert cellRc(mem, cell) == 0 && cellTypeIndex(mem, cell) == 5 && cellRootIdx(mem, cell) == -1 && cellAllocSize(mem, cell) == 48;
-	setCellRc(mem, cell, 32);
-	setCellRootIdx(mem, cell, 9);
-	assert cellRc(mem, cell) == 32 && cellRootIdx(mem, cell) == 9 && cellAllocSize(mem, cell) == 48 && cellTypeIndex(mem, cell) == 5;
-	const untyped = newCell(mem, 8, 8, -1);
-	assert cellTypeIndex(mem, untyped) == -1;
-	st64(mem, cell, 11);
+	assert cellRc(cell) == 0 && cellTypeIndex(cell) == 5 && cellRootIdx(cell) == -1 && cellAllocSize(cell) == 48;
+	setCellRc(cell, 32);
+	setCellRootIdx(cell, 9);
+	assert cellRc(cell) == 32 && cellRootIdx(cell) == 9 && cellAllocSize(cell) == 48 && cellTypeIndex(cell) == 5;
+	const untyped = newCell(mem, 8, 8, -1, true);
+	assert cellTypeIndex(untyped) == -1;
+	st64(cell, 11);
 	assert disposeCell(mem, cell, 8) && !disposeCell(mem, cell, 8) && disposeCell(mem, untyped, 8) && disposeCell(mem, 0, 8);
 	assert auditHeap(mem).allocated == 0;
 }
