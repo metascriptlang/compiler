@@ -1179,10 +1179,13 @@ function makeCopyAfterInit(destSym: Symbol, rcInfo: RcInfo, loc: SourceLocation,
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(sym: Symbol, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	return makeSinkCallTo(makeIdentResolved(sym, loc), srcExpr, rcInfo, loc);
+}
+
+function makeSinkCallTo(destRef: Node, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	const sinkSym = rcInfo.sinkFn;
 	if (sinkSym == null) return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind == RcKind.Named) {
-		const destRef = makeIdentResolved(sym, loc);
 		const destArg = needsDestAddr(rcInfo)
 			? makeHiddenAddr(destRef, loc)
 			: destRef;
@@ -1192,7 +1195,7 @@ function makeSinkCall(sym: Symbol, srcExpr: Node, rcInfo: RcInfo, loc: SourceLoc
 			makeCall(makeTypedIdentResolved(sinkSym, null, loc), [destArg, srcArg], loc), loc);
 	}
 	return makeExprStmt(
-		makeCall(makeTypedIdentResolved(sinkSym, null, loc), [makeIdentResolved(sym, loc), srcExpr], loc), loc);
+		makeCall(makeTypedIdentResolved(sinkSym, null, loc), [destRef, srcExpr], loc), loc);
 }
 
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
@@ -1253,6 +1256,11 @@ function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): N
 	return src;
 }
 
+function assignedSource(stmt: Node, rhs: Node): Node {
+	const asg = stmt.kind == NodeKind.ExprStmt ? (stmt.data as ExprStmtData).expr : null;
+	return asg != null && asg.kind == NodeKind.BinaryExpr ? (asg.data as BinaryExprData).right : rhs;
+}
+
 // genSink: ownership transfer — fresh/last-read values moved without copy.
 // Reference: genSink in injectdestructors
 function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcInfo: RcInfo,
@@ -1264,6 +1272,7 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 	// IsField (MemberExpr/ArrayAccess LHS): save old → assign → destroy old
 	if ((flags & MOC_IS_FIELD) != 0) {
 		evalSourceFirst(stmt, dest, rhs, dctx);
+		if (dctx.ctx.raiserBackend && rcInfo.rcKind == RcKind.Named && rcInfo.sinkFn != null) return makeSinkCallTo(dest, assignedSource(stmt, rhs), rcInfo, loc);
 		return emitSaveAssignDestroySimple(stmt, cloneNodeKeepSem(dest), rcInfo, "oldField", dctx, loc);
 	}
 	if (destSym != null) {
