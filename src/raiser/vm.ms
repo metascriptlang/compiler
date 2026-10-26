@@ -453,19 +453,26 @@ function storeSlotRef(vm: RaiserVM, obj: Cursor<RaiserObjectData>, idx: int32, h
 	releaseShell(vm, old);
 }
 
-// A frame's exit releases the shells in its own ref slots and zeroes everything above its parameters: the next frame
-// starts on those slots, and a word left in a slot some caller keeps a handle in would be read back as one.
-function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction): void {
+// A frame's exit releases the shells in its own ref slots, and clears the dead ref temporaries its caller keeps above the
+// call window: the frame's words landed on them, and a word left in a slot would be read back as a handle.
+function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction, frame: Cursor<RaiserCallFrame>): void {
+	const slots = vm.regs.slots;
 	const own = func.ownRefs;
 	for (let i = 0; i < own.length; i += 1) {
 		const r = base + own[i];
-		const h = vm.regs.slots[r];
+		const h = slots[r];
 		if (h != 0) {
-			vm.regs.slots[r] = 0;
+			slots[r] = 0;
 			releaseShell(vm, h);
 		}
 	}
-	zeroFrame(vm.regs.slots, base + (func.arity as int64), base + (func.frameSize as int64));
+	const held = getModuleFunc(vm.mod, frame.funcIdx).ownRefs;
+	if (held.length == 0) return;
+	const from = (base - frame.base) as int32 + func.arity;
+	const to = (base - frame.base) as int32 + func.frameSize;
+	for (let i = held.length - 1; i >= 0 && held[i] >= from; i -= 1) {
+		if (held[i] < to) slots[frame.base + held[i]] = 0;
+	}
 }
 
 // A callee frame overlays the registers above the call window. Shells a caller's dead temporaries still
@@ -1204,9 +1211,9 @@ function unwindFrame(vm: RaiserVM): void {
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	const disposing = vm.callStack.items[vm.callStack.depth - 1].returnDest == DISPOSE_DEST;
 	if (disposing) vm.regs.slots[vm.base] = 0;
-	leaveFrame(vm, vm.base, func);
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
+	leaveFrame(vm, vm.base, func, frame);
 	vm.callStack.depth = depth;
 	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
@@ -2407,12 +2414,12 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Span<int64>, objects: 
 						} else {
 							slots[frame.base + (dest >> 3)] = slots[fb + (ia >> 3)];
 						}
-						if (ic > 1) leaveFrame(vm, fb, func);
-						else zeroFrame(slots, fb + ib, fb + func.frameSize);
+						const caller: Cursor<RaiserFunction> = mod.functions[frame.funcIdx];
+						if (func.ownRefs.length + caller.ownRefs.length != 0) leaveFrame(vm, fb, func, frame);
 						vm.callStack.depth = depth - 1;
 						fb = frame.base;
 						funcIdx = frame.funcIdx;
-						func = mod.functions[funcIdx];
+						func = caller;
 						code = func.packed;
 						ip = frame.returnIp;
 					} else {
@@ -3683,7 +3690,7 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	vm.base = frame.base;
 	vm.ip = frame.returnIp;
 	setRegConform(vm, frame.returnDest, returned);
-	leaveFrame(vm, calleeBase, callee);
+	leaveFrame(vm, calleeBase, callee, frame);
 }
 
 // --- Destroying a cell whose last reference went ---
@@ -3877,7 +3884,7 @@ function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 	vm.funcIdx = frame.funcIdx;
 	vm.base = frame.base;
 	vm.ip = frame.returnIp;
-	leaveFrame(vm, calleeBase, callee);
+	leaveFrame(vm, calleeBase, callee, frame);
 	vmFreeCell(vm, vm.disposing.pop());
 	vmDrain(vm);
 }
@@ -7573,7 +7580,7 @@ test "a callee's word registers leave no word in the slots a caller holds handle
 	const leaf = createRaiserFunction("leaf", [raiserABC(RaiserOpcode.LoadInt, 0, immField(30), 0), raiserABC(RaiserOpcode.LoadInt, 1, immField(30), 0), raiserABC(RaiserOpcode.Ret, 0, 0, 0)], [], 0, 0, 2, [word, word]);
 	const vm = execModule(createRaiserModule("leftover", [main, mid, leaf], 0));
 	assert vm.error == "" && vm.exitValue.intVal == 5, vm.error;
-	for (const slot of vm.regs.slots) assert slot == 0 || slot == 5;
+	assert vm.regs.slots[2] == 0, `mid keeps ${vm.regs.slots[2]} in its Ref register`;
 }
 
 // A spawned strand runs in a frame of its own whose first register is the environment slot, whatever
