@@ -1002,7 +1002,7 @@ function unwindFrame(vm: RaiserVM): void {
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
 	vm.callStack.depth = depth;
-	vm.safePoints.length = frame.spBase;
+	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
 	vm.wordBase = frame.wordBase;
@@ -1047,7 +1047,21 @@ const FINALLY_RETURN: int64 = 2;
 
 function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: int64, value: RaiserValue): void {
 	vm.regs.words[vm.wordBase + routeRank] = kind;
-	setRegConform(vm, operandTagged(heldRank as int32, RaiserRegClass.Dyn), value);
+	const held = operandTagged(heldRank as int32, RaiserRegClass.Dyn);
+	setRegConform(vm, held, value);
+	if (kind != FINALLY_NORMAL) vm.safePoints.push(pendingMarker(absOf(vm, held)));
+}
+
+function pendingMarker(abs: number): number {
+	return -1 - abs;
+}
+
+function dropSafePoints(vm: RaiserVM, base: number): void {
+	while (vm.safePoints.length > base) {
+		const top = vm.safePoints[vm.safePoints.length - 1];
+		vm.safePoints.length = vm.safePoints.length - 1;
+		if (top < 0) freePendingBox(vm, (-1 - top) as int64);
+	}
 }
 
 function freePendingBox(vm: RaiserVM, abs: int64): void {
@@ -1065,6 +1079,10 @@ function unwindStep(vm: RaiserVM): void {
 	while (true) {
 		while (vm.safePoints.length > safePointBase(vm)) {
 			const sp = popSafePoint(vm);
+			if (sp < 0) {
+				freePendingBox(vm, (-1 - sp) as int64);
+				continue;
+			}
 			const func = getModuleFunc(vm.mod, vm.funcIdx);
 			if (sp < 0 || sp >= func.packed.length) {
 				vmError(vm, `safepoint out of bounds: ${sp}`);
@@ -1099,6 +1117,7 @@ function unwindStep(vm: RaiserVM): void {
 // Every Try emits a Finally marker, so the innermost safepoint is the only one
 // that can own the next finally to run; re-executing the Ret finds the next.
 function cleanUpOnReturn(vm: RaiserVM): number {
+	while (vm.safePoints.length > safePointBase(vm) && vm.safePoints[vm.safePoints.length - 1] < 0) dropSafePoints(vm, vm.safePoints.length - 1);
 	const n = vm.safePoints.length;
 	if (n == safePointBase(vm)) return -1;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -3298,6 +3317,14 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			const heldReg = operandTagged(ib, RaiserRegClass.Dyn);
 			const held = getDyn(vm, heldReg);
 			if (kind == FINALLY_RAISE) setException(vm, held);
+			if (kind != FINALLY_NORMAL) {
+				const marker = pendingMarker(absOf(vm, heldReg));
+				if (vm.safePoints.length == safePointBase(vm) || vm.safePoints[vm.safePoints.length - 1] != marker) {
+					vmError(vm, "internal: FinallyEnd found no pending marker for its box");
+					return;
+				}
+				vm.safePoints.length = vm.safePoints.length - 1;
+			}
 			freePendingBox(vm, absOf(vm, heldReg) as int64);
 			if (kind == FINALLY_RAISE) {
 				unwindStep(vm);
@@ -3422,7 +3449,7 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	vm.callStack.depth = depth - 1;
 	if (vm.safePoints.length != vm.callStack.items[depth - 1].spBase) {
-		vm.safePoints.length = vm.callStack.items[depth - 1].spBase;
+		dropSafePoints(vm, vm.callStack.items[depth - 1].spBase);
 	}
 
 	const returned = getReg(vm, ia);
@@ -3620,7 +3647,7 @@ function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 	const ownCount = callee.refRegs - callee.paramRefs;
 	vm.regs.refs[vm.refBase] = 0;
 	vm.callStack.depth = depth - 1;
-	vm.safePoints.length = frame.spBase;
+	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
 	vm.wordBase = frame.wordBase;
 	vm.refBase = frame.refBase;
@@ -8299,4 +8326,72 @@ test "placed: AssignInPlace gives a union behind a pointer the source's tag and 
 	const dest = vm.objectHeap.objects[handleIndex(vm.regs.refs[0])];
 	assert handleIndex(dest.slots[1]) == 3 && dest.rc == 2, `${handleIndex(dest.slots[1])} ${dest.rc}`;
 	assert vmLiveCount(vm) == 2 && vm.objectHeap.freeList.length == 2, `${vmLiveCount(vm)}`;
+}
+
+const pendingClasses: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Word];
+
+function throwFromFinallyBody(placed: boolean): RaiserVM {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 11),
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 5, 1),
+		raiserABC(RaiserOpcode.Throw, 5, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 4, 1),
+		raiserABx(RaiserOpcode.LoadConst, 0, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [], 0, 0, 2, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7), raiserInt(8), raiserInt(9)], 0, 0, 6, pendingClasses);
+	return execModule(placedModule([fMain, fGuarded], placed), "orc");
+}
+
+function frameUnwoundWhilePending(placed: boolean): RaiserVM {
+	const mainCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 2, 1),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	];
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 4),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 5, 1),
+		raiserABC(RaiserOpcode.Throw, 5, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [], 0, 0, 3, [RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Word]);
+	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7), raiserInt(8)], 0, 0, 6, pendingClasses);
+	return execModule(placedModule([fMain, fGuarded], placed), "orc");
+}
+
+test "a throw out of a finally body frees the box of the return it interrupted, placed or not" {
+	for (const placed of [true, false]) {
+		const vm = throwFromFinallyBody(placed);
+		assert vm.error == "" && vm.exitValue.intVal == 9, `${placed} ${vm.error} ${vm.exitValue.intVal}`;
+		assert heapBoxLive(vm.arrayHeap) == 0 && vm.safePoints.length == 0, `${placed} ${heapBoxLive(vm.arrayHeap)} ${vm.safePoints.length}`;
+	}
+}
+
+test "a frame unwound by a throw from its finally frees the box of the return it interrupted, placed or not" {
+	for (const placed of [true, false]) {
+		const vm = frameUnwoundWhilePending(placed);
+		assert vm.error == "" && vm.exitValue.intVal == 8, `${placed} ${vm.error} ${vm.exitValue.intVal}`;
+		assert heapBoxLive(vm.arrayHeap) == 0 && vm.safePoints.length == 0, `${placed} ${heapBoxLive(vm.arrayHeap)} ${vm.safePoints.length}`;
+	}
 }
