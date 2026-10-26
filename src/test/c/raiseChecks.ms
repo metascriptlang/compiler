@@ -327,3 +327,44 @@ test "raiseChecks: @throws on a method makes its callers check as it does on a f
 	assert checksIn(result.value, "useStatic") == 1;
 	assert checksIn(result.value, "usePlain") == 0;
 }
+
+const HELD_SRC = `
+function quietHeld(xs: int32[]): int32 {
+	const dbl = (x: int32): int32 => x * 2;
+	let s: int32 = 0;
+	for (const x of xs) s += dbl(x);
+	return s;
+}
+function* mapped(xs: int32[], f: (x: int32) => int32): Iterator<int32> {
+	for (const x of xs) yield f(x);
+}
+function quietChain(xs: int32[]): int32 {
+	let s: int32 = 0;
+	for (const v of mapped(xs, (x: int32): int32 => x * 2)) s += v;
+	return s;
+}
+function raisingHeld(xs: int32[]): int32 {
+	const bad = (x: int32): int32 => { if (x > 100) throw new Error("big"); return x; };
+	let s: int32 = 0;
+	for (const x of xs) s += bad(x);
+	return s;
+}
+function rebound(xs: int32[]): int32 {
+	let f = (x: int32): int32 => x * 2;
+	if (xs.length > 3) f = (x: int32): int32 => { if (x > 100) throw new Error("big"); return x; };
+	let s: int32 = 0;
+	for (const x of xs) s += f(x);
+	return s;
+}
+const xs: int32[] = [1, 2, 3];
+console.log(String(quietHeld(xs) + quietChain(xs) + raisingHeld(xs) + rebound(xs)));
+`;
+
+test "raiseChecks: a local written once with a closure takes its routine's verdict, a rebound one keeps its check" {
+	const result = compileToC(HELD_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "quietHeld") == 0, functionBody(result.value, "quietHeld");
+	assert checksIn(result.value, "quietChain") == 0, functionBody(result.value, "quietChain");
+	assert checksIn(result.value, "raisingHeld") == 1, functionBody(result.value, "raisingHeld");
+	assert checksIn(result.value, "rebound") == 1, functionBody(result.value, "rebound");
+}
