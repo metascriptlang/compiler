@@ -5481,7 +5481,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 		}
 	}
-	const fieldOwnerSym = declaringSymOf(resolvedObjType);
+	const ownSym = declaringSymOf(resolvedObjType);
+	const fieldOwnerSym = ownSym == null && needsDeref ? declaringSymOf(ptrType) : ownSym;
 	const peeledObjType = peelToStructOrUnion(resolvedObjType);
 	if (peeledObjType != null) { resolvedObjType = peeledObjType; }
 	const memberOwner = fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym;
