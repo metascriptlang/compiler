@@ -202,13 +202,44 @@ export interface RaiserStringHeap {
 	texts: string[];
 	rc: int32[];
 	freeList: int64[];
+	bytes: int64[];        // per heap string, the array a placed asBytes handed out (0 for none); the string owns it
+	constBytes: int64[];   // the same for a constant string, kept to the end of the heap
 }
 
 export function createStringHeap(): RaiserStringHeap {
 	const texts: string[] = [];
 	const rc: int32[] = [];
 	const freeList: int64[] = [];
-	return { texts, rc, freeList };
+	const bytes: int64[] = [];
+	const constBytes: int64[] = [];
+	return { texts, rc, freeList, bytes, constBytes };
+}
+
+function bytesSlots(heap: RaiserStringHeap, h: int64): int64[] {
+	return isConstHandle(h) ? heap.constBytes : heap.bytes;
+}
+
+// The byte array a placed asBytes handed out for this string, or 0. A borrowed view in the C runtime, so
+// the string holds the only count and frees the array with itself; the array stays when the text changes
+// and is refilled by the next asBytes.
+export function stringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue): int64 {
+	const slots = bytesSlots(arr.strings, str.intVal);
+	const index = handleIndex(str.intVal) as number;
+	return index < slots.length ? slots[index] : 0;
+}
+
+export function setStringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue, bytes: int64): void {
+	const slots = bytesSlots(arr.strings, str.intVal);
+	const index = handleIndex(str.intVal) as number;
+	while (slots.length <= index) slots.push(0);
+	slots[index] = bytes;
+}
+
+export function stringBytesHandles(heap: RaiserStringHeap): int64[] {
+	const held: int64[] = [];
+	for (const h of heap.bytes) if (h != 0) held.push(h);
+	for (const h of heap.constBytes) if (h != 0) held.push(h);
+	return held;
 }
 
 const constTexts: string[] = [""];
@@ -555,6 +586,7 @@ export interface RaiserArrayData {
 	color: int32;
 	viewOff: int64;
 	viewLen: int32;
+	elemUncounted: boolean;   // the elements are borrowed (a cursor): destroy and copy never count them
 	elemCyclic: boolean;   // the element type can reach the array again: a release that leaves the element alive registers it with the cycle collector
 }
 
@@ -594,12 +626,13 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 		data.viewOff = -1;
 		data.viewLen = 0;
 		data.elemCyclic = false;
+		data.elemUncounted = false;
 		return makeHandle(reused, RaiserHeapKind.Array);
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
 	const words: int64[] = [];
-	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, elemCyclic: false };
+	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, elemCyclic: false, elemUncounted: false };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -625,7 +658,7 @@ export function arrayHeldCount(data: RaiserArrayData): number {
 
 // Whether any held value can be a heap reference.
 export function arrayHoldsHandles(data: RaiserArrayData): boolean {
-	return data.elemClass == RaiserRegClass.Dyn || data.elemClass == RaiserRegClass.Ref;
+	return !data.elemUncounted && (data.elemClass == RaiserRegClass.Dyn || data.elemClass == RaiserRegClass.Ref);
 }
 
 // The value held at `index`, read in the array's element class.
@@ -1293,6 +1326,12 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 @noinline
 function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
 	const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
+	if (index < strings.bytes.length && strings.bytes[index] != 0) {
+		const bytes = arrHeap.arrays[handleIndex(strings.bytes[index])];
+		bytes.items.length = 0;
+		arrHeap.freeList.push(handleIndex(strings.bytes[index]));
+		strings.bytes[index] = 0;
+	}
 	strings.texts[index] = "";
 	strings.freeList.push(index);
 }
@@ -1300,13 +1339,15 @@ function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
 @noinline
 function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.arrays[index];
-	if (data.elemClass == RaiserRegClass.Ref) {
-		for (const handle of data.words) {
-			if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
+	if (!data.elemUncounted) {
+		if (data.elemClass == RaiserRegClass.Ref) {
+			for (const handle of data.words) {
+				if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
+			}
 		}
-	}
-	for (const item of data.items) {
-		rcDecref(arrHeap, objHeap, item);
+		for (const item of data.items) {
+			rcDecref(arrHeap, objHeap, item);
+		}
 	}
 	data.items.length = 0;
 	data.words.length = 0;
