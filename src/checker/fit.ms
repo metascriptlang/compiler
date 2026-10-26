@@ -2944,7 +2944,7 @@ export function declaredTagUnionOf(expr: Node): Type | null {
 	return isSlotUnion(body) ? body : null;
 }
 
-export function isSlotUnion(t: Type): boolean {
+export function isSlotUnion(t: Readonly<Type>): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
 	for (const child of t.typeChildren) {
@@ -3127,11 +3127,11 @@ export function convertUnionToUnion(expr: Node, source: Type, target: Type): Nod
 	return convNode;
 }
 
-function hasSharedDiscriminant(t: Type): boolean {
+function hasSharedDiscriminant(t: Readonly<Type>): boolean {
 	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
 }
 
-export function storesUnionTag(t: Type): boolean {
+export function storesUnionTag(t: Readonly<Type>): boolean {
 	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
 	for (const m of t.typeChildren) {

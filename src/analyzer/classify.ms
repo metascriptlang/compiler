@@ -243,7 +243,7 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 
 // A Raiser union whose members are all value structs is the member's cell, with no tag beside it; the cell
 // is released and copied through the analyzer's cell rows.
-export function raiserFlatCellUnion(t: Type): boolean {
+export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
 	for (const child of t.typeChildren) {
 		if (child.kind != TypeKind.Struct) return false;
@@ -390,7 +390,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				const an = anonUnionCName(t);
 				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
-			if (ctx.raiserBackend && t.typeFlags.has(TypeFlag.ValueUnion)) return structCellInfo();
+			if (ctx.raiserBackend && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t))) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {

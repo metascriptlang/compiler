@@ -3335,7 +3335,7 @@ export function typeofNameMatches(t: Type, name: string): boolean {
 	return isPrimitiveKindName(name) ? primitiveKindName(t) == name : typeofTagOf(t) == name;
 }
 
-export function jsMemberKind(t: Type): string {
+export function jsMemberKind(t: Readonly<Type>): string {
 	if (t.kind == TypeKind.Null) return "null";
 	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
 	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
@@ -3378,7 +3378,7 @@ export function functionSlotOf(slot: Type | null): Type | null {
 	return fn.kind == TypeKind.Function && fn.typeChildren != null ? fn : null;
 }
 
-export function isArrayShaped(t: Type): boolean {
+export function isArrayShaped(t: Readonly<Type>): boolean {
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return true;
 	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
 }
