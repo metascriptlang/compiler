@@ -1272,7 +1272,7 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 	// IsField (MemberExpr/ArrayAccess LHS): save old → assign → destroy old
 	if ((flags & MOC_IS_FIELD) != 0) {
 		evalSourceFirst(stmt, dest, rhs, dctx);
-		if (dctx.ctx.raiserBackend && rcInfo.rcKind == RcKind.Named && rcInfo.sinkFn != null) return makeSinkCallTo(dest, assignedSource(stmt, rhs), rcInfo, loc);
+		if (dctx.ctx.raiserBackend && (rcInfo.rcKind == RcKind.Named || rcInfo.rcKind == RcKind.Array) && rcInfo.sinkFn != null) return makeSinkCallTo(dest, assignedSource(stmt, rhs), rcInfo, loc);
 		return emitSaveAssignDestroySimple(stmt, cloneNodeKeepSem(dest), rcInfo, "oldField", dctx, loc);
 	}
 	if (destSym != null) {
