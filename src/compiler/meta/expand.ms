@@ -135,7 +135,7 @@ function isSpliceCall(node: Node | null): boolean {
 }
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
-let _quoteTypeLocals: string[] = [];
+let _quoteTypeLocals: Map<Node, string[]> = new Map<Node, string[]>();
 
 // The std/meta `msMetaBindSym` host while a typed getTypeImpl literal is built:
 // a Symbol cannot be spelled as a literal, so nodeToASTLiteral reads it back from
@@ -229,8 +229,8 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteGensym = new HashSet<Node>();
 	markQuoteLocals(body, []);
-	_quoteTypeLocals = [];
-	collectQuoteTypeLocals(body, _quoteTypeLocals);
+	_quoteTypeLocals = new Map<Node, string[]>();
+	scopeQuoteTypeLocals(body, []);
 	// Enable splice detection in nodeToASTLiteral
 	_quoteSpliceActive = true;
 
@@ -252,7 +252,7 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteSpliceActive = false;
 	_quoteGensym = new HashSet<Node>();
-	_quoteTypeLocals = [];
+	_quoteTypeLocals = new Map<Node, string[]>();
 	return result;
 }
 
@@ -260,21 +260,35 @@ function collectGenericNames(params: string, out: string[]): void {
 	for (const name of splitTopLevel(genericParamNamesOf(params), ",")) { if (name != "") out.push(name); }
 }
 
-function collectQuoteTypeLocals(n: Node | null, out: string[]): void {
-	if (n == null) return;
+function declaredTypeName(n: Node): string {
+	return match (n.kind) {
+		NodeKind.ClassDecl => (n.data as ClassDeclData).className,
+		NodeKind.ActorDecl => (n.data as ActorDeclData).actorName,
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => (n.data as InterfaceDeclData).interfaceName,
+		NodeKind.EnumDecl => (n.data as EnumDeclData).enumName,
+		NodeKind.TypeAliasDecl => (n.data as TypeAliasDeclData).aliasName,
+		_ => "",
+	};
+}
+
+function addOwnGenericNames(n: Node, out: string[]): void {
 	match (n.kind) {
-		NodeKind.ClassDecl => { out.push((n.data as ClassDeclData).className); collectGenericNames(n.typeArg, out); },
-		NodeKind.ActorDecl => { out.push((n.data as ActorDeclData).actorName); collectGenericNames(n.typeArg, out); },
-		NodeKind.InterfaceDecl | NodeKind.StructDecl => { out.push((n.data as InterfaceDeclData).interfaceName); collectGenericNames(n.typeArg, out); },
-		NodeKind.EnumDecl => out.push((n.data as EnumDeclData).enumName),
-		NodeKind.TypeAliasDecl => { out.push((n.data as TypeAliasDeclData).aliasName); collectGenericNames(n.typeArg, out); },
+		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl => collectGenericNames(n.typeArg, out),
 		NodeKind.FunctionDecl => { for (const g of extractGenericNames((n.data as FunctionDeclData).fnFlags)) out.push(g); },
 		NodeKind.MethodDecl => { for (const g of extractGenericNames((n.data as MethodDeclData).methodFlags)) out.push(g); },
 		NodeKind.ArrowFunction => { for (const g of extractGenericNames((n.data as ArrowFunctionData).arrowFlags)) out.push(g); },
 		NodeKind.FunctionExpr => { for (const g of extractGenericNames((n.data as FunctionExprData).funcExprFlags)) out.push(g); },
 		_ => {},
 	};
-	forEachChild(n, (c: Node): void => { collectQuoteTypeLocals(c, out); });
+}
+
+function scopeQuoteTypeLocals(n: Node | null, outer: string[]): void {
+	if (n == null) return;
+	const visible = outer.slice(0);
+	forEachChild(n, (c: Node): void => { const name = declaredTypeName(c); if (name != "") visible.push(name); });
+	addOwnGenericNames(n, visible);
+	_quoteTypeLocals.set(n, visible);
+	forEachChild(n, (c: Node): void => { scopeQuoteTypeLocals(c, visible); });
 }
 
 function namesAnyOf(text: string, names: string[]): boolean {
@@ -298,9 +312,9 @@ function namesAnyOf(text: string, names: string[]): boolean {
 // The Type a quote's type text names where the quote is written, as an operand node that
 // carries it. A text that names a quote-local type, or a name nothing declares there, stays
 // text and is resolved where the quote expands.
-function quotedTypeOperand(text: string, loc: SourceLocation): Node | null {
+function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation): Node | null {
 	if (text == "" || _metaScope == null || _metaDefiner == "" || text.indexOf("typeof") >= 0) return null;
-	if (namesAnyOf(text, _quoteTypeLocals)) return null;
+	if (namesAnyOf(text, locals)) return null;
 	const ctx = _metaScope!;
 	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
 	if (home == null) return null;
@@ -317,18 +331,18 @@ function quotedTypeOperand(text: string, loc: SourceLocation): Node | null {
 	return operand;
 }
 
-function addQuotedTypeOperand(keys: string[], values: Node[], text: string, loc: SourceLocation): void {
-	const operand = quotedTypeOperand(text, loc);
+function addQuotedTypeOperand(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
+	const operand = quotedTypeOperand(text, locals, loc);
 	if (operand == null) return;
 	keys.push("boundTypeExpr");
 	values.push(nodeToASTLiteral(operand, loc, false));
 }
 
-function addQuotedTypeOperands(keys: string[], values: Node[], text: string, loc: SourceLocation): void {
+function addQuotedTypeOperands(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
 	if (text == "") return;
 	const elements: Node[] = [];
 	for (const part of splitTopLevel(text, ",")) {
-		const operand = quotedTypeOperand(part.trim(), loc);
+		const operand = quotedTypeOperand(part.trim(), locals, loc);
 		if (operand == null) return;
 		elements.push(nodeToASTLiteral(operand, loc, false));
 	}
@@ -336,11 +350,11 @@ function addQuotedTypeOperands(keys: string[], values: Node[], text: string, loc
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 }
 
-function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[], returnType: string, loc: SourceLocation): void {
+function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[], returnType: string, locals: string[], loc: SourceLocation): void {
 	const elements: Node[] = [];
 	let anyBound = false;
 	for (const text of paramTypes) {
-		const operand = quotedTypeOperand(text.trim(), loc);
+		const operand = quotedTypeOperand(text.trim(), locals, loc);
 		anyBound = anyBound || operand != null;
 		elements.push(nodeToASTLiteral(operand, loc, false));
 	}
@@ -348,17 +362,23 @@ function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[]
 		keys.push("boundTypeExprs");
 		values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 	}
-	if (returnType != "void" && returnType.indexOf(" is ") < 0 && !returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, loc);
+	if (returnType != "void" && returnType.indexOf(" is ") < 0 && !returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, locals, loc);
+}
+
+function typeLocalsAt(node: Node): string[] {
+	const locals = _quoteTypeLocals.get(node);
+	if (locals == null) throw new Error("internal: a quoted node was not visited when the quote's type scopes were collected");
+	return locals;
 }
 
 function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {
 	match (node.kind) {
-		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; addQuotedSignature(keys, values, d.fnParamTypes, d.fnReturnType, loc); },
-		NodeKind.ArrowFunction => { const d = node.data as ArrowFunctionData; addQuotedSignature(keys, values, d.arrowParamTypes, d.arrowReturnType, loc); },
-		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, loc); },
-		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, loc),
-		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, loc),
-		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, loc),
+		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; addQuotedSignature(keys, values, d.fnParamTypes, d.fnReturnType, typeLocalsAt(node), loc); },
+		NodeKind.ArrowFunction => { const d = node.data as ArrowFunctionData; addQuotedSignature(keys, values, d.arrowParamTypes, d.arrowReturnType, typeLocalsAt(node), loc); },
+		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, typeLocalsAt(node), loc); },
+		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
+		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, typeLocalsAt(node), loc),
+		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, typeLocalsAt(node), loc),
 		_ => {},
 	};
 }
