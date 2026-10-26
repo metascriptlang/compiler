@@ -255,11 +255,11 @@ export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue
 		index = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		heap.texts[index] = text;
-		heap.rc[index] = 0;
+		heap.rc[index] = arr.allocRc;
 	} else {
 		index = heap.texts.length;
 		heap.texts.push(text);
-		heap.rc.push(0);
+		heap.rc.push(arr.allocRc);
 	}
 	return { kind: RaiserValueKind.String, intVal: makeHandle(index, RaiserHeapKind.String), floatVal: 0.0 };
 }
@@ -555,6 +555,7 @@ export interface RaiserArrayData {
 	color: int32;
 	viewOff: int64;
 	viewLen: int32;
+	elemCyclic: boolean;   // the element type can reach the array again: a release that leaves the element alive registers it with the cycle collector
 }
 
 export interface RaiserArrayHeap {
@@ -562,6 +563,7 @@ export interface RaiserArrayHeap {
 	freeList: int64[];
 	strings: RaiserStringHeap;
 	boxes: RaiserBoxHeap;
+	allocRc: int32;   // the count a fresh string, array or box starts with: 0, or 1 when the allocating register owns it (a placed module)
 	orcRoots: int64[];
 	orcThreshold: number;
 }
@@ -572,7 +574,7 @@ export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
 	const orcRoots: int64[] = [];
-	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), allocRc: 0, orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
@@ -587,16 +589,17 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 		data.items.length = 0;
 		data.words.length = 0;
 		data.elemClass = elemClass;
-		data.rc = 0;
+		data.rc = heap.allocRc;
 		data.color = 0;
 		data.viewOff = -1;
 		data.viewLen = 0;
+		data.elemCyclic = false;
 		return makeHandle(reused, RaiserHeapKind.Array);
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
 	const words: int64[] = [];
-	const data: RaiserArrayData = { items, words, elemClass, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
+	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, elemCyclic: false };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -790,11 +793,11 @@ export function heapAllocBox(heap: RaiserArrayHeap, value: RaiserValue): int64 {
 		const reused = boxes.freeList[boxes.freeList.length - 1];
 		boxes.freeList.length = boxes.freeList.length - 1;
 		boxes.items[reused].value = copy;
-		boxes.items[reused].rc = 0;
+		boxes.items[reused].rc = heap.allocRc;
 		return makeHandle(reused, RaiserHeapKind.Box);
 	}
 	const index = boxes.items.length;
-	boxes.items.push({ value: copy, rc: 0 });
+	boxes.items.push({ value: copy, rc: heap.allocRc });
 	return makeHandle(index, RaiserHeapKind.Box);
 }
 
@@ -824,6 +827,7 @@ export interface RaiserClassType {
 	zeroWordSlots: int64;
 	zeroRefSlots: int64;
 	dynCount: int32;   // the nil values a fresh object holds, one per Dyn slot
+	cyclic: boolean[];   // per slot: the slot's type can reach the object again, so a release that leaves its referent alive registers it with the cycle collector
 	destroyFn: int32;   // function index of the lifted destroy routine of the type, -1 when the VM destroys its cells by walking them
 }
 
@@ -833,7 +837,9 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 	let zeroWordSlots: int64 = 0;
 	let zeroRefSlots: int64 = 0;
 	let dynCount: int32 = 0;
+	const cyclic: boolean[] = [];
 	for (let i = 0; i < fields.length; i += 1) {
+		cyclic.push(false);
 		const cls = kinds[i];
 		const bit: int64 = i < TYPED_SLOTS ? (1 as int64) << (i as int64) : 0;
 		if (cls == RaiserRegClass.Word) zeroWordSlots = zeroWordSlots | bit;
@@ -845,7 +851,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, destroyFn: -1 };
+	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, destroyFn: -1 };
 }
 
 export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
@@ -872,12 +878,13 @@ export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): 
 export interface RaiserObjectHeap {
 	objects: RaiserObjectData[];
 	freeList: int64[];
+	allocRc: int32;   // the count a fresh object starts with: 0, or 1 when the allocating register owns it (a placed module)
 }
 
 export function createStructHeap(): RaiserObjectHeap {
 	const objects: RaiserObjectData[] = [];
 	const freeList: int64[] = [];
-	return { objects, freeList };
+	return { objects, freeList, allocRc: 0 };
 }
 
 export function heapAllocObject(heap: RaiserObjectHeap): int64 {
@@ -890,7 +897,7 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		data.refSlots = 0;
 		data.values.length = 0;
 		data.added.length = 0;
-		data.rc = 0;
+		data.rc = heap.allocRc;
 		data.color = 0;
 		data.classType = RAISER_NO_CLASS;
 		return makeHandle(reused, RaiserHeapKind.Object);
@@ -899,7 +906,7 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 	const slots: int64[] = [];
 	const values: RaiserValue[] = [];
 	const added: string[] = [];
-	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
+	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: heap.allocRc, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return makeHandle(idx, RaiserHeapKind.Object);
 }
@@ -1130,6 +1137,21 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 	return last;
+}
+
+// The count a cell holds: 0 for nil and for handles that are not counted.
+export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): int32 {
+	if (handle == 0) return 0;
+	const index = handleIndex(handle);
+	let count: int32 = 0;
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Array => { count = arrHeap.arrays[index].rc; },
+		RaiserHeapKind.Object => { count = objHeap.objects[index].rc; },
+		RaiserHeapKind.String => { count = arrHeap.strings.rc[index]; },
+		RaiserHeapKind.Box => { count = arrHeap.boxes.items[index].rc; },
+		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+	}
+	return count;
 }
 
 // Returns a cell's storage to its heap without touching what it held: the caller has released the contents.
