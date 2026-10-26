@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: before x x foo
 // @xfail(danger): --danger drops the forced conversion check, so the wrong conversion reads the plain value as a Proxy instead of stopping
-// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 // note: `as` into a distinct of a class checks the value's class at run time, as `as` into the class itself does. A Proxy is a distinct of its cell, so a Proxy cast back to its own type and a class cast to its own distinct pass, and a plain class value cast to a Proxy stops with "invalid object conversion" instead of being read as a Proxy (which crashed on C and threw on JS). An object literal cast the same way is proxyCastThroughConditionalAliasFatal.
 
 interface C { c: string; }

@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: before 7
 // @xfail(danger): --danger drops the union member check
-// @xfail(raiser): fatal VM errors use a different stderr report from C and JS
 
 function pick(k: int32): int32 | float64 | null {
 	if (k == 0) return 7;
