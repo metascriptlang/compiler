@@ -3581,6 +3581,12 @@ test "string | null wraps as Maybe<string>" {
 	assert t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
+test "Result<T, E> | null wraps as Maybe<Result<T, E>>" {
+	const t = resolveWith("Result<number, string> | null");
+	assert t.typeFlags.has(TypeFlag.IsMaybe);
+	assert t.typeReturn != null && isResult(t.typeReturn);
+}
+
 test "number | null wraps as Maybe<number>" {
 	const t = resolveWith("number | null");
 	assert t.kind == TypeKind.Struct;
