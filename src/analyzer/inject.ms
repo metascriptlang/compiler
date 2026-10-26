@@ -505,6 +505,13 @@ function peelSlot(t: Type | null): Type | null {
 	return cur;
 }
 
+function pushesIntoArray(callee: Node): boolean {
+	if (callee.kind != NodeKind.MemberExpr) return false;
+	const md = callee.data as MemberExprData;
+	const owner = peelSlot(md.object.nodeType);
+	return md.property == "push" && owner != null && owner.kind == TypeKind.Array;
+}
+
 function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
@@ -534,6 +541,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && isSinkTypeForParam(sinkParams[i]) && !isUncountedElement(boundElement(sinkParams, i, cd.arguments)))) {
+			argMode = DrcMode.SinkArg;
+		}
+		if (argMode == DrcMode.Normal && pushesIntoArray(cd.callee) && cd.arguments[i].nodeType != null && classifyRc(cd.arguments[i].nodeType, dctx).needsCleanup) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
