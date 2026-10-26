@@ -85,6 +85,11 @@ export function extractArchive(archiveBytes: string, destDir: string): Result<in
 	return result;
 }
 
+// A staging directory no other download of the same package shares.
+function partialDirFor(extractedPath: string): string {
+	return extractedPath + ".partial-" + Date.now().toString() + "-" + Math.floor(Math.random() * 1000000000).toString();
+}
+
 // Download and verify a package archive from the registry, then extract it.
 // The extracted directory appears only after a complete extract.
 export function downloadPackage(name: string, version: string, archiveUrl: string, expectedIntegrity: string): Result<void, PackageError> {
@@ -112,8 +117,7 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 		if (!writeFile(dlPath, archiveBytes).ok) return Result.err(PackageError.Write);
 	}
 
-	const partialPath = extractedPath + ".partial";
-	if (!removeAll(partialPath).ok) return Result.err(PackageError.Write);
+	const partialPath = partialDirFor(extractedPath);
 	if (!ensureDir(partialPath).ok) return Result.err(PackageError.Write);
 	const extracted = extractArchive(archiveBytes, partialPath);
 	if (!extracted.ok) {
@@ -122,6 +126,8 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	}
 	if (!rename(partialPath, extractedPath).ok) {
 		removeAll(partialPath);
+		// A concurrent download of the same package published its directory first.
+		if (exists(extractedPath)) return Result.ok(null);
 		return Result.err(PackageError.Write);
 	}
 	console.log(`  extracted ${name}@${version} (${extracted.value.toString()} files)`);
@@ -187,4 +193,10 @@ test "integrity must be present and match" {
 	if (good.ok) assert verifyIntegrity(bytes, "sha256-" + good.value).ok;
 	assert !verifyIntegrity(bytes, "").ok;
 	assert !verifyIntegrity(bytes, "sha256-AAAA").ok;
+}
+
+test "two downloads of one package stage in different directories" {
+	const target = join(tmpDir(), "mscDownloadTest-target");
+	assert partialDirFor(target) != partialDirFor(target);
+	assert partialDirFor(target).startsWith(target + ".partial-");
 }
