@@ -308,7 +308,7 @@ export function projectTypesFingerprint(session: BuildSession, paths: string[]):
 
 import { NodeKind, createNodeAt, makeLoc } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
-import { int32Type } from "../checker/types";
+import { int32Type, stringType, createStruct, createEnum, createTuple } from "../checker/types";
 
 function slotReference(disamb: int32): Node {
 	const sym = makeSymbol("slot", SymbolKind.Variable, int32Type(), false);
@@ -322,4 +322,71 @@ function slotReference(disamb: int32): Node {
 test "an instance fingerprint tells two same-named symbols of one module apart" {
 	const session = createBuildSession(true);
 	assert instancesFingerprint(session, [slotReference(1)]) != instancesFingerprint(session, [slotReference(2)]);
+}
+
+function declared(t: Type, kind: SymbolKind): Type {
+	const sym = makeSymbol(t.typeName, kind, t, false);
+	sym.modulePath = "/m.ms";
+	t.sym = sym;
+	return t;
+}
+
+function classB(fieldType: Type): Type {
+	return declared(createStruct("B", ["x"], [fieldType], false), SymbolKind.Class);
+}
+
+function instanceOver(arg: Type): Node {
+	const sym = makeSymbol("f", SymbolKind.Function, int32Type(), false);
+	sym.modulePath = "/m.ms";
+	const generic = makeSymbol("f", SymbolKind.Function, null, false);
+	generic.modulePath = "/g.ms";
+	sym.instantiatedFrom = generic;
+	sym.instanceArgs = [arg];
+	const ref = createNodeAt(NodeKind.Identifier, { name: "f" }, makeLoc(1, 1));
+	ref.resolvedSym = sym;
+	return ref;
+}
+
+test "a type shape of a diamond chain stays flat" {
+	const session = createBuildSession(true);
+	let level = declared(createStruct("L0", ["v"], [int32Type()], false), SymbolKind.Class);
+	for (let i = 1; i <= 14; i += 1) level = declared(createStruct("L" + String(i), ["a", "b"], [level, level], false), SymbolKind.Class);
+	assert typeShape(session, level).length < 200;
+}
+
+test "an instance over a diamond chain fingerprints in linear size" {
+	const session = createBuildSession(true);
+	let level = declared(createStruct("L0", ["v"], [int32Type()], false), SymbolKind.Struct);
+	level.typeFlags = level.typeFlags.incl(TypeFlag.IsStruct);
+	for (let i = 1; i <= 14; i += 1) {
+		level = declared(createStruct("L" + String(i), ["a", "b"], [level, level], false), SymbolKind.Struct);
+		level.typeFlags = level.typeFlags.incl(TypeFlag.IsStruct);
+	}
+	assert instancesFingerprint(session, [instanceOver(level)]).length < 8000;
+}
+
+test "an instance fingerprint changes when the argument class changes a field type" {
+	const session = createBuildSession(true);
+	assert instancesFingerprint(session, [instanceOver(classB(int32Type()))]) != instancesFingerprint(session, [instanceOver(classB(stringType()))]);
+}
+
+test "an instance fingerprint changes when a by-value member of the argument changes" {
+	const session = createBuildSession(true);
+	const first = declared(createStruct("P", ["n"], [int32Type()], true), SymbolKind.Struct);
+	first.typeFlags = first.typeFlags.incl(TypeFlag.IsStruct);
+	const second = declared(createStruct("P", ["n"], [stringType()], true), SymbolKind.Struct);
+	second.typeFlags = second.typeFlags.incl(TypeFlag.IsStruct);
+	const a = declared(createStruct("B", ["p"], [first], false), SymbolKind.Class);
+	const b = declared(createStruct("B", ["p"], [second], false), SymbolKind.Class);
+	assert instancesFingerprint(session, [instanceOver(a)]) != instancesFingerprint(session, [instanceOver(b)]);
+	assert instancesFingerprint(session, [instanceOver(createTuple([first]))]) != instancesFingerprint(session, [instanceOver(createTuple([second]))]);
+}
+
+test "an enum layout changes with a member name or a member value" {
+	const session = createBuildSession(true);
+	const base = declared(createEnum("E", ["A", "B"], [0, 1]), SymbolKind.Enum);
+	const renamed = declared(createEnum("E", ["A", "C"], [0, 1]), SymbolKind.Enum);
+	const revalued = declared(createEnum("E", ["A", "B"], [0, 2]), SymbolKind.Enum);
+	assert layoutDigest(session, base) != layoutDigest(session, renamed);
+	assert layoutDigest(session, base) != layoutDigest(session, revalued);
 }
