@@ -4554,10 +4554,12 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
 	}
+	const evicted: RaiserValue[] = [];
 	if (arrayHoldsHandles(vm.arrayHeap, handle)) {
-		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(vm.arrayHeap, handle); i += 1) vmDecref(vm, arrayHeldAt(vm.arrayHeap, handle, i));
+		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(vm.arrayHeap, handle); i += 1) evicted.push(arrayHeldAt(vm.arrayHeap, handle, i));
 	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
+	vmEvictAll(vm, evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }
 
 function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
