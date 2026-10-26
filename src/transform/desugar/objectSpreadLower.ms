@@ -121,21 +121,6 @@ function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[], saf
 	}
 }
 
-// Stops at function boundaries (their statements get their own expandStmt
-// visit) and at nested blocks (walkExpandBlocks descends into them itself).
-function scanForSpreads(node: Node, ctx: TransformContext, decls: Node[]): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.ObjectLiteral) maybeHoistOperands(node, ctx, decls, null);
-	forEachChild(node, (c: Node): void => {
-		if (c == null) return;
-		const k = c.kind;
-		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
-			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
-			|| k == NodeKind.BlockStmt) return;
-		scanForSpreads(c, ctx, decls);
-	});
-}
-
 function hoistLeadingSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const decls: Node[] = [];
 	const safe: Node[] = [];
@@ -144,12 +129,6 @@ function hoistLeadingSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
 		if (!effectBefore) safe.push(n);
 		if (n.kind == NodeKind.ObjectLiteral) maybeHoistOperands(n, ctx, decls, safe);
 	});
-	return prependDecls(stmt, decls);
-}
-
-function hoistSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
-	const decls: Node[] = [];
-	scanForSpreads(stmt, ctx, decls);
 	return prependDecls(stmt, decls);
 }
 
@@ -256,11 +235,6 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 
 export function lowerObjectSpread(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, hoistLeadingSpreadStmt, ctx);
-	return walkNode(program, (n: Node): Node => expandObjectSpread(n, ctx));
-}
-
-export function lowerObjectSpreadEager(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, hoistSpreadStmt, ctx);
 	return walkNode(program, (n: Node): Node => expandObjectSpread(n, ctx));
 }
 

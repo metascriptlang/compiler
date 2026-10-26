@@ -24,7 +24,8 @@ import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerTailCall } from "./lowering/tailCallLower";
-import { lowerObjectSpreadEager } from "./desugar/objectSpreadLower";
+import { lowerObjectSpread } from "./desugar/objectSpreadLower";
+import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -83,7 +84,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerConstFold(result, ctx);
 	result = lowerStaticInit(result, ctx);
 	result = lowerRestParams(result, ctx);
-	result = lowerObjectSpreadEager(result, ctx);
+	result = lowerObjectSpread(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = materializeMaybeReads(result, ctx);
@@ -120,6 +121,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = lowerClosureEqualities(result, ctx);
+	result = lowerConditionalExpr(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerBigIntOps(result, ctx);
