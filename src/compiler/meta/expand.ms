@@ -260,8 +260,6 @@ function collectGenericNames(params: string, out: string[]): void {
 	for (const name of splitTopLevel(genericParamNamesOf(params), ",")) { if (name != "") out.push(name); }
 }
 
-// Every type name a quote declares itself, or takes as a generic parameter, is resolved
-// where the quote expands, beside the declaration it names.
 function collectQuoteTypeLocals(n: Node | null, out: string[]): void {
 	if (n == null) return;
 	match (n.kind) {
