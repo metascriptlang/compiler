@@ -70,7 +70,7 @@ Why each part is needed, and why no compiler patch is:
 
 With `--no-entry` nothing calls `main`, so the init chain never runs on its own. Bind it to whatever entry the host does call — for SpacetimeDB, an export matching its `__preinit__*` scan.
 
-**What `MsMain()` actually is** (`src/codegen/c/index.ms`): `MsPreMainInner()` → every **alive module's** `__DatInit000()`; `MsMainInner()` → every alive module's `__Init000()`; then `msOrcCollect()`. It is not "initialize me", it is "initialize the entire program".
+**What `MsMain()` actually is** (`src/codegen/c/index.ms`): `MsPreMainInner()` → every **alive module's** `__DatInit000()`; `MsMainInner()` → every alive module's `__Init000()`; then `msTestErrorFlag()`, and `msOrcCollect()` only in a build with the DRC ledger (`-DMS_DRC_LEDGER`), since exit leaves garbage cycles uncollected. It is not "initialize me", it is "initialize the entire program".
 
 `MsMainInner` contains **only** `__Init000()` calls — there is no `main` invocation to suppress. The implicit auto-call of an unreferenced `main` was removed 2026-08-16 (`15df69d`); `genProjectDispatcher` no longer takes `autoCallMain`/`mainRetType`, and a function named `main` is an ordinary function with no special C name. Verified by probe: a program that defines `main` and never calls it prints only its top-level output and exits 0, on both the C and JS lanes. The program body is now whatever the entry module's `__Init000()` runs, so an entry whose top level does nothing still gets init without a body — that part is free, as before.
 
@@ -367,8 +367,8 @@ static void MsMainInner(void) {
   <std/core/object>__Init000();
   <entry module>__Init000();
 }
-void MsMain(void) { MsPreMainInner(); MsMainInner(); msTestErrorFlag(); msOrcCollect(); }
-int main(void) { MsMain(); return msProgramResult; }
+void MsMain(void) { MsPreMainInner(); MsMainInner(); msTestErrorFlag(); }
+int main(void) { MsMain(); MsDestroyGlobals(); return msProgramResult; }
 ```
 
 `MsPreMainInner` is empty for this program and `MsMainInner` carries two `__Init000()` calls —
