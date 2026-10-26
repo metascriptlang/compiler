@@ -3,7 +3,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, arrayClassSlot
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, arrayClassSlot
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
@@ -3252,7 +3252,10 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			if (inRefFile((ia & 7) as RaiserRegClass)) {
 				const moved = vm.regs.refs[absOf(vm, ia)];
 				vm.regs.refs[absOf(vm, ia)] = 0;
-				if (vm.placed) releaseShell(vm, moved);
+				if (vm.placed) {
+					if (ib == 1) vmFreeMovedCell(vm, moved);
+					else releaseShell(vm, moved);
+				}
 			} else vm.regs.words[absOf(vm, ia)] = 0;
 		},
 		RaiserOpcode.DestroyValue => {
@@ -3607,18 +3610,20 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 		},
 		RaiserHeapKind.Array => {
 			const data = vm.arrayHeap.arrays[index];
-			if (data.elemClass == RaiserRegClass.Ref) {
-				for (let i = 0; i < data.words.length; i += 1) {
-					const child = data.words[i];
-					data.words[i] = 0;
-					vmReleaseChild(vm, child, data.elemCyclic);
+			if (!data.elemUncounted) {
+				if (data.elemClass == RaiserRegClass.Ref) {
+					for (let i = 0; i < data.words.length; i += 1) {
+						const child = data.words[i];
+						data.words[i] = 0;
+						vmReleaseChild(vm, child, data.elemCyclic);
+					}
 				}
-			}
-			for (let i = 0; i < data.items.length; i += 1) {
-				const held = data.items[i];
-				if (held.kind >= RaiserValueKind.String) {
-					data.items[i] = raiserNil();
-					vmReleaseChild(vm, held.intVal, data.elemCyclic);
+				for (let i = 0; i < data.items.length; i += 1) {
+					const held = data.items[i];
+					if (held.kind >= RaiserValueKind.String) {
+						data.items[i] = raiserNil();
+						vmReleaseChild(vm, held.intVal, data.elemCyclic);
+					}
 				}
 			}
 		},
@@ -3695,6 +3700,18 @@ function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 // A struct, tuple or array held by value is destroyed by its copy plan: the plan names which children are
 // aggregates it owns (destroyed in turn and freed) and leaves the others to the dynamic release of one reference.
 // A cell its count says another holder still has stays.
+// A user move hook took the contents of a struct cell its source register held alone: the cell is freed as it
+// stands, because the hook decided what became of the fields, as the zeroed source of a move does in the reference.
+function vmFreeMovedCell(vm: RaiserVM, moved: int64): void {
+	const sole = moved == 0 || !isShell(moved) || vm.arrayHeap.boxes.items[handleIndex(moved)].rc <= 1;
+	const inner = innerHandle(vm, moved);
+	releaseShell(vm, moved);
+	if (!sole || inner == 0 || !rcDecIsLast(vm.arrayHeap, vm.objectHeap, inner)) return;
+	vm.dropNest += 1;
+	vmFreeCell(vm, inner);
+	vm.dropNest -= 1;
+}
+
 function vmDestroyAggregate(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], planIndex: int32): void {
 	if (handle == 0 || !rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) return;
 	vm.dropNest += 1;
@@ -3715,6 +3732,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 	const index = handleIndex(handle);
 	if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Array) {
 		const data = vm.arrayHeap.arrays[index];
+		if (data.elemUncounted) return;
 		if (data.elemClass == RaiserRegClass.Ref) {
 			for (let i = 0; i < data.words.length; i += 1) {
 				const held = data.words[i];
@@ -3807,6 +3825,7 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 		const viewOff = to.viewOff; to.viewOff = from.viewOff; from.viewOff = viewOff;
 		const viewLen = to.viewLen; to.viewLen = from.viewLen; from.viewLen = viewLen;
 		const elemCyclic = to.elemCyclic; to.elemCyclic = from.elemCyclic; from.elemCyclic = elemCyclic;
+		const elemUncounted = to.elemUncounted; to.elemUncounted = from.elemUncounted; from.elemUncounted = elemUncounted;
 	} else {
 		const to: Cursor<RaiserObjectData> = vm.objectHeap.objects[d];
 		const from: Cursor<RaiserObjectData> = vm.objectHeap.objects[s];
@@ -3857,6 +3876,7 @@ function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int
 	const slot = ((func.packed[pc] >> 56) & 255) as number;
 	const handle = heapAllocArrayOf(vm.arrayHeap, slotArrayClass(slot));
 	vm.arrayHeap.arrays[handleIndex(handle)].elemCyclic = slotArrayCyclic(slot);
+	vm.arrayHeap.arrays[handleIndex(handle)].elemUncounted = slotArrayUncounted(slot);
 	const elemCount = ib;
 	for (let i = 0; i < elemCount; i = i + 1) {
 		const elem = getDyn(vm, func.blocks[ic + 4 + i] as int32);
@@ -4116,10 +4136,10 @@ function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32)
 	if (inserting) {
 		const length = arrayHeldCount(data) as int64;
 		const at = start < length ? start : length;
-		vmShareHold(vm, item);
+		if (!data.elemUncounted) vmShareHold(vm, item);
 		arrayHeldInsert(data, at as number, item);
 	}
-	vmEvictAll(vm, evicted, data.elemCyclic);
+	vmEvictAll(vm, data.elemUncounted ? [] : evicted, data.elemCyclic);
 }
 
 function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
@@ -4131,10 +4151,10 @@ function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
 	const evicted: RaiserValue[] = [];
 	for (let i = 0; i < arrayHeldCount(data); i += 1) {
 		evicted.push(arrayHeldAt(data, i));
-		vmShareHold(vm, val);
+		if (!data.elemUncounted) vmShareHold(vm, val);
 		heapArraySet(vm.arrayHeap, handle, i as int64, val);
 	}
-	vmEvictAll(vm, evicted, data.elemCyclic);
+	vmEvictAll(vm, data.elemUncounted ? [] : evicted, data.elemCyclic);
 }
 
 function vmSourceArray(vm: RaiserVM, t: int32): int64 {
@@ -4150,6 +4170,7 @@ function vmNewArrayLike(vm: RaiserVM, source: int64): int64 {
 	const base = arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(source)]);
 	const handle = heapAllocArrayOf(vm.arrayHeap, base.elemClass);
 	vm.arrayHeap.arrays[handleIndex(handle)].elemCyclic = base.elemCyclic;
+	vm.arrayHeap.arrays[handleIndex(handle)].elemUncounted = base.elemUncounted;
 	return handle;
 }
 
@@ -4157,7 +4178,7 @@ function vmCopyElements(vm: RaiserVM, from: int64, start: int64, end: int64, int
 	for (let i = start; i < end; i += 1) {
 		const val = heapArrayGet(vm.arrayHeap, from, i);
 		heapArrayPush(vm.arrayHeap, into, val);
-		vmShareHold(vm, val);
+		if (!vm.arrayHeap.arrays[handleIndex(into)].elemUncounted) vmShareHold(vm, val);
 	}
 }
 
@@ -7606,6 +7627,20 @@ test "placed: the last RcDec of an array releases its elements and frees the arr
 	const vm = execModule(placedModule([main], true));
 	assert vm.error == "", vm.error;
 	assert vm.arrayHeap.arrays.length == 1 && vm.objectHeap.objects.length == 1 && vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
+}
+
+test "placed: the last RcDec of an array of uncounted elements leaves the elements to their owner" {
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref, false, true)),
+		raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
+	const vm = execModule(placedModule([main], true));
+	assert vm.error == "", vm.error;
+	assert vm.objectHeap.objects[0].rc == 1 && vmLiveCount(vm) == 1, `${vm.objectHeap.objects[0].rc} ${vmLiveCount(vm)}`;
 }
 
 test "placed: a class's destroy routine runs once on the last RcDec, sees the cell's fields, and the VM frees the cell after it returns" {

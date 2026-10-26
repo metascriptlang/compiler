@@ -217,7 +217,7 @@ export enum RaiserOpcode {
 	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
 	RcInc,            // ABC: count +1 on the handle in refs[A]; nil and constant handles stay as they are
 	RcDec,            // ABC: count -1 on refs[A]; the last reference destroys the cell by its dynamic type and nils refs[A]; B = 1 registers a surviving cell with the cycle collector
-	WasMoved,         // ABC: R[A] = nil (ref file) or 0 (word file) without touching any count
+	WasMoved,         // ABC: R[A] = nil (ref file) or 0 (word file) without touching any count; B=1 after a user move hook: the sole-held cell R[A] stood on is freed without walking its slots
 	DestroyValue,     // ABC: destroy the aggregate in refs[A] by copy plan C: release its ref slots, destroy its nested aggregates, free its cell, nil refs[A]
 	SinkValue,        // ABC: DestroyValue the aggregate in refs[A] by copy plan C, then refs[A] = refs[B]; a destination that already holds B's handle stays
 	RcHeld,           // ABC: words[B] = the count of the cell in refs[A], 0 for nil
@@ -581,18 +581,25 @@ export function branchOffset(field: number): int64 {
 // A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
 // an instruction built without a slot makes the array that holds anything.
 // A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
+// An uncounted element (a cursor or a pointer to an uncounted type, the checker's isUncountedElement) adds
+// ARRAY_UNCOUNTED_SLOT: the array borrows its elements, so its destroy and copy never count them.
 export const ARRAY_CYCLIC_SLOT = 16;
+export const ARRAY_UNCOUNTED_SLOT = 32;
 
-export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false): number {
-	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + (cyclic ? ARRAY_CYCLIC_SLOT : 0);
+export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false): number {
+	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + (cyclic ? ARRAY_CYCLIC_SLOT : 0) + (uncounted ? ARRAY_UNCOUNTED_SLOT : 0);
 }
 
 export function slotArrayCyclic(slot: number): boolean {
-	return slot >= ARRAY_CYCLIC_SLOT;
+	return (slot & ARRAY_CYCLIC_SLOT) != 0;
+}
+
+export function slotArrayUncounted(slot: number): boolean {
+	return (slot & ARRAY_UNCOUNTED_SLOT) != 0;
 }
 
 export function slotArrayClass(slot: number): RaiserRegClass {
-	const base = slot >= ARRAY_CYCLIC_SLOT ? slot - ARRAY_CYCLIC_SLOT : slot;
+	const base = slot & 15;
 	if (base < 0 || base > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
 	return base == 0 ? RaiserRegClass.Dyn : (base - 1) as RaiserRegClass;
 }
