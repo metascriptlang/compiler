@@ -2633,6 +2633,7 @@ export function unservedCallReason(s: RaiserCompState, node: Node): string {
 	if (isToStringCall(d.callee)) return "toString with an argument";
 	const sym = d.callee.resolvedSym;
 	if (sym == null || (d.callee.kind != NodeKind.Identifier && d.callee.kind != NodeKind.MemberExpr)) return "";
+	if (ownershipRow(sym) != 0) return "";
 	const hostName = runtimeHostName(sym);
 	if (hostName != "" && hostName == sym.nativeName && lookupHost(sym.nativeName) == null) return `extern ${sym.nativeName}`;
 	return "";
