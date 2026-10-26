@@ -21,7 +21,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -211,8 +211,8 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
 		if (body == null || body.kind != TypeKind.Struct) continue;
 		for (const held of heldBeyond(body)) {
-			if (hasGenericParams(held) || !hasTypeIdentity(held)) return true;
 			const key = typeIdentity(held);
+			if (hasGenericParams(held) || key == "") return true;
 			if (nameSetContains(seen, key)) continue;
 			nameSetAdd(seen, key);
 			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createNameSet())) return true;
@@ -340,7 +340,7 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || !hasTypeIdentity(held) || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
+		if (hasGenericParams(held) || typeIdentity(held) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
@@ -412,6 +412,9 @@ function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker
 	if (t.kind == TypeKind.Struct && addsAux(base, true, cyclicCache, acyclicCache, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	for (const held of heldBeyond(t)) {
+		if (hasGenericParams(held) || typeIdentity(held) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
