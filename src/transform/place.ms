@@ -53,6 +53,25 @@ export function cloneIfPure(node: Node): Node | null {
 		c.nodeType = node.nodeType;
 		return c;
 	}
+	if (node.kind == NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		const inner = cloneIfPure(d.asExpr);
+		if (inner == null) return null;
+		const c = createNodeAt(NodeKind.TypeAssertion, { asExpr: inner, asType: d.asType } as TypeAssertionData, node.location);
+		c.nodeType = node.nodeType;
+		c.flags = node.flags;
+		return c;
+	}
+	if (isVariantRead(node)) {
+		const d = node.data as HiddenStdConvData;
+		const inner = cloneIfPure(d.convExpr);
+		if (inner == null) return null;
+		const c = createNodeAt(NodeKind.HiddenSubConv, { convExpr: inner, convType: d.convType } as NodeData, node.location);
+		c.nodeType = node.nodeType;
+		c.flags = node.flags;
+		c.variantSlot = node.variantSlot;
+		return c;
+	}
 	if (node.kind == NodeKind.CallExpr && isCompilerCheckCall(node)) {
 		const d = node.data as CallExprData;
 		const args: Node[] = [];

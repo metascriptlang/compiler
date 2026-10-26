@@ -87,6 +87,19 @@ function compoundLoopUpdate(): string {
 	return `${steps} ${i}`;
 }
 
+function compoundInsideClosure(): string {
+	let s: int32 = 1;
+	let t: float64 = 1;
+	const bump = (k: int32): int32 => k + 1;
+	const run = (cb: () => void): void => { cb(); };
+	run((): void => {
+		s += bump(2);
+		t *= bump(3) as float64;
+		run((): void => { s += bump(s); });
+	});
+	return `${s} ${t}`;
+}
+
 test "compoundAssignmentEvaluation: a global target is read before a right side that writes it" {
 	assert compoundGlobals() == "3 9 9 6";
 }
@@ -101,4 +114,8 @@ test "compoundAssignmentEvaluation: a field, an element and a post-increment rea
 
 test "compoundAssignmentEvaluation: a loop update reads its counter before the step writes it" {
 	assert compoundLoopUpdate() == "3 3";
+}
+
+test "compoundAssignmentEvaluation: a target captured by a closure is compounded inside that closure" {
+	assert compoundInsideClosure() == "9 4";
 }
