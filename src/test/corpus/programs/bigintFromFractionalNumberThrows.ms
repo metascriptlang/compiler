@@ -1,5 +1,4 @@
 // @stdout: fraction RangeError The number 1.5 cannot be converted to a BigInt because it is not an integer
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: a number that is not an integer (NaN and Infinity included) converted with `as bigint` throws the catchable RangeError that BigInt(x) throws, with node's message, on C and JS; C used to abort with exit 134.
 
 function show(label: string, f: () => bigint): void {

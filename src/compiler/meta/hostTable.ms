@@ -53,6 +53,7 @@ import {
 	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
+import { registerBigIntKernels } from "./bigintHost";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
 import { nodeKindName } from "../../ast/fieldspec";
 import { NodeKind, TypeKind, SymbolKind } from "../../ast/node";
@@ -1321,6 +1322,19 @@ function _bridgeNumberArrayAt(args: RaiserValue[]): RaiserValue {
 	return boxFloat(xs[i as int32]);
 }
 
+function _bridgeRaiseRange(args: RaiserValue[]): RaiserValue {
+	raiseFromHost(`value ${args[0].intVal} not in range ${args[1].intVal} .. ${args[2].intVal}`, true);
+	return raiserNil();
+}
+
+function _bridgeRaiseField(args: RaiserValue[]): RaiserValue {
+	const labels = unboxString(args[1]).split("|");
+	const tag = unboxInt(args[2]);
+	const label = tag >= 0 && tag < labels.length ? labels[tag as int32] : "";
+	raiseFromHost(`${unboxString(args[0])}${label}'`, true);
+	return raiserNil();
+}
+
 function _bridgeStringArrayIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxFloat(_stringsOf(args[0]).indexOf(unboxString(args[1])));
 }
@@ -1365,6 +1379,8 @@ function registerArrayKernels(): void {
 	registerHostFn("&msNumberArrayCount", _bridgeNumberArrayCount, HostCapability.Pure);
 	registerHostFn("&msNumberArrayJoin", _bridgeNumberArrayJoin, HostCapability.Pure);
 	registerHostFn("&msNumberArrayAt", _bridgeNumberArrayAt, HostCapability.Pure);
+	registerHostFn("msRaiseRangeError", _bridgeRaiseRange, HostCapability.Pure);
+	registerHostFn("msRaiseFieldError", _bridgeRaiseField, HostCapability.Pure);
 	registerHostFn("&msStringArrayIndexOf", _bridgeStringArrayIndexOf, HostCapability.Pure);
 	registerHostFn("&msStringArrayIncludes", _bridgeStringArrayIncludes, HostCapability.Pure);
 	registerHostFn("&msStringArrayLastIndexOf", _bridgeStringArrayLastIndexOf, HostCapability.Pure);
@@ -1658,7 +1674,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerStringCallbacks();
 	registerArrayKernels();
-	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
+	registerBigIntKernels();
+	registerHostFn("msAsString",           _bridgeMsAsString, HostCapability.Pure);
 	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
 	registerHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
@@ -2068,7 +2085,6 @@ test "cms extern closure: declared externs are bridged, intercepted, or listed u
 		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
 		"&msRefArraySplice3", "&msUint8ArraySplice3",
 		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "&msStringStripInPlace",
-		"msRaiseRangeError",
 	];
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();

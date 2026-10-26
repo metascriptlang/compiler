@@ -1,5 +1,4 @@
 // @stdout: literal false true false true false true | evaluated false true calls 2
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: a bigint compared with null is false (and != true) on C as on JS, with the bigint operand still evaluated; C used to stop in the transform with "cannot convert null to bigint".
 
 function big(v: bigint): bigint { return v; }

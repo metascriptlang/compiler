@@ -1,4 +1,3 @@
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // @stdout: bigint ops done
 
 // bigint is arbitrary-precision on both backends: C routes every operator to a

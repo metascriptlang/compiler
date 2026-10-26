@@ -66,7 +66,7 @@ export function popped(xs: string[]): string { return xs.pop(); }
 `;
 
 const BIG_HELPERS = `
-export function big(): string { const x: bigint = 5n; return x.toString(); }
+export function big(): string { const x: bigint = 2n; return (x ** 70n).toString(); }
 `;
 
 const PLAIN_EXPECTED = "A!x-y10:1+2+3|3|2";
@@ -147,12 +147,12 @@ test "a build-world helper returns what the C kernels return where the VM prelud
 	assert c.includes(expected), `the expansion differs from the C kernels: ${expected}`;
 }
 
-test "a build-world helper holding a bigint is refused on the VM and names the routine" {
+test "a build-world helper holding a bigint runs on the VM with every digit" {
 	const entries: MapEntry[] = [
 		{ entryPath: "engineBig/lib.ms", entrySource: BIG_HELPERS },
 		{ entryPath: "engineBig/main.ms", entrySource: plainMain(`big()`, `import { big } from "./lib";`) },
 	];
 	const c = compileProjectToCWithStd(entries, "engineBig/main.ms");
-	assert c.startsWith("ERROR:"), "the bigint helper ran";
-	assert c.includes("bigint is not supported on the Raiser VM"), c;
+	assert !c.startsWith("ERROR:"), c;
+	assert c.includes("1180591620717411303424"), "the bigint expansion is missing";
 }
