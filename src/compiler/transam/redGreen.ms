@@ -128,7 +128,7 @@ export function executeQueryWith(
 	depStack: TaDependencyStack,
 	key: TaQueryKey,
 	currentRevision: int32,
-	outputHash: number,  // content hash
+	outputHash: int64,  // content hash
 	wasComputed: boolean
 ): void {
 	if (!wasComputed) return;
@@ -172,11 +172,7 @@ export function invalidateFile(
 
 // ===== Test Helpers =====
 
-interface TaTestCounter {
-	value: number;
-}
-
-function makeTestDeps(fileId: int32, expectedHash: number): TaDependencyEntry[] {
+function makeTestDeps(fileId: int32, expectedHash: int64): TaDependencyEntry[] {
 	const deps: TaDependencyEntry[] = [];
 	const dk = createQueryKey(TaQueryKind.FileText, fileId);
 	const de: TaDependencyEntry = { depKey: dk, expectedHash: expectedHash };

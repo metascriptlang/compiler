@@ -36,7 +36,7 @@ import {
 	getRegisteredAt, setRegisteredAt, resetRegisteredAt
 } from "./moduleDeps";
 import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
-import { transAmHashNode } from "./hash";
+import { taHashNode } from "./hash";
 import {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
@@ -182,7 +182,7 @@ interface TaGlobalImportsLayer {
 
 interface BoundCheck {
 	revision: int32;
-	inputHash: number;
+	inputHash: int64;
 	unit: BoundModule;
 }
 
@@ -490,7 +490,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	}
 
 	db.preprocessCache.set(fileId, out);
-	const outHash = taHashString(out) as number;
+	const outHash = taHashString(out);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, outHash, true);
 	return out;
 }
@@ -523,7 +523,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 
 	const program = adoptLoaderParse(db, filePath, source);
 	db.trees.set(parseNodeKey(fileId), program);
-	const parseHash = taHashString(source) as number;
+	const parseHash = taHashString(source);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
 }
@@ -716,8 +716,8 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 	return entries;
 }
 
-function checkOutputHash(ctx: CheckerContext, inputHashes: number[]): number {
-	let h: number = ctx != null ? checkErrorCount(ctx) : 0;
+function checkOutputHash(ctx: CheckerContext, inputHashes: int64[]): int64 {
+	let h: int64 = ctx != null ? checkErrorCount(ctx) : 0;
 	for (const input of inputHashes) h = (h * 31 + input) % 2147483647;
 	return h;
 }
@@ -806,8 +806,8 @@ function boundInputsUnchanged(db: TransAmDb, filePath: string): boolean {
 	return entry.revision == db.revision.value || entry.inputHash == bindInputHash(db, filePath);
 }
 
-function bindInputHash(db: TransAmDb, filePath: string): number {
-	let h: number = 0;
+function bindInputHash(db: TransAmDb, filePath: string): int64 {
+	let h: int64 = 0;
 	const seen = new HashSet<int32>();
 	const pending: int32[] = [getFileId(db.fileInput, filePath)];
 	while (pending.length > 0) {
@@ -886,7 +886,7 @@ registerBoundModuleFn(dbBoundModule);
 
 // An import this db only binds has no TypeCheck entry to depend on: its bound exports read the
 // parses of its own imports, down to the modules this db checks.
-function recordBoundImportReads(db: TransAmDb, boundId: int32, reached: HashSet<int32>, inputHashes: number[]): void {
+function recordBoundImportReads(db: TransAmDb, boundId: int32, reached: HashSet<int32>, inputHashes: int64[]): void {
 	const pending: int32[] = [];
 	for (const depId of getDirectImports(db.moduleDeps, boundId)) pending.push(depId);
 	while (pending.length > 0) {
@@ -957,7 +957,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const parseHash = parseEntry != null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
-	const inputHashes: number[] = [parseHash];
+	const inputHashes: int64[] = [parseHash];
 
 	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
 	// Parse dep: structural changes (new/removed declarations).
@@ -1087,7 +1087,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(db.routineDecls, []));
 	db.trees.set(analyzeNodeKey(fileId), analyzed);
-	const analyzeHash = transAmHashNode(analyzed);
+	const analyzeHash = taHashNode(analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, analyzeHash, true);
 	return analyzed;
 }
@@ -1119,7 +1119,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	db.trees.set(transformNodeKey(fileId), transformed);
-	const transformHash = transAmHashNode(transformed);
+	const transformHash = taHashNode(transformed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, transformHash, true);
 	return transformed;
 }

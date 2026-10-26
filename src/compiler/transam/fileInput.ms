@@ -14,7 +14,7 @@ import { TaDurability } from "./revision";
 class TaFileEntry {
 	filePath: string;
 	source: string;
-	sourceHash: number;
+	sourceHash: int64;
 	fileId: int32;
 	durability: TaDurability;
 }
@@ -56,7 +56,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		// Existing file — check if content changed
 		if (store.files[idx].source == source) return false;
 		store.files[idx].source = source;
-		store.files[idx].sourceHash = taHashString(source) as number;
+		store.files[idx].sourceHash = taHashString(source);
 		return true;
 	}
 	// New file
@@ -65,7 +65,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const entry: TaFileEntry = {
 		filePath,
 		source,
-		sourceHash: taHashString(source) as number,
+		sourceHash: taHashString(source),
 		fileId,
 		durability: TaDurability.Low,
 	};
@@ -80,7 +80,7 @@ export function getFileText(store: TaFileInputStore, fileId: int32): string {
 	return store.files[idx].source;
 }
 
-export function getFileHash(store: TaFileInputStore, fileId: int32): number | null {
+export function getFileHash(store: TaFileInputStore, fileId: int32): int64 | null {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return null;
 	return store.files[idx].sourceHash;
