@@ -137,3 +137,25 @@ const v: int32 = m(0);
 	]);
 	assert bad == "", bad;
 }
+
+test "macroInternalTypeNames: a macro body reading its module's own Node gets that class's fields, not the engine node's" {
+	const cases = [
+		["const own = new Node(); const at: int32 = own.line;", "'line'"],
+		["const own: Node = { n: 2, symHandle: 1 };", "'symHandle'"],
+	];
+	const bad: string[] = [];
+	for (const entry of cases) {
+		const source = `
+import { Node as MNode } from "std/meta";
+class Node { n: int32 = 1; }
+export macro m(x: MNode): MNode { ${entry[0]} return x; }
+const v: int32 = m(0);
+console.log(v);
+`;
+		const c = compileToCWithStd(source);
+		if (c.ok || !c.error.contains(entry[1])) bad.push(entry[0] + " (C): " + (c.ok ? "compiled" : c.error));
+		const js = compileToJSWithStd(source);
+		if (js.ok || !js.error.contains(entry[1])) bad.push(entry[0] + " (JS): " + (js.ok ? "compiled" : js.error));
+	}
+	assert bad.length == 0, bad.join("\n");
+}
