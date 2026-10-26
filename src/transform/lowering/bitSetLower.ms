@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
@@ -368,7 +368,15 @@ function lowerBinary(node: Node, ctx: TransformContext): Node {
 	return node;
 }
 
+function refuseUnhoistedOperand(node: Node, ctx: TransformContext): boolean {
+	if (node.kind == NodeKind.BinaryExpr && isSetCompoundOp((node.data as BinaryExprData).operator)) return false;
+	if (!isImpureArrayOp(node)) return false;
+	reportTransformError(ctx, "a BitSet operation over 64 members here needs operands that can be read twice; bind each operand to a local first", node.location);
+	return true;
+}
+
 function lowerNode(node: Node, ctx: TransformContext): Node {
+	if (refuseUnhoistedOperand(node, ctx)) return node;
 	if (node.kind == NodeKind.CallExpr) return lowerCall(node, ctx);
 	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node, ctx);
 	if (node.kind == NodeKind.TypeAssertion) {
