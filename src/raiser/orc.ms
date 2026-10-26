@@ -16,7 +16,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
-	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf
+	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
 
@@ -224,25 +224,8 @@ export type OrcDestroy = (handle: int64) => void;
 
 const COLOR_MASK = 3;
 const ROOT_SHIFT = 2;
-const DEFAULT_THRESHOLD = 128;
 const MIN_THRESHOLD = 16;
 const NEVER_COLLECT = 2147483647;
-
-interface OrcRoots {
-	arrHeap: RaiserArrayHeap;
-	objHeap: RaiserObjectHeap;
-	handles: int64[];
-	threshold: number;
-}
-
-const orcRegistries: OrcRoots[] = [];
-
-function registryIndex(arrHeap: RaiserArrayHeap): number {
-	for (let i = 0; i < orcRegistries.length; i += 1) {
-		if (orcRegistries[i].arrHeap === arrHeap) return i;
-	}
-	return -1;
-}
 
 function colorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): int32 {
 	const kind = handleHeapKind(h);
@@ -416,92 +399,67 @@ function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, e
 	}
 }
 
-function unregisterAt(roots: OrcRoots, h: int64): void {
-	const slot = (colorField(roots.arrHeap, roots.objHeap, h) >> ROOT_SHIFT) - 1;
-	const last = roots.handles.length - 1;
-	const moved = roots.handles[last];
-	roots.handles[slot] = moved;
-	roots.handles.length = last;
+function unregisterAt(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): void {
+	const roots = arrHeap.orcRoots;
+	const slot = (colorField(arrHeap, objHeap, h) >> ROOT_SHIFT) - 1;
+	const last = roots.length - 1;
+	const moved = roots[last];
+	roots[slot] = moved;
+	roots.length = last;
 	if (moved != h) {
-		const field = colorField(roots.arrHeap, roots.objHeap, moved);
-		setColorField(roots.arrHeap, roots.objHeap, moved, (field & COLOR_MASK) | ((slot + 1) << ROOT_SHIFT));
+		const field = colorField(arrHeap, objHeap, moved);
+		setColorField(arrHeap, objHeap, moved, (field & COLOR_MASK) | ((slot + 1) << ROOT_SHIFT));
 	}
-	setColorField(roots.arrHeap, roots.objHeap, h, colorField(roots.arrHeap, roots.objHeap, h) & COLOR_MASK);
+	setColorField(arrHeap, objHeap, h, colorField(arrHeap, objHeap, h) & COLOR_MASK);
 }
 
 export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
 	if (handle == 0) return false;
 	if (registered(arrHeap, objHeap, handle)) return false;
-	let at = registryIndex(arrHeap);
-	if (at < 0) {
-		orcRegistries.push({ arrHeap, objHeap, handles: [], threshold: DEFAULT_THRESHOLD });
-		at = orcRegistries.length - 1;
-	}
-	const roots = orcRegistries[at];
-	setColorField(arrHeap, objHeap, handle, COL_BLACK | ((roots.handles.length + 1) << ROOT_SHIFT));
-	roots.handles.push(handle);
-	return roots.handles.length - DEFAULT_THRESHOLD >= roots.threshold;
+	const roots = arrHeap.orcRoots;
+	setColorField(arrHeap, objHeap, handle, COL_BLACK | ((roots.length + 1) << ROOT_SHIFT));
+	roots.push(handle);
+	return roots.length - ORC_DEFAULT_THRESHOLD >= arrHeap.orcThreshold;
 }
 
 export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	if (handle == 0 || !registered(arrHeap, objHeap, handle)) return;
-	const at = registryIndex(arrHeap);
-	if (at < 0) throw new Error(`internal: cell ${handle} is registered but its heap has no collector roots`);
-	unregisterAt(orcRegistries[at], handle);
-}
-
-export function orcRelease(arrHeap: RaiserArrayHeap): void {
-	const at = registryIndex(arrHeap);
-	if (at < 0) return;
-	orcRegistries[at] = orcRegistries[orcRegistries.length - 1];
-	orcRegistries.pop();
-}
-
-export function orcRootCount(arrHeap: RaiserArrayHeap): number {
-	const at = registryIndex(arrHeap);
-	return at < 0 ? 0 : orcRegistries[at].handles.length;
-}
-
-export function orcThreshold(arrHeap: RaiserArrayHeap): number {
-	const at = registryIndex(arrHeap);
-	return at < 0 ? DEFAULT_THRESHOLD : orcRegistries[at].threshold;
+	unregisterAt(arrHeap, objHeap, handle);
 }
 
 export function orcCollect(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, destroy: OrcDestroy): int32 {
-	const at = registryIndex(arrHeap);
-	if (at < 0) return 0;
-	const roots = orcRegistries[at];
-	if (roots.handles.length == 0) return 0;
+	const roots = arrHeap.orcRoots;
+	if (roots.length == 0) return 0;
 	const env: OrcEnv = { owners: [], indices: [], children: [], toFree: [], touched: 0, edges: 0, rcSum: 0, keepThreshold: false };
-	const count = roots.handles.length;
-	for (let i = count - 1; i >= 0; i -= 1) markGrayCell(arrHeap, objHeap, env, roots.handles[i]);
+	const count = roots.length;
+	for (let i = count - 1; i >= 0; i -= 1) markGrayCell(arrHeap, objHeap, env, roots[i]);
 	let colToCollect = COL_WHITE;
 	if (env.rcSum == env.edges) {
 		colToCollect = COL_GRAY;
 		env.keepThreshold = true;
 	} else {
-		for (let i = count - 1; i >= 0; i -= 1) scanCell(arrHeap, objHeap, env, roots.handles[i]);
+		for (let i = count - 1; i >= 0; i -= 1) scanCell(arrHeap, objHeap, env, roots[i]);
 	}
 	for (let i = 0; i < count; i += 1) {
-		const h = roots.handles[i];
+		const h = roots[i];
 		setColorField(arrHeap, objHeap, h, colorField(arrHeap, objHeap, h) & COLOR_MASK);
 		collectColorCell(arrHeap, objHeap, env, h, colToCollect);
 	}
-	const oldThreshold = roots.threshold;
-	roots.threshold = NEVER_COLLECT;
-	roots.handles.length = 0;
+	const oldThreshold = arrHeap.orcThreshold;
+	arrHeap.orcThreshold = NEVER_COLLECT;
+	roots.length = 0;
 	for (const h of env.toFree) {
 		setCount(arrHeap, objHeap, h, 1);
 		destroy(h);
 	}
-	roots.threshold = oldThreshold;
+	arrHeap.orcThreshold = oldThreshold;
 	const freed = env.toFree.length;
 	if (!env.keepThreshold) {
 		if (freed * 2 >= env.touched) {
-			roots.threshold = Math.max(Math.floor(roots.threshold * 2 / 3), MIN_THRESHOLD);
-		} else if (roots.threshold < Math.floor(NEVER_COLLECT / 4)) {
-			if (roots.threshold <= 0) roots.threshold = DEFAULT_THRESHOLD;
-			roots.threshold = Math.floor(roots.threshold / 2) + roots.threshold;
+			arrHeap.orcThreshold = Math.max(Math.floor(oldThreshold * 2 / 3), MIN_THRESHOLD);
+		} else if (oldThreshold < Math.floor(NEVER_COLLECT / 4)) {
+			const base = oldThreshold <= 0 ? ORC_DEFAULT_THRESHOLD : oldThreshold;
+			arrHeap.orcThreshold = Math.floor(base / 2) + base;
 		}
 	}
 	return freed as int32;
@@ -625,13 +583,12 @@ test "orcCollect frees a registered garbage cycle and leaves unregistered cells 
 	const live = heapAllocObject(obj);
 	rcIncref(arr, obj, raiserObject(live));
 	assert !orcRegisterCandidate(arr, obj, a);
-	assert orcRootCount(arr) == 1;
+	assert arr.orcRoots.length == 1;
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 2;
 	assert obj.freeList.length == 2;
 	assert obj.objects[handleIndex(c)].rc == 1 && obj.objects[handleIndex(d)].rc == 1;
 	assert obj.objects[handleIndex(live)].rc == 1;
-	assert orcRootCount(arr) == 0;
-	orcRelease(arr);
+	assert arr.orcRoots.length == 0;
 }
 
 test "orcCollect keeps an externally referenced registered cycle and drops it from the roots" {
@@ -645,11 +602,10 @@ test "orcCollect keeps an externally referenced registered cycle and drops it fr
 	orcRegisterCandidate(arr, obj, a);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
 	assert obj.objects[handleIndex(a)].rc == 2 && obj.objects[handleIndex(b)].rc == 1;
-	assert orcRootCount(arr) == 0;
+	assert arr.orcRoots.length == 0;
 	assert obj.objects[handleIndex(a)].color == 0;
 	assert !orcRegisterCandidate(arr, obj, a);
-	assert orcRootCount(arr) == 1;
-	orcRelease(arr);
+	assert arr.orcRoots.length == 1;
 }
 
 test "orcCollect clears each slot of a three-node ring before its destroy runs, once per cell" {
@@ -674,7 +630,6 @@ test "orcCollect clears each slot of a three-node ring before its destroy runs, 
 	assert calls.length == 3;
 	assert calls[0] != calls[1] && calls[1] != calls[2] && calls[0] != calls[2];
 	assert obj.freeList.length == 3;
-	orcRelease(arr);
 }
 
 test "orcCollect frees a cycle that runs through an array, holding handles as items and as words" {
@@ -692,7 +647,6 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	orcRegisterCandidate(arr, obj, items);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 3;
 	assert arr.freeList.length == 2 && obj.freeList.length == 1;
-	orcRelease(arr);
 }
 
 test "orcRegisterCandidate asks for a collection at 128 plus the threshold and the threshold follows the runtime rule" {
@@ -707,8 +661,8 @@ test "orcRegisterCandidate asks for a collection at 128 plus the threshold and t
 	rcIncref(arr, obj, raiserObject(last));
 	assert orcRegisterCandidate(arr, obj, last);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
-	assert orcThreshold(arr) == 192;
-	assert orcRootCount(arr) == 0;
+	assert arr.orcThreshold == 192;
+	assert arr.orcRoots.length == 0;
 
 	const a = heapAllocObject(obj);
 	const b = heapAllocObject(obj);
@@ -717,8 +671,7 @@ test "orcRegisterCandidate asks for a collection at 128 plus the threshold and t
 	orcRegisterCandidate(arr, obj, a);
 	orcRegisterCandidate(arr, obj, last);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 2;
-	assert orcThreshold(arr) == 128;
-	orcRelease(arr);
+	assert arr.orcThreshold == 128;
 }
 
 test "orcCollect keeps the threshold when every reference of the roots is internal" {
@@ -730,8 +683,7 @@ test "orcCollect keeps the threshold when every reference of the roots is intern
 	linkObjects(arr, obj, b, a, "next");
 	orcRegisterCandidate(arr, obj, a);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 2;
-	assert orcThreshold(arr) == 128;
-	orcRelease(arr);
+	assert arr.orcThreshold == 128;
 }
 
 test "orcUnregister swaps the last root into the freed slot and a freed cell stays out of the collection" {
@@ -747,12 +699,11 @@ test "orcUnregister swaps the last root into the freed slot and a freed cell sta
 	orcRegisterCandidate(arr, obj, b);
 	orcRegisterCandidate(arr, obj, c);
 	orcUnregister(arr, obj, a);
-	assert orcRootCount(arr) == 2;
+	assert arr.orcRoots.length == 2;
 	assert obj.objects[handleIndex(a)].color == 0;
 	assert obj.objects[handleIndex(c)].color >> 2 == 1;
 	orcUnregister(arr, obj, c);
 	assert obj.objects[handleIndex(b)].color >> 2 == 1;
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
 	assert obj.objects[handleIndex(a)].rc == 1 && obj.objects[handleIndex(c)].rc == 1;
-	orcRelease(arr);
 }
