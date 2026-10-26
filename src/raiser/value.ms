@@ -1218,6 +1218,11 @@ export function heapObjectLaidCount(heap: RaiserObjectHeap, handle: int64): numb
 	return isObjectCell(handle) ? objectCellClass(handle).fields.length : heap.objects[handleIndex(handle)].slots.length;
 }
 
+// The handle of an object cell: its address with the generic cell tag.
+export function objectCellHandle(cell: int64): int64 {
+	return cell | (RaiserHeapKind.Seq as int64);
+}
+
 export function objectCellClass(handle: int64): RaiserClassType {
 	return classTypeAt(cellTypeIndex(seqCellOf(handle)));
 }
