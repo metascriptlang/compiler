@@ -469,6 +469,7 @@ function holdsValueSym(sym: Symbol): boolean {
 function unservedExtern(call: Node): string {
 	const d = call.data as CallExprData;
 	const sym = d.callee.resolvedSym;
+	if (sym != null && sym.modulePath.endsWith(".jms")) return "js prelude routine";
 	if (sym == null || holdsValueSym(sym) || sym.nativeName == "" || sym.builtinKind != "") return "";
 	if (hasHostCallback(sym) || lookupHost(sym.nativeName) != null || INTERCEPTED_EXTERNS.includes(sym.nativeName)) return "";
 	if (d.callee.kind == NodeKind.MemberExpr && sym.symbolKind != SymbolKind.Method) {
@@ -480,10 +481,16 @@ function unservedExtern(call: Node): string {
 
 function blockedForm(node: Node, afterTransform: boolean): string {
 	if (node == null) return "";
+	if (node.kind == NodeKind.QuoteExpr || node.kind == NodeKind.MacroInvocation) return "macro form";
 	if (!afterTransform) {
-		if (node.kind == NodeKind.QuoteExpr || node.kind == NodeKind.MacroInvocation) return "macro form";
 		const sym = node.resolvedSym;
 		if (sym != null && (sym.builtinKind.startsWith("Meta") || isMetaNodeSym(sym))) return "meta builtin";
+	}
+	if (node.kind == NodeKind.FunctionDecl) {
+		for (const dflt of (node.data as FunctionDeclData).fnDefaults) {
+			const inDefault = blockedForm(dflt, afterTransform);
+			if (inDefault != "") return inDefault;
+		}
 	}
 	if (afterTransform && node.kind == NodeKind.CallExpr) {
 		const extern = unservedExtern(node);
@@ -518,6 +525,10 @@ function buildBodyCtx(sym: Symbol): CheckerContext | null {
 function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	if (sym.symbolKind == SymbolKind.Class || !isCheckedRoutineDecl(sym.declNode)) {
 		_buildLoweringBlockedBy = sym.symbolKind == SymbolKind.Class ? "class" : "not checked";
+		return BUILD_LOWERING_BLOCKED;
+	}
+	if (sym.modulePath.endsWith(".jms")) {
+		_buildLoweringBlockedBy = "js prelude routine";
 		return BUILD_LOWERING_BLOCKED;
 	}
 	const bodyCtx = buildBodyCtx(sym);
@@ -584,8 +595,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	}
 	let recheckReason = vmStd ? "vm std" : "";
 	if (recheckReason == "") {
-		const lowered = lowerBuildCheckedHelper(sym);
-		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
+		const lowered = lowerBuildCheckedHelper(sym);		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
 		recheckReason = _buildLoweringBlockedBy;
 	}
 	noteRecheck(recheckReason);
