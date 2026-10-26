@@ -33,7 +33,6 @@ function intersect(a: HashSet<Symbol>, b: HashSet<Symbol>): HashSet<Symbol> {
 
 function collectBlockMoved(block: Node): HashSet<Symbol> {
 	const result = new HashSet<Symbol>();
-	if (block == null) return result;
 	if (block.kind != NodeKind.BlockStmt) return result;
 	scanBlock((block.data as BlockStmtData).statements, result);
 	return result;
@@ -59,17 +58,15 @@ function collectIfMoved(ifNode: Node): HashSet<Symbol> {
 // ===== The variable a wasMoved/destroy call acts on =====
 
 function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
-	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return null;
+	if (stmt.kind != NodeKind.ExprStmt) return null;
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return null;
+	if (ed.expr.kind != NodeKind.CallExpr) return null;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null || cd.callee.resolvedSym == null || !hasFlag(cd.callee.resolvedSym, op)) return null;
+	if (cd.callee.resolvedSym == null || !hasFlag(cd.callee.resolvedSym, op)) return null;
 	if (cd.arguments.length != 1) return null;
-	// Access arguments[0] inline — avoid local Node variable (DRC use-after-free on return)
-	if (cd.arguments[0] == null) return null;
 	if (cd.arguments[0].kind == NodeKind.HiddenAddr) {
 		const inner = (cd.arguments[0].data as HiddenDerefData).expr;
-		if (inner == null || inner.kind != NodeKind.Identifier) return null;
+		if (inner.kind != NodeKind.Identifier) return null;
 		return inner.resolvedSym;
 	}
 	if (cd.arguments[0].kind != NodeKind.Identifier) return null;
@@ -79,7 +76,7 @@ function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
 function isPairOpCall(node: Node): boolean {
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
-	if (callee == null || callee.resolvedSym == null) return false;
+	if (callee.resolvedSym == null) return false;
 	return hasFlag(callee.resolvedSym, SymbolFlag.WasMovedOp) || hasFlag(callee.resolvedSym, SymbolFlag.DestroyOp);
 }
 
@@ -105,27 +102,20 @@ function optimizeBlock(stmts: Node[]): Node[] {
 function scanBlock(stmts: Node[], moved: HashSet<Symbol>): Node[] {
 	const result: Node[] = [];
 
-	let i = 0;
-	while (i < stmts.length) {
-		const stmt = stmts[i];
-		if (stmt == null) {
-			i += 1;
-			continue;
-		}
+	for (const stmt of stmts) {
+		if (stmt == null) continue;
 
 		// Track wasMoved calls — add var to moved set
 		const wmVar = opCallTarget(stmt, SymbolFlag.WasMovedOp);
 		if (wmVar != null) {
 			moved.add(wmVar);
 			result.push(stmt);
-			i += 1;
 			continue;
 		}
 
 		// Eliminate destroy for definitely-moved vars
 		const dVar = opCallTarget(stmt, SymbolFlag.DestroyOp);
 		if (dVar != null && moved.has(dVar)) {
-			i += 1;  // skip destroy — var was already zeroed by wasMoved
 			continue;
 		}
 
@@ -139,7 +129,6 @@ function scanBlock(stmts: Node[], moved: HashSet<Symbol>): Node[] {
 		}
 
 		result.push(stmt);
-		i += 1;
 	}
 	return result;
 }
@@ -190,10 +179,6 @@ function walkOptimize(node: Node): void {
 		},
 		NodeKind.MethodDecl => { walkOptimize((node.data as MethodDeclData).methodBody); },
 		NodeKind.ConstructorDecl => { walkOptimize((node.data as ConstructorDeclData).ctorBody); },
-		// Default: descend via canonical walker so any new container kind still
-		// has its nested blocks reached. Block-level optimization runs on
-		// BlockStmt / SwitchCase / Program — if an unknown container wraps those,
-		// they'll be hit via forEachChild recursion. Correctness-preserving.
 		_ => { forEachChild(node, (child: Node): void => { walkOptimize(child); }); },
 	};
 }
