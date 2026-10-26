@@ -1,12 +1,13 @@
 import { VmMemory, createVmMemory, newCell, disposeCell, cellRc, setCellRc, setCellRootIdx, cellTypeIndex, cellAllocSize, isLiveCell, liveCellBlocks, ld64, st64 } from "./memory";
 import { RaiserRegClass } from "./bytecode";
-import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
+import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, raiserInt, raiserFloat, heapObjectSetField, heapObjectGetField, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldRefusal, heapObjectFieldIndex, heapObjectClass, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
 
 // An object with a layout is a cell: the reference header, then one 8 byte slot per laid field in layout order.
 // The header's type word indexes the class type table, so a cell knows its class and its destroy routine without a handle
 // heap. A Dyn slot holds the handle of its box, as a Dyn register does; every other slot holds the word its class holds.
 export function objectCellNew(mem: VmMemory, t: RaiserClassType, rc: int64): int64 {
 	when (mode != "danger") { if (t.kinds.length != t.fields.length) throw new Error(`internal: class ${t.name} has ${t.fields.length} fields and ${t.kinds.length} slot classes`); }
+	when (mode != "danger") { if (t.kinds.includes(RaiserRegClass.Dyn)) throw new Error(`internal: class ${t.name} has a Dyn slot, which a cell holds only once Dyn values are cells`); }
 	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_CELL_SLOT_BYTES, 8, classTypeIndex(t) as int64, true);
 	setCellRc(cell, rc);
 	setCellRootIdx(cell, 0);
@@ -75,6 +76,19 @@ test "an object cell's handle reads as an object and a release of the last holde
 	assert rcDecIsLast(arr, obj, cellHandle(inner));
 	rcFreeHandle(arr, obj, cellHandle(inner));
 	assert liveCellBlocks(arr.mem).length == 0;
+}
+
+test "the host field accessors read and store a cell's laid slots in their classes" {
+	const obj = createStructHeap();
+	const cell = objectCellNew(createArrayHeap().mem, pointType(), 0);
+	const h = cellHandle(cell);
+	heapObjectSetField(obj, h, "x", raiserInt(7));
+	heapObjectSetField(obj, h, "y", raiserInt(2));
+	assert heapObjectFieldCount(obj, h) == 3 && heapObjectFieldNameAt(obj, h, 1) == "y";
+	assert heapObjectGetField(obj, h, "x").intVal == 7 && heapObjectGetField(obj, h, "y").floatVal == 2.0;
+	assert heapObjectGetField(obj, h, "name").kind == RaiserValueKind.Nil && heapObjectGetField(obj, h, "none").kind == RaiserValueKind.Nil;
+	assert heapObjectFieldRefusal(obj, h, 0, raiserFloat(1.5)) != "" && heapObjectFieldRefusal(obj, h, 1, raiserInt(1)) == "";
+	assert heapObjectFieldIndex(obj, h, "name") == 2 && heapObjectClass(obj, h).name == "Point";
 }
 
 test "one class type shares a table index however many cells hold it" {
