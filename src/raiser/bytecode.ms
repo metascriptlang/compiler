@@ -222,9 +222,18 @@ export enum RaiserOpcode {
 	SinkValue,        // ABC: DestroyValue the aggregate in refs[A] by copy plan C, then refs[A] = refs[B]; a destination that already holds B's handle stays
 	RcHeld,           // ABC: words[B] = the count of the cell in refs[A], 0 for nil
 	RcKeptCheck,      // ABC: fatal when the count of the cell in refs[A] exceeds words[B]: a destroy routine kept its own cell alive
+	ArrayPop,         // ABC: R[A] = R[B].pop(); the element leaves the array with its count; an empty array is fatal like an index past its end
+	ArrayShift,       // ABC: R[A] = R[B].shift(); an empty array gives the zero of its element class, and "" when C = 1 (a string array)
+	ArraySplice,      // ABC: remove R[C+1] elements at R[C] from R[A]; a start outside the array or a count of 0 or less changes nothing
+	ArraySplice3,     // ABC: remove R[C+1] elements at R[C] from R[A], then insert R[B] there; the start clamps into 0..length
+	ArrayReverse,     // ABC: reverse R[A] in place
+	ArraySort,        // ABC: sort R[A] in place, stable: numbers by value, strings by bytes
+	ArrayFill,        // ABC: every element of R[A] becomes R[B], each evicted element released
+	ArraySliceCopy,   // ABC: R[A] = a new array of R[B] over [R[C], R[C+1]); a negative bound counts from the end, both clamp
+	ArrayConcat,      // ABC: R[A] = a new array of the elements of R[B] then those of R[C]
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.RcKeptCheck;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.ArrayConcat;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -346,6 +355,13 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArrayPush => "rx-",
 		RaiserOpcode.ArraySetLen => "ri-",
 		RaiserOpcode.ArraySlice => "rrp",
+		RaiserOpcode.ArrayPop | RaiserOpcode.ArrayShift => "xr-",
+		RaiserOpcode.ArraySplice => "r-p",
+		RaiserOpcode.ArraySplice3 => "rxp",
+		RaiserOpcode.ArrayReverse | RaiserOpcode.ArraySort => "r--",
+		RaiserOpcode.ArrayFill => "rx-",
+		RaiserOpcode.ArraySliceCopy => "rrp",
+		RaiserOpcode.ArrayConcat => "rrr",
 		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
 		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
 		RaiserOpcode.LoadSlotW => "ir-",
@@ -791,6 +807,9 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.DestroyValue, 2) == RaiserRole.None;
 	assert opRole(RaiserOpcode.WasMoved, 0) == RaiserRole.Any;
 	assert opRole(RaiserOpcode.SinkValue, 1) == RaiserRole.Slot;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.RcKeptCheck, 0) == RaiserRole.Slot;
+	assert opRole(RaiserOpcode.RcKeptCheck, 1) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.ArrayPop, 0) == RaiserRole.Any && opRole(RaiserOpcode.ArrayPop, 1) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.ArraySplice3, 1) == RaiserRole.Any && opRole(RaiserOpcode.ArraySplice3, 2) == RaiserRole.IntPair;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Ref;
 }
