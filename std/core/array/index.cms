@@ -21,6 +21,7 @@ export class Array<T> {
 }
 
 export { toString } from "./shared";
+import { spliceStart, spliceCount } from "./shared";
 
 // ===== Number Array =====
 
@@ -253,19 +254,6 @@ extern function rotate<T>(this arr: T[], lo: int64, mid: int64, hi: int64): void
 extern function swap<T>(this arr: T[], i: int64, j: int64): void from "&msGenericArraySwap";
 extern function swapWith<T>(this arr: T[], i: int64, other: T[], j: int64): void from "&msGenericArraySwapWith";
 extern function growEmpty<T>(this arr: T[], n: int64): void from "&msGenericArraySetLen";
-
-function spliceStart(start: number, n: int64): int64 {
-	if (start != start || start <= -(n as number)) return 0;
-	if (start >= (n as number)) return n;
-	const s = start as int64;
-	return s < 0 ? s + n : s;
-}
-
-function spliceCount(deleteCount: number, room: int64): int64 {
-	if (deleteCount != deleteCount || deleteCount <= 0) return 0;
-	if (deleteCount >= (room as number)) return room;
-	return deleteCount as int64;
-}
 
 /** Removes deleteCount elements starting at index start; a negative start counts from the end. */
 export function splice<T>(this arr: T[], start: number, deleteCount: number): void {

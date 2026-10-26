@@ -1,4 +1,5 @@
 export { toString } from "./shared";
+import { spliceStart, spliceCount } from "./shared";
 
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
@@ -42,35 +43,44 @@ export function capacity<T>(this arr: Vec<T>): number {
 	return arr.length;
 }
 
-// Removes deleteCount elements starting at start (clamped).
+// Removes deleteCount elements starting at start; a negative start counts from the end.
 export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
-	const n = arr.length;
-	let s = start;
-	if (s < 0) s = 0;
-	if (s > n) s = n;
-	let end = s + deleteCount;
-	if (end > n) end = n;
+	const n = arr.length as int64;
+	const s = spliceStart(start, n);
+	const k = spliceCount(deleteCount, n - s);
+	if (k == 0) return;
 	let dst = s;
-	let src = end;
-	while (src < n) {
-		arr[dst] = arr[src];
+	while (dst + k < n) {
+		arr[dst] = arr[dst + k];
 		dst = dst + 1;
-		src = src + 1;
 	}
-	arr.setLength(n - (end - s));
+	arr.setLength((n - k) as number);
 }
 
-// Removes deleteCount elements at start, then inserts item at start.
+// Removes deleteCount elements at start, then inserts item at start; a negative start counts from the end.
 export function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void {
-	splice(arr, start, deleteCount);
-	const n = arr.length;
-	arr.setLength(n + 1);
+	const s = spliceStart(start, arr.length as int64);
+	splice(arr, s as number, deleteCount);
+	const n = arr.length as int64;
+	arr.setLength((n + 1) as number);
 	let i = n;
-	while (i > start) {
+	while (i > s) {
 		arr[i] = arr[i - 1];
 		i = i - 1;
 	}
-	arr[start] = item;
+	arr[s] = item;
+}
+
+export function reverse<T>(this arr: T[]): void {
+	let lo: int64 = 0;
+	let hi = (arr.length as int64) - 1;
+	while (lo < hi) {
+		const tmp = arr[lo];
+		arr[lo] = arr[hi];
+		arr[hi] = tmp;
+		lo = lo + 1;
+		hi = hi - 1;
+	}
 }
 
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
