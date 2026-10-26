@@ -139,6 +139,12 @@ function emitSink(s: RaiserCompState, name: string, dest: Node, src: Node): void
 
 function emitAppend(s: RaiserCompState, name: string, dest: Node, tail: int32): void {
 	const held = refRegister(s, name, dest);
+	const place = placeOf(dest);
+	if (place.kind == NodeKind.Identifier && resolveLocal(s, place.resolvedSym) == held
+		&& classOfReg(s, held) == RaiserRegClass.Ref && classOfReg(s, tail) == RaiserRegClass.Ref) {
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStrR, held, held, tail));
+		return;
+	}
 	const joined = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, joined, held, tail));
 	emitRebind(s, name, dest, joined, held);
