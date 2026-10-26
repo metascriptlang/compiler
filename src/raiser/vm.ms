@@ -3262,10 +3262,8 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			}
 		},
 		RaiserOpcode.UnionConv => {
-			when (mode != "danger") {
-				const shown = unionConvRefusal(vm, getDyn(vm, ia), constStringText(getFuncConst(func, ib)));
-				if (shown != "") vmError(vm, constStringText(getFuncConst(func, ic)) + shown + "'");
-			}
+			const shown = unionConvRefusal(vm, getDyn(vm, ia), constStringText(getFuncConst(func, ib)));
+			if (shown != "") vmError(vm, constStringText(getFuncConst(func, ic)) + shown + "'");
 		},
 		RaiserOpcode.SameLoc => {
 			const l = getDyn(vm, ib);
