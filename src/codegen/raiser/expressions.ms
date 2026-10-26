@@ -1808,6 +1808,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const acc = compileEchoLine(s, d.arguments);
 		emitInst(s, raiserABC(RaiserOpcode.Print, acc, 0, 0));
+		if (raiserPlaced()) emitInst(s, raiserABC(RaiserOpcode.RcDec, acc, 0, 0));
 		return acc;
 	}
 
@@ -1818,6 +1819,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (line != lineReg) emitInst(s, raiserABC(RaiserOpcode.Move, lineReg, line, 0));
 		const nameIdx = addConst(s, raiserConstString("msEprintln"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
+		if (raiserPlaced()) emitInst(s, raiserABC(RaiserOpcode.RcDec, line, 0, 0));
 		return dest;
 	}
 
