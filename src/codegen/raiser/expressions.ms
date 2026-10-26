@@ -21,7 +21,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { structShapeOperand, emitStoreCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
+import { emitAggregateAssign, structShapeOperand, emitStoreCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
@@ -758,19 +758,33 @@ function isRefParamTarget(left: Node): boolean {
 		&& sym.symbolType != null && sym.symbolType.kind == TypeKind.Var;
 }
 
+function isFreshValue(node: Node): boolean {
+	return node.kind == NodeKind.ArrayLiteral || node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.CallExpr;
+}
+
 function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 {
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
 		const paramReg = resolveLocal(s, left.resolvedSym);
 		if (paramReg < 0 || heldByLocation(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
+		if (raiserPlaced()) {
+			const written = emitAggregateAssign(s, paramReg, srcReg, pointeeType, isFreshValue(right));
+			if (written >= 0) return written;
+		}
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
 	}
 	if (!needsValueAssign(s, left.nodeType)) return -1;
 	if (left.kind == NodeKind.HiddenDeref) {
 		const srcReg = compileExpr(s, right);
 		const pointee = compileExpr(s, (left.data as HiddenDerefData).expr);
-		if (!heldByLocation(s, left.nodeType)) return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		if (!heldByLocation(s, left.nodeType)) {
+			if (raiserPlaced()) {
+				const written = emitAggregateAssign(s, pointee, srcReg, left.nodeType, isFreshValue(right));
+				if (written >= 0) return written;
+			}
+			return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		}
 		const held = allocFor(s, left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, held, pointee, 0));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
