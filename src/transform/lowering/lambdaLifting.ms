@@ -1527,6 +1527,16 @@ test "a shared env keeps a nullable ref assigned by its called closure counted" 
 	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Union, envDump(stmts);
 }
 
+test "a shared env keeps a nullable ref counted when its called closure overwrites the slot it was read from" {
+	const stmts = checkedLifted(LENT + "class Box { next: Item | null = null; } function f(a: Box): int32 { const best = a.next; const get = (): int32 => { a.next = null; return best != null ? best.v : 0; }; return get(); }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Union, envDump(stmts);
+}
+
+test "a shared env keeps a ref counted when its called closure overwrites the slot it was read from" {
+	const stmts = checkedLifted(LENT + "class Box { child: Item = new Item(); } function f(a: Box): int32 { const best = a.child; const get = (): int32 => { a.child = new Item(); return best.v; }; return get(); }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Ref, envDump(stmts);
+}
+
 test "a shared env keeps a borrowed array parameter its called closure pushes into as a counted field" {
 	const stmts = checkedLifted(LENT + "function walk(n: int32, f: (x: int32) => void): void { f(n); }\nfunction f(out: Item[]): void { walk(1, (x: int32): void => { out.push(new Item()); }); }");
 	assert envFieldKind(stmts, "Env_f_shared", "out") == TypeKind.Ref, envDump(stmts);
