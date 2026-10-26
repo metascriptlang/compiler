@@ -15,7 +15,7 @@ import { JsonKind, JsonValue } from "std/serialize/json/types";
 import { getDynamicField, asString, asInt32 } from "std/serialize/json/accessors";
 import { writeStderr } from "std/io";
 import { readFile, writeFile, mkdir, remove } from "std/fs";
-import { env } from "std/process";
+import { cwd, env } from "std/process";
 import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
@@ -538,6 +538,70 @@ test "definition on JSX tag with attributes resolves" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
 	const r = handleDefinition("65", params, db);
 	assert r.indexOf("\"line\":0") >= 0;
+}
+
+// Fixture modules on disk: html.ms declares IntrinsicElements, ui.ms is a JSX consumer with
+// `export * as JSX` beside it, uiPlain.ms the same consumer without it.
+const JSX_DIR = "src/test/fixtures/lsp/jsxNamespace";
+
+// Opened as a client opens it, so the imports it names are recorded before the check.
+function jsxDb(main: string): TransAmDb {
+	const db = createTransAmDb(100);
+	handleDidOpen(`{"textDocument":{"uri":${lspJsonString(`file://${cwd()}/${JSX_DIR}/main.ms`)},"text":${lspJsonString(main)}}}`, db);
+	return db;
+}
+
+function jsxQuery(db: TransAmDb, line: int32, character: int32, definition: boolean): string {
+	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
+	return definition ? handleDefinition("71", params, db) : handleHover("70", params, db);
+}
+
+// line 1: `const v: number = <a href="x" id="y"/>;` — a at 19, href at 21, id at 30
+const JSX_AT_BOUNDARY = "import { view } from \"./ui\";\nconst v: number = <a href=\"x\" id=\"y\"/>;";
+
+test "hover on a lowercase JSX tag shows its IntrinsicElements field doc from the consumer's JSX" {
+	const r = jsxQuery(jsxDb(JSX_AT_BOUNDARY), 1, 19, false);
+	assert r.indexOf("The anchor element.") >= 0;
+	assert r.indexOf("developer.mozilla.org") >= 0;
+}
+
+test "hover on a JSX attribute shows the doc of the tag's attribute field" {
+	assert jsxQuery(jsxDb(JSX_AT_BOUNDARY), 1, 21, false).indexOf("The URL the link points to.") >= 0;
+}
+
+test "hover on an inherited JSX attribute names and documents the interface that declares it" {
+	const r = jsxQuery(jsxDb(JSX_AT_BOUNDARY), 1, 30, false);
+	assert r.indexOf("GlobalAttrs.id") >= 0;
+	assert r.indexOf("Unique id of the element.") >= 0;
+}
+
+test "definition on an inherited JSX attribute jumps to its field in the parent interface" {
+	const r = jsxQuery(jsxDb(JSX_AT_BOUNDARY), 1, 30, true);
+	assert r.indexOf("html.ms") >= 0;
+	assert r.indexOf("\"line\":2") >= 0;
+}
+
+test "a JSX argument of an explicit macro call reads the macro module's JSX" {
+	// line 1: `const w = ui(<a href="z"/>);` — a at 14, href at 16
+	const db = jsxDb("import { ui } from \"./ui\";\nconst w = ui(<a href=\"z\"/>);");
+	assert jsxQuery(db, 1, 14, false).indexOf("The anchor element.") >= 0;
+	assert jsxQuery(db, 1, 16, false).indexOf("The URL the link points to.") >= 0;
+}
+
+test "a consumer without a JSX export falls back to the JSX in scope" {
+	const db = jsxDb("import { view } from \"./uiPlain\";\nimport * as JSX from \"./html\";\nconst v: number = <a href=\"x\" id=\"y\"/>;");
+	assert jsxQuery(db, 2, 21, false).indexOf("The URL the link points to.") >= 0;
+}
+
+test "a lowercase JSX tag with no JSX namespace anywhere records nothing" {
+	const db = jsxDb("import { view } from \"./uiPlain\";\nconst v: number = <a href=\"x\" id=\"y\"/>;");
+	assert jsxQuery(db, 1, 21, false).indexOf("The URL") < 0;
+}
+
+test "hover on an inherited field read through a member access shows its declaring interface's doc" {
+	// line 1: `function f(x: AnchorAttrs): string { return x.id; }` — id at 46
+	const db = jsxDb("import { AnchorAttrs } from \"./html\";\nfunction f(x: AnchorAttrs): string { return x.id; }");
+	assert jsxQuery(db, 1, 46, false).indexOf("Unique id of the element.") >= 0;
 }
 
 test "find references from a JSX tag finds the other usages" {
