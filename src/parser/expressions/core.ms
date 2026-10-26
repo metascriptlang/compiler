@@ -60,6 +60,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 	// Postfix operators: call, member access, optional chaining, array indexing, update
 	let chainOpen = false;
+	let optionalIndex = false;
 	while (!isAtEnd(state)) {
 		const token = current(state);
 
@@ -101,6 +102,18 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 		// Optional chaining: expr?.prop
 		if (token.kind == TokenKind.QuestionDot) {
 			advance(state);
+			if (current(state).kind == TokenKind.LParen) {
+				if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
+				left = try parseCallExpr(state, left, parseExprWithPrec);
+				left.flags = left.flags.incl(NodeFlag.OptionalLink);
+				chainOpen = true;
+				continue;
+			}
+			if (current(state).kind == TokenKind.LBracket) {
+				if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
+				optionalIndex = true;
+				continue;
+			}
 			const prop = current(state);
 			let optPropName = "";
 			if (isIdentOrKeyword(prop.kind)) {
@@ -139,6 +152,11 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				index: idx
 			};
 			left = createNode(NodeKind.ArrayAccess, accessData, token);
+			if (optionalIndex) {
+				left.flags = left.flags.incl(NodeFlag.OptionalLink);
+				chainOpen = true;
+				optionalIndex = false;
+			}
 			continue;
 		}
 

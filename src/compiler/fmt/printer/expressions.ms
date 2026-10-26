@@ -136,7 +136,7 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	const callParts: Doc[] = [printAtom(d.callee, options), docText(writtenTypeArgs(node, d.callee, options) + "(")];
+	const callParts: Doc[] = [printAtom(d.callee, options), docText((node.flags.has(NodeFlag.OptionalLink) ? "?." : "") + writtenTypeArgs(node, d.callee, options) + "(")];
 	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
@@ -229,7 +229,7 @@ export function printArrayAccess(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayAccessData;
 	return docGroup([
 		printAtom(d.array, options),
-		docText("["),
+		docText(node.flags.has(NodeFlag.OptionalLink) ? "?.[" : "["),
 		callPrintNode(d.index, options),
 		docText("]"),
 	]);

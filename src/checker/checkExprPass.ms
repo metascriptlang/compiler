@@ -1053,6 +1053,7 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 function optionalRootOf(end: Node): Node | null {
 	let link: Node = end;
 	while (true) {
+		if (link.flags.has(NodeFlag.OptionalLink)) return link;
 		if (link.kind == NodeKind.MemberExpr) {
 			const d = link.data as MemberExprData;
 			if (d.isOptional) return link;
@@ -1071,7 +1072,28 @@ function optionalRootOf(end: Node): Node | null {
 }
 
 function startsOptionalChain(node: Node): boolean {
-	return node.flags.has(NodeFlag.OptionalChainEnd) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+	return node.flags.has(NodeFlag.OptionalChainEnd) || node.flags.has(NodeFlag.OptionalLink) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+}
+
+function optionalOperand(root: Node): Node {
+	return match (root.kind) {
+		NodeKind.CallExpr => (root.data as CallExprData).callee,
+		NodeKind.ArrayAccess => (root.data as ArrayAccessData).array,
+		_ => (root.data as MemberExprData).object,
+	};
+}
+
+function setOptionalOperand(root: Node, operand: Node): void {
+	match (root.kind) {
+		NodeKind.CallExpr => { (root.data as CallExprData).callee = operand; },
+		NodeKind.ArrayAccess => { (root.data as ArrayAccessData).array = operand; },
+		_ => { (root.data as MemberExprData).object = operand; },
+	}
+}
+
+function endOptionalRoot(root: Node): void {
+	root.flags = root.flags.excl(NodeFlag.OptionalLink);
+	if (root.kind == NodeKind.MemberExpr) (root.data as MemberExprData).isOptional = false;
 }
 
 function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -1081,22 +1103,21 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 		checkExprKind(ctx, node, expectedType);
 		return;
 	}
-	const rd = root.data as MemberExprData;
-	const tested = rd.object;
+	const tested = optionalOperand(root);
 	checkInTypeSlot(ctx, tested);
 	if (tested.nodeType == null) {
 		checkExprKind(ctx, node, expectedType);
 		return;
 	}
 	if (!isNullableShape([tested.nodeType])) {
+		endOptionalRoot(root);
 		checkExprKind(ctx, node, expectedType);
-		rd.isOptional = false;
 		return;
 	}
 	const loc = node.location;
 	const probe = readsOnlyNames(tested) ? cloneNodeKeepSem(tested) : tested;
-	rd.object = createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location);
-	rd.isOptional = false;
+	setOptionalOperand(root, createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location));
+	endOptionalRoot(root);
 	const chain = createNodeAt(node.kind, node.data, loc);
 	chain.flags = node.flags;
 	chain.typeArg = node.typeArg;
