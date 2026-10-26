@@ -27,7 +27,7 @@ import {
 	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
-	setRaiserModulePath, getRaiserModulePath,
+	setRaiserModulePath, getRaiserModulePath, setRaiserPlaced,
 	resolveRoutine, RaiserCompState,
 	isScalarClass
 } from "./context";
@@ -373,7 +373,18 @@ function hasTopLevelAwait(node: Node): boolean {
 	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = [], placed: boolean = false): RaiserModule {
+	setRaiserPlaced(placed);
+	try {
+		const compiled = generateProjectBody(modules, plan, exported);
+		compiled.drcPlaced = placed;
+		return compiled;
+	} finally {
+		setRaiserPlaced(false);
+	}
+}
+
+function generateProjectBody(modules: RaiserModuleInput[], plan: DynamicModulePlan, exported: ExportedSymInfo[]): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
