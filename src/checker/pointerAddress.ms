@@ -93,7 +93,7 @@ export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node,
 		return;
 	}
 	const refusal = writeRefusal(place, WriteSite.RefArg);
-	if (refusal == "") return;
+	if (refusal == null) return;
 	if (node.nodeType == null) {
 		addError(ctx, refusal, expr.location.line, expr.location.column);
 		return;

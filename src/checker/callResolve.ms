@@ -2600,8 +2600,8 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 function reportArrayReceiverWrite(ctx: CheckerContext, me: MemberExprData, recvFormal: Type): void {
 	const formal = skipModifier(recvFormal) ?? recvFormal;
 	const refusal = formal.kind == TypeKind.Span ? viewRefusal(me.object, formal)
-		: writesThroughReceiver(formal) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : "";
-	if (refusal != "") addError(ctx, refusal, me.object.location.line, me.object.location.column);
+		: writesThroughReceiver(formal) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : null;
+	if (refusal != null) addError(ctx, refusal, me.object.location.line, me.object.location.column);
 }
 
 function writesThroughReceiver(formal: Type): boolean {
@@ -2765,7 +2765,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 		const foreignVarargs = hasRest && pi >= restParamIdx && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC);
 		const formal: Type = skipModifier(paramType) ?? paramType;
 		const viewed = viewRefusal(args[pi], formal);
-		if (viewed != "") addError(ctx, viewed, args[pi].location.line, args[pi].location.column);
+		if (viewed != null) addError(ctx, viewed, args[pi].location.line, args[pi].location.column);
 		const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
 		if (isUnknownType(formalHeld) && !foreignVarargs) {
 			const refusal = unknownRefusal(argTypes[pi]);
@@ -2934,7 +2934,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						: ro != null
 						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
 						: writeRefusal(lvArg, WriteSite.RefArg);
-					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
+					if (refusal != null) addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 					const written = paramType.typeReturn;
 					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {
 						addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": an out parameter of type " + typeDisplayName(written)

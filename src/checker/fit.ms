@@ -3303,7 +3303,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (sendable == null) return expr;
 	if (sendable != exprType) return fitSlot(ctx, expr, formal, sendable);
 	const viewed = viewRefusal(expr, formal);
-	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
+	if (viewed != null) { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
 	if (isUnresolvedType(formal)) return expr;
 	const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
 	if (isUnknownType(formalHeld)) {

@@ -251,7 +251,7 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 		return;
 	}
 	const refusal = writeRefusal(target, WriteSite.Assign);
-	if (refusal != "") addError(ctx, refusal, target.location.line, target.location.column);
+	if (refusal != null) addError(ctx, refusal, target.location.line, target.location.column);
 }
 
 function literalDiscriminantOwner(md: MemberExprData): Type | null {
@@ -1230,7 +1230,7 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		addError(ctx, "cannot move out of " + typeDisplayName(roMove) + " — a read-only view is borrowed, not owned; to hand a value to a spawn thunk, list it in spawn(fn, { move: [x] }) (PARALOCK E24)", node.location.line, node.location.column);
 	} else if (d.moveArg.kind == NodeKind.MemberExpr || d.moveArg.kind == NodeKind.ArrayAccess) {
 		const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
-		if (refusal != "") addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
+		if (refusal != null) addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
 	}
 	// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.

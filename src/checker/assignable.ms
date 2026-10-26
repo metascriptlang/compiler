@@ -204,8 +204,8 @@ export function lvalueText(node: Node): string {
 	return "…";
 }
 
-export function viewRefusal(source: Node, slot: Type | null): string {
-	if (slot == null || slot.kind != TypeKind.Span || isReadonlyView(slot)) return "";
+export function viewRefusal(source: Node, slot: Type | null): string | null {
+	if (slot == null || slot.kind != TypeKind.Span || isReadonlyView(slot)) return null;
 	const root = sliceSource(source);
 	if (isStringLike(root.nodeType)) {
 		return `cannot view '${lvalueText(root)}' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`;
@@ -213,9 +213,9 @@ export function viewRefusal(source: Node, slot: Type | null): string {
 	return writeRefusal(source, WriteSite.View);
 }
 
-export function writeRefusal(target: Node, site: WriteSite, method: string = ""): string {
+export function writeRefusal(target: Node, site: WriteSite, method: string = ""): string | null {
 	const w = checkWrite(target, site);
-	if (w.root == null || w.verdict == WriteVerdict.Writable) return "";
+	if (w.root == null || w.verdict == WriteVerdict.Writable) return null;
 	const name = w.root.name;
 	const text = lvalueText(target);
 	const what = match (site) {
@@ -229,7 +229,7 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
 		WriteVerdict.BorrowView => `cannot ${what} — '${name}' is a read-only Borrow<T> view; to write, change what it was taken from or take a 'ref' parameter instead`,
-		WriteVerdict.Writable => "",
+		WriteVerdict.Writable => { throw new Error("internal: writeRefusal reached a Writable verdict"); },
 	};
 	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;
 }
