@@ -595,6 +595,17 @@ test "an IntrinsicElements alias shows the field doc of the interface it names" 
 	assert r.indexOf("The anchor element.") >= 0;
 }
 
+// line 5: `const v: number = <Card title="x"/>;` — title at 24
+const JSX_COMPONENT = "import { view } from \"./uiPlain\";\ninterface CardProps {\n\t/** The heading the card shows. */\n\ttitle: string;\n}\nfunction Card(props: CardProps): number { return 0; }\nconst v: number = <Card title=\"x\"/>;";
+
+test "hover on a function component's JSX attribute shows its props field doc" {
+	assert jsxQuery(jsxDb(JSX_COMPONENT), 6, 24, false).indexOf("The heading the card shows.") >= 0;
+}
+
+test "definition on a function component's JSX attribute jumps to its props field" {
+	assert jsxQuery(jsxDb(JSX_COMPONENT), 6, 24, true).indexOf("\"line\":3") >= 0;
+}
+
 test "a consumer without a JSX export falls back to the JSX in scope" {
 	const db = jsxDb("import { view } from \"./uiPlain\";\nimport * as JSX from \"./html\";\nconst v: number = <a href=\"x\" id=\"y\"/>;");
 	assert jsxQuery(db, 2, 21, false).indexOf("The URL the link points to.") >= 0;
