@@ -4,7 +4,8 @@
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
 import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData, ProgramData, ExportDeclData } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
+import { isScopeBoundary } from "../../ast/shape";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName, buildModuleNameRoots } from "../c/names";
@@ -421,16 +422,15 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 export function needsAutoAsync(flags: string, body: Node): boolean {
 	const kind = routineKindFlag(flags);
 	if (kind == "async" || kind == "async_generator") return false;
-	return body != null && bodyContainsAwait(body);
+	return body != null && containsOwnAwait(body);
 }
 
-function bodyContainsAwait(node: Node): boolean {
-	if (node.kind == NodeKind.AwaitExpr) return true;
-	let found = false;
-	forEachChild(node, (child) => {
-		if (!found) found = bodyContainsAwait(child);
+// An `await` belongs to the nearest enclosing routine, so the walk stops at a nested routine or class.
+export function containsOwnAwait(root: Node): boolean {
+	return anyDescendant(root, (n: Node): Visit => {
+		if (n.kind == NodeKind.AwaitExpr) return Visit.Hit;
+		return n !== root && isScopeBoundary(n) ? Visit.Skip : Visit.Descend;
 	});
-	return found;
 }
 
 // ===== Finalize =====

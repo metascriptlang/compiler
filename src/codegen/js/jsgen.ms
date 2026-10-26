@@ -4,10 +4,9 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, NodeFlag, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
-import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals, collectInnerLocals } from "./emit";
+import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals, collectInnerLocals, containsOwnAwait } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { createNodeAt, makeLoc } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
 	emitBigIntLiteral, emitRegexLiteral,
@@ -392,14 +391,7 @@ export function generateJSModule(
 }
 
 export function hasTopLevelAwait(node: Node): boolean {
-	if (node.kind == NodeKind.AwaitExpr) return true;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction
-			|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ClassDecl) return false;
-	let found = false;
-	forEachChild(node, (child) => {
-		if (!found) found = hasTopLevelAwait(child);
-	});
-	return found;
+	return containsOwnAwait(node);
 }
 
 function insertAfterHeader(gen: JSGenerator, headerChunks: int32, text: string): void {
