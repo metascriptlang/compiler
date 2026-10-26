@@ -2,6 +2,8 @@
 
 @include("runtime/os.h");
 
+import { env } from "../process";
+
 extern struct CpuInfo {
 	model: string;
 	speed: int32;
@@ -17,8 +19,6 @@ export extern function cpuCount(): int32 from "msOsCpuCount";
 export extern function totalMem(): int64 from "msOsTotalMem";
 export extern function freeMem(): int64 from "msOsFreeMem";
 export extern function uptime(): number from "msOsUptime";
-export extern function homeDir(): string from "msOsHomedir";
-export extern function tmpDir(): string from "msOsTmpdir";
 export extern function endianness(): string from "msOsEndianness";
 
 // Span expansion: CpuInfo* buf, int64_t buf_len → out buf: Span<CpuInfo>
@@ -32,3 +32,40 @@ export function cpus(): CpuInfo[] {
 }
 
 export const EOL: string = "\n";
+
+when (windows) {
+	@include("windows.h");
+
+	import { allocWide, freeWide, utf8Of } from "../fs/widePath";
+
+	extern function GetTempPathW(room: uint32, path: Ptr<uint16> | null): uint32;
+
+	const HOME_VARIABLE = "USERPROFILE";
+	const TEMP_FALLBACK = "C:\\Temp";
+
+	function tmpDirKernel(): string {
+		const units = GetTempPathW(0, null);
+		if (units == 0) return TEMP_FALLBACK;
+		const wide = allocWide(units as uint64);
+		if (wide == null) return TEMP_FALLBACK;
+		const written = GetTempPathW(units, wide);
+		const text = written > 0 && written < units ? utf8Of(wide) : "";
+		freeWide(wide);
+		return text != "" ? text : TEMP_FALLBACK;
+	}
+} else {
+	const HOME_VARIABLE = "HOME";
+
+	function tmpDirKernel(): string {
+		const tmp = env.get("TMPDIR");
+		return tmp != "" ? tmp : "/tmp";
+	}
+}
+
+export function homeDir(): string {
+	return env.get(HOME_VARIABLE);
+}
+
+export function tmpDir(): string {
+	return tmpDirKernel();
+}

@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
 import { isStructType, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { statementCanRaise, inferredCallRaises, finallyIsErrorBlind } from "../../checker/raises";
@@ -312,9 +312,10 @@ function assignTargetCType(g: CGen, left: Readonly<Node>): string {
 	return t != null ? getTypeDesc(g, t) : "";
 }
 
-function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
+function assignsInPlace(g: CGen, p: CProc, expr: Readonly<Node>): boolean {
+	const d = expr.data as BinaryExprData;
 	if (d.operator != "=" || (d.right.kind != NodeKind.ObjectLiteral && d.right.kind != NodeKind.CallExpr)) return false;
-	if (d.right.kind == NodeKind.CallExpr && !isPlainStruct(d.left.nodeType)) return false;
+	if (d.right.kind == NodeKind.CallExpr && !isPlainStruct(d.left.nodeType) && !expr.flags.has(NodeFlag.FirstWrite)) return false;
 	const root = frameLocalRoot(d.left, p);
 	if (root == null || readsFrameLocal(p, root, d.right)) return false;
 	if (d.right.kind == NodeKind.CallExpr && !storeIsUnobservable(p, d.right)) return false;
@@ -357,7 +358,7 @@ function storeIsUnobservable(p: Readonly<CProc>, call: Readonly<Node>): boolean 
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ExprStmtData;
-	if (d.expr.kind == NodeKind.BinaryExpr && assignsInPlace(g, p, d.expr.data as BinaryExprData)) {
+	if (d.expr.kind == NodeKind.BinaryExpr && assignsInPlace(g, p, d.expr)) {
 		const bd = d.expr.data as BinaryExprData;
 		const dest = genExpr(g, p, bd.left);
 		const built = genExprInto(g, p, bd.right, dest);

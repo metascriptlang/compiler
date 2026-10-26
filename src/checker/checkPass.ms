@@ -42,7 +42,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
-import { checkActorNonisolatedField, checkActorStaticField } from "./sendable";
+import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -1735,6 +1735,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 		checkActorStaticField(ctx, member);
 		checkActorNonisolatedField(ctx, sym, member);
+		checkActorReplies(ctx, member);
 	}
 	ctx.currentActor = prevActor;
 	closeScope(ctx.table);
@@ -6348,27 +6349,43 @@ test "a module numbers its template locals in its own context, whatever was chec
 	assert templateLocalsOfOneCheck() == first;
 }
 
-test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
+interface FreshPrelude {
+	ctx: CheckerContext;
+	gensymLeft: int32;
+}
+
+const freshPreludes = new Map<string, FreshPrelude>();
+
+function freshPreludeOf(stdPath: string, ext: string): FreshPrelude {
+	const key = ext + "|" + stdPath;
+	const known = freshPreludes.get(key);
+	if (known != null) return known;
 	env.set("MSC_NO_PRELUDE_PACK", "1");
+	const outer = templateGensymMark();
 	try {
-		for (const ext of [".rms", ".cms"]) {
-			const outer = templateGensymMark();
-			rewindTemplateGensym(41);
-			const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"), ext);
-			const left = templateGensymMark();
-			rewindTemplateGensym(outer);
-			assert left == 41;
-			assert ctx.generatedInstances.length == 0;
-			assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
-		}
+		rewindTemplateGensym(41);
+		const ctx = buildPreludeContext(stdPath, ext);
+		const fresh: FreshPrelude = { ctx, gensymLeft: templateGensymMark() };
+		freshPreludes.set(key, fresh);
+		return fresh;
 	} finally {
+		rewindTemplateGensym(outer);
 		env.delete("MSC_NO_PRELUDE_PACK");
+	}
+}
+
+test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
+	for (const ext of [".rms", ".cms"]) {
+		const fresh = freshPreludeOf(join(resolveRuntimeDir(), "std"), ext);
+		assert fresh.gensymLeft == 41;
+		assert fresh.ctx.generatedInstances.length == 0;
+		assert fresh.ctx.procInstCache.size == 0 && fresh.ctx.typeInstCache.size == 0;
 	}
 }
 
 test "a prelude checked from the relative std root names its modules as the absolute root does" {
 	const relative = checkPreludeFromSource("", ".cms");
-	const absolute = checkPreludeFromSource(join(cwd(), "std"), ".cms");
+	const absolute = freshPreludeOf(join(cwd(), "std"), ".cms").ctx;
 	assert relative.ownModules.size > 0 && relative.ownModules.size == absolute.ownModules.size;
 	for (const path of relative.ownModules) assert absolute.ownModules.has(path), path;
 	assert relative.preludeModuleScopes.size > 0 && relative.preludeModuleScopes.size == absolute.preludeModuleScopes.size;
@@ -6453,7 +6470,7 @@ test "a prelude module that imports an earlier prelude module checks it once" {
 }
 
 test "a prelude checked from source reports no errors" {
-	const ctx = checkPreludeFromSource(join(resolveRuntimeDir(), "std"), ".cms");
+	const ctx = freshPreludeOf(join(resolveRuntimeDir(), "std"), ".cms").ctx;
 	assert ctx.errors.length == 0, ctx.errors.length > 0 ? `${ctx.errors[0].line}:${ctx.errors[0].column} ${ctx.errors[0].message}` : "";
 }
 

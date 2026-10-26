@@ -1,5 +1,17 @@
 import { fullPipeline, findFnDecl } from "./helpers";
 import { Node, NodeKind, FunctionDeclData, BlockStmtData, ReturnStmtData, ExprStmtData, CallExprData, IdentifierData } from "../../ast/node";
+import { parseSource } from "../../parser/statements/validation";
+import "../../parser/statements/core";
+import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
+import { ExportRegistry } from "../../checker/context";
+import { monomorphizeProgram } from "../../monomorphize/collect";
+import { validateTypedAST } from "../../checker/validate";
+import { transformProgram } from "../../transform/index";
+import { transformForNative } from "../../transform/native/index";
+import { createTransformContextWithChecker } from "../../transform/context";
+import { Module, ModuleGraph } from "../../module/graph";
+import { resetBuildState } from "../../compiler/buildSession";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 
 function returnValue(source: string): Node | null {
 	const fn = findFnDecl(fullPipeline(source), "probe");
@@ -151,4 +163,90 @@ test "a pointer difference keeps its operator" {
 	assert runtimeCallee(returnValue("function probe(p: Ptr<int64>, q: Ptr<int64>): int32 { return q - p; }")) == "";
 	assert runtimeCallee(returnValue("struct Pair { left: int32; right: int32; } function probe(p: Ptr<Pair>, q: Ptr<Pair>): int32 { return q - p; }")) == "";
 	assert runtimeCallee(returnValue("function probe(p: Ptr<uint8>, n: int32): int32 { return ((p + n) - p) * n; }")) == "msMulI32";
+}
+
+function loweredWithRangeChecks(source: string, rangeChecks: boolean): Node {
+	resetBuildState();
+	const prelude = preludeContextFor("", ".cms");
+	const pr = parseSource(source);
+	if (!pr.ok) throw new Error("probe does not parse: " + source);
+	const ctx = checkProgramWithRegistry(
+		pr.value,
+		null as unknown as ExportRegistry,
+		null as unknown as ModuleGraph,
+		null as unknown as Module,
+		prelude,
+	);
+	const monoed = monomorphizeProgram(pr.value, ctx);
+	validateTypedAST(ctx, monoed);
+	const transformed = transformProgram(monoed, ctx, false);
+	const nativeCtx = createTransformContextWithChecker(ctx);
+	nativeCtx.rangeChecks = rangeChecks;
+	return transformForNative(transformed, nativeCtx);
+}
+
+function probeCall(source: string, rangeChecks: boolean): CallExprData {
+	const fn = findFnDecl(loweredWithRangeChecks(source, rangeChecks), "probe");
+	if (fn == null) throw new Error("probe is not a top-level function: " + source);
+	const body = (fn.data as FunctionDeclData).fnBody;
+	let value: Node | null = null;
+	for (const s of (body.data as BlockStmtData).statements) {
+		if (s.kind == NodeKind.ReturnStmt) value = (s.data as ReturnStmtData).argument;
+		else if (s.kind == NodeKind.ExprStmt) value = (s.data as ExprStmtData).expr;
+	}
+	if (value == null || value.kind != NodeKind.CallExpr) throw new Error("probe does not end in a call: " + source);
+	return value.data as CallExprData;
+}
+
+function calleeName(call: CallExprData): string {
+	if (call.callee.kind != NodeKind.Identifier) throw new Error("probe callee is not a name");
+	return (call.callee.data as IdentifierData).name;
+}
+
+function isStdFunction(call: CallExprData): boolean {
+	const sym = call.callee.resolvedSym;
+	return sym != null && !hasFlag(sym, SymbolFlag.ImportC);
+}
+
+const WIDTHS = ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"];
+const SUFFIXES = ["I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64"];
+const POWER_WIDTHS = ["int32", "int64", "uint32", "uint64"];
+const POWER_SUFFIXES = ["I32", "I64", "U32", "U64"];
+
+function powerSource(t: string): string {
+	return `function probe(a: ${t}, b: ${t}): ${t} { return a ** b; }`;
+}
+
+function powerAssignSource(t: string): string {
+	return `function probe(a: ${t}, b: ${t}): void { let x = a; x **= b; }`;
+}
+
+test "an integer power reaches a std function written in MetaScript, not a C helper" {
+	for (const t of POWER_WIDTHS) {
+		assert isStdFunction(probeCall(powerSource(t), true)), t;
+	}
+}
+
+test "a power assignment reaches an own-width std function on every integer width" {
+	for (let w = 0; w < WIDTHS.length; w += 1) {
+		const call = probeCall(powerAssignSource(WIDTHS[w]), true);
+		assert calleeName(call) == "msPowAssign" + SUFFIXES[w], WIDTHS[w];
+		assert isStdFunction(call), WIDTHS[w];
+	}
+}
+
+test "a danger power reaches the wrapping std function of its width" {
+	for (let w = 0; w < POWER_WIDTHS.length; w += 1) {
+		const call = probeCall(powerSource(POWER_WIDTHS[w]), false);
+		assert calleeName(call) == "msPowWrap" + POWER_SUFFIXES[w], POWER_WIDTHS[w];
+		assert isStdFunction(call), POWER_WIDTHS[w];
+	}
+}
+
+test "a danger power assignment reaches the wrapping std function on every integer width" {
+	for (let w = 0; w < WIDTHS.length; w += 1) {
+		const call = probeCall(powerAssignSource(WIDTHS[w]), false);
+		assert calleeName(call) == "msPowWrapAssign" + SUFFIXES[w], WIDTHS[w];
+		assert isStdFunction(call), WIDTHS[w];
+	}
 }

@@ -192,11 +192,11 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 		let need = 0;
 		let min = 128;
 		if (b0 >= 194 && b0 <= 223) { need = 1; }
-		else if (b0 == 224) { need = 2; min = 160; }
+		else if (b0 == 224) { need = 2; min = 2048; }
 		else if (b0 >= 225 && b0 <= 236) { need = 2; }
 		else if (b0 == 237) { need = 2; }
 		else if (b0 >= 238 && b0 <= 239) { need = 2; }
-		else if (b0 == 240) { need = 3; min = 144; }
+		else if (b0 == 240) { need = 3; min = 65536; }
 		else if (b0 >= 241 && b0 <= 243) { need = 3; }
 		else if (b0 == 244) { need = 3; }
 		else return false;
@@ -360,7 +360,7 @@ function bufFind(hay: Buffer, needle: Buffer, from: number, reverse: boolean): n
 	const n = needle.length;
 	if (n == 0) return from;
 	let i = from;
-	while (i <= hay.length - n) {
+	while (i >= 0 && i <= hay.length - n) {
 		let k = 0;
 		while (k < n && hay.byteAt(i + k) == needle.byteAt(k)) { k += 1; }
 		if (k == n) return i;
@@ -372,7 +372,10 @@ export function indexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number
 	return bufFind(b, needle, byteOffset < 0 ? 0 : byteOffset, false);
 }
 export function lastIndexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
-	return bufFind(b, needle, byteOffset < 0 ? b.length : byteOffset, true);
+	if (b.length == 0) return -1;
+	if (needle.length == 0) return byteOffset < 0 || byteOffset >= b.length ? b.length : byteOffset;
+	const last = b.length - needle.length;
+	return bufFind(b, needle, byteOffset < 0 || byteOffset > last ? last : byteOffset, true);
 }
 export function includesBuffer(this b: Buffer, needle: Buffer, byteOffset: number): boolean {
 	return indexOfBuffer(b, needle, byteOffset) != -1;
@@ -543,7 +546,19 @@ export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
 	return o + 8;
 }
 
+function badByteLength(byteLength: number, rule: string): never {
+	throw new RangeError(
+		`The value of "byteLength" is out of range. It must be ${rule}. Received ${byteLength}`,
+	);
+}
+
+function checkByteLength(byteLength: number): void {
+	if (Math.floor(byteLength) != byteLength) badByteLength(byteLength, "an integer");
+	if (byteLength < 1 || byteLength > 6) badByteLength(byteLength, ">= 1 and <= 6");
+}
+
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -553,6 +568,7 @@ export function readUIntLE(this b: Buffer, o: number, byteLength: number): numbe
 	return v;
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -572,6 +588,7 @@ export function readIntBE(this b: Buffer, o: number, byteLength: number): number
 	return u >= half ? u - half * 2 : u;
 }
 export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let x = v;
 	let k = 0;
 	while (k < byteLength) {
@@ -582,6 +599,7 @@ export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: nu
 	return o + byteLength;
 }
 export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
 	let x = v;
 	let k = byteLength - 1;
 	while (k >= 0) {

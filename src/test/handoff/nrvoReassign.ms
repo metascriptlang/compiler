@@ -28,8 +28,9 @@ function findAssignment(fn: Node): Node {
 test "E2E C: struct reassignment from NRVO call stores the temp, not a void cast" {
 	const c = compileToC("struct Pair { a: number; b: string; }\nfunction makePair(x: number): Pair { return { a: x, b: \"s\" }; }\nfunction main(): void {\n  let p: Pair = makePair(1);\n  p = makePair(2);\n  console.log(p.b);\n}");
 	assert c.ok;
-	assert c.value.contains("(p_1_ = T");
+	assert c.value.contains("Sink((&(p_1_)), (&(dollarcallRes_0_)))");
 	assert !c.value.contains("((void)(T");
+	assert !c.value.contains("((void)(dollarcallRes");
 }
 
 test "struct reassignment RHS has struct nodeType not void" {

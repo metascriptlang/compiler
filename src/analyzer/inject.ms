@@ -1554,7 +1554,9 @@ function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[],
 	if (d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
 		const lhs = makeIdentResolved(hoistSym, loc);
 		if (stmt.nodeType != null) { lhs.nodeType = stmt.nodeType; }
-		body.push(makeExprStmt(makeAssign(lhs, d.initializer, loc), loc));
+		const assign = makeAssign(lhs, d.initializer, loc);
+		assign.flags = assign.flags.incl(NodeFlag.FirstWrite);
+		body.push(makeExprStmt(assign, loc));
 	}
 	return true;
 }
@@ -2457,9 +2459,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Function-local vars are moved out by destructiveMoveVar in the Consumed walk.
 		// Non-local variables (globals, module-level, outer function) are borrowed —
 		// caller's destroy would free the shared data, causing double-free.
-		// Gate on ORIGINAL identifier name so a fresh borrow temp introduced by
-		// processNode doesn't get copied a second time.
-		if (origKind == NodeKind.Identifier) {
+		if (origKind == NodeKind.Identifier && d.argument.resolvedSym == origSym) {
 			const vi = findVarInfoInFunction(dctx, origSym);
 			if (vi == null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
@@ -2803,11 +2803,6 @@ test "generateCleanup skips moved" {
 	// wasMoved(b) + destroy(a) = 2 nodes
 	assert cleanup.length == 2;
 }
-
-test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
-
-test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
-
 
 test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");

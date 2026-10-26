@@ -9,28 +9,18 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 ## Build Commands
 
 ```bash
-# Verify a change: picks the lanes from the diff, names every NEW red.
-tools/gate.sh                         # --dry-run = show the choice, --release = full ladder
+# Edit loop: one check per changed contract, each under 60 s. Which check when: src/test/CLAUDE.md §Running
+msc test src/utils/string.ms --tests-in-dir   # one module's tests; without the flag it also runs every import's tests
+MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # named corpus programs; recipe + traps: docs/TESTING.md
+GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms   # named lifecycle guards
+MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms   # one flow A/B; docs/BUILD-PERF.md "Measuring by flow"
 
-# Tests. `msc test <file>` runs that file + its transitive dep tests.
-# NOTE: no --filter/--jobs flags.
-msc test src/index.ms                 # full compiler suite, native
-msc test src/utils/string.ms          # one file (+ its deps)
-
-# Corpus tier — two SEPARATE lane runs. Parity when the change touches
-# codegen / DRC / runtime / transform; SAN when it touches DRC hooks; both
-# before a RELEASE cut (docs/GIT-FLOW.md). A land on main is not a ship.
-# Runners test ./msc when it exists, else installed msc; MSC=<path> overrides.
-# Which command when: src/test/CLAUDE.md
-msc run src/test/corpus/run.ms                 # parity (C↔JS) + RSS
-MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger
-MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
-msc run --target=raiser src/test/guard/run.ms   # lifecycle guards (proven-red)
-
-MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: docs/TESTING.md
-
-# Flow A/B: base vs ./msc, each pass, DRC counter and emitted-C cost as its own row; docs/BUILD-PERF.md "Measuring by flow"
-MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms
+# Land gate and release ladder: never mid-edit. Runners test ./msc when it exists, else installed msc; MSC=<path> overrides.
+tools/gate.sh                         # lanes picked from the diff; --dry-run = show the choice, --release = release ladder
+msc test src/index.ms                 # full compiler suite
+msc run src/test/corpus/run.ms                 # corpus parity (C↔JS) + RSS
+MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # corpus ASan + DRC ledger
+msc run --target=raiser src/test/guard/run.ms   # every lifecycle guard
 
 msc run src/index.ms                              # build + run natively
 msc build examples/actorSpawnBasic.ms --target=c
@@ -38,7 +28,7 @@ msc build examples/actorSpawnBasic.ms --target=c
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
 msc build src/index.ms --danger --output=msc
 
-# Dev loop (edit → rebuild → test): drop thin-LTO. The link then takes ~0.2s
+# Edit loop candidate: drop thin-LTO. The link then takes ~0.2s
 # instead of ~15s — thin-LTO produces machine code only at link, so every
 # rebuild re-pays it even when clang hits the object cache. Same -O3.
 # Numbers + method: docs/BUILD-PERF.md "Measured 2026-09-26".
@@ -130,11 +120,17 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 - **Decide what verification a change needs before you land it** — name what the change can alter and which lane observes that: who reads the changed code, which test or corpus program reaches it. When a lane can observe it, send it to the gate train (workspace `CLAUDE.md` §Worktrees; the Mac land queue only for what Linux cannot verify), because a train gates it once against the base it lands on, together with every other slice ready at that moment. When none can (a string only `msc --version` prints, a comment, a doc), say so with that evidence and land with `land --no-gate` once the person agrees; the flag records that the gate did not run, and the person owns that call because the gate is the shared safety net.
 
-## Verification Cost — lanes follow the change; the full ladder follows a release
+## Verification — edit loop, land gate, release ladder
 
-**"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for the full ladder.
+Three flows, chosen by when they run. Read [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running before you test, run or measure anything: it owns which flow applies, the check for each kind of change and its measured cost.
 
-- **One command picks and runs the lanes** — `tools/gate.sh` maps changed paths to lanes (a path is its stand-in for what the change can reach; the decision above is yours) and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why, `--release` runs the full ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
+- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build.
+- **Land gate**: once per land, `tools/gate.sh` on the gate train; lanes run only here and in the release ladder.
+- **Release ladder**: `tools/gate.sh --release` and the fixpoint check when cutting a release per `docs/GIT-FLOW.md`. Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for it.
+
+How the land gate works:
+
+- **One command picks and runs the lanes** — `tools/gate.sh` maps changed paths to lanes (a path is its stand-in for what the change can reach; the decision above is yours) and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why, `--release` runs the release ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
 - **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
 - **The machine is shared** — gates queue machine-wide FIFO in `~/.metascript/gates`; once admitted, a gate checks load before its phases and shares its worker/slot budget among concurrent lanes. Do not start a second heavy lane beside it. Measured phase and queue time: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
 - **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct ([`docs/TESTING.md`](docs/TESTING.md)), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
@@ -154,7 +150,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 | Situation | Action |
 |---|---|
-| The fix tracks the reference implementation and stays inside the task | do it, gate it, report after |
+| The fix tracks the reference implementation and stays inside the task | do it, verify it in the edit loop, report after; it reaches `main` through the land gate |
 | Two directions both track the reference, or the fix crosses a recorded intentional divergence | ask — one question, with a recommendation |
 | The work has to leave the task's scope | stop and report |
 | The fix needs a pass, structure or protocol the design and the reference both lack | stop and ask, marked **NEW MECHANISM**, before writing it |
@@ -162,7 +158,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 ## Commits
 
 - **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `~/nerdtools/claude/tools/wt.sh land`, and nothing is pushed without a yes.
-- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own guard has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the gate before a land, not to each commit.
+- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own guard has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
 
 IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 

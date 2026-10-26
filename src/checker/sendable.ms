@@ -2,7 +2,7 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isOutsideResolvedStd } from "./context";
+import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
@@ -131,6 +131,116 @@ export function checkActorNonisolatedField(ctx: CheckerContext, actorSym: Symbol
 		member.location.line, member.location.column);
 }
 
+function crossesAsReply(t: Type | null): boolean {
+	if (t == null || !typeCarriesRef(t) || isAtomicRef(t)) return true;
+	if (isDeepSendable(t, (SendLeaf.String | SendLeaf.Function) as int32, declaresNoHook)) return true;
+	if (t.kind == TypeKind.GenericInstance && t.typeExtra != null && t.typeExtra!.kind == TypeKind.Union) {
+		for (const a of t.typeChildren) {
+			if (!crossesAsReply(a)) return false;
+		}
+		return true;
+	}
+	if (t.kind == TypeKind.Ref) return t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+	if (t.kind != TypeKind.Union) return false;
+	for (const c of t.typeChildren) {
+		if (!crossesAsReply(c)) return false;
+	}
+	return true;
+}
+
+const REPLY_SCOPE: FreshScope = {
+	moveNames: [],
+	table: null,
+	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
+};
+
+function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, method: string): Node | null {
+	if (n == null) return null;
+	const p = peelView(n);
+	if (crossesAsReply(p.nodeType)) return null;
+	return match (p.kind) {
+		NodeKind.ArrayLiteral => firstSharedReplyPart(ctx, (p.data as ArrayLiteralData).elements, result, method),
+		NodeKind.ObjectLiteral => firstSharedReplyPart(ctx, (p.data as ObjectLiteralData).properties, result, method),
+		NodeKind.SpreadExpr => {
+			const arg = (p.data as SpreadExprData).spreadArg;
+			const t = arg.nodeType != null ? peelThrough(arg.nodeType!, PEEL_ALIAS) : null;
+			if (t != null && t.kind == TypeKind.Array && crossesAsReply(t.typeReturn)) return null;
+			return sharedReplyPart(ctx, arg, result, method);
+		},
+		NodeKind.ConditionalExpr => {
+			const d = p.data as ConditionalExprData;
+			const a = sharedReplyPart(ctx, d.ternaryConsequent, result, method);
+			return a != null ? a : sharedReplyPart(ctx, d.ternaryAlternate, result, method);
+		},
+		NodeKind.Identifier when (p.resolvedSym != null && p.resolvedSym!.name != "this") => {
+			checkReplyBindingSoleOwner(ctx, p.resolvedSym!, result, p.location, method);
+			return null;
+		},
+		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
+	};
+}
+
+function replyHead(method: string): string {
+	return `the reply of '${method}' may cross to the caller while the actor still reaches it`;
+}
+
+const REPLY_CHOICE = "reply with a copy (a number, string or plain struct), a fresh value nothing in the actor keeps (a literal, `new`, or a local built for the reply), or an Arc<T>";
+
+function rewordSoleOwnerAsReply(ctx: CheckerContext, name: string, method: string, at: SourceLocation): void {
+	const prefix = "cannot move '" + name + "': ";
+	for (let i = 0; i < ctx.errors.length; i += 1) {
+		const m = ctx.errors[i].message;
+		if (ctx.errors[i].line != at.line || ctx.errors[i].column != at.column || !m.startsWith(prefix) || !m.endsWith(SOLE_OWNER_TAG)) continue;
+		let why = m.substring(prefix.length, m.length - SOLE_OWNER_TAG.length);
+		const tail = why.indexOf("; only a binding");
+		if (tail >= 0) why = why.substring(0, tail);
+		else {
+			const advice = why.indexOf(" — ");
+			if (advice >= 0) why = why.substring(0, advice);
+		}
+		ctx.errors[i].message = `${replyHead(method)} — '${name}' ${why.startsWith("it ") ? why.substring(3) : why}; ${REPLY_CHOICE}`;
+	}
+}
+
+function checkReplyBindingSoleOwner(ctx: CheckerContext, sym: Symbol, result: Node, at: SourceLocation, method: string): void {
+	checkMoveSoleOwner(ctx, sym, [], result, at);
+	rewordSoleOwnerAsReply(ctx, sym.name, method, at);
+	deferEffectCheck(result, "replyWording", (late: CheckerContext): void => rewordSoleOwnerAsReply(late, sym.name, method, at));
+}
+
+function firstSharedReplyPart(ctx: CheckerContext, nodes: Node[], result: Node, method: string): Node | null {
+	for (const n of nodes) {
+		const s = sharedReplyPart(ctx, n, result, method);
+		if (s != null) return s;
+	}
+	return null;
+}
+
+export function checkActorReplies(ctx: CheckerContext, raw: Node): void {
+	let member = raw;
+	if (member.kind == NodeKind.DecoratedDecl) member = (member.data as DecoratedDeclData).decoratedNode;
+	if (member == null || member.kind != NodeKind.MethodDecl || member.resolvedSym == null) return;
+	const d = member.data as MethodDeclData;
+	if (d.methodIsStatic || d.methodVisibility == "private" || d.methodName.startsWith("#") || d.methodBody == null) return;
+	if (isGenericFn(d.methodFlags)) {
+		addError(ctx, `actor method '${d.methodName}' is generic, so the reply of each instance cannot be checked before it crosses to the caller — write a concrete method for each type the caller needs, or keep the generic code in a module-level function that a concrete method calls`,
+			member.location.line, member.location.column);
+		return;
+	}
+	const results: Node[] = [];
+	collectResults(d.methodBody, results);
+	const here = ctx.currentFunction;
+	ctx.currentFunction = member.resolvedSym;
+	for (const r of results) {
+		const shared = sharedReplyPart(ctx, r, r, d.methodName);
+		if (shared == null) continue;
+		const name = describeExpr(shared);
+		addError(ctx, `${replyHead(d.methodName)} — it replies with ${name == "an expression" ? "a value" : "'" + name + "'"}, which stays in the actor; ${REPLY_CHOICE}`,
+			shared.location.line, shared.location.column);
+	}
+	ctx.currentFunction = here;
+}
+
 export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, declaresHook: (owner: Type) => boolean, line: int32, column: int32): void {
 	if (isDeepSendable(pointee, SendLeaf.String as int32, declaresHook)) return;
 	if (isArcPointeeSendable(pointee)) {
@@ -191,6 +301,16 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	if (t == null) return false;
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
+	if (t.kind != TypeKind.Function) {
+		const path = plainFunctionPath(t, []);
+		if (path != null) {
+			const label = describeExpr(argNode);
+			addError(ctx, `${label == "an expression" ? "the argument" : label}${path} is a plain function inside a value that crosses to the actor, so it may capture mutable state and would run on the actor's thread — declare that field Sendable<F>, so its closure is checked where it is built, or send the data without the function`,
+				argNode.location.line, argNode.location.column);
+			return false;
+		}
+	}
+	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, argNode, sendClass)) {
 		if (isPlainRefBorrow && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor)) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
@@ -215,6 +335,71 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 	return false;
+}
+
+function plainFunctionPath(t: Type | null, seen: Type[]): string | null {
+	if (t == null || seen.includes(t)) return null;
+	if (t.kind == TypeKind.Function) return isSendableFunction(t) ? null : "";
+	seen.push(t);
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) {
+		const p = plainFunctionPath(t.typeReturn, seen);
+		return p == null ? null : "[]" + p;
+	}
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			const p = plainFunctionPath(t.typeChildren[i], seen);
+			if (p != null) return (i < t.typeNames.length ? "." + t.typeNames[i] : "[" + i + "]") + p;
+		}
+		return null;
+	}
+	if (t.kind == TypeKind.Union || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Varargs) {
+		for (const c of t.typeChildren) {
+			const p = plainFunctionPath(c, seen);
+			if (p != null) return p;
+		}
+	}
+	return plainFunctionPath(t.typeReturn, seen);
+}
+
+function refuseSentClosures(ctx: CheckerContext, argNode: Node, at: Node): void {
+	const p = peelView(argNode);
+	if (p.kind == NodeKind.MoveExpr) {
+		const moved = peelView((p.data as MoveExprData).moveArg);
+		const init = moved.kind == NodeKind.Identifier ? constBindingInitializer(moved.resolvedSym) : null;
+		if (init != null) refuseSentClosures(ctx, init, at);
+		return;
+	}
+	if (p.kind == NodeKind.ObjectLiteral || p.kind == NodeKind.ArrayLiteral) {
+		const parts = p.kind == NodeKind.ObjectLiteral ? (p.data as ObjectLiteralData).properties : (p.data as ArrayLiteralData).elements;
+		for (const e of parts) refuseSentClosures(ctx, e, at);
+		return;
+	}
+	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr || isSendableFunction(p.nodeType) || isSendableFunction(argNode.nodeType)) refuseSentClosureBorrow(ctx, argNode, at);
+}
+
+// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-copy-only-sendable-closure-sent-to-an-actor-shares-its-frame-env-with-plain-rc-a-data-race.md
+function refuseSentClosureBorrow(ctx: CheckerContext, argNode: Node, at: Node): void {
+	let source = spawnedClosure(peelHidden(argNode));
+	const sym = source.kind == NodeKind.Identifier ? aliasTarget(source.resolvedSym) : null;
+	if (sym != null && sym.symbolKind == SymbolKind.Function) {
+		if (isModuleScoped(ctx, sym) || sym.declNode == null) return;
+		source = sym.declNode!;
+	}
+	const name = describeExpr(argNode);
+	if (source.kind != NodeKind.ArrowFunction && source.kind != NodeKind.FunctionExpr && source.kind != NodeKind.FunctionDecl) {
+		addError(ctx, `a send without a reply runs '${name}' on the actor after this code moves on, and its captures cannot be seen here — pass a closure literal or a function declaration whose captures are copies, Arc<T> or Locked<T>, or give the method a result and await it so the call lends what the function captures`,
+			at.location.line, at.location.column);
+		return;
+	}
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, source, views, moved);
+	for (const v of views) {
+		if (moved.includes(v)) continue;
+		addError(ctx, `a send without a reply runs this closure on the actor after this code moves on, so it cannot borrow '${v.name}': no reply ends the loan — capture a copy instead (const n = ${v.name}.field, or a clone), share it through Arc<T> or Locked<T>, or give the method a result and await it so the call lends '${v.name}' until the reply`,
+			at.location.line, at.location.column);
+		return;
+	}
 }
 
 function routineParts(sym: Symbol | null): Node | null {
@@ -491,8 +676,82 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		refuseViewResult(ctx, source);
 	}
 	requireSpawnSafe(ctx, closure, "spawn runs this thunk on another thread", spawnNode);
+	refuseBorrowedAwaitable(ctx, closure, spawnNode);
 	if (isIsolatedThunk(ctx, source)) spawnNode.flags = spawnNode.flags.incl(NodeFlag.Isolated);
 	else spawnNode.flags = spawnNode.flags.excl(NodeFlag.Isolated);
+}
+
+function reachesAwaitable(t: Type | null, seen: Type[]): boolean {
+	if (t == null || seen.includes(t)) return false;
+	if (isAwaitable(t)) return true;
+	if (!typeCarriesRef(t)) return false;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.Alias | TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Distinct
+			| TypeKind.Borrow | TypeKind.Lent | TypeKind.Sink | TypeKind.Var | TypeKind.Cursor => reachesAwaitable(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Varargs => {
+			for (const c of t.typeChildren) { if (reachesAwaitable(c, seen)) return true; }
+			return false;
+		},
+		_ => false,
+	};
+}
+
+function borrowedRoot(n: Node, borrowed: Symbol[]): Symbol | null {
+	let cur = peelView(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelView(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	const sym = cur.kind == NodeKind.Identifier ? cur.resolvedSym : null;
+	return sym != null && borrowed.includes(sym) ? sym : null;
+}
+
+function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | null {
+	if (node == null) return null;
+	const p = peelView(node);
+	if (p.kind == NodeKind.AwaitExpr) {
+		const arg = peelView((p.data as AwaitExprData).awaitArg);
+		if (borrowedRoot(arg, borrowed) != null && isAwaitable(arg.nodeType)) return null;
+	}
+	if (p.kind == NodeKind.CallExpr) {
+		const d = p.data as CallExprData;
+		const callee = peelView(d.callee);
+		if (callee.kind == NodeKind.MemberExpr) {
+			const receiver = (callee.data as MemberExprData).object;
+			if (borrowedRoot(receiver, borrowed) != null && reachesAwaitable(receiver.nodeType, [])) return receiver;
+		}
+		if (!keepsArgumentsInFrame(p)) {
+			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
+			if (inCallee != null) return inCallee;
+			for (const a of d.arguments) {
+				// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-spawn-task-passes-a-borrowed-promise-to-a-routine-that-attaches-a-callback.md
+				if (borrowedRoot(a, borrowed) != null) continue;
+				const inArg = borrowedAwaitableUse(a, borrowed);
+				if (inArg != null) return inArg;
+			}
+			return null;
+		}
+	}
+	if ((p.kind == NodeKind.Identifier || p.kind == NodeKind.MemberExpr || p.kind == NodeKind.ArrayAccess) && borrowedRoot(p, borrowed) != null) {
+		return reachesAwaitable(p.nodeType, []) ? p : null;
+	}
+	let found: Node | null = null;
+	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed); });
+	return found;
+}
+
+function refuseBorrowedAwaitable(ctx: CheckerContext, fn: Node, at: Node): void {
+	const thunk = spawnedClosure(peelHidden(fn));
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, thunk, views, moved);
+	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v) && reachesAwaitable(v.symbolType, []));
+	if (borrowed.length == 0) return;
+	const use = borrowedAwaitableUse(routineParamsAndBody(thunk).body, borrowed);
+	if (use == null) return;
+	const name = describeExpr(use);
+	addError(ctx, `spawn's task uses '${name}', a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
+		use.location.line, use.location.column);
 }
 
 function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {

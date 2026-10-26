@@ -5,7 +5,6 @@
 
 #include "runtime/core/system.h"
 #include "runtime/core/array.h"
-#include "runtime/core/dragonbox.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -388,27 +387,6 @@ int msStringCompare(msString a, msString b) {
 	if (a.len < b.len) return -1;
 	if (a.len > b.len) return 1;
 	return 0;
-}
-
-bool msStringStartsWith(msString s, msString prefix) {
-	if (prefix.len == 0) return true;
-	if (prefix.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return memcmp(s.p->data, prefix.p->data, prefix.len) == 0;
-}
-
-bool msStringEndsWith(msString s, msString suffix) {
-	if (suffix.len == 0) return true;
-	if (suffix.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return memcmp(s.p->data + s.len - suffix.len, suffix.p->data, suffix.len) == 0;
-}
-
-bool msStringContains(msString s, msString sub) {
-	if (sub.len == 0) return true;
-	if (sub.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return msStringByteIndexOf(s, sub, 0) >= 0;
 }
 
 /* ===== Search ===== */
@@ -818,50 +796,6 @@ msString msStringSlice(msString s, int64_t start, int64_t end) {
 
 /* ===== Transformation ===== */
 
-msString msStringToLower(msString s) {
-	if (s.len == 0) return MS_EMPTY_STRING;
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < result.len; i++) {
-		result.p->data[i] = (char)tolower((unsigned char)result.p->data[i]);
-	}
-	return result;
-}
-
-msString msStringToUpper(msString s) {
-	if (s.len == 0) return MS_EMPTY_STRING;
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < result.len; i++) {
-		result.p->data[i] = (char)toupper((unsigned char)result.p->data[i]);
-	}
-	return result;
-}
-
-msString msStringTrim(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t start = 0;
-	int64_t end = s.len;
-	while (start < end && isspace((unsigned char)s.p->data[start])) start++;
-	while (end > start && isspace((unsigned char)s.p->data[end - 1])) end--;
-	if (start >= end) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, end - start);
-}
-
-msString msStringTrimStart(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t start = 0;
-	while (start < s.len && isspace((unsigned char)s.p->data[start])) start++;
-	if (start >= s.len) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, s.len - start);
-}
-
-msString msStringTrimEnd(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t end = s.len;
-	while (end > 0 && isspace((unsigned char)s.p->data[end - 1])) end--;
-	if (end <= 0) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data, end);
-}
-
 msString msStringReplace(msString s, msString search, msString replacement) {
 	if (search.len == 0) return msStringConcat(replacement, s);
 	if (s.len == 0) return MS_EMPTY_STRING;
@@ -936,17 +870,6 @@ msString msStringReplaceAll(msString s, msString search, msString replacement) {
 
 	result.len = dstPos;
 	result.p->data[dstPos] = '\0';
-	return result;
-}
-
-msString msStringReverse(msString s) {
-	if (s.len <= 1) {
-		return s.len == 1 ? msStringNew(s.p->data, 1) : MS_EMPTY_STRING;
-	}
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < s.len; i++) {
-		result.p->data[i] = s.p->data[s.len - 1 - i];
-	}
 	return result;
 }
 
@@ -1126,106 +1049,6 @@ void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	}
 }
 
-static int msWriteUint64Decimal(uint64_t value, char* out) {
-	char reversed[20];
-	int n = 0;
-	do {
-		reversed[n++] = (char)('0' + value % 10);
-		value /= 10;
-	} while (value != 0);
-	for (int i = 0; i < n; i++) out[i] = reversed[n - 1 - i];
-	return n;
-}
-
-static int msWriteInt64Decimal(int64_t value, char* out) {
-	if (value < 0) {
-		out[0] = '-';
-		return 1 + msWriteUint64Decimal((uint64_t)0 - (uint64_t)value, out + 1);
-	}
-	return msWriteUint64Decimal((uint64_t)value, out);
-}
-
-msString msIntToString(int64_t value) {
-	char buf[32];
-	int len = msWriteInt64Decimal(value, buf);
-	return msStringNew(buf, len);
-}
-
-static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
-	uint64_t bits;
-	__builtin_memcpy(&bits, &value, sizeof bits);
-	msDragonboxDecimal decimal = msDragonboxToDecimal64(bits & (MS_DRAGONBOX_HIDDEN_BIT - 1), (bits >> 52) & 0x7FF);
-	uint64_t significand = decimal.significand;
-	int32_t exponent = decimal.exponent;
-	while (significand % 10 == 0) {
-		significand /= 10;
-		exponent++;
-	}
-	int k = msWriteUint64Decimal(significand, digits);
-	*decExp = exponent + k - 1;
-	return k;
-}
-
-msString msNumberToString(double value) {
-	char buf[64];
-	uint64_t bits;
-	__builtin_memcpy(&bits, &value, sizeof bits);
-	bool nonFinite = (bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL;
-	if (nonFinite && (bits & 0x000FFFFFFFFFFFFFULL) != 0) return msStringNew("NaN", 3);
-	if (value == 0.0) return msStringNew("0", 1);
-	if (nonFinite) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
-	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
-		int len = msWriteInt64Decimal((int64_t)value, buf);
-		return msStringNew(buf, len);
-	}
-
-	char* p = buf;
-	if (value < 0.0) {
-		*p++ = '-';
-		value = -value;
-	}
-	char digits[32];
-	int decExp = 0;
-	int k = msShortestRoundTripDigits(value, digits, &decExp);
-	int n = decExp + 1;
-	if (k <= n && n <= 21) {
-		memcpy(p, digits, (size_t)k);
-		p += k;
-		for (int i = 0; i < n - k; i++) *p++ = '0';
-	} else if (n > 0 && n <= 21) {
-		memcpy(p, digits, (size_t)n);
-		p += n;
-		*p++ = '.';
-		memcpy(p, digits + n, (size_t)(k - n));
-		p += k - n;
-	} else if (n > -6 && n <= 0) {
-		*p++ = '0';
-		*p++ = '.';
-		for (int i = 0; i < -n; i++) *p++ = '0';
-		memcpy(p, digits, (size_t)k);
-		p += k;
-	} else {
-		*p++ = digits[0];
-		if (k > 1) {
-			*p++ = '.';
-			memcpy(p, digits + 1, (size_t)(k - 1));
-			p += k - 1;
-		}
-		*p++ = 'e';
-		*p++ = n > 0 ? '+' : '-';
-		p += msWriteInt64Decimal(n > 0 ? n - 1 : -(n - 1), p);
-	}
-	return msStringNew(buf, (int)(p - buf));
-}
-
-/* Unsigned counterpart of msIntToString: values above INT64_MAX print as a
-   negative through the signed formatter. */
-msString msUint64ToString(uint64_t value) {
-	char buf[24];
-	int len = msWriteUint64Decimal(value, buf);
-	return msStringNew(buf, len);
-}
-
 static int msCheckedRadix(double radix) {
 	if (!(radix >= 2.0 && radix < 37.0)) msRaiseRadixError();
 	return (int)radix;
@@ -1324,11 +1147,6 @@ msString msNumberToStringRadix(double value, double radix) {
 	} while (integer > 0);
 	if (negative) buffer[--integerCursor] = '-';
 	return msStringNew(buffer + integerCursor, fractionCursor - integerCursor);
-}
-
-msString msBoolToString(int value) {
-	if (value) return msStringNew("true", 4);
-	return msStringNew("false", 5);
 }
 
 /* ===== Splitting & Joining ===== */

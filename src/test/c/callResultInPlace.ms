@@ -93,3 +93,25 @@ function main(): void { console.log(receivers()); }
 	assert !body.contains("_clit");
 	assert body.contains("digits_");
 }
+
+test "a struct with hooks declared from a call is its own result slot" {
+	const c = compileToC(`
+struct Named { name: string; tags: string[]; }
+function named(s: string): Named { return { name: s + "!", tags: [s] }; }
+function declared(s: string): int64 {
+	const n = named(s);
+	return n.name.length + n.tags.length;
+}
+function reassigned(s: string): int64 {
+	let n = named(s);
+	n = named(s + "?");
+	return n.name.length;
+}
+function main(): void { console.log(declared("a") + reassigned("b")); }
+`);
+	assert c.ok;
+	const declared = bodyOf(c.value, "declared");
+	assert declared.contains("(&n_1_, s);");
+	assert !declared.contains("n_1_ = T");
+	assert bodyOf(c.value, "reassigned").contains("(&n_1_, s);");
+}

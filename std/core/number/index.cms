@@ -118,3 +118,4 @@ export class Number {
 }
 
 import { stringToNumber } from "./parse";
+import "./digits";

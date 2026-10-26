@@ -303,33 +303,6 @@ static inline double msOsUptime(void) {
 #endif
 }
 
-/* ===== homedir() ===== */
-
-static inline msString msOsHomedir(void) {
-#ifdef _WIN32
-	const char *home = getenv("USERPROFILE");
-#else
-	const char *home = getenv("HOME");
-#endif
-	if (home != NULL) return msStringFromCStr(home);
-	return MS_EMPTY_STRING;
-}
-
-/* ===== tmpdir() ===== */
-
-static inline msString msOsTmpdir(void) {
-#ifdef _WIN32
-	char buf[MAX_PATH];
-	DWORD len = GetTempPathA(MAX_PATH, buf);
-	if (len > 0) return msStringFromCStr(buf);
-	return msStringFromCStr("C:\\Temp");
-#else
-	const char *tmp = getenv("TMPDIR");
-	if (tmp != NULL) return msStringFromCStr(tmp);
-	return msStringFromCStr("/tmp");
-#endif
-}
-
 /* ===== endianness() — "LE" or "BE" ===== */
 
 static inline msString msOsEndianness(void) {

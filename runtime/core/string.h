@@ -95,11 +95,6 @@ static inline const char* msStringToCString(msString s) {
 	return s.p->data;
 }
 
-/* Check if empty */
-static inline bool msStringIsEmpty(msString s) {
-	return s.len == 0;
-}
-
 /* DJB2 hash — used by match lowering for string switch optimization.
  * Must match the compile-time djb2Hash in matchLower.ms. */
 static inline int32_t msStringHash(msString s) {
@@ -230,15 +225,6 @@ int msStringCompareBytes(msString a, msString b);
 static inline bool msStringCompareLt(msString a, msString b) { return msStringCompare(a, b) < 0; }
 static inline bool msStringCompareLe(msString a, msString b) { return msStringCompare(a, b) <= 0; }
 
-/* Prefix check */
-bool msStringStartsWith(msString s, msString prefix);
-
-/* Suffix check */
-bool msStringEndsWith(msString s, msString suffix);
-
-/* Substring check */
-bool msStringContains(msString s, msString sub);
-
 /* ===== Search ===== */
 
 /* Find first occurrence, starting from `start`. Returns -1 if not found. */
@@ -291,14 +277,8 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
 /* ===== Transformation ===== */
 
-msString msStringToLower(msString s);
-msString msStringToUpper(msString s);
-msString msStringTrim(msString s);
-msString msStringTrimStart(msString s);
-msString msStringTrimEnd(msString s);
 msString msStringReplace(msString s, msString search, msString replacement);
 msString msStringReplaceAll(msString s, msString search, msString replacement);
-msString msStringReverse(msString s);
 msString msStringPadStart(msString s, int64_t targetLen, msString pad);
 msString msStringPadEnd(msString s, int64_t targetLen, msString pad);
 

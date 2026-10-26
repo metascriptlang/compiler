@@ -2,6 +2,7 @@
  * MetaScript File System Runtime — Windows implementation
  *
  * readFile and readDir; std/fs/index.cms calls the CRT and Win32 for the rest.
+ * Paths arrive as UTF-8 and reach the wide entry points.
  * Selected by compile.ms when --os=windows.
  */
 #include "runtime/fs/header.h"
@@ -15,23 +16,57 @@ int32_t msFsErrnoFromWin32(uint32_t code) {
 	switch (code) {
 	case ERROR_FILE_NOT_FOUND:
 	case ERROR_PATH_NOT_FOUND:
-	case ERROR_DIRECTORY:
+	case ERROR_INVALID_DRIVE:
+	case ERROR_BAD_NETPATH:
+	case ERROR_BAD_NET_NAME:
 		return ENOENT;
+	case ERROR_DIRECTORY:
+		return ENOTDIR;
 	case ERROR_ACCESS_DENIED:
 		return EACCES;
 	case ERROR_ALREADY_EXISTS:
 	case ERROR_FILE_EXISTS:
 		return EEXIST;
+	case ERROR_DIR_NOT_EMPTY:
+		return ENOTEMPTY;
 	case ERROR_INVALID_PARAMETER:
+	case ERROR_INVALID_NAME:
+	case ERROR_BAD_PATHNAME:
 		return EINVAL;
+	case ERROR_FILENAME_EXCED_RANGE:
+		return ENAMETOOLONG;
 	case ERROR_NOT_ENOUGH_MEMORY:
+	case ERROR_OUTOFMEMORY:
 		return ENOMEM;
+	case ERROR_DISK_FULL:
+	case ERROR_HANDLE_DISK_FULL:
+		return ENOSPC;
+	case ERROR_NOT_SAME_DEVICE:
+		return EXDEV;
+	case ERROR_TOO_MANY_OPEN_FILES:
+		return EMFILE;
+	case ERROR_WRITE_PROTECT:
+		return EROFS;
+	case ERROR_FILE_TOO_LARGE:
+		return EFBIG;
+	case ERROR_BUSY:
+		return EBUSY;
 	default:
 		return EIO;
 	}
 }
 
 static _Thread_local int _msFsLastErrno = 0;
+
+static wchar_t* msFsWidePath(msString path, int extra) {
+	const char* cpath = msStringToCString(path);
+	int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, cpath, -1, NULL, 0);
+	if (n <= 0) { _msFsLastErrno = EINVAL; return NULL; }
+	wchar_t* wide = (wchar_t*)malloc(((size_t)n + (size_t)extra) * sizeof(wchar_t));
+	if (!wide) { _msFsLastErrno = ENOMEM; return NULL; }
+	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, cpath, -1, wide, n);
+	return wide;
+}
 
 int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;
@@ -41,7 +76,12 @@ int32_t msFsLastErrno(void) {
 
 msString msFsReadFile(msString path) {
 	_msFsLastErrno = 0;
-	FILE* f = fopen(msStringToCString(path), "rb");
+	wchar_t* wide = msFsWidePath(path, 0);
+	if (!wide) return MS_EMPTY_STRING;
+	FILE* f = _wfopen(wide, L"rb");
+	int openErrno = errno;
+	free(wide);
+	errno = openErrno;
 	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
 	if (_fseeki64(f, 0, SEEK_END) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
 	__int64 sz = _ftelli64(f);
@@ -67,24 +107,18 @@ msString msFsReadFile(msString path) {
 
 msString msFsReadDirEntries(msString path) {
 	_msFsLastErrno = 0;
-	const char* cpath = msStringToCString(path);
-	size_t pathLen = strlen(cpath);
-
 	/* Build glob pattern: "path\\*" */
-	char* pattern = (char*)malloc(pathLen + 3);
-	if (!pattern) { _msFsLastErrno = ENOMEM; return MS_EMPTY_STRING; }
-	memcpy(pattern, cpath, pathLen);
-	if (pathLen > 0 && cpath[pathLen - 1] != '\\' && cpath[pathLen - 1] != '/') {
-		pattern[pathLen] = '\\';
-		pattern[pathLen + 1] = '*';
-		pattern[pathLen + 2] = '\0';
-	} else {
-		pattern[pathLen] = '*';
-		pattern[pathLen + 1] = '\0';
+	wchar_t* pattern = msFsWidePath(path, 2);
+	if (!pattern) return MS_EMPTY_STRING;
+	size_t pathLen = wcslen(pattern);
+	if (pathLen > 0 && pattern[pathLen - 1] != L'\\' && pattern[pathLen - 1] != L'/') {
+		pattern[pathLen++] = L'\\';
 	}
+	pattern[pathLen] = L'*';
+	pattern[pathLen + 1] = L'\0';
 
-	WIN32_FIND_DATAA fd;
-	HANDLE h = FindFirstFileA(pattern, &fd);
+	WIN32_FIND_DATAW fd;
+	HANDLE h = FindFirstFileW(pattern, &fd);
 	free(pattern);
 	if (h == INVALID_HANDLE_VALUE) {
 		_msFsLastErrno = msFsErrnoFromWin32(GetLastError());
@@ -98,12 +132,13 @@ msString msFsReadDirEntries(msString path) {
 
 	do {
 		/* Skip "." and ".." */
-		if (fd.cFileName[0] == '.' &&
-		    (fd.cFileName[1] == '\0' ||
-		     (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0'))) {
+		if (fd.cFileName[0] == L'.' &&
+		    (fd.cFileName[1] == L'\0' ||
+		     (fd.cFileName[1] == L'.' && fd.cFileName[2] == L'\0'))) {
 			continue;
 		}
-		size_t nlen = strlen(fd.cFileName);
+		int nlen = WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, NULL, 0, NULL, NULL) - 1;
+		if (nlen < 0) { free(buf); FindClose(h); _msFsLastErrno = EINVAL; return MS_EMPTY_STRING; }
 		int isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
 		/* Resize buffer if needed: name + optional "/" + "\n" */
 		while (len + nlen + 2 >= cap) {
@@ -113,11 +148,11 @@ msString msFsReadDirEntries(msString path) {
 			buf = nb;
 			cap = newCap;
 		}
-		memcpy(buf + len, fd.cFileName, nlen);
-		len += nlen;
+		WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, buf + len, nlen + 1, NULL, NULL);
+		len += (size_t)nlen;
 		if (isDir) buf[len++] = '/';
 		buf[len++] = '\n';
-	} while (FindNextFileA(h, &fd));
+	} while (FindNextFileW(h, &fd));
 	FindClose(h);
 
 	msString result = msStringNew(buf, (int64_t)len);

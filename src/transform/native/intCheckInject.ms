@@ -15,7 +15,7 @@
 
 import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
-import { peelToRepr, createPrimitive } from "../../checker/types";
+import { peelToRepr, createPrimitive, typeDisplayName } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -180,13 +180,28 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 
 function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = integerRepr(d.left.nodeType);
-	let helper = "msPowAssignF64";
-	if (t != null && ctx.rangeChecks && isSubIntSigned(t.kind)) helper = ownWidthName("msPowAssign", t);
-	else if (t != null) helper = helperName(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
-	else if (!isFloatRepr(d.left.nodeType)) return node;
+	if (t == null && !isFloatRepr(d.left.nodeType)) return node;
+	const prefix = ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign";
+	const helper = t != null ? exactWidthName(prefix, t) : "msPowAssignF64";
 	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
 	call.nodeType = d.left.nodeType;
 	return call;
+}
+
+function exactWidthName(prefix: string, t: Type): string {
+	const suffix = match (t.kind) {
+		TypeKind.Int8 => "I8",
+		TypeKind.Int16 => "I16",
+		TypeKind.Int32 => "I32",
+		TypeKind.Int64 => "I64",
+		TypeKind.Uint8 => "U8",
+		TypeKind.Uint16 => "U16",
+		TypeKind.Uint32 => "U32",
+		TypeKind.Uint64 => "U64",
+		_ => "",
+	};
+	if (suffix == "") throw new Error(`internal: '${prefix}' asked for the width of ${typeDisplayName(t)}, which is not an integer`);
+	return prefix + suffix;
 }
 
 function isFloatRepr(t: Type | null): boolean {

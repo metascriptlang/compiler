@@ -156,6 +156,7 @@ A lifecycle guard is proven red on a binary that has the bug before it is truste
 
 ```bash
 msc build src/index.ms --danger --output=msc   # self-host binary
+msc test src/utils/string.ms --tests-in-dir             # one module's tests
 msc test src/index.ms                                   # full compiler suite
 msc run src/test/corpus/run.ms                          # corpus: parity + RSS lanes
 ```

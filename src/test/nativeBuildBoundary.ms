@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, or all");
 	exit(2);
 }
 
@@ -1106,9 +1106,37 @@ function runFlows(): void {
 	recordTrue("MSC_FLOWS writes the total, setup, phase A and emit rows of a build", flowRow(rows, "total", "ms") > 0 && flowRow(rows, "phase.setup", "ms") > 0 && flowRow(rows, "phase.A", "ms") > 0 && flowRow(rows, "emit.module", "ms") > 0);
 	recordTrue("the pass rows of a build fit inside its phase A", passMs > 0 && passMs <= flowRow(rows, "phase.A", "ms"));
 	record("a build lowers each module once under a2.xform", "true", `${flowRow(rows, "a2.xform", "count") > 0}`);
+	put(`${dir}/check.ms`, "test \"sum\" { assert 1 + 2 == 3; }\n");
+	const testRowsFile = `${dir}/test-flows.tsv`;
+	env.set("MSC_FLOWS", testRowsFile);
+	const tested = command(dir, "flows-test", compiler, ["test", "check.ms"]);
+	env.delete("MSC_FLOWS");
+	need(tested.code == 0, "flows test");
+	const testRead = readFile(testRowsFile);
+	const testRows = testRead.ok ? testRead.value : "";
+	recordTrue("MSC_FLOWS splits a test run into graph, phase A, cc, link and the run of the test binary", flowRow(testRows, "phase.graph", "ms") > 0 && flowRow(testRows, "phase.A", "ms") > 0 && flowRow(testRows, "cc", "count") > 0 && flowRow(testRows, "phase.link", "ms") > 0 && flowRow(testRows, "test.run", "ms") > 0 && flowRow(testRows, "total", "ms") >= flowRow(testRows, "test.run", "ms"));
+}
+
+function runTestScope(): void {
+	const dir = `${root}/test-scope`;
+	ensureDir(`${dir}/app`);
+	ensureDir(`${dir}/lib`);
+	const badTest = "test \"refused\" { const s: string = 1; }\n";
+	const half = "export function half(x: int32): int32 { return x - 2; }\n";
+	put(`${dir}/lib/twice.ms`, `export function twice(x: int32): int32 { return x * 2; }\n${badTest}`);
+	put(`${dir}/app/half.ms`, half);
+	put(`${dir}/app/main.ms`, "import { twice } from \"../lib/twice\";\nimport { half } from \"./half\";\ntest \"app\" { assert twice(half(4)) == 4; }\n");
+	record("a module outside --tests-in-dir does not check its test blocks", "0", `${command(dir, "scope-dir", compiler, ["test", "app/main.ms", "--tests-in-dir"]).code}`);
+	recordTrue("without --tests-in-dir the imported module's test blocks are checked", command(dir, "scope-all", compiler, ["test", "app/main.ms"]).code != 0);
+	recordTrue("the tested module's own test blocks are checked", command(dir, "scope-lib", compiler, ["test", "lib/twice.ms", "--tests-in-dir"]).code != 0);
+	put(`${dir}/app/half.ms`, `${half}${badTest}`);
+	const shard0 = command(dir, "scope-shard0", compiler, ["test", "app/main.ms", "--tests-in-dir", "--tests-shard=0/2"]).code == 0;
+	const shard1 = command(dir, "scope-shard1", compiler, ["test", "app/main.ms", "--tests-in-dir", "--tests-shard=1/2"]).code == 0;
+	recordTrue("only the shard that tests a module checks its test blocks", shard0 != shard1);
 }
 
 if (group == "argv" || group == "all") runArgv();
+if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
