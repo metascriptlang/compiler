@@ -22,6 +22,7 @@ import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUs
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
@@ -6204,9 +6205,7 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 	if (!isEngineCheckMode()) return false;
 	if (recvType == null || recvType.typeName != "Node") return false;
 	if (flattenedLocationFieldType(recvType, key) != null) return true;
-	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
-	// valueToNode consumes it — never a real Node field.
-	if (key == "symHandle" || key == "typeHandle" || key == "gensym") return true;
+	if (isNodeWireMetaField(key)) return true;
 	return engineNodeDataField(recvType, key).fieldType != null;
 }
 
