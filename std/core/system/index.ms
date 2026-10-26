@@ -252,7 +252,7 @@ export class AbortSignal {
 	}
 
 	addEventListener(type: string, listener: () => void): void {
-		if (!msStringEquals(type, "abort")) return;
+		if (type != "abort") return;
 		if (this.abortListeners == null) {
 			this.abortListeners = new AbortListener(listener);
 			return;
@@ -267,7 +267,7 @@ export class AbortSignal {
 	}
 
 	removeEventListener(type: string, listener: () => void): void {
-		if (!msStringEquals(type, "abort") || this.abortListeners == null) return;
+		if (type != "abort" || this.abortListeners == null) return;
 		if (this.abortListeners!.fn === listener) {
 			this.abortListeners = this.abortListeners!.next;
 			return;
@@ -414,9 +414,6 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msStringConcat(a: string, b: string): string;
-
-	@compilerFunc
-	extern function msStringEquals(a: string, b: string): boolean;
 
 	@compilerFunc
 	extern function msStringCompare(a: string, b: string): int32;

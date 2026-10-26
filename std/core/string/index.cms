@@ -7,7 +7,17 @@
 
 // ===== Operators =====
 // Primitive operators (C runtime)
-export extern function `==`(this a: string, b: string): boolean from "msStringEquals";
+@compilerFunc @inline
+function msStringEquals(a: string, b: string): boolean {
+	const x = a.asBytes();
+	const y = b.asBytes();
+	if (x.length != y.length) return false;
+	return x.length == 0 || msEqualMem(x, y);
+}
+
+extern function msEqualMem(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean;
+
+@inline export function `==`(this a: string, b: string): boolean { return msStringEquals(a, b); }
 export extern function `<`(this a: string, b: string): boolean from "msStringCompareLt";
 export extern function `<=`(this a: string, b: string): boolean from "msStringCompareLe";
 // Derived operators (!=, >, >=) come from the system templates.
@@ -15,7 +25,7 @@ export extern function `<=`(this a: string, b: string): boolean from "msStringCo
 // ===== Comparison =====
 
 /** Determines whether two strings are equivalent. */
-export extern function equals(this s: string, other: string): boolean from "msStringEquals";
+@inline export function equals(this s: string, other: string): boolean { return msStringEquals(s, other); }
 
 // ===== Search =====
 

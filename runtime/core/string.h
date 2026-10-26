@@ -215,6 +215,11 @@ static inline void msStringAppendChar(msString* dest, char c) {
 /* Byte-equal comparison */
 bool msStringEquals(msString a, msString b);
 
+static inline bool msEqualMem(const uint8_t* a, int64_t aLen, const uint8_t* b, int64_t bLen) {
+	(void)bLen;
+	return memcmp(a, b, (size_t)aLen) == 0;
+}
+
 /* Ordering in UTF-16 code units (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
 
