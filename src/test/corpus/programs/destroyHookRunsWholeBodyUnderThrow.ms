@@ -2,7 +2,7 @@
 // @stdout: fallible caught calls=4
 // @stdout: field caught calls=2
 // @stdout: normal exit calls=2
-// @xfail(raiser): output differs from c: raiser runs no user lifecycle hooks
+// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table (the installed unplaced build stops at the same 'new')
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // note: a destroy hook whose callees can throw runs its whole body while a throw unwinds the scope (old compiler: each callee that can throw returned at once, because the hook ran with the exception in flight: destroyed=0, calls=2 and calls=1)
 import { lockedUpdate, lockedRead } from "std/core/promise";
