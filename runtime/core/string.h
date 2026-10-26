@@ -89,6 +89,13 @@ static inline void msStrMarkNonAscii(msStrPayload* p) {
 	}
 }
 
+static inline bool msStrKnownAscii(const msStrPayload* p) {
+	if (p == NULL) return false;
+	const int64_t cap = msStrCapLoad(p);
+	return (cap & MS_ASCII_CHECKED) != 0 && (cap & MS_ASCII_FLAG) != 0;
+}
+
+static inline bool msStringKnownAscii(msString s) { return msStrKnownAscii(s.p); }
 static inline void msStringMarkAscii(msString s) { msStrMarkAscii(s.p); }
 static inline void msStringMarkNonAscii(msString s) { msStrMarkNonAscii(s.p); }
 
@@ -360,7 +367,7 @@ static inline int64_t msStringByteLength(msString s) {
 msString msStringConcat(msString a, msString b);
 
 /* Concatenate N strings from an array — ABI-portable (no variadic struct passing) */
-msString msStringConcatArr(const msString* arr, int64_t count);
+msString msStringConcatArr(msString* arr, int64_t count);
 
 /* Append N strings from an array to dest in place — single prepareAdd sized
  * exactly to total addition, then loop memcpy. Used by stringOpLower to lower

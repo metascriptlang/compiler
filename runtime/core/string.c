@@ -83,12 +83,6 @@ static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t 
    lie. Literal payloads are never written — their bytes cannot change, and they
    may live in .rodata. */
 
-static inline bool msStrKnownAscii(const msStrPayload* p) {
-	if (p == NULL) return false;
-	const int64_t cap = msStrCapLoad(p);
-	return (cap & MS_ASCII_CHECKED) != 0 && (cap & MS_ASCII_FLAG) != 0;
-}
-
 /* Answer for the SOURCE of an append without writing to it: the cached bit when
    present, else a scan bounded by the appended chunk (so a build loop stays
    linear overall). Deciding the destination the same way would rescan the whole
@@ -337,56 +331,9 @@ int64_t msStringByteAt(msString s, int64_t idx) {
 	return (int64_t)(unsigned char)s.p->data[idx];
 }
 
-/* Byte-level slice: direct byte offsets into the underlying buffer.
- * Used by lexer, hashing, protocol parsing via .byteSlice() extension. */
-msString msStringByteSlice(msString s, int64_t start, int64_t end) {
-	if (start < 0) start = s.len + start;
-	if (end < 0) end = s.len + end;
-	if (start < 0) start = 0;
-	if (end > s.len) end = s.len;
-	if (start >= end || s.p == NULL) return MS_EMPTY_STRING;
-	msString slice = msStringNew(s.p->data + start, end - start);
-	if (msStrKnownAscii(s.p)) msStrMarkAscii(slice.p);
-	return slice;
-}
-
 /* ===== Transformation ===== */
 
 /* ===== Building ===== */
-
-msString msStringConcat(msString a, msString b) {
-	if (a.len == 0 && b.len == 0) return MS_EMPTY_STRING;
-	if (a.len == 0) return msStringNew(b.p->data, b.len);
-	if (b.len == 0) return msStringNew(a.p->data, a.len);
-
-	int64_t totalLen = a.len + b.len;
-	msString result = msStringNewCap(totalLen);
-	memcpy(result.p->data, a.p->data, a.len);
-	memcpy(result.p->data + a.len, b.p->data, b.len);
-	result.len = totalLen;
-	result.p->data[totalLen] = '\0';
-	return result;
-}
-
-msString msStringConcatArr(const msString* arr, int64_t count) {
-	if (count <= 0) return MS_EMPTY_STRING;
-
-	int64_t totalLen = 0;
-	for (int64_t i = 0; i < count; i++) totalLen += arr[i].len;
-	if (totalLen == 0) return MS_EMPTY_STRING;
-
-	msString result = msStringNewCap(totalLen);
-	int64_t pos = 0;
-	for (int64_t i = 0; i < count; i++) {
-		if (arr[i].len > 0 && arr[i].p != NULL) {
-			memcpy(result.p->data + pos, arr[i].p->data, arr[i].len);
-			pos += arr[i].len;
-		}
-	}
-	result.len = totalLen;
-	result.p->data[totalLen] = '\0';
-	return result;
-}
 
 void msStringAppendArr(msString* dest, const msString* arr, int64_t count) {
 	/* Multi-part self-append (`s = s + mid + s`): an element may alias dest's ORIGINAL

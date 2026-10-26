@@ -4,7 +4,8 @@ import { stringByteIndexOf } from "./bytes";
 
 extern function newBytes(length: int64): string from "msStringNewUninit";
 extern function copyTo(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
-extern function sliceBytes(s: string, start: int64, end: int64): string from "msStringByteSlice";
+extern function msStringKnownAscii(s: string): boolean;
+extern function msStringMarkAscii(s: string): void;
 extern function newParts(capacity: int64): string[] from "msStringArrayNew";
 extern function asciiUnit(byte: uint8): string from "msCharTableAt";
 extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
@@ -48,6 +49,44 @@ function lowHalf(sb: Readonly<Span<uint8>>, p: int64): int32 {
 function surrogateString(unit: int32): string {
 	const out = newBytes(3);
 	writeSurrogate(writable(out), 0, unit);
+	return out;
+}
+
+@exportName("msStringByteSlice")
+function byteSliceCopy(s: string, start: int64, end: int64): string {
+	const sb = s.asBytes();
+	const from = start < 0 ? (sb.length + start < 0 ? 0 : sb.length + start) : start;
+	const to = end < 0 ? sb.length + end : end > sb.length ? sb.length : end;
+	if (from >= to) return "";
+	const out = newBytes(to - from);
+	copyTo(writable(out), 0, sb, from, to - from);
+	if (msStringKnownAscii(s)) msStringMarkAscii(out);
+	return out;
+}
+
+@exportName("msStringConcat")
+function concatPair(a: string, b: string): string {
+	const ab = a.asBytes();
+	const bb = b.asBytes();
+	const out = newBytes(ab.length + bb.length);
+	const dst = writable(out);
+	copyTo(dst, 0, ab, 0, ab.length);
+	copyTo(dst, ab.length, bb, 0, bb.length);
+	return out;
+}
+
+@exportName("msStringConcatArr")
+function concatParts(parts: Readonly<Span<string>>): string {
+	let length: int64 = 0;
+	for (let i: int64 = 0; i < parts.length; i++) length += parts[i].asBytes().length;
+	const out = newBytes(length);
+	const dst = writable(out);
+	let at: int64 = 0;
+	for (let i: int64 = 0; i < parts.length; i++) {
+		const pb = parts[i].asBytes();
+		copyTo(dst, at, pb, 0, pb.length);
+		at += pb.length;
+	}
 	return out;
 }
 
@@ -371,7 +410,7 @@ export function split(this s: string, delimiter: string): string[] {
 				parts.push(surrogateString(highHalf(sb, p)));
 				parts.push(surrogateString(lowHalf(sb, p)));
 			} else {
-				parts.push(sliceBytes(s, p, p + w));
+				parts.push(byteSliceCopy(s, p, p + w));
 			}
 			p += w;
 		}
@@ -385,10 +424,10 @@ export function split(this s: string, delimiter: string): string[] {
 	while (true) {
 		const found = stringByteIndexOf(s, delimiter, pos);
 		if (found < 0) {
-			parts.push(sliceBytes(s, pos, sb.length));
+			parts.push(byteSliceCopy(s, pos, sb.length));
 			return parts;
 		}
-		parts.push(sliceBytes(s, pos, found));
+		parts.push(byteSliceCopy(s, pos, found));
 		pos = found + db.length;
 	}
 }
