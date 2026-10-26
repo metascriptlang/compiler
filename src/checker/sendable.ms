@@ -276,10 +276,6 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, d
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.
-function isActorRef(t: Type): boolean {
-	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
-}
-
 function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	if (t == null) return true;
 	// move always transfers ownership safely
