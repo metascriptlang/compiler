@@ -77,6 +77,19 @@ function enumTextCall(obj: Node, t: Type, ctx: TransformContext): Node {
 	return call;
 }
 
+export function lowerArrayLengthAssign(program: Node): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.BinaryExpr) return node;
+		const d = node.data as BinaryExprData;
+		if (d.operator != "=" || d.left.kind != NodeKind.MemberExpr) return node;
+		const md = d.left.data as MemberExprData;
+		if (md.property != "length" || md.object.nodeType == null || peelTransparentInstance(md.object.nodeType).kind != TypeKind.Array) return node;
+		const call = makeCall(makeMember(md.object, "setLength", node.location), [d.right], node.location);
+		call.nodeType = node.nodeType;
+		return call;
+	});
+}
+
 export function lowerEnumNames(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind == NodeKind.ArrayAccess) return lowerEnumReverseIndex(node, ctx);

@@ -11,6 +11,8 @@ import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerEnumNames } from "./native/builtinLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
 import { lowerStaticInit } from "./lowering/staticLower";
+import { lowerEnumNames, lowerArrayLengthAssign } from "./native/builtinLower";
+import { lowerEnumToString } from "./native/enumToStringLower";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
@@ -55,7 +57,7 @@ import { lowerStringOps } from "./native/stringOpLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, rangeChecks: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
@@ -103,6 +105,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerTypeof(result, ctx);
+	result = lowerArrayLengthAssign(result);
 	if (namesEnums) result = lowerEnumToString(lowerEnumNames(result, ctx), ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);

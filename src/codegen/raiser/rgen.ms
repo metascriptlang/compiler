@@ -97,7 +97,7 @@ export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T):
 }
 
 export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
-	return underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true), ctx, createWriteSummaries(createRoutineDecls(), [])));
+	return underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false), ctx, createWriteSummaries(createRoutineDecls(), [])));
 }
 
 export function generateRaiser(program: Node): RaiserModule {
