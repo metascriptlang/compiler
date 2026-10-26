@@ -5,6 +5,7 @@
 1	_msWorkerLoopPump
 10	_msActorRunJobs
 10	_msCancelTimer
+11	_msPidTableFull
 11	_msPoolWorkerLoop
 13	_msPoolRunQueued
 14	_msActorProcess
