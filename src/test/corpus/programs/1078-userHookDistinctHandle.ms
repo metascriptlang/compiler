@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: raiser runs no user lifecycle hooks (destroyed 0)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // note: a user destroy hook on a handle-only distinct int32 makes the type need management.
 type Id = distinct int32;
