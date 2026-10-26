@@ -136,6 +136,8 @@ export interface RaiserCompState {
 	globals: RaiserGlobalMap;
 	receiverReg: int32;
 	tries: RaiserTryInfo[];
+	cellNodes: Node[];
+	cellRegs: int32[];
 }
 
 export interface RaiserTryInfo {
@@ -151,7 +153,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [], cellNodes: [], cellRegs: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {

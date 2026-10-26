@@ -705,7 +705,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 		NodeKind.HiddenAddr => {
 			const hd = node.data as HiddenDerefData;
 			if (!heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
-			if (!isPlace(s, hd.expr)) return compileCellAddress(s, hd.expr);
+			if (!isPlace(s, hd.expr)) return compileCellAddress(s, node, hd.expr);
 			return compileAddress(s, hd.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
@@ -855,12 +855,43 @@ function derefTarget(s: RaiserCompState, target: Node): Node | null {
 	return null;
 }
 
-function compileCellAddress(s: RaiserCompState, value: Node): int32 {
+function reservedCell(s: RaiserCompState, hidden: Node): int32 {
+	const at = s.cellNodes.indexOf(hidden);
+	return at < 0 ? -1 : s.cellRegs[at];
+}
+
+function reserveCells(s: RaiserCompState, args: Node[]): int32[] {
+	const regs: int32[] = [];
+	if (!raiserPlaced()) return regs;
+	for (const a of args) {
+		if (a.kind != NodeKind.HiddenAddr) continue;
+		const inner = (a.data as HiddenDerefData).expr;
+		if (!heldByLocation(s, inner.nodeType) || isPlace(s, inner) || inRefFile(regClassOf(s, inner.nodeType))) continue;
+		const reg = allocRef(s);
+		s.cellNodes.push(a);
+		s.cellRegs.push(reg);
+		regs.push(reg);
+	}
+	return regs;
+}
+
+function releaseCells(s: RaiserCompState, regs: int32[]): void {
+	for (const reg of regs) {
+		emitInst(s, raiserABC(RaiserOpcode.RcDec, reg, 0, 0));
+		const at = s.cellRegs.indexOf(reg);
+		s.cellNodes.splice(at, 1);
+		s.cellRegs.splice(at, 1);
+	}
+}
+
+function compileCellAddress(s: RaiserCompState, hidden: Node, value: Node): int32 {
+	const held = reservedCell(s, hidden);
 	const cell = allocBlock(s, [RaiserRegClass.Ref, regClassOf(s, value.nodeType)]);
 	const slot = cell + 1;
 	const reg = compileExpr(s, value);
 	if (reg != slot) emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.NewArray, cell, 1, 0));
+	if (held >= 0) emitInst(s, raiserABC(RaiserOpcode.Move, held, cell, 0));
 	const zero = allocWord(s);
 	emitLoadConst(s, zero, raiserInt(0));
 	const dest = allocDyn(s);
@@ -1887,11 +1918,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
+			const cells = reserveCells(s, d.arguments);
 			const dest = callBlock(s, node.nodeType, d.arguments, calleeParamTypes(calleeSym));
 			emitCallArgs(s, dest, d.arguments);
 			const pastBase = d.arguments.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym)) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
 			patchJumpsTo(s, pastBase, codeLen(s));
+			releaseCells(s, cells);
 			return dest;
 		}
 	}
