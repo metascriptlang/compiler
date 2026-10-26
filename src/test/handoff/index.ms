@@ -93,6 +93,7 @@ import "./comptimeHostEffects";
 import "./comptimeMacroValues";
 import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
+import "./bitSetCaseLabel";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
