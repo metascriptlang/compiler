@@ -541,8 +541,7 @@ export function ltoBroken(cc: string, targetOs: string): boolean {
 	return targetOs == "darwin" || targetOs == "macos";
 }
 
-// Should --danger (or --release on Solana) reach for LTO by default? Practicality on top of
-// possibility: GNU gcc links -flto, but a whole-program link of this tree ran
+// Practicality on top of possibility: GNU gcc links -flto, but a whole-program link of this tree ran
 // 40+ minutes without finishing — never a sane default, still allowed
 // explicitly (informed choice, e.g. an overnight CI build).
 function ltoDefaultOn(cc: string, targetOs: string): boolean {
@@ -551,23 +550,17 @@ function ltoDefaultOn(cc: string, targetOs: string): boolean {
 	return true;
 }
 
-// Resolve opts.lto once the compiler is known. Empty = no explicit --lto=:
-// --release on Solana takes thin LTO too, since --danger is refused there and
-// the checked build must be as optimized as the unchecked one was.
-// --danger means "the fastest binary this toolchain can produce on this
-// target", so it takes thin LTO where that links and drops it (with a notice)
-// where it cannot. An explicit --lto= against a proven-broken pair fails loud.
 export function resolveLto(opts: CliOptions): void {
 	const cc = opts.targetOs == "solana" ? "clang" : getCompilerName(opts.ccCompiler, opts.ccBinary);
 	const ccName = isZigCC(cc) ? "zig cc" : cc;
 	if (opts.lto == "") {
-		const wantsLto = opts.mode == MODE_DANGER || (opts.mode == MODE_RELEASE && opts.targetOs == "solana");
+		const wantsLto = opts.mode == MODE_DANGER || opts.mode == MODE_RELEASE;
 		if (wantsLto && ltoDefaultOn(cc, opts.targetOs)) {
 			opts.lto = "thin";
 		} else {
 			opts.lto = "off";
-			if (wantsLto) {
-				writeStderr(`note: ${opts.mode == MODE_DANGER ? "--danger" : "--release"} builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
+			if (opts.mode == MODE_DANGER) {
+				writeStderr(`note: --danger builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
 			}
 		}
 		return;
@@ -1383,6 +1376,20 @@ test "no-default-library flags suppress implicit math linkage but preserve expli
 		assert explicit.ok;
 		assert explicit.value.flagArgs.includes("-lm");
 	}
+}
+
+test "a release build takes thin LTO where its compiler links it, and leaves it off where it cannot" {
+	const resolvedLto = (args: string[]): string => {
+		const opts = newCliOptions();
+		assert applyArgs(opts, args, 0).ok, args.join(" ");
+		resolveLto(opts);
+		return opts.lto;
+	};
+	assert resolvedLto(["--release", "--cc=clang", "--os=linux"]) == "thin";
+	assert resolvedLto(["--release", "--cc=clang", "--os=macos"]) == "thin";
+	assert resolvedLto(["--release", "--cc=gcc", "--os=linux"]) == "off";
+	assert resolvedLto(["--release", "--cc=clang", "--os=linux", "--lto=off"]) == "off";
+	assert resolvedLto(["--cc=clang", "--os=linux"]) == "off";
 }
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {
