@@ -2560,6 +2560,13 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 		return destination;
 	}
 
+	if (d.property == "byteLength" && d.object.nodeType != null && unwrapRef(peelTransparentInstance(unwrapRef(d.object.nodeType))).kind == TypeKind.Array) {
+		const source = compileExpr(s, d.object);
+		const destination = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayLen, destination, source, 0));
+		return destination;
+	}
+
 	// .length — string vs array
 	if (d.property == "length" && !isRecordOperand(d.object)) {
 		const objReg = compileExpr(s, d.object);
