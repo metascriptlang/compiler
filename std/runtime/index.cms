@@ -1,0 +1,5 @@
+extern function msOrcCollect(): void;
+
+export function collectCycles(): void {
+	msOrcCollect();
+}
