@@ -1675,6 +1675,10 @@ export function compoundBase(op: string): string {
 	return op.slice(0, op.length - 1);
 }
 
+function handleAgainstValue(a: Type, b: Type): boolean {
+	return isAtomicRef(a) != isAtomicRef(b);
+}
+
 export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Type, rightType: Type): boolean {
 	const bop = compoundBase(op);
 	const cls = binaryOperandClass(bop);
@@ -1685,6 +1689,10 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 	if (a == null || b == null) return false;
 	const sa = binaryOperandSkip(a);
 	const sb = binaryOperandSkip(b);
+	if (!sa && !sb && handleAgainstValue(a, b)) {
+		return ctx.extensionRegistry == null
+			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
+	}
 	if (sa || sb) {
 		if (cls != "eq") return false;
 		const ea = sa ? eqComparableOperand(leftType, a) : leftType;
@@ -1818,7 +1826,8 @@ export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: T
 	}
 	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
 		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
-		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + ")`",
+		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + ")`"
+		+ (isAtomicRef(operandShape(leftType)) || isAtomicRef(operandShape(rightType)) ? "; an Arc<T> or Locked<T> is a shared handle, not its value: read the Arc payload with `a[]`" : ""),
 		node.location.line, node.location.column);
 	return true;
 }

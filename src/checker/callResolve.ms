@@ -5852,7 +5852,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
 		// unwrapped Array so T binds (mirrors the class-method deref path above).
-		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || resolvedObjType.kind == TypeKind.String)) {
+		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
 			const derefExt = findFirstMatchingExt(allByName, resolvedObjType);
 			if (derefExt != null) {
 				ext = derefExt;
