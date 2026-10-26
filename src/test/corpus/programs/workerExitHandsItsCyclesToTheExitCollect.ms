@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM models no pool-thread root sets or worker exit, and runs the 50M-iteration busy loop past its VM iteration limit
 // @skip-js: a sync main awaits the pool tasks, which the JS backend refuses; the program pins native worker threads
 // @stdout: pairs 80 busy true
 // Pool tasks make cyclic garbage below the collection threshold while main stays busy, so the

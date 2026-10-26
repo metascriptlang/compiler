@@ -1,4 +1,3 @@
-// @xfail(raiser): the generic alias instance Setter<Payload> gets Named union hooks that read a tag the held-value union does not have; one object stays live at exit
 // @stdout: 1 12 9
 // note: a struct held in a union beside a function is the struct's cell, released and moved by the cell rows, so a struct passed to the union, a function passed to it and a generic instance of the union all leave nothing live at exit. Second axis: the union is a generic alias instantiated by the caller.
 struct Payload { a: int32; b: int32; }
