@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-timing" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-timing, or all");
 	exit(2);
 }
 
@@ -1117,6 +1117,62 @@ function runFlows(): void {
 	recordTrue("MSC_FLOWS splits a test run into graph, phase A, cc, link and the run of the test binary", flowRow(testRows, "phase.graph", "ms") > 0 && flowRow(testRows, "phase.A", "ms") > 0 && flowRow(testRows, "cc", "count") > 0 && flowRow(testRows, "phase.link", "ms") > 0 && flowRow(testRows, "test.run", "ms") > 0 && flowRow(testRows, "total", "ms") >= flowRow(testRows, "test.run", "ms"));
 }
 
+function runTestTiming(): void {
+	const dir = `${root}/test-timing`;
+	ensureDir(dir);
+	put(
+		`${dir}/timing.ms`,
+		"import { argv } from \"std/process\";\n" +
+		"test \"a\\tline\\n\\u00e9\" { assert argv.length == 1; }\n" +
+		"test \"\" { assert true; }\n" +
+		"test \"failure stays named\" { assert false; }\n",
+	);
+	const plain = command(
+		dir,
+		"plain",
+		compiler,
+		["test", "--tests-in-dir", "timing.ms"],
+	);
+	const timed = command(
+		dir,
+		"timed",
+		compiler,
+		["test", "--tests-in-dir", "--time", "timing.ms"],
+	);
+	recordTrue(
+		"plain tests keep results without timing records",
+		plain.code == 1 && plain.stdout.includes("2 passed") &&
+		plain.stdout.includes("1 failed") && plain.stdout.includes("failure stays named") &&
+		!plain.stdout.includes("TESTTIME\t"),
+	);
+	recordTrue(
+		"timed tests keep argv, counts and named failures",
+		timed.code == 1 && timed.stdout.includes("2 passed") &&
+		timed.stdout.includes("1 failed") && timed.stdout.includes("failure stays named"),
+	);
+	const rows = timed.stdout.split("\n")
+		.filter((line: string): boolean => line.startsWith("TESTTIME\t"));
+	record("--time records every native test case", "3", `${rows.length}`);
+	let valid = true;
+	let escaped = false;
+	let empty = false;
+	for (let i = 0; i < rows.length; i++) {
+		const cols = rows[i].split("\t");
+		if (cols.length != 5) {
+			valid = false;
+			continue;
+		}
+		valid = valid && parseFloat(cols[1]) >= 0 && cols[2] == `${i}` &&
+			cols[3].endsWith("74696d696e672e6d73") && !rows[i].includes("timing.ms");
+		if (cols[2] == "0") escaped = cols[4] == "61096c696e650ac3a9";
+		if (cols[2] == "1") empty = cols[4] == "";
+	}
+	recordTrue(
+		"timing records preserve escaped and empty identities without raw paths",
+		valid && escaped && empty,
+	);
+}
+
 function runTestScope(): void {
 	const dir = `${root}/test-scope`;
 	ensureDir(`${dir}/app`);
@@ -1156,6 +1212,7 @@ if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
 if (group == "ios-process" || group == "all") runIosProcess();
 if (group == "flows" || group == "all") runFlows();
+if (group == "test-timing" || group == "all") runTestTiming();
 
 let failures = 0;
 console.log(`root ${root}`);

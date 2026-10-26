@@ -3901,7 +3901,12 @@ resetLiftedOps();
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
-	const dispatcher = genTestDispatcher(graph.loadOrder, testedModules(graph.loadOrder, filePath, opts), filePath);
+	const dispatcher = genTestDispatcher(
+		graph.loadOrder,
+		testedModules(graph.loadOrder, filePath, opts),
+		filePath,
+		opts.showTime,
+	);
 	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
 	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
 	writeCSource("_test_dispatch", dispFp, dispatcher);

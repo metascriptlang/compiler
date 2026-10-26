@@ -88,7 +88,12 @@ export function emitTestTable(g: CGen): void {
 // Replaces genProjectDispatcher for test builds.
 // Runs all module DatInit + Init, then calls each module's test runner.
 
-export function genTestDispatcher(modulePaths: string[], testedPaths: string[], entryPath: string): string {
+export function genTestDispatcher(
+	modulePaths: string[],
+	testedPaths: string[],
+	entryPath: string,
+	timings: boolean = false,
+): string {
 	const b = createBuilder();
 
 	addLine(b, "#define MS_TEST_BUILD 1");
@@ -148,10 +153,25 @@ export function genTestDispatcher(modulePaths: string[], testedPaths: string[], 
 	}
 	addLine(b, "    {NULL, NULL}");
 	addLine(b, "  };");
-	addLine(b, "  return ms_test_main(__ms_modules, argc, argv);");
+	const runner = timings ? "ms_test_main_timed" : "ms_test_main";
+	addLine(b, `  return ${runner}(__ms_modules, argc, argv);`);
 	addLine(b, "}");
 
 	return extract(b);
+}
+
+test "test dispatcher keeps the legacy runner by default" {
+	const generated = genTestDispatcher([], [], "");
+	assert generated == genTestDispatcher([], [], "", false);
+	assert generated.includes("return ms_test_main(__ms_modules, argc, argv);");
+	assert !generated.includes("ms_test_main_timed");
+}
+
+test "timed test dispatcher preserves the native argv" {
+	const generated = genTestDispatcher([], [], "", true);
+	assert generated.includes("return ms_test_main_timed(__ms_modules, argc, argv);");
+	assert generated.includes("cmdLine = argv;");
+	assert generated.includes("cmdCount = argc;");
 }
 
 // escapeCString imported from literals.ms
