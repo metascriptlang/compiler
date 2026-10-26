@@ -38,23 +38,26 @@ import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
+import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerVarHoist } from "./lowering/varHoist";
+import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx);
+		return lowerForRaiser(program, ctx, placed);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext): Node {
+function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean): Node {
 	let result = planModuleTdz(program, ctx);
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
@@ -82,12 +85,14 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
+	if (placed) result = lowerParamReassign(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = guardModuleTdzRaiser(result, ctx);
+	if (placed) result = lowerVarHoist(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
@@ -95,8 +100,9 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);
+	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
-	result = liftDestructors(result, ctx, false);
+	result = liftDestructors(result, ctx, placed);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

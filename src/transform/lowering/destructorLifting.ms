@@ -71,6 +71,7 @@ class LiftCtx {
 	refusedArrayElems: HashSet<Type>;
 	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
+	raiserBackend: boolean;
 	callsUnavailableCopy: boolean; // the copy hook being lifted calls an UnavailableOp one
 	dropOwner: Symbol | null;
 }
@@ -1368,7 +1369,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
 	const releasesAfterHook = hookSym != null && hook == "destroy";
 	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
-	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend ? s1 : null;
+	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend && !lctx.raiserBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
@@ -2390,6 +2391,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refusedArrayElems: new HashSet<Type>(),
 		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
+		raiserBackend: ctx.raiserBackend,
 		callsUnavailableCopy: false,
 		dropOwner: null,
 	};
