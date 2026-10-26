@@ -229,3 +229,33 @@ console.log(h.rec.n);
 `);
 	assert cyclicFlag(c, "Holder") == "acyclic";
 }
+
+test "E2E C: a record cast into an open union slot that reaches nothing leaves the slot's holders acyclic" {
+	const c = compiled(`type Lit = { v: number, s: string };
+type D = Lit | { k: number };
+class Node { data: D | null = null; }
+class Env { node: Node | null = null; }
+const e = new Env();
+const n = new Node();
+n.data = { v: 1.5, s: "a" } as D;
+e.node = n;
+console.log(n.data !== null);
+`);
+	assert cyclicFlag(c, "Env") == "acyclic";
+	assert cyclicFlag(c, "Node") == "acyclic";
+}
+
+test "E2E C: a record cast into an open union slot that holds the holder again keeps it cyclic" {
+	const c = compiled(`class Env { node: Node | null = null; }
+type Lit = { v: number, env: Env | null };
+type D = Lit | { k: number };
+class Node { data: D | null = null; }
+const e = new Env();
+const n = new Node();
+n.data = { v: 1.5, env: e } as D;
+e.node = n;
+console.log(n.data !== null);
+`);
+	assert cyclicFlag(c, "Env") == "cyclic";
+	assert cyclicFlag(c, "Node") == "cyclic";
+}
