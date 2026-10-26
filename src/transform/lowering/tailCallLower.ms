@@ -28,13 +28,14 @@ import {
 	FunctionDeclData, ReturnStmtData, CallExprData, ConditionalExprData,
 	IdentifierData, BlockStmtData, IfStmtData, BinaryExprData,
 	ClassDeclData, MethodDeclData, MemberExprData,
-	WhileStmtData, ContinueStmtData,
+	WhileStmtData, ContinueStmtData, UpdateExprData, HiddenDerefData,
 	VariableDeclData, ArrowFunctionData, FunctionExprData, OutExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, peelToStruct } from "../../checker/types";
 import { walkNode, mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild, anyChild } from "../../ast/visitor";
+import { isAssignOp } from "../../ast/operators";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl, makeIf, makeReturn,
 	makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
@@ -209,7 +210,27 @@ function forwardedVarSlots(body: Node, fnName: string, fnSym: Symbol | null, par
 			if (i >= args.length || !denotesParam(args[i], paramSyms![i])) return null;
 		}
 	}
+	if (paramSyms == null) return forwarded;
+	for (let i = 0; i < forwarded.length; i += 1) {
+		if (forwarded[i]) continue;
+		let invariant = !assignsSym(body, paramSyms[i]);
+		for (const call of calls) {
+			const args = (call.data as CallExprData).arguments;
+			if (i >= args.length || !denotesParam(args[i], paramSyms[i])) invariant = false;
+		}
+		forwarded[i] = invariant;
+	}
 	return forwarded;
+}
+
+function assignsSym(n: Node, sym: Symbol): boolean {
+	if (n == null) return false;
+	let target: Node | null = null;
+	if (n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
+	else if (n.kind == NodeKind.UpdateExpr) target = (n.data as UpdateExprData).updateArg;
+	else if (n.kind == NodeKind.HiddenAddr) target = (n.data as HiddenDerefData).expr;
+	if (target != null && target.kind == NodeKind.Identifier && target.resolvedSym == sym) return true;
+	return anyChild(n, (c: Node): boolean => assignsSym(c, sym));
 }
 
 function denotesParam(arg: Node, ps: Symbol): boolean {
@@ -465,6 +486,17 @@ test "a ref parameter every tail call passes back stays the parameter" {
 	const src = "function f(ref acc: int32, n: int32): void { if (n == 0) return; acc = acc + n; return f(acc, n - 1); }";
 	assert lowersToLoop(src);
 	assert shadowedParamCount(src) == 1;
+}
+
+test "a value parameter every tail call passes back stays the parameter" {
+	assert shadowedParamCount("function f(a: number[], i: int32): boolean { if (i >= 3) return true; return f(a, i + 1); }") == 1;
+	assert shadowedParamCount("function f(a: number[], s: string, i: int32): boolean { if (i >= 3) return true; return f(a, s, i + 1); }") == 1;
+}
+
+test "a value parameter a tail call replaces or the body assigns keeps its loop-carried local" {
+	assert shadowedParamCount("function f(a: number[], b: number[], i: int32): boolean { if (i >= 3) return true; return f(b, a, i + 1); }") == 3;
+	assert shadowedParamCount("function f(a: number[], i: int32): boolean { if (i >= 3) return true; a = [i]; return f(a, i + 1); }") == 2;
+	assert shadowedParamCount("function f(a: number[], i: int32): boolean { if (i >= 3) return true; return f([i], i + 1); }") == 2;
 }
 
 test "a tail call that passes another location to a ref parameter stays recursive" {

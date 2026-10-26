@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
@@ -150,12 +150,14 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	return { type: isRefBase ? createRef(instType) : instType, instance };
 }
 
-// Inherit modulePath + location from a container type onto a synthetic field symbol.
-// Used for cross-file go-to-definition on object literal keys and member access properties.
+// Inherit modulePath + location from the type that declares the field, walking up from the
+// container, onto a synthetic field symbol: go-to-definition and the field doc read them.
 export function inheritContainerInfo(fieldSym: Symbol, container: Symbol | null): void {
-	if (container == null || container.modulePath == "") return;
-	fieldSym.modulePath = container.modulePath;
-	if (container.location != null) fieldSym.location = container.location;
+	const declarer = fieldDeclarer(container, fieldSym.name);
+	const owner = declarer != null ? declarer : container;
+	if (owner == null || owner.modulePath == "") return;
+	fieldSym.modulePath = owner.modulePath;
+	if (owner.location != null) fieldSym.location = owner.location;
 }
 
 // Public API: check expression, store type on node. Callers read node.nodeType.
@@ -283,7 +285,9 @@ export function bindRefsTo(node: Node, syms: Symbol[]): void {
 // Walk `nodes` with the unconsumed-JSX leak check suppressed. A raw JSX node is legal as a
 // macro argument (the macro consumes it) or as a child of a JSX node already accounted for by
 // its parent — jsxMacroArgDepth > 0 marks both, so reportUnconsumedJsx stays silent inside.
-export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
+export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[], consumer: Symbol | null = ctx.jsxConsumer): void {
+	const outer = ctx.jsxConsumer;
+	ctx.jsxConsumer = consumer;
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 	// nodeTypeAst is only ever set from a node that was typed before a macro
 	// round-trip (bridge valueToNode); re-checking such an arg re-infers from
@@ -295,6 +299,7 @@ export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
 		callCheckExpr(ctx, n, null);
 	}
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
+	ctx.jsxConsumer = outer;
 }
 
 export function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): void {
@@ -1932,7 +1937,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
-			checkJsxConsumed(ctx, macroArgsRef);
+			checkJsxConsumed(ctx, macroArgsRef, sym);
 			rewriteCallAsMacroInvocation(node, sym);
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
@@ -2571,7 +2576,8 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 		return;
 	}
 	const me = d.callee.data as MemberExprData;
-	const recvType = me.object.nodeType;
+	const recvActor = unwrapRef(recvFormal).sym;
+	const recvType = recvActor != null && recvActor.symbolKind == SymbolKind.Actor && me.object.nodeType != null ? withoutReadonlyView(me.object.nodeType) : me.object.nodeType;
 	if (recvType == null) {
 		relateCallArgs(ctx, node, calleeType, argTypes, isActorMethodCall);
 		return;
@@ -5733,7 +5739,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
-		if (needsDeref && resolvedObjType.kind == TypeKind.Array) {
+		if (needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.String)) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
 			derefNode.nodeType = resolvedObjType;
@@ -5761,6 +5767,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);
 			propSym.state = SymbolState.Shaped;
 			node.resolvedSym = propSym;
+			if (needsDeref) {
+				const tok = createToken(TokenKind.Ident, "", node.location.line);
+				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+				derefNode.nodeType = resolvedObjType;
+				d.object = derefNode;
+			}
 			return int32Type();
 		}
 	}
@@ -5798,7 +5810,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// actual object type (e.g. Promise<string>) to discover T → string,
 				// then substitute in parameter/return types.
 				const receiverType = methType.typeChildren[0];
-				if ((isReadonlyView(objType) || isReadonlyView(resolvedObjType)) && !isReadonlyView(receiverType)) {
+				if ((isReadonlyView(objType) || isReadonlyView(resolvedObjType)) && !isReadonlyView(receiverType)
+						&& (fieldOwnerSym == null || fieldOwnerSym.symbolKind != SymbolKind.Actor)) {
 					refuseReadonlyViewCall(ctx, node, d.property, objType, typeNameOf(receiverType));
 				}
 				const eb = createUnifyBindings();

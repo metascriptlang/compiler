@@ -12,7 +12,7 @@
 
 import {
 	Node, NodeKind, NodeData, Type, TypeKind,
-	CallExprData, IdentifierData, NewExprData,
+	CallExprData, IdentifierData, NewExprData, TypeAssertionData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -20,7 +20,7 @@ import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
 import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
-import { peelTransparentInstance } from "../../checker/types";
+import { peelTransparentInstance, functionSlotOf } from "../../checker/types";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
@@ -91,14 +91,17 @@ function lowerRest(node: Node): Node {
 		d.arguments = packCtorRest(d.arguments, ctorFormalTypes(callee.resolvedSym), node.location.line);
 		return node;
 	}
-	let sym = callee.resolvedSym;
+	let named: Node = callee;
+	while (named.kind == NodeKind.TypeAssertion && (named.data as TypeAssertionData).asType == "!") named = (named.data as TypeAssertionData).asExpr;
+	let sym = named.resolvedSym;
 	if (sym == null) return node;
 	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
 	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return node;
-	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
+	const fnType = functionSlotOf(sym.symbolType);
+	if (fnType == null) return node;
 
-	const typeChildren = sym.symbolType.typeChildren;
+	const typeChildren = fnType.typeChildren;
 	if (typeChildren.length == 0) return node;
 	const lastType = typeChildren[typeChildren.length - 1];
 	if (lastType == null || lastType.kind != TypeKind.Varargs) return node;
@@ -108,9 +111,9 @@ function lowerRest(node: Node): Node {
 	// that slot when computing rest position so d.arguments-relative indexing
 	// stays aligned. Static extension calls (`Math.floor(x)`) and free function
 	// calls keep their natural alignment.
-	const typeNames = sym.symbolType.typeNames;
+	const typeNames = fnType.typeNames;
 	const hasThisSlot = typeNames.length > 0 && typeNames[0] == "this"
-		&& callee.kind == NodeKind.MemberExpr;
+		&& named.kind == NodeKind.MemberExpr;
 	const restIdx = (typeChildren.length - 1) - (hasThisSlot ? 1 : 0);
 
 	// Peel Varargs → user's array type (e.g. string[]) for the ArrayLiteral.

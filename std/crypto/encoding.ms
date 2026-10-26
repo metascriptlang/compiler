@@ -30,12 +30,13 @@ export function decodeHex(this text: string): uint8[] {
 	const byteCount = bytes.length as int64;
 	if (byteCount % 2 != 0) return [];
 	const result = newDecodingOutput(byteCount / 2);
+	const out: Span<uint8> = result;
 	const inputLength = byteCount as EncodingIndex;
 	for (let i: EncodingIndex = 0; i < inputLength; i += 2) {
 		const hi = hexDigit(bytes[i] as int32);
 		const lo = hexDigit(bytes[i + 1] as int32);
 		if (hi < 0 || lo < 0) return [];
-		result[i / 2] = ((hi << 4) | lo) as uint8;
+		out[i / 2] = ((hi << 4) | lo) as uint8;
 	}
 	return result;
 }

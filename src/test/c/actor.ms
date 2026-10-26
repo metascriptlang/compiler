@@ -127,6 +127,41 @@ actor W {
 	}
 }
 
+test "E2E C: a spawn thunk inside an actor cannot call the actor's own method" {
+	const src = `
+actor W {
+	n: number = 0;
+	add(x: number): void { this.n = this.n + x; }
+	run(): number {
+		const r = await spawn(() => { this.add(1); return 0; });
+		return r;
+	}
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+	if (!c.ok) {
+		assert c.error.contains("PARALOCK S1/E61");
+	}
+}
+
+test "E2E C: a foreign actor captured by a spawn thunk can be sent to" {
+	const src = `
+actor Counter {
+	n: number = 0;
+	add(x: number): void { this.n = this.n + x; }
+}
+function main(): void {
+	const c = new Counter();
+	const h = spawn(() => { c.add(1); return 1; });
+	console.log(await h);
+}
+main();
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+
 test "E2E C: E24 — compound assignment in spawn thunk fails" {
 	const src = `
 actor W {

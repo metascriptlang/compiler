@@ -36,6 +36,7 @@ import {
 	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
+import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -1617,7 +1618,7 @@ function namespaceMemberIdent(node: Node): Node | null {
 
 function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 	const object = (member.data as MemberExprData).object;
-	if (object.kind != NodeKind.Identifier) compileExpr(s, object);
+	if (object.kind != NodeKind.Identifier && !isNamespaceRef(object)) compileExpr(s, object);
 }
 
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {

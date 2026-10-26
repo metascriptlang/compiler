@@ -275,12 +275,17 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, d
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.
+function isActorRef(t: Type): boolean {
+	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
 function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	if (t == null) return true;
 	// move always transfers ownership safely
 	if (argNode != null && argNode.kind == NodeKind.MoveExpr) return true;
 	// If the type itself contains no refs, it's always sendable (value copy)
 	if (isTypeSendable(t)) return true;
+	if (isActorRef(t)) return true;
 	if (t.kind == TypeKind.Ref) {
 		// SHARE — Arc<T> only: atomic rc at the actor boundary makes the binding's
 		// mutability irrelevant (rebinding the handle never writes the pointee).
@@ -299,7 +304,7 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
-	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
+	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
 		const path = plainFunctionPath(t, []);
@@ -312,7 +317,7 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	}
 	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, argNode, sendClass)) {
-		if (isPlainRefBorrow && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor)) refuseKeptBorrow(call, argNode, pi);
+		if (isPlainRefBorrow) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
 	}
 	const argLabel = argNode.kind == NodeKind.Identifier
@@ -706,7 +711,7 @@ function borrowedRoot(n: Node, borrowed: Symbol[]): Symbol | null {
 	return sym != null && borrowed.includes(sym) ? sym : null;
 }
 
-function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | null {
+function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[], seen: Node[], via: string[]): Node | null {
 	if (node == null) return null;
 	const p = peelView(node);
 	if (p.kind == NodeKind.AwaitExpr) {
@@ -721,12 +726,19 @@ function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | nul
 			if (borrowedRoot(receiver, borrowed) != null && reachesAwaitable(receiver.nodeType, [])) return receiver;
 		}
 		if (!keepsArgumentsInFrame(p)) {
-			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
+			const inCallee = borrowedAwaitableUse(d.callee, borrowed, seen, via);
 			if (inCallee != null) return inCallee;
-			for (const a of d.arguments) {
-				// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-spawn-task-passes-a-borrowed-promise-to-a-routine-that-attaches-a-callback.md
-				if (borrowedRoot(a, borrowed) != null) continue;
-				const inArg = borrowedAwaitableUse(a, borrowed);
+			const routine = routineParts(p.resolvedSym != null ? p.resolvedSym : callee.resolvedSym);
+			for (let i = 0; i < d.arguments.length; i += 1) {
+				const a = d.arguments[i];
+				if (borrowedRoot(a, borrowed) != null) {
+					if (routine == null || routine.paramSyms == null || seen.includes(routine) || firstArgParam(routine, p) + i >= routine.paramSyms!.length) continue;
+					const inner = borrowedAwaitableUse(routineBody(routine), [routine.paramSyms![firstArgParam(routine, p) + i]], seen.concat([routine]), via);
+					if (inner == null) continue;
+					via.push(callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name : describeExpr(callee));
+					return a;
+				}
+				const inArg = borrowedAwaitableUse(a, borrowed, seen, via);
 				if (inArg != null) return inArg;
 			}
 			return null;
@@ -736,7 +748,7 @@ function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | nul
 		return reachesAwaitable(p.nodeType, []) ? p : null;
 	}
 	let found: Node | null = null;
-	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed); });
+	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed, seen, via); });
 	return found;
 }
 
@@ -747,11 +759,16 @@ function refuseBorrowedAwaitable(ctx: CheckerContext, fn: Node, at: Node): void 
 	collectBorrowCaptures(ctx, thunk, views, moved);
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v) && reachesAwaitable(v.symbolType, []));
 	if (borrowed.length == 0) return;
-	const use = borrowedAwaitableUse(routineParamsAndBody(thunk).body, borrowed);
-	if (use == null) return;
-	const name = describeExpr(use);
-	addError(ctx, `spawn's task uses '${name}', a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
-		use.location.line, use.location.column);
+	const body = routineParamsAndBody(thunk).body;
+	deferEffectCheck(at, "borrowedAwaitable", (later: CheckerContext): void => {
+		const via: string[] = [];
+		const use = borrowedAwaitableUse(body, borrowed, [], via);
+		if (use == null) return;
+		const name = describeExpr(use);
+		const through = via.length > 0 ? ` (passed to '${via[via.length - 1]}', which attaches a callback to it)` : "";
+		addError(later, `spawn's task uses '${name}'${through}, a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
+			use.location.line, use.location.column);
+	});
 }
 
 function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {

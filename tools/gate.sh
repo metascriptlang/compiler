@@ -10,7 +10,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
-  'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
+  'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
@@ -25,7 +25,7 @@ RULES=(
 DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana"
 LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "tsan" "solana")
+PHASES=("build" "tools boundary suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
 KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san tsan guard solana"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
@@ -1697,17 +1697,17 @@ src/checker/checkPass.ms|build corpus lsp solana suite tests
 src/checker/bindNames.ms|build corpus guard lsp solana suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
-std/meta/node.ms|build corpus fmt guard solana suite tests
-std/fs/index.ms|boundary build corpus suite tests
+std/meta/node.ms|build corpus fmt guard hcr solana suite tests
+std/fs/index.ms|boundary build corpus hcr suite tests
 vendor/miniz/miniz.c|boundary build corpus suite tests
 src/module/loader.ms|build corpus suite tests
 src/monomorphize/index.ms|build corpus solana suite tests
 src/utils/path.ms|build corpus suite tests
 src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
-runtime/drc.h|boundary build corpus guard san suite tests
-runtime/promise/future.h|boundary build corpus guard san suite tests
-runtime/actor/actor.h|boundary build corpus guard san suite tests
+runtime/drc.h|boundary build corpus guard hcr san suite tests
+runtime/promise/future.h|boundary build corpus guard hcr san suite tests
+runtime/actor/actor.h|boundary build corpus guard hcr san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
@@ -1717,8 +1717,8 @@ src/compiler/meta/comptime.ms|build corpus guard solana suite tests
 src/compiler/lsp/server.ms|build lsp suite
 src/compiler/transam/query.ms|build lsp suite
 src/test/lsp/run.ms|build lsp suite
-std/process/child.cms|boundary build corpus lsp suite tests
-runtime/process.h|boundary build corpus lsp suite tests
+std/process/child.cms|boundary build corpus hcr lsp suite tests
+runtime/process.h|boundary build corpus hcr lsp suite tests
 src/compiler/package/install.ms|boundary build suite
 src/compiler/meta/hostTable.ms|boundary build corpus guard solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
@@ -1743,13 +1743,13 @@ examples/anchorBench/vault/program.ms|build solana suite
 src/test/c/solanaVaultHost.ms|build solana suite tests
 src/test/guard/solanaCpiFrame.ms|build guard suite
 src/codegen/js/expressions.ms|build corpus suite tests
-std/crypto/sha256.ms|build corpus solana suite tests
-runtime/manual.h|boundary build corpus guard san solana suite tests
-runtime/solana/host.c|boundary build corpus guard solana suite tests
-std/solana/core.ms|build corpus guard solana suite tests
-std/solana/test.ms|build corpus guard solana suite tests
-runtime/solana/solana.h|boundary build corpus guard solana suite tests
-runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
+std/crypto/sha256.ms|build corpus hcr solana suite tests
+runtime/manual.h|boundary build corpus guard hcr san solana suite tests
+runtime/solana/host.c|boundary build corpus guard hcr solana suite tests
+std/solana/core.ms|build corpus guard hcr solana suite tests
+std/solana/test.ms|build corpus guard hcr solana suite tests
+runtime/solana/solana.h|boundary build corpus guard hcr solana suite tests
+runtime/freestanding/musl/pow.c|boundary build corpus hcr solana suite tests
 docs/TESTING.md|
 src/test/known-red.json|
 CASES

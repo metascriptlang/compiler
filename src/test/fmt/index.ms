@@ -77,6 +77,7 @@ import "./cases/assertionOperands";
 import "./cases/bareArrowParam";
 import "./cases/objectKeys";
 import "./cases/optionalMembers";
+import "./cases/optionalCalls";
 import "./cases/spacedTypeClosers";
 import "./cases/matchAndBlockComments";
 import "./cases/whenChain";

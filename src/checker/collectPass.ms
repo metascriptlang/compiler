@@ -1555,6 +1555,14 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 		const imp = d.exportedDecl.data as ImportDeclData;
 
 		if (!isGlobalImport(imp.importSource)) {
+			if (imp.importNames.length == 1 && imp.importNames[0] == "*" && imp.importAliases[0] != "*") {
+				const nsPath = resolveImportSourcePath(ctx, imp.importSource);
+				const nsSym = makeSymbol(imp.importAliases[0], SymbolKind.Module, nsPath != "" ? createModuleNamespace(nsPath) : noneType(), false);
+				nsSym.modulePath = nsPath;
+				nsSym.location = node.location;
+				exportSymAs(ctx, nsSym, imp.importAliases[0]);
+				return;
+			}
 			// Star re-export: export * from "path" — re-export all symbols from source
 			if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
 				const sourcePath = resolveImportSourcePath(ctx, imp.importSource);

@@ -38,16 +38,17 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
-import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
+import { cloneTargetIfPure } from "../place";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
@@ -720,17 +721,50 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
 	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
-	if (rhsPre.length > 0) {
-		const writes: Symbol[] = [];
-		for (const s of rhsPre) { collectWrites(s, writes); }
-		collectWrites(bd.right, writes);
-		bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
-		for (const s of rhsPre) { pre.push(s); }
-	}
+	const writes: Symbol[] = [];
+	for (const s of rhsPre) { collectWrites(s, writes); }
+	collectWrites(bd.right, writes);
+	const readFirst = compoundReadsTargetFirst(bd, rhsPre, writes, ctx);
+	if (rhsPre.length > 0 || readFirst) bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
+	if (readFirst) readCompoundTarget(bd, pre, ctx, stmt.location);
+	for (const s of rhsPre) { pre.push(s); }
 	if (guardedWrite) guardWrite(bd, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	pre.push(stmt);
 	return pre;
+}
+
+function compoundReadsTargetFirst(bd: BinaryExprData, rhsPre: Node[], writes: Symbol[], ctx: TransformContext): boolean {
+	if (ctx.jsBackend || bd.operator == "=" || !isNumeric(bd.left.nodeType)) return false;
+	if (readsAnyOf(bd.left, writes) || holdsCall(bd.right)) return true;
+	for (const s of rhsPre) {
+		if (holdsCall(s)) return true;
+	}
+	return false;
+}
+
+function isBitwiseCompound(op: string): boolean {
+	return op == "&=" || op == "|=" || op == "^=" || op == "<<=" || op == ">>=" || op == ">>>=";
+}
+
+function readCompoundTarget(bd: BinaryExprData, pre: Node[], ctx: TransformContext, loc: SourceLocation): void {
+	const read = cloneTargetIfPure(bd.left);
+	if (read == null) throw new Error(`internal: compound target ${bd.left.kind} is not a re-readable place`);
+	const sym = freshOwnedSym(ctx, "ord", bd.left.nodeType);
+	const decl = makeVarDecl(sym.name, read, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = bd.left.nodeType;
+	pre.push(decl);
+	const op = bd.operator.slice(0, bd.operator.length - 1);
+	const target = bd.left.nodeType!;
+	if (isBitwiseCompound(bd.operator) && !isIntegerType(target)) {
+		const bits = makeBinary(makeHiddenStdConv(makeIdentResolved(sym, loc), int32Type(), loc), op, bd.right, loc);
+		bits.nodeType = op == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
+		bd.right = makeHiddenStdConv(bits, target, loc);
+	} else {
+		bd.right = makeBinary(makeIdentResolved(sym, loc), op, bd.right, loc);
+	}
+	bd.operator = "=";
 }
 
 // Hoist the effectful parts of an assignment TARGET into preceding temps.

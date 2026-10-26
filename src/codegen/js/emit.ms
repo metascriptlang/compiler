@@ -24,11 +24,12 @@ export class JSHelpers {
 	keyNames: string[];
 	keyRuntime: boolean;
 	classNameRuntime: boolean;
+	lockedRuntime: boolean;
 	actorRuntime: boolean;
 }
 
 export function createJSHelpers(): JSHelpers {
-	return { copyKeys: [], copyNames: [], assignKeys: [], assignNames: [], keyKeys: [], keyNames: [], keyRuntime: false, classNameRuntime: false, actorRuntime: false };
+	return { copyKeys: [], copyNames: [], assignKeys: [], assignNames: [], keyKeys: [], keyNames: [], keyRuntime: false, classNameRuntime: false, lockedRuntime: false, actorRuntime: false };
 }
 
 export class JSGenerator {
@@ -57,6 +58,9 @@ export class JSGenerator {
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
+	namespaceImportPaths: string[];
+	namespaceImportLocals: string[];
+	ownNamespaceAliases: HashSet<string>;
 	declaredLocals: HashSet<string>;   // every name this module binds below top level; an import binding never takes one
 	innerLocals: HashSet<string>;
 	aliasedExports: string[];
@@ -97,7 +101,7 @@ export function createJsTreeLayout(): JsTreeLayout {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), innerLocals: new HashSet<string>(), aliasedExports: [], moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
+		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], namespaceImportPaths: [], namespaceImportLocals: [], ownNamespaceAliases: new HashSet<string>(), declaredLocals: new HashSet<string>(), innerLocals: new HashSet<string>(), aliasedExports: [], moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -123,6 +127,15 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 	}
 	gen.neededNames[at].push(name);
 	gen.neededLocals[at].push(local);
+	return local;
+}
+
+export function recordNamespaceImport(gen: JSGenerator, modulePath: string, name: string): string {
+	const at = gen.namespaceImportPaths.indexOf(modulePath);
+	if (at >= 0) return gen.namespaceImportLocals[at];
+	const local = importBindingTaken(gen, name) ? `${name}__${mangleModuleName(buildModuleNameRoots(), modulePath)}` : name;
+	gen.namespaceImportPaths.push(modulePath);
+	gen.namespaceImportLocals.push(local);
 	return local;
 }
 

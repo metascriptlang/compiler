@@ -100,6 +100,41 @@ export function privateFieldOwner(typeSym: Symbol | null, field: string): Symbol
 	return null;
 }
 
+function declaredParents(sym: Symbol): Symbol[] {
+	const parents: Symbol[] = [];
+	if (isClassLike(sym)) {
+		const p = parentClassSymOf(sym);
+		if (p != null) parents.push(p);
+		return parents;
+	}
+	if (sym.symbolKind == SymbolKind.TypeAlias) {
+		const t = sym.symbolType;
+		const own = t != null && (t.kind == TypeKind.Alias || t.sym == sym) && t.typeReturn != null;
+		const target = declaringSymOf(own ? t.typeReturn : t);
+		if (target != null && target != sym) parents.push(target);
+		return parents;
+	}
+	const decl = unwrapDecl(sym.declNode);
+	if (decl == null || decl.baseExprs == null) return parents;
+	for (const base of decl.baseExprs) {
+		const p = declaringSymOf(base.nodeType);
+		if (p != null) parents.push(p);
+	}
+	return parents;
+}
+
+// The type whose own declaration holds the field, searched up every `extends` parent.
+export function fieldDeclarer(typeSym: Symbol | null, field: string, depth: int32 = 0): Symbol | null {
+	if (typeSym == null || depth > 64) return null;
+	const sym = originOf(typeSym);
+	if (ownVisibility(sym, field) != DeclaredVisibility.NotDeclared) return sym;
+	for (const parent of declaredParents(sym)) {
+		const found = fieldDeclarer(parent, field, depth + 1);
+		if (found != null) return found;
+	}
+	return null;
+}
+
 function derivesFrom(cls: Symbol, owner: Symbol): boolean {
 	let c: Symbol | null = cls;
 	let depth = 0;

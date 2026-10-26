@@ -73,8 +73,6 @@ export extern function spawn<T>(fn: () => T): Promise<T> from "Promise.resolve()
 // continuation with the same exit semantics as C.
 export extern function sleepAsync(ms: number): Promise<void> from "new Promise((r) => setTimeout(r, #))";
 
-@emit("globalThis.Locked = class Locked { constructor(value) { this.value = value; this.held = false; } };");
-
 extern function msLockedHeldHere<T>(cell: Locked<T>): boolean from "#.held";
 extern function msLockedAcquire<T>(cell: Locked<T>): void from "(#.held = true)";
 extern function msLockedRelease<T>(cell: Locked<T>): void from "(#.held = false)";

@@ -119,3 +119,8 @@ test "parentheses and a cast end the chain" {
 }
 
 test "a plain member chain carries no chain end" { assert chainEnds("a.b.c(1);") == "----"; }
+
+test "an optional call and an optional index each start a chain" {
+	assert chainEnds("f?.(1).b;") == "E--";
+	assert chainEnds("a?.b?.(1);") == "EE-";
+}

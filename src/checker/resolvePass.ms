@@ -8,7 +8,7 @@
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
@@ -1500,15 +1500,20 @@ function resolveTypeQuery(ctx: CheckerContext, operand: string, line: int32, col
 }
 
 function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
-	const dot = name.indexOf(".");
-	if (dot <= 0) return null;
-	const nsSym = lookupSymbol(ctx.table, name.slice(0, dot));
-	if (nsSym == null || nsSym.symbolKind != SymbolKind.Module || nsSym.modulePath == "") return null;
-	const exported = findExportedSymbol(ctx.exportRegistry, nsSym.modulePath, name.slice(dot + 1, name.length));
-	if (exported == null) return null;
-	markUsedIn(ctx, nsSym);
-	noteImported(ctx, exported.sym);
-	return exported.sym;
+	const parts = name.split(".");
+	if (parts.length < 2 || parts[0] == "") return null;
+	const head = lookupSymbol(ctx.table, parts[0]);
+	if (head == null) return null;
+	let sym = head;
+	for (let i = 1; i < parts.length; i += 1) {
+		if (sym.symbolKind != SymbolKind.Module || sym.modulePath == "") return null;
+		const exported = findExportedSymbol(ctx.exportRegistry, sym.modulePath, parts[i]);
+		if (exported == null) return null;
+		sym = exported.sym;
+		noteImported(ctx, sym);
+	}
+	markUsedIn(ctx, head);
+	return sym;
 }
 
 export function builtinTypeHead(ctx: CheckerContext, writtenName: string, baseName: string = ""): string {
@@ -2628,7 +2633,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	const hasGenericAlias = d.aliasGenericParams != null && d.aliasGenericParams != "";
 	if (hasGenericAlias) defineTypeParams(ctx, sym, d.aliasGenericParams);
 
-	const resolved = resolveAnnotation(d.aliasType, ctx, node.location.line, node.location.column);
+	let resolved = resolveAnnotation(d.aliasType, ctx, node.location.line, node.location.column);
 	resolveTypeExpr(node.typeExpr, ctx);
 
 	if (hasGenericAlias) {
@@ -2637,6 +2642,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind == TypeKind.Union && resolved.typeName == "") {
+		resolved = copyTypeShallow(resolved);
 		resolved.typeName = d.aliasName;
 	}
 	// Tier 3: for generic aliases, stamp the typeName so instantiation can reference the alias
@@ -3579,6 +3585,12 @@ test "string | null wraps as Maybe<string>" {
 	const t = resolveWith("string | null");
 	assert t.kind == TypeKind.Struct;
 	assert t.typeFlags.has(TypeFlag.IsMaybe);
+}
+
+test "Result<T, E> | null wraps as Maybe<Result<T, E>>" {
+	const t = resolveWith("Result<number, string> | null");
+	assert t.typeFlags.has(TypeFlag.IsMaybe);
+	assert t.typeReturn != null && isResult(t.typeReturn);
 }
 
 test "number | null wraps as Maybe<number>" {

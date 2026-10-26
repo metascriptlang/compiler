@@ -2223,6 +2223,7 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (hasGenericParams(t)) return;
 	if (t.kind == TypeKind.GenericInstance) {
 		const seen = peelTransparentInstance(t);
 		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
@@ -2324,6 +2325,7 @@ function ensureDeclaredHooks(sym: Symbol | null, node: Node, lctx: LiftCtx): voi
 	if (objType == null) return;
 	if (sym.symbolKind == SymbolKind.TypeAlias && sym.symbolType.kind == TypeKind.Ref) return;
 	if (namesAnotherType(sym, objType, sym.name)) return;
+	if (unwrapRefNullUnion(objType) != null) return;
 	const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor || sym.symbolKind == SymbolKind.Interface)
 		? sym.symbolType
 		: null as unknown as Type;

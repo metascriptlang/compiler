@@ -1,5 +1,5 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
-// @skip-js: Arc<T> has no js binding (atomic-rc box is C-only, PARALOCK tier 2/3) - same as 405/406
+// @skip-js: main() awaits without being async, which the JS backend refuses; Arc and Locked themselves lower on JS (arcLockedValuePayloads)
 // note: Arc<POD pointee> regression - until 2026-09-03 (Amendment I step 0) every
 // `new Arc<PODStruct>` died at LINK: the weak Arc cell TypeInfo wired the pointee's
 // destroyFn, but a POD struct's destroy hook is dropped by reachability (a POD temp

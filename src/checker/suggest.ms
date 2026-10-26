@@ -12,6 +12,9 @@ import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filt
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
+import { JSXElementData, JSXAttributeData } from "../ast/node";
+import { peelToStructOrUnion } from "./types";
+import { declaringSymOf, fieldDeclarer } from "./visibility";
 
 // ===== Data Types =====
 
@@ -744,7 +747,7 @@ function sgExtractLine(source: string, line: int32): string {
 	while (end < source.byteLength && source.byteAt(end) != "\n".code) {
 		end = end + 1;
 	}
-	return source.slice(start, end);
+	return source.byteSlice(start, end);
 }
 
 // Strip leading whitespace from a string.
@@ -756,7 +759,7 @@ function sgTrimLeft(s: string): string {
 		i = i + 1;
 	}
 	if (i == 0) return s;
-	return s.slice(i, s.byteLength);
+	return s.byteSlice(i, s.byteLength);
 }
 
 // Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
@@ -789,9 +792,9 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 		// Strip /** and */
 		let s = raw;
 		const openIdx = sgFindSubstring(s, "/**");
-		if (openIdx >= 0) s = s.slice(openIdx + 3, s.length);
+		if (openIdx >= 0) s = s.byteSlice(openIdx + 3, s.byteLength);
 		const closeIdx = sgFindSubstring(s, "*/");
-		if (closeIdx >= 0) s = s.slice(0, closeIdx);
+		if (closeIdx >= 0) s = s.byteSlice(0, closeIdx);
 		return sgTrimLeft(sgTrimRight(s));
 	}
 	// Multi-line: collect from startLine+1 to endLine-1, plus partial first/last
@@ -800,7 +803,7 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 	const firstRaw = sgExtractLine(source, startLine);
 	const openIdx = sgFindSubstring(firstRaw, "/**");
 	if (openIdx >= 0) {
-		const after = firstRaw.slice(openIdx + 3, firstRaw.length);
+		const after = firstRaw.byteSlice(openIdx + 3, firstRaw.byteLength);
 		const trimAfter = sgTrimLeft(sgTrimRight(after));
 		if (trimAfter.length > 0) lines.push(trimAfter);
 	}
@@ -811,9 +814,9 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 		let content = raw;
 		// Strip leading * (with optional space)
 		if (content.byteLength > 0 && content.byteAt(0) == "*".code) {
-			content = content.slice(1, content.byteLength);
+			content = content.byteSlice(1, content.byteLength);
 			if (content.byteLength > 0 && content.byteAt(0) == " ".code) {
-				content = content.slice(1, content.byteLength);
+				content = content.byteSlice(1, content.byteLength);
 			}
 		}
 		lines.push(sgTrimRight(content));
@@ -824,12 +827,12 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 	// Strip */ first, then strip leading * prefix
 	let lastContent = lastRaw;
 	const closeIdx2 = sgFindSubstring(lastContent, "*/");
-	if (closeIdx2 >= 0) lastContent = lastContent.slice(0, closeIdx2);
+	if (closeIdx2 >= 0) lastContent = lastContent.byteSlice(0, closeIdx2);
 	lastContent = sgTrimLeft(lastContent);
 	if (lastContent.byteLength > 0 && lastContent.byteAt(0) == "*".code) {
-		lastContent = lastContent.slice(1, lastContent.byteLength);
+		lastContent = lastContent.byteSlice(1, lastContent.byteLength);
 		if (lastContent.byteLength > 0 && lastContent.byteAt(0) == " ".code) {
-			lastContent = lastContent.slice(1, lastContent.byteLength);
+			lastContent = lastContent.byteSlice(1, lastContent.byteLength);
 		}
 	}
 	lastContent = sgTrimRight(lastContent);
@@ -853,7 +856,7 @@ function sgTrimRight(s: string): string {
 		if (ch != " ".code && ch != "\t".code && ch != "\r".code) break;
 		i = i - 1;
 	}
-	return s.slice(0, i + 1);
+	return s.byteSlice(0, i + 1);
 }
 
 // ===== Cross-Module Helpers =====
@@ -1078,7 +1081,7 @@ function sgGetLineText(source: string, line: int32): string {
 	while (lineEnd < source.byteLength && source.byteAt(lineEnd) != "\n".code) {
 		lineEnd = lineEnd + 1;
 	}
-	return source.slice(lineOffset, lineEnd);
+	return source.byteSlice(lineOffset, lineEnd);
 }
 
 function sgStartsWith(s: string, prefix: string): boolean {
@@ -1689,7 +1692,7 @@ export function sgExtractImportPath(source: string, line: int32, col: int32): st
 	const openQuote = qi;
 	const cursorCol0 = col - 1;
 	if (cursorCol0 <= openQuote) return "";
-	return lineText.slice(openQuote + 1, cursorCol0);
+	return lineText.byteSlice(openQuote + 1, cursorCol0);
 }
 
 // Extract existing imported names from ImportDecl AST node.
@@ -1798,6 +1801,119 @@ export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, root
 			};
 			result.push(item);
 		}
+	}
+	return result;
+}
+
+// ===== JSX tag and attribute completion =====
+
+// The opening tag holding the cursor: on its tag name (the tag is being typed) or among its
+// attributes, outside any attribute value. `editing` is the attribute whose name the cursor is in.
+export interface SgJsxSite {
+	element: Node;
+	onTag: boolean;
+	editing: Node | null;
+}
+
+export function sgJsxSiteAt(program: Node, source: string, line: int32, col: int32): SgJsxSite | null {
+	const cursor = sgGetLineOffset(source, line) + col - 1;
+	let site: SgJsxSite | null = null;
+	const visit = (node: Node): void => {
+		if (site != null || node.location.line > line) return;
+		if (node.kind == NodeKind.JSXElement && node.typeExpr != null) site = jsxOpeningSite(node, source, cursor);
+		forEachChild(node, visit);
+	};
+	visit(program);
+	return site;
+}
+
+function jsxOpeningSite(element: Node, source: string, cursor: int32): SgJsxSite | null {
+	const tag = element.typeExpr!;
+	const tagStart = sgGetLineOffset(source, tag.location.line) + tag.location.column - 1;
+	if (cursor < tagStart) return null;
+	if (cursor <= tagStart + (tag.data as IdentifierData).name.byteLength) return { element, onTag: true, editing: null };
+	let i = tagStart + (element.data as JSXElementData).jsxTag.byteLength;
+	while (i < cursor) {
+		const c = source.byteAt(i);
+		if (c == ">".code || c == "/".code) return null;
+		if (c == "\"".code || c == "'".code || c == "{".code) {
+			const end = jsxValueEnd(source, i);
+			if (cursor <= end) return null;
+			i = end + 1;
+			continue;
+		}
+		i += 1;
+	}
+	let editing: Node | null = null;
+	for (const attr of (element.data as JSXElementData).jsxAttrs) {
+		if (attr.kind != NodeKind.JSXAttribute) continue;
+		const start = sgGetLineOffset(source, attr.location.line) + attr.location.column - 1;
+		if (cursor >= start && cursor <= start + (attr.data as JSXAttributeData).jsxAttrName.byteLength) editing = attr;
+	}
+	return { element, onTag: false, editing };
+}
+
+// The offset of the byte closing the attribute value opened at `open`: its quote, or the brace
+// balancing it (strings inside braces skipped).
+function jsxValueEnd(source: string, open: int32): int32 {
+	const first = source.byteAt(open);
+	let quote = first == "{".code ? 0 : first;
+	let depth = 0;
+	let i = open + 1;
+	while (i < source.byteLength) {
+		const c = source.byteAt(i);
+		if (quote != 0) {
+			if (c == "\\".code) i += 1;
+			else if (c == quote) {
+				if (first != "{".code) return i;
+				quote = 0;
+			}
+		} else if (c == "\"".code || c == "'".code || c == "`".code) {
+			quote = c;
+		} else if (c == "{".code) {
+			depth += 1;
+		} else if (c == "}".code) {
+			if (depth == 0) return i;
+			depth -= 1;
+		}
+		i += 1;
+	}
+	return i;
+}
+
+// TS completes a tag from IntrinsicElements' properties and an attribute from the props type's
+// properties, leaving out the attributes already written except the one being edited. Each
+// candidate carries the declaring type's location, from which the handler reads the field doc.
+export function sgCompleteJsx(ctx: CheckerContext, site: SgJsxSite, prefix: string): SgSuggest[] {
+	const result: SgSuggest[] = [];
+	const anchor = site.onTag ? site.element.typeExpr!.location : site.element.location;
+	const contextual = sgQueryContextualTypeAt(ctx, anchor.line, anchor.column);
+	if (contextual == null || contextual.symType == null) return result;
+	const t = peelToStructOrUnion(contextual.symType);
+	if (t == null || t.kind != TypeKind.Struct || t.typeNames == null) return result;
+	const container = declaringSymOf(contextual.symType);
+	const written = new HashSet<string>();
+	if (!site.onTag) {
+		for (const attr of (site.element.data as JSXElementData).jsxAttrs) {
+			if (attr.kind == NodeKind.JSXAttribute && attr != site.editing) written.add((attr.data as JSXAttributeData).jsxAttrName);
+		}
+	}
+	for (let fi = 0; fi < t.typeNames.length; fi += 1) {
+		const name = t.typeNames[fi];
+		if (written.has(name)) continue;
+		const ps = sgPrefixMatch(prefix, name);
+		if (ps <= 0) continue;
+		const found = fieldDeclarer(container, name);
+		const declarer = found != null ? found : container;
+		result.push({
+			sym: null, name, kind: SymbolKind.Property,
+			symType: fi < t.typeChildren.length ? t.typeChildren[fi] : noneType(),
+			location: declarer != null && declarer.location != null ? declarer.location : makeLoc(0, 0),
+			modulePath: declarer != null ? declarer.modulePath : "",
+			containerName: declarer != null ? declarer.name : "",
+			prefixScore: ps, scopeDepth: 0, contextFit: true,
+			isExported: false, isMutable: false, usageCount: 0,
+		});
 	}
 	return result;
 }
@@ -3707,6 +3823,21 @@ test "doc comment JSDoc multi-line" {
 	const src = "/**\n * Parses the input string.\n * @param text A valid string.\n * @returns The parsed value.\n */\nfunction parse(text: string): number { return 0; }";
 	const comment = sgExtractDocComment(src, 6);
 	assert comment == "Parses the input string.\n@param text A valid string.\n@returns The parsed value.";
+}
+
+test "doc comment after non-ASCII text keeps its own words" {
+	const src = "const café = \"crème\";\n/** Adds two numbers. */\nfunction add(x: number): number { return x; }";
+	assert sgExtractDocComment(src, 3) == "Adds two numbers.";
+}
+
+test "doc comment with non-ASCII words keeps every line whole" {
+	const src = "// ünïcödé\n/**\n * Đọc dữ liệu.\n * @param text chuỗi vào.\n */\nfunction parse(text: string): number { return 0; }";
+	assert sgExtractDocComment(src, 6) == "Đọc dữ liệu.\n@param text chuỗi vào.";
+}
+
+test "import path after non-ASCII text on the line" {
+	const src = "const ö = 1; import { x } from \"std/bu";
+	assert sgExtractImportPath(src, 1, src.byteLength + 1) == "std/bu";
 }
 
 test "doc comment JSDoc empty body" {

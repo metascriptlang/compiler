@@ -21,6 +21,7 @@ import {
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports } from "../../../checker/context";
+import { sgJsxSiteAt, sgCompleteJsx, sgFieldDeclLine } from "../../../checker/suggest";
 import { handleDidOpen, handleDidChange } from "./lifecycle";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
@@ -274,6 +275,19 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const program = dbParse(db, path);
 	if (program == null) return lspResponse(id, "[]");
 
+	// Inside a JSX opening tag: the tag from IntrinsicElements plus the names in scope, an
+	// attribute from the props type only.
+	const jsxSite = sgJsxSiteAt(program, source, pos.line, pos.col + 1);
+	if (jsxSite != null) {
+		const jsxCtx = dbTypeCheck(db, path);
+		if (jsxCtx == null) return lspResponse(id, "[]");
+		const jsxItems = formatJsxCompletionItems(sgCompleteJsx(jsxCtx, jsxSite, prefix), db, path, program);
+		if (jsxSite.onTag) {
+			for (const item of formatCompletionItemsArray(sgGetCompletionCandidates(jsxCtx, SgCompletionKind.Identifier, prefix, null, null), db, path)) jsxItems.push(item);
+		}
+		return lspResponse(id, joinJsonItems(jsxItems));
+	}
+
 	// AST-based context detection FIRST — import contexts bypass all caches
 	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
 
@@ -506,6 +520,22 @@ function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path
 			doc = sgBuiltinDoc(item.name, item.containerName);
 		}
 		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, ""));
+	}
+	return result;
+}
+
+// A JSX candidate's location is its declaring type's; the doc sits on that type's field line.
+function formatJsxCompletionItems(candidates: SgSuggest[], db: TransAmDb, path: string, program: Node): string[] {
+	const result: string[] = [];
+	for (const item of candidates) {
+		const external = item.modulePath != "" && item.modulePath != path;
+		if (external) lspEnsureFileLoaded(db, item.modulePath);
+		const declared = external ? dbParse(db, item.modulePath) : program;
+		let doc = "";
+		if (declared != null && item.location.line > 0) {
+			doc = sgExtractDocComment(dbGetSource(db, external ? item.modulePath : path), sgFieldDeclLine(declared, item.location, item.name));
+		}
+		result.push(lspFmtCompletionItem(item.name, lspCompletionItemKind(item.kind, false), sgTypeToString(item.symType), lspCompletionSortText(item), false, "", doc, ""));
 	}
 	return result;
 }

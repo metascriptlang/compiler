@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -21,7 +21,7 @@ import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef, isAtomicRef, isLockedRef } from "../../checker/types";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
 import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 import { enumMemberLiteral } from "../../checker/constFold";
@@ -160,6 +160,9 @@ export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumN
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
+	if (gen.multiFile && sym.symbolKind == SymbolKind.Module && sym.modulePath != "" && sym.modulePath != gen.currentModulePath && !gen.ownNamespaceAliases.has(name)) {
+		return recordNamespaceImport(gen, sym.modulePath, safeJsName(name));
+	}
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
@@ -834,6 +837,22 @@ export function emitSpreadExpr(gen: JSGenerator, node: Node): void {
 export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	if (emitCollectionNew(gen, node)) return;
 	const d = node.data as NewExprData;
+	if (isAtomicRef(node.nodeType) && d.newArguments.length == 1) {
+		if (!isLockedRef(node.nodeType)) {
+			emit(gen, "(");
+			emitNode(gen, d.newArguments[0]);
+			emit(gen, ")");
+			return;
+		}
+		if (!gen.helpers.lockedRuntime) {
+			gen.helpers.lockedRuntime = true;
+			gen.staticSlots.push("class msLocked { constructor(value) { this.value = value; this.held = false; } }\n");
+		}
+		emit(gen, "new msLocked(");
+		emitNode(gen, d.newArguments[0]);
+		emit(gen, ")");
+		return;
+	}
 	const arrayType = arrayOf(node.nodeType);
 	if (arrayType != null && d.newArguments.length == 1) {
 		const zero = jsDefaultValue(arrayType.typeReturn);

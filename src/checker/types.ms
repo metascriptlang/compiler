@@ -3678,7 +3678,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.StringLiteral) return true;
 	if (literalUnionBase(t) != null) return true;
 	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array) return true;
-	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && isStructType(t.typeExtra);
+	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && (isStructType(t.typeExtra) || peelToStructOrUnion(t.typeExtra)?.kind == TypeKind.Union);
 	return false;
 }
 
@@ -5357,6 +5357,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.
+	if (isAtomicRef(t) && t.typeReturn != null) return "Arc<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.Ref && !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn)) {
 		return "Ref<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	}

@@ -1386,6 +1386,7 @@ export class CheckerContext {
 	runtimeConverters: Symbol[];
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
+	jsxConsumer: Symbol | null;
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	inferredReturnStmts: Node[];  // ReturnStmts pending refit once the joined inferred return is known
 	inferredReturnTries: Node[];
@@ -1483,6 +1484,7 @@ export function createContext(): CheckerContext {
 		runtimeConverters: [],
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
+		jsxConsumer: null,
 		inferredReturn: inferredType(),
 		inferredReturnStmts: [],
 		inferredReturnTries: [],

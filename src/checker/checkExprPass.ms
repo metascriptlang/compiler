@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
@@ -490,12 +490,65 @@ export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null 
 }
 
 function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
+	if (node.typeExpr == null) return;
+	const tag = node.typeExpr;
+	const base = (tag.data as IdentifierData).name;
+	const intrinsics = ctx.jsxMacroArgDepth > 0 ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
+	if (intrinsics != null) ensureShaped(intrinsics, ctx);
 	const sym = jsxComponentSym(ctx, node);
-	if (sym == null) return;
-	const base = (node.typeExpr!.data as IdentifierData).name;
-	node.typeExpr!.resolvedSym = sym;
-	const loc = node.typeExpr!.location;
-	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+	if (sym != null) {
+		tag.resolvedSym = sym;
+		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+		const fn = sym.symbolType;
+		if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
+	} else if (intrinsics != null) {
+		const attrs = recordJsxProperty(ctx, intrinsics.symbolType, base, tag.location);
+		if (attrs != null) recordJsxAttrs(ctx, node, attrs);
+	}
+	// The tag's contextual type (TS completes a tag from IntrinsicElements' properties). Its span
+	// includes the column after the name, where the cursor sits while the tag is typed; recorded
+	// after the tag's own symbol so hover keeps finding that first.
+	if (intrinsics != null) {
+		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength + 1,
+			null, intrinsics.symbolType, SymbolKind.Interface, "", intrinsics.name, false);
+	}
+}
+
+// TS resolves a lowercase tag as a property of `JSX.IntrinsicElements`, taking `JSX` from the
+// module of the element's factory, else from scope; the consumer macro is that factory here.
+function jsxNamespaceMember(ctx: CheckerContext, name: string): Symbol | null {
+	const consumer = ctx.jsxConsumer;
+	let ns: Symbol | null = null;
+	if (consumer != null && consumer.modulePath != "") {
+		const exported = findExportedSymbol(ctx.exportRegistry, consumer.modulePath, "JSX");
+		if (exported != null) ns = exported.sym;
+	}
+	if (ns == null) ns = lookupSymbol(ctx.table, "JSX");
+	if (ns == null || ns.symbolKind != SymbolKind.Module || ns.modulePath == "") return null;
+	const member = findExportedSymbol(ctx.exportRegistry, ns.modulePath, name);
+	return member != null ? member.sym : null;
+}
+
+function recordJsxProperty(ctx: CheckerContext, owner: Type, name: string, loc: SourceLocation): Type | null {
+	const t = getProperty(peelToStructOrUnion(owner), name);
+	if (isUnresolvedType(t)) return null;
+	const container = declaringSymOf(owner);
+	const declarer = fieldDeclarer(container, name);
+	const fieldSym = makeSymbolState(name, SymbolKind.Property, t, false, SymbolState.Shaped);
+	inheritContainerInfo(fieldSym, container);
+	sgRecordSym(ctx, loc.line, loc.column, loc.column + name.byteLength, fieldSym, t, SymbolKind.Property, name, declarer != null ? declarer.name : "", false);
+	return t;
+}
+
+// An element's attributes are the properties of its props type: an intrinsic tag's field type,
+// a function component's first parameter. The props type is also the contextual type of the
+// attributes, recorded at the element's `<` for attribute completion.
+function recordJsxAttrs(ctx: CheckerContext, node: Node, props: Type): void {
+	const at = node.location;
+	sgRecordSym(ctx, at.line, at.column, at.column + 1, null, props, SymbolKind.Interface, "", "", false);
+	for (const attr of (node.data as JSXElementData).jsxAttrs) {
+		if (attr.kind == NodeKind.JSXAttribute) recordJsxProperty(ctx, props, (attr.data as JSXAttributeData).jsxAttrName, attr.location);
+	}
 }
 
 
@@ -1000,6 +1053,7 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 function optionalRootOf(end: Node): Node | null {
 	let link: Node = end;
 	while (true) {
+		if (link.flags.has(NodeFlag.OptionalLink)) return link;
 		if (link.kind == NodeKind.MemberExpr) {
 			const d = link.data as MemberExprData;
 			if (d.isOptional) return link;
@@ -1018,7 +1072,28 @@ function optionalRootOf(end: Node): Node | null {
 }
 
 function startsOptionalChain(node: Node): boolean {
-	return node.flags.has(NodeFlag.OptionalChainEnd) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+	return node.flags.has(NodeFlag.OptionalChainEnd) || node.flags.has(NodeFlag.OptionalLink) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+}
+
+function optionalOperand(root: Node): Node {
+	return match (root.kind) {
+		NodeKind.CallExpr => (root.data as CallExprData).callee,
+		NodeKind.ArrayAccess => (root.data as ArrayAccessData).array,
+		_ => (root.data as MemberExprData).object,
+	};
+}
+
+function setOptionalOperand(root: Node, operand: Node): void {
+	match (root.kind) {
+		NodeKind.CallExpr => { (root.data as CallExprData).callee = operand; },
+		NodeKind.ArrayAccess => { (root.data as ArrayAccessData).array = operand; },
+		_ => { (root.data as MemberExprData).object = operand; },
+	}
+}
+
+function endOptionalRoot(root: Node): void {
+	root.flags = root.flags.excl(NodeFlag.OptionalLink);
+	if (root.kind == NodeKind.MemberExpr) (root.data as MemberExprData).isOptional = false;
 }
 
 function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -1028,8 +1103,7 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 		checkExprKind(ctx, node, expectedType);
 		return;
 	}
-	const rd = root.data as MemberExprData;
-	const tested = rd.object;
+	const tested = optionalOperand(root);
 	checkInTypeSlot(ctx, tested);
 	if (tested.nodeType == null) {
 		checkExprKind(ctx, node, expectedType);
@@ -1037,13 +1111,13 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	if (!isNullableShape([tested.nodeType])) {
 		checkExprKind(ctx, node, expectedType);
-		rd.isOptional = false;
+		endOptionalRoot(root);
 		return;
 	}
 	const loc = node.location;
 	const probe = readsOnlyNames(tested) ? cloneNodeKeepSem(tested) : tested;
-	rd.object = createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location);
-	rd.isOptional = false;
+	setOptionalOperand(root, createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location));
+	endOptionalRoot(root);
 	const chain = createNodeAt(node.kind, node.data, loc);
 	chain.flags = node.flags;
 	chain.typeArg = node.typeArg;
@@ -3332,7 +3406,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 	}
 	// @import args are pure syntax (not evaluated) — skip type-checking
 	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
-	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs); }
+	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs, invokedMacroSym(ctx, node)); }
 	// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
 	// with concrete types. After mono clones a generic body, replaceTypeVars
 	// substitutes T→concrete in arg.nodeType. The re-check then hits this
