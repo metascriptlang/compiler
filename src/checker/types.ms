@@ -3486,7 +3486,7 @@ function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
 // each such type here and the cycle classification walks them, as the reference walks the
 // subtypes of a non-final object; a slot nothing else was accepted into stays closed.
 export function noteHeldBeyond(slot: Type, held: Type): void {
-	if (slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return;
+	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return;
 	const entry = heldEntry(slot, true)!;
 	if (entry.seen.has(held)) return;
 	entry.seen.add(held);
@@ -3494,7 +3494,7 @@ export function noteHeldBeyond(slot: Type, held: Type): void {
 }
 
 export function heldBeyond(slot: Type): Type[] {
-	if (slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return [];
+	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return [];
 	const entry = heldEntry(slot, false);
 	return entry != null ? entry.held : [];
 }

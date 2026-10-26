@@ -499,7 +499,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (ancestor != null) return isAssignable(ancestor, target);
 		const sBody = structBodyOf(source);
 		const tBody = structBodyOf(target);
-		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target));
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target));
 	}
 
 	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
@@ -1114,9 +1114,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	if (!objectLayoutFits(source, target, isReadonlyView(target))) return false;
-	noteHeldBeyond(target, source);
-	return true;
+	return heldLayoutFits(source, target, isReadonlyView(target));
 }
 
 // A writable target field aliases the source's slot, so it must hold the same type
@@ -1539,7 +1537,13 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	const s = unwrapRefBase(sBody);
 	const t = unwrapRefBase(tBody);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return isAssignable(sBody, tBody);
-	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t, isReadonlyView(target));
+	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(s, t, isReadonlyView(target));
+}
+
+function heldLayoutFits(source: Type, target: Type, readonlyTarget: boolean): boolean {
+	if (!objectLayoutFits(source, target, readonlyTarget)) return false;
+	noteHeldBeyond(target, source);
+	return true;
 }
 
 function sameEnumMember(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {

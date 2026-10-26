@@ -1,10 +1,10 @@
 // @xfail(raiser): the Raiser VM has no actors
 // @skip-js: Arc<T> is a C-backend atomic-rc box; no js binding
 // @maxrss: 20
-// @stdout: undelivered stopped=400 reaped=400 queued=400
+// @stdout: undelivered stopped=400 reaped=400 queued=400 call=400
 // @serial
 // note: a message its actor never runs (sent after a stop, to a reaped pid, or left in the
-// mailbox when the actor stops) returns the Arc reference the send took and frees the string
+// mailbox when the actor stops, or a CALL to a stopped actor) returns the Arc reference the send took and frees the string
 // copy it carries (ULTRALOCK M7). Each message holds a ~16 KB Arc payload and a ~16 KB string,
 // so the old compiler, which released neither, peaked at 48 MB here against 10 MB fixed (c lane, Linux); flat RSS is the oracle.
 // The moved-graph argument of the same paths is pinned by actorDropReleasesUndeliveredArgs.
@@ -16,6 +16,7 @@ struct Payload { buf: string; n: int32; }
 actor Sink {
 	total: int32 = 0;
 	absorb(p: Arc<Payload>, s: string): void { this.total = this.total + p.n + s.length; }
+	weigh(p: Arc<Payload>, s: string): int32 { return p.n + s.length; }
 	park(): void { const r = await spawn(() => 1); this.total = this.total + r; }
 }
 
@@ -56,8 +57,15 @@ async function main(): Promise<void> {
 		queued += 1;
 	}
 
+	let call = 0;
+	for (let i = 0; i < 400; i += 1) {
+		const s = new Sink();
+		stop(s.pid, ExitReason.Normal);
+		const k = try await s.weigh(payload(i), `${big}${i}`) catch -1;
+		if (k < 0) call += 1;
+	}
 	await sleepAsync(20);
-	console.log(`undelivered stopped=${stopped} reaped=${reaped} queued=${queued}`);
+	console.log(`undelivered stopped=${stopped} reaped=${reaped} queued=${queued} call=${call}`);
 }
 
 await main();

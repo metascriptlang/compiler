@@ -89,6 +89,44 @@ console.log(s.area);
 	assert cyclicFlag(c, "Square") == "cyclic";
 }
 
+const SELF_RING = `interface Shape { area: number; }
+class Ring { area: number = 1; next: Ring | null = null; }
+`;
+
+function traces(c: string, name: string): boolean {
+	const line = typeInfoOf(c, name);
+	return line != "" && !line.contains(".traceFn = NULL");
+}
+
+test "E2E C: an interface whose implementer forms its own cycle releases through the cyclic path" {
+	const c = compiled(SELF_RING + `class Holder { shape: Shape | null = null; }
+const h = new Holder();
+const r = new Ring();
+r.next = r;
+h.shape = r;
+console.log(h.shape.area);
+`);
+	assert cyclicFlag(c, "Holder") == "acyclic";
+	assert cyclicFlag(c, "Ring") == "cyclic";
+	assert traces(c, "Holder");
+}
+
+test "E2E C: two interfaces held in each other take the cycle of the implementer behind both" {
+	const c = compiled(SELF_RING + `interface Sized { area: number; }
+class Holder { slot: Sized | null = null; }
+const r = new Ring();
+r.next = r;
+const s: Shape = r;
+const z: Sized = s;
+const back: Shape = z;
+const h = new Holder();
+h.slot = z;
+console.log(back.area + h.slot.area);
+`);
+	assert cyclicFlag(c, "Holder") == "acyclic";
+	assert traces(c, "Holder");
+}
+
 const ACYCLIC = `interface Shape { area: number; }
 class Square implements Shape { area: number = 4; }
 class Circle implements Shape { area: number = 3; radius: number = 1; }

@@ -336,9 +336,8 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 	selfDecl.resolvedSym = selfSym;
 	stmts.push(selfDecl);
 
-	let msgKind = 0;
-	for (const m of methods) {
-		if (m.kind != NodeKind.MethodDecl) continue;
+	for (let msgKind = 0; msgKind < methods.length; msgKind += 1) {
+		const m = methods[msgKind];
 		const md = m.data as MethodDeclData;
 		const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
 		// Condition: msMsgKind(_dmsg) === N
@@ -420,7 +419,6 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 			alternate: emptyBlock,
 		}, syntheticToken(loc));
 		stmts.push(ifNode);
-		msgKind = msgKind + 1;
 	}
 	return makeBlock(stmts, loc);
 }
@@ -551,8 +549,7 @@ function boundaryReleases(methodName: string, params: string[], paramSyms: Symbo
 	return releases;
 }
 
-function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
-	let msgKind = 0;
+function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lowered: ActorLowered, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
 	for (const member of d.actorBody) {
 		let m = member;
 		let decorators: Node[] = [];
@@ -631,8 +628,8 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 			const methodRetType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : voidType();
 			const proxySyms = actorParamSyms(ctx, md.methodParams, methodParamTypes);
 			const proxyBody = isVoid
-				? buildSendProxy(msgKind, proxySyms, methodParamTypes, lowered.drop, ctx, loc)
-				: buildCallProxy(msgKind, proxySyms, methodParamTypes, methodRetType, lowered.drop, ctx, loc);
+				? buildSendProxy(messageKind(methods, m), proxySyms, methodParamTypes, lowered.drop, ctx, loc)
+				: buildCallProxy(messageKind(methods, m), proxySyms, methodParamTypes, methodRetType, lowered.drop, ctx, loc);
 			const proxyParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
 			// Proxy returns the reply Promise<T>, not T directly. The user-visible
 			// type at the call site MUST be Promise<T> so:
@@ -686,7 +683,6 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 			} else {
 				result.push(proxyNode);
 			}
-			msgKind = msgKind + 1;
 		}
 		if (m.kind == NodeKind.ConstructorDecl) {
 			const cd = m.data as ConstructorDeclData;
@@ -770,12 +766,9 @@ function dropFnType(): Type {
 function emitActorDrop(name: string, methods: Node[], dropSym: Symbol, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
 	const dropParamSyms = actorParamSyms(ctx, ["_dmsg"], [createPtr(voidType())]);
 	const stmts: Node[] = [];
-	let msgKind = 0;
-	for (const m of methods) {
+	for (let kind = 0; kind < methods.length; kind += 1) {
+		const m = methods[kind];
 		const md = m.data as MethodDeclData;
-		if (isLifecycleHook(md.methodName)) continue;
-		const kind = msgKind;
-		msgKind = msgKind + 1;
 		if (md.methodParams.length <= 1) continue;
 		const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
 		const types = m.nodeType != null ? m.nodeType.typeChildren : [];
@@ -827,9 +820,8 @@ function emitActorDrop(name: string, methods: Node[], dropSym: Symbol, ctx: Tran
 	result.push(fnNode);
 }
 
-// ===== Collect methods from actor body (unwrapping decorators) =====
-
-function collectActorMethods(d: ActorDeclData): Node[] {
+// The methods a message dispatches, in declaration order; a method's message kind is its index here.
+function messageMethods(d: ActorDeclData): Node[] {
 	const methods: Node[] = [];
 	for (const member of d.actorBody) {
 		let m = member;
@@ -837,9 +829,15 @@ function collectActorMethods(d: ActorDeclData): Node[] {
 			const dd = m.data as DecoratedDeclData;
 			if (dd.decoratedNode != null) m = dd.decoratedNode;
 		}
-		if (m.kind == NodeKind.MethodDecl) methods.push(m);
+		if (m.kind == NodeKind.MethodDecl && !isLifecycleHook((m.data as MethodDeclData).methodName)) methods.push(m);
 	}
 	return methods;
+}
+
+function messageKind(methods: Node[], m: Node): number {
+	const kind = methods.indexOf(m);
+	if (kind < 0) throw new Error(`internal: actor method '${(m.data as MethodDeclData).methodName}' has no message kind`);
+	return kind;
 }
 
 // ===== ActorDecl → struct + handlers + proxies + dispatch =====
@@ -869,8 +867,8 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const stateClass = emitActorStruct(node, d, ctx, loc);
 	result.push(stateClass);
 
-	const methods = collectActorMethods(d);
-	emitActorMethods(d, name, lowered, ctx, loc, result);
+	const methods = messageMethods(d);
+	emitActorMethods(d, name, methods, lowered, ctx, loc, result);
 
 	// Emit system message handler if actor has onExit or onDown
 	const onExit = lowered.onExit;

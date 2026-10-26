@@ -30,7 +30,7 @@ import { hoistGuarded, lowerGuardedTernary, expandConditionStmt, KindHoister } f
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
-	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
+	makeExprStmt, makeOwningTryCatch, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
@@ -183,7 +183,7 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext, run: Tr
 		const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
 		const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
 		const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
-		hoisted.push(makeTryCatch(tryBlock, makeCatchSym(ctx, "$e"), catchBlock, makeBlock([], loc), loc));
+		hoisted.push(makeOwningTryCatch(ctx, tryBlock, catchBlock, loc));
 		const ref = makeIdentResolved(sym, loc);
 		ref.nodeType = node.nodeType != null ? node.nodeType : resType;
 		return ref;
