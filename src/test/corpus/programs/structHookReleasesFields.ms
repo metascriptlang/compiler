@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: field outer=100 inner=100
 // @stdout: array outer=100 inner=300
