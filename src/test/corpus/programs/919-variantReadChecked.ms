@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: narrowed
 // @xfail(danger): --danger elides the variant field check, so the read of the other variant is undefined behaviour
-// @xfail(raiser): Raiser has no variant field check; the read yields nil
 enum K { Num, Str }
 type D = match (kind: K) {
 	K.Num => { value: float64 },

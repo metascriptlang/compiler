@@ -556,6 +556,9 @@ export function layoutOperand(s: RaiserCompState, fields: string[], kinds: Raise
 	return s.classTypes.length;
 }
 
+export const RAISER_KIND_CLOSURE: int32 = 64;
+export const RAISER_KIND_PLAIN_OBJECT: int32 = 65;
+
 export const CLOSURE_PAIR: string[] = ["fn", "env"];
 export const CLOSURE_PAIR_KINDS: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Ref];
 
