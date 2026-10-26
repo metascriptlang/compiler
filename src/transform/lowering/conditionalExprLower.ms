@@ -38,10 +38,10 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
-import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive, isStringLike } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -735,7 +735,9 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function compoundReadsTargetFirst(bd: BinaryExprData, rhsPre: Node[], writes: Symbol[], ctx: TransformContext): boolean {
-	if (ctx.jsBackend || bd.operator == "=" || !isNumeric(bd.left.nodeType)) return false;
+	if (ctx.jsBackend || bd.operator == "=") return false;
+	if (bd.operator == "+=" && isStringLike(bd.left.nodeType)) return true;
+	if (!isNumeric(bd.left.nodeType)) return false;
 	if (readsAnyOf(bd.left, writes) || holdsCall(bd.right)) return true;
 	for (const s of rhsPre) {
 		if (holdsCall(s)) return true;
@@ -757,7 +759,11 @@ function readCompoundTarget(bd: BinaryExprData, pre: Node[], ctx: TransformConte
 	pre.push(decl);
 	const op = bd.operator.slice(0, bd.operator.length - 1);
 	const target = bd.left.nodeType!;
-	if (isBitwiseCompound(bd.operator) && !isIntegerType(target)) {
+	if (isStringLike(target)) {
+		const concat = makeCall(runtimeRef("msStringConcat", loc), [makeIdentResolved(sym, loc), bd.right], loc);
+		concat.nodeType = target;
+		bd.right = concat;
+	} else if (isBitwiseCompound(bd.operator) && !isIntegerType(target)) {
 		const bits = makeBinary(makeHiddenStdConv(makeIdentResolved(sym, loc), int32Type(), loc), op, bd.right, loc);
 		bits.nodeType = op == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
 		bd.right = makeHiddenStdConv(bits, target, loc);

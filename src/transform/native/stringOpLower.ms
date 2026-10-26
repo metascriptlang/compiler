@@ -21,11 +21,11 @@
 // isSameIdent handles Identifier, MemberExpr, ArrayAccess, NumberLiteral —
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
-import { Node, NodeKind, SourceLocation, Symbol, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, UpdateExprData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, Symbol, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, UpdateExprData, ExprStmtData, TypeKind } from "../../ast/node";
 import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance, stringType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode, isFuncBoundary } from "../walker";
-import { makeCall, makeNumber, makeHiddenAddr, makeAssign, runtimeRef, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
 import { clonePlace } from "../place";
 import { anyDescendant, Visit } from "../../ast/visitor";
 import { isAssignOp } from "../../ast/operators";
@@ -36,13 +36,20 @@ import { liftWrites } from "../lowering/lambdaLiftingEnv";
 
 export function lowerStringOps(program: Node, ctx: TransformContext): Node {
 	const w = liftWrites(ctx);
-	walkNode(program, (node: Node): Node => rewriteStringOp(node, w, ctx));
+	const readFirst: Node[] = [];
+	walkNode(program, (node: Node): Node => rewriteStringOp(node, w, readFirst, ctx));
+	for (const n of readFirst) { concatReadingTargetFirst(n, ctx); }
 	return program;
 }
 
 // ===== Rewriter =====
 
-function rewriteStringOp(node: Node, w: WriteEffects, ctx: TransformContext): Node {
+function rewriteStringOp(node: Node, w: WriteEffects, readFirst: Node[], ctx: TransformContext): Node {
+	if (node.kind == NodeKind.ExprStmt) {
+		const at = readFirst.indexOf((node.data as ExprStmtData).expr);
+		if (at >= 0) readFirst.splice(at, 1);
+		return node;
+	}
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 
@@ -143,7 +150,11 @@ function rewriteStringOp(node: Node, w: WriteEffects, ctx: TransformContext): No
 	// We do the same rewrite here so DRC sees a normal call (no special-casing)
 	// and codegen emits a normal call (no special-casing).
 	if (d.operator == "+=" && isStringTyped(d.left)) {
-		if (rightSideWritesTarget(w, d.left, d.right)) return concatReadingTargetFirst(node, d, ctx);
+		if (rightSideWritesTarget(w, d.left, d.right)) {
+			d.right = coercePartToString(d.right, loc);
+			readFirst.push(node);
+			return node;
+		}
 		const addrOf = makeHiddenAddr(d.left, loc);
 		const code = asAsciiCharCode(d.right);
 		if (code >= 0) {
@@ -210,17 +221,17 @@ function writesRoot(w: WriteEffects, n: Node, roots: Symbol[]): boolean {
 	return root != null && roots.includes(root!);
 }
 
-function concatReadingTargetFirst(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
+function concatReadingTargetFirst(node: Node, ctx: TransformContext): void {
+	const d = node.data as BinaryExprData;
 	const loc = node.location;
 	if (anyDescendant(d.left, (n: Node): Visit => n.kind == NodeKind.CallExpr ? Visit.Hit : Visit.Descend)) {
-		reportTransformError(ctx, "a string `+=` whose target calls a routine has a right side that can write the target; bind the target's object to a const first", loc);
-		return node;
+		reportTransformError(ctx, "a string `+=` used as a value, whose target calls a routine, has a right side that can write the target; write the `+=` as its own statement", loc);
+		return;
 	}
-	const concat = makeCall(runtimeRef("msStringConcat", loc), [clonePlace(d.left, loc), coercePartToString(d.right, loc)], loc);
+	const concat = makeCall(runtimeRef("msStringConcat", loc), [clonePlace(d.left, loc), d.right], loc);
 	concat.nodeType = d.left.nodeType;
-	const assign = makeAssign(d.left, concat, loc);
-	assign.nodeType = node.nodeType;
-	return assign;
+	d.operator = "=";
+	d.right = concat;
 }
 
 // ===== String Index Assignment =====
