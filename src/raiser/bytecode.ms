@@ -580,16 +580,22 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
-// A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
-// an instruction built without a slot makes the array that holds anything.
+// A NewArray's slot is 0 for an array of tagged values; otherwise bits 0-2 hold the element class plus one and
+// bits 3-5 the element's storage width (ELEM_*), so an instruction built without a slot makes the array that
+// holds anything and one built without a width holds 8-byte elements.
 // A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
 // An uncounted element (a cursor or a pointer to an uncounted type, the checker's isUncountedElement) adds
 // ARRAY_UNCOUNTED_SLOT: the array borrows its elements, so its destroy and copy never count them.
-export const ARRAY_CYCLIC_SLOT = 16;
-export const ARRAY_UNCOUNTED_SLOT = 32;
+export const ARRAY_CYCLIC_SLOT = 64;
+export const ARRAY_UNCOUNTED_SLOT = 128;
+const ARRAY_WIDTH_SHIFT = 3;
 
-export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false): number {
-	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + (cyclic ? ARRAY_CYCLIC_SLOT : 0) + (uncounted ? ARRAY_UNCOUNTED_SLOT : 0);
+// How a Word, Float or Bool element sits in memory: a Word element is a signed or unsigned integer of the
+// width named, a Float element a 64-bit or (F32) 32-bit float, any other element 8 bytes.
+export enum ElemWidth { Wide, I32, I16, I8, U32, U16, U8, F32 }
+
+export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false, width: ElemWidth = ElemWidth.Wide): number {
+	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + ((width as number) << ARRAY_WIDTH_SHIFT) + (cyclic ? ARRAY_CYCLIC_SLOT : 0) + (uncounted ? ARRAY_UNCOUNTED_SLOT : 0);
 }
 
 export function slotArrayCyclic(slot: number): boolean {
@@ -601,9 +607,13 @@ export function slotArrayUncounted(slot: number): boolean {
 }
 
 export function slotArrayClass(slot: number): RaiserRegClass {
-	const base = slot & 15;
+	const base = slot & 7;
 	if (base < 0 || base > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
 	return base == 0 ? RaiserRegClass.Dyn : (base - 1) as RaiserRegClass;
+}
+
+export function slotArrayWidth(slot: number): ElemWidth {
+	return ((slot >> ARRAY_WIDTH_SHIFT) & 7) as ElemWidth;
 }
 
 export function carriesSlot(op: RaiserOpcode): boolean {

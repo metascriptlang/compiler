@@ -244,7 +244,7 @@ export function copyBytes(dst: int64, src: int64, size: int64): void {
 }
 
 @inline
-function zeroRange(a: int64, size: int64): void {
+export function zeroRange(a: int64, size: int64): void {
 	memset(a as Ptr<void>, 0, size as uint64);
 }
 
@@ -442,6 +442,11 @@ export function newCell(mem: VmMemory, size: int64, align: int64, typeIndex: int
 	st64(cell - REF_HEADER_SIZE + 8, typeIndex + 1);
 	st64(cell - REF_HEADER_SIZE + 16, (total * 4294967296) | 0xFFFFFFFF);
 	return cell;
+}
+
+@inline
+export function isLiveCell(cell: int64): boolean {
+	return ld64(cell - REF_HEADER_SIZE - 8) == STATE_CELL;
 }
 
 @inline

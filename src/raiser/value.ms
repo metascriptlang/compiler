@@ -1,10 +1,10 @@
-import { WordSeq, wlen, wat, wput, wpush, wshrink, wclear } from "./vmSeq";
+import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto } from "./vmSeq";
 // Raiser VM — Value representation
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
-import { RaiserRegClass, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory } from "./memory";
+import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
+import { VmMemory, createVmMemory, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex } from "./memory";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -39,6 +39,7 @@ export enum RaiserHeapKind {
 	Object,
 	Future,       // the VM-wide future table
 	Box,
+	Seq,          // a typed array: the address of its cell in the running strand's VM memory
 }
 
 const HEAP_KIND_BITS = 3;
@@ -70,7 +71,7 @@ export function handleKind(handle: int64): RaiserValueKind {
 	return match (handleHeapKind(handle)) {
 		RaiserHeapKind.None => RaiserValueKind.Nil,
 		RaiserHeapKind.String | RaiserHeapKind.ConstString => RaiserValueKind.String,
-		RaiserHeapKind.Array => RaiserValueKind.Array,
+		RaiserHeapKind.Array | RaiserHeapKind.Seq => RaiserValueKind.Array,
 		RaiserHeapKind.Object => RaiserValueKind.Object,
 		RaiserHeapKind.Future => RaiserValueKind.Future,
 		RaiserHeapKind.Box => RaiserValueKind.Box,
@@ -78,7 +79,7 @@ export function handleKind(handle: int64): RaiserValueKind {
 }
 
 function checkHeapKind(handle: int64): void {
-	if (handleTag(handle) > (RaiserHeapKind.Box as int64)) throw new Error(`internal: handle ${handle} names no heap kind`);
+	if (handleTag(handle) > (RaiserHeapKind.Seq as int64)) throw new Error(`internal: handle ${handle} names no heap kind`);
 }
 
 // The value a ref register's handle stands for.
@@ -91,7 +92,7 @@ export function handleValue(h: int64): RaiserValue {
 export function handleAgrees(kind: RaiserValueKind, handle: int64): boolean {
 	const tag = handleTag(handle);
 	return match (kind) {
-		RaiserValueKind.ElemAddr | RaiserValueKind.Array => tag == (RaiserHeapKind.Array as int64),
+		RaiserValueKind.ElemAddr | RaiserValueKind.Array => tag == (RaiserHeapKind.Array as int64) || tag == (RaiserHeapKind.Seq as int64),
 		RaiserValueKind.FieldAddr | RaiserValueKind.Object => tag == (RaiserHeapKind.Object as int64),
 		RaiserValueKind.String => tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64),
 		RaiserValueKind.Future => tag == (RaiserHeapKind.Future as int64),
@@ -376,7 +377,20 @@ export function heapStringLive(arr: RaiserArrayHeap): number {
 // The handle of every live string cell on the heap, for the ledger.
 export function heapStringHandles(arr: RaiserArrayHeap): int64[] {
 	const handles: int64[] = [];
-	for (const block of liveCellBlocks(arr.mem)) handles.push(heapTextHandle(block + refBlockOffset(8)));
+	for (const block of liveCellBlocks(arr.mem)) {
+		const cell = block + refBlockOffset(8);
+		if (cellTypeIndex(cell) != SEQ_TYPE_INDEX) handles.push(heapTextHandle(cell));
+	}
+	return handles;
+}
+
+// The handle of every live typed array cell on the heap, for the ledger.
+export function heapSeqHandles(arr: RaiserArrayHeap): int64[] {
+	const handles: int64[] = [];
+	for (const block of liveCellBlocks(arr.mem)) {
+		const cell = block + refBlockOffset(8);
+		if (cellTypeIndex(cell) == SEQ_TYPE_INDEX) handles.push(cell | (RaiserHeapKind.Seq as int64));
+	}
 	return handles;
 }
 
@@ -528,16 +542,12 @@ test "int" { assert raiserToString(createArrayHeap(), raiserInt(42)) == "42"; }
 test "array" { assert raiserToString(createArrayHeap(), raiserArray(0)) == "[array]"; }
 
 // --- Array Heap ---
-// Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
-// in intVal that indexes into the heap. Reference semantics (shared handle).
-
-// An array holds its elements in the class its NewArray names: a Word, Float or Bool element as raw
-// bits and a Ref element as its handle (0 is nil), both in `words`, or any other element as a value in
-// `items`. A view holds only the array it stands on, as the one value of `items`.
+// An array of tagged values (Dyn) lives on a side heap and its handle is an index into it. Every other array is a
+// typed cell in VM memory (vmSeq.ms): a Word, Float or Bool element as raw bits at the width its type has and a Ref
+// element as its handle (0 is nil), and its handle is the address of the cell. Reference semantics (shared handle).
+// A view holds only the array it stands on: as the one item of a Dyn view, as `base` of a typed one.
 export interface RaiserArrayData {
 	items: RaiserValue[];
-	words: WordSeq;
-	elemClass: RaiserRegClass;
 	rc: int32;
 	color: int32;
 	viewOff: int64;
@@ -552,6 +562,7 @@ export interface RaiserArrayHeap {
 	freeList: int64[];
 	mem: VmMemory;
 	stringBytes: HashMap<int64, int64>;
+	seqViews: HashMap<int64, int64[]>;
 	boxes: RaiserBoxHeap;
 	orcRoots: int64[];
 	orcThreshold: number;
@@ -565,21 +576,29 @@ export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
 	const orcRoots: int64[] = [];
-	return { arrays, freeList, mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { arrays, freeList, mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+}
+
+@inline
+export function isSeqHandle(handle: int64): boolean {
+	return (handle & HEAP_KIND_MASK) == (RaiserHeapKind.Seq as int64);
+}
+
+@inline
+export function seqCellOf(handle: int64): int64 {
+	return (handle >> HEAP_KIND_BITS) << HEAP_KIND_BITS;
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
-	return heapAllocArrayOf(heap, RaiserRegClass.Dyn);
+	return dynAllocArray(heap);
 }
 
-export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClass): int64 {
+function dynAllocArray(heap: RaiserArrayHeap): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		const data = heap.arrays[reused];
 		data.items.length = 0;
-		data.words.wclear();
-		data.elemClass = elemClass;
 		data.rc = OWNED_BY_RECEIVER_RC;
 		data.color = 0;
 		data.viewOff = -1;
@@ -591,17 +610,33 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const words = new WordSeq(heap.mem);
 	const views: int64[] = [];
-	const data: RaiserArrayData = { items, words, elemClass, rc: OWNED_BY_RECEIVER_RC, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
+	const data: RaiserArrayData = { items, rc: OWNED_BY_RECEIVER_RC, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
 
-// A view (a slice) owns no elements: its only item is the plain array it
-// views, which keeps that array alive through RC, the collector and copyGraph.
+export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClass, width: ElemWidth = ElemWidth.Wide): int64 {
+	if (elemClass == RaiserRegClass.Dyn) return dynAllocArray(heap);
+	const stored = elemClass == RaiserRegClass.Bool ? ElemWidth.U8 : elemClass == RaiserRegClass.Float ? (width == ElemWidth.F32 ? ElemWidth.F32 : ElemWidth.Wide) : elemClass == RaiserRegClass.Word && width != ElemWidth.F32 ? width : ElemWidth.Wide;
+	return seqNew(heap.mem, elemClass, stored, false, false, OWNED_BY_RECEIVER_RC as int64) | (RaiserHeapKind.Seq as int64);
+}
+
+// A view (a slice) owns no elements: it stands on the plain array it views, which it keeps alive through RC, the
+// collector and copyGraph.
 export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int64, len: int32): int64 {
-	const handle = heapAllocArray(heap);
+	if (isSeqHandle(base.intVal)) {
+		const view = seqNewView(heap.mem, seqCellOf(base.intVal), base.intVal, off, len as int64, OWNED_BY_RECEIVER_RC as int64) | (RaiserHeapKind.Seq as int64);
+		const held = heap.seqViews.get(base.intVal);
+		if (held == null) {
+			const list: int64[] = [view];
+			heap.seqViews.set(base.intVal, list);
+		} else {
+			held.push(view);
+		}
+		return view;
+	}
+	const handle = dynAllocArray(heap);
 	heapArrayPush(heap, handle, base);
 	heap.arrays[handleIndex(handle)].viewOff = off;
 	heap.arrays[handleIndex(handle)].viewLen = len;
@@ -610,45 +645,120 @@ export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int
 }
 
 export function heapArrayIsView(heap: RaiserArrayHeap, handle: int64): boolean {
+	if (isSeqHandle(handle)) return seqBase(seqCellOf(handle)) != 0;
 	return heap.arrays[handleIndex(handle)].viewOff >= 0;
 }
 
-// The number of values the array holds: its elements, or the one array a view stands on.
-export function arrayHeldCount(data: RaiserArrayData): number {
-	return data.elemClass == RaiserRegClass.Dyn ? data.items.length : data.words.wlen();
+// The array a view stands on, or the array itself.
+export function arrayBaseOf(heap: RaiserArrayHeap, handle: int64): int64 {
+	if (isSeqHandle(handle)) {
+		const base = seqBase(seqCellOf(handle));
+		return base != 0 ? base : handle;
+	}
+	const data = heap.arrays[handleIndex(handle)];
+	return data.viewOff >= 0 ? data.items[0].intVal : handle;
+}
+
+export function heapArrayClass(heap: RaiserArrayHeap, handle: int64): RaiserRegClass {
+	return isSeqHandle(handle) ? seqClass(seqCellOf(handle)) : RaiserRegClass.Dyn;
+}
+
+export function heapArrayCyclic(heap: RaiserArrayHeap, handle: int64): boolean {
+	const base = arrayBaseOf(heap, handle);
+	return isSeqHandle(base) ? seqCyclic(seqCellOf(base)) : heap.arrays[handleIndex(base)].elemCyclic;
+}
+
+export function heapArrayUncounted(heap: RaiserArrayHeap, handle: int64): boolean {
+	const base = arrayBaseOf(heap, handle);
+	return isSeqHandle(base) ? seqUncounted(seqCellOf(base)) : heap.arrays[handleIndex(base)].elemUncounted;
+}
+
+// A new empty array in `dst` of the element class, width and flags of the array `source` (or the one it stands on) in `src`.
+export function heapAllocArrayLike(dst: RaiserArrayHeap, src: RaiserArrayHeap, source: int64): int64 {
+	const base = arrayBaseOf(src, source);
+	let handle: int64 = 0;
+	if (isSeqHandle(base)) {
+		handle = heapAllocArrayOf(dst, seqClass(seqCellOf(base)), seqWidth(seqCellOf(base)));
+	} else {
+		handle = dynAllocArray(dst);
+	}
+	heapArraySetFlags(dst, handle, heapArrayCyclic(src, base), heapArrayUncounted(src, base));
+	return handle;
+}
+
+export function heapArrayRc(heap: RaiserArrayHeap, handle: int64): int32 {
+	return isSeqHandle(handle) ? cellRc(seqCellOf(handle)) as int32 : heap.arrays[handleIndex(handle)].rc;
+}
+
+export function heapArraySetRc(heap: RaiserArrayHeap, handle: int64, rc: int32): void {
+	if (isSeqHandle(handle)) {
+		setCellRc(seqCellOf(handle), rc as int64);
+		return;
+	}
+	heap.arrays[handleIndex(handle)].rc = rc;
+}
+
+export function heapArraySetFlags(heap: RaiserArrayHeap, handle: int64, cyclic: boolean, uncounted: boolean): void {
+	if (isSeqHandle(handle)) {
+		seqSetFlags(seqCellOf(handle), cyclic, uncounted);
+		return;
+	}
+	heap.arrays[handleIndex(handle)].elemCyclic = cyclic;
+	heap.arrays[handleIndex(handle)].elemUncounted = uncounted;
+}
+
+// The number of values the array holds: its elements, or the one array a Dyn view stands on.
+export function arrayHeldCount(heap: RaiserArrayHeap, handle: int64): number {
+	return isSeqHandle(handle) ? seqLen(seqCellOf(handle)) : heap.arrays[handleIndex(handle)].items.length;
 }
 
 // Whether any held value can be a heap reference.
-export function arrayHoldsHandles(data: RaiserArrayData): boolean {
-	return !data.elemUncounted && (data.elemClass == RaiserRegClass.Dyn || data.elemClass == RaiserRegClass.Ref);
+export function arrayHoldsHandles(heap: RaiserArrayHeap, handle: int64): boolean {
+	if (isSeqHandle(handle)) {
+		const c = seqCellOf(handle);
+		return !seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref;
+	}
+	return !heap.arrays[handleIndex(handle)].elemUncounted;
+}
+
+function heldFromWord(cls: RaiserRegClass, w: int64): RaiserValue {
+	if (cls == RaiserRegClass.Word) return raiserInt(w);
+	if (cls == RaiserRegClass.Float) return raiserFloat(msBitsFloat64(w));
+	if (cls == RaiserRegClass.Bool) return raiserBool(w != 0);
+	if (cls == RaiserRegClass.Ref) return handleValue(w);
+	throw new Error("internal: a typed array cell holds no tagged value");
 }
 
 // The value held at `index`, read in the array's element class.
-export function arrayHeldAt(data: RaiserArrayData, index: number): RaiserValue {
-	return match (data.elemClass) {
-		RaiserRegClass.Dyn => data.items[index],
-		RaiserRegClass.Word => raiserInt(data.words.wat(index)),
-		RaiserRegClass.Float => raiserFloat(msBitsFloat64(data.words.wat(index))),
-		RaiserRegClass.Bool => raiserBool(data.words.wat(index) != 0),
-		RaiserRegClass.Ref => handleValue(data.words.wat(index)),
-	};
+export function arrayHeldAt(heap: RaiserArrayHeap, handle: int64, index: number): RaiserValue {
+	if (isSeqHandle(handle)) {
+		const c = seqCellOf(handle);
+		when (mode != "danger") { if (index < 0 || index >= seqLen(c)) throw new Error(`internal: array index ${index} outside its ${seqLen(c)} elements`); }
+		return heldFromWord(seqClass(c), seqLoad(c, index));
+	}
+	return heap.arrays[handleIndex(handle)].items[index];
 }
 
-// "" when the array can hold the value, otherwise why it cannot.
-export function arrayRefusal(data: RaiserArrayData, val: RaiserValue): string {
-	if (slotFits(data.elemClass, val)) return "";
-	return `internal: an array of ${regClassLetter(data.elemClass)} elements got a value of kind ${val.kind}`;
+// "" when the array can hold the value, otherwise why it cannot. A view holds what the array it stands on does.
+export function arrayRefusal(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): string {
+	const base = arrayBaseOf(heap, handle);
+	if (!isSeqHandle(base)) return "";
+	const cls = seqClass(seqCellOf(base));
+	if (slotFits(cls, val)) return "";
+	return `internal: an array of ${regClassLetter(cls)} elements got a value of kind ${val.kind}`;
 }
 
 // Stores a value at `index` without counting: the array takes over the caller's count of it.
-export function arrayHeldStore(data: RaiserArrayData, index: number, val: RaiserValue): void {
-	if (data.elemClass == RaiserRegClass.Dyn) {
-		data.items[index] = val;
+export function arrayHeldStore(heap: RaiserArrayHeap, handle: int64, index: number, val: RaiserValue): void {
+	if (!isSeqHandle(handle)) {
+		heap.arrays[handleIndex(handle)].items[index] = val;
 		return;
 	}
-	const refused = arrayRefusal(data, val);
+	const c = seqCellOf(handle);
+	const refused = arrayRefusal(heap, handle, val);
 	if (refused != "") throw new Error(refused);
-	data.words.wput(index, slotWord(data.elemClass, val));
+	when (mode != "danger") { if (index < 0 || index >= seqLen(c)) throw new Error(`internal: array index ${index} outside its ${seqLen(c)} elements`); }
+	seqStore(c, index, slotWord(seqClass(c), val));
 }
 
 function heldCopy(val: RaiserValue): RaiserValue {
@@ -656,40 +766,53 @@ function heldCopy(val: RaiserValue): RaiserValue {
 	return copy;
 }
 
-function heldSwap(data: RaiserArrayData, i: number, j: number): void {
-	if (data.elemClass == RaiserRegClass.Dyn) {
-		const kept = heldCopy(data.items[i]);
-		data.items[i] = heldCopy(data.items[j]);
-		data.items[j] = kept;
+function heldSwap(heap: RaiserArrayHeap, handle: int64, i: number, j: number): void {
+	if (isSeqHandle(handle)) {
+		const c = seqCellOf(handle);
+		const kept = seqLoad(c, i);
+		seqStore(c, i, seqLoad(c, j));
+		seqStore(c, j, kept);
 		return;
 	}
-	const kept = data.words.wat(i);
-	data.words.wput(i, data.words.wat(j));
-	data.words.wput(j, kept);
+	const items = heap.arrays[handleIndex(handle)].items;
+	const kept = heldCopy(items[i]);
+	items[i] = heldCopy(items[j]);
+	items[j] = kept;
 }
 
 // Removes `count` held values from `start` without counting: the caller reads and releases them first.
-export function arrayHeldRemove(data: RaiserArrayData, start: number, count: number): void {
-	const n = arrayHeldCount(data);
-	if (data.elemClass == RaiserRegClass.Dyn) {
-		for (let i = start; i + count < n; i += 1) data.items[i] = heldCopy(data.items[i + count]);
-		data.items.shrink((n - count) as int64);
+export function arrayHeldRemove(heap: RaiserArrayHeap, handle: int64, start: number, count: number): void {
+	if (isSeqHandle(handle)) {
+		seqRemove(seqCellOf(handle), start, count);
 		return;
 	}
-	for (let i = start; i + count < n; i += 1) data.words.wput(i, data.words.wat(i + count));
-	data.words.wshrink(n - count);
+	const items = heap.arrays[handleIndex(handle)].items;
+	const n = items.length;
+	for (let i = start; i + count < n; i += 1) items[i] = heldCopy(items[i + count]);
+	items.shrink((n - count) as int64);
 }
 
 // Inserts a value at `index` without counting: the array takes over the caller's count of it.
-export function arrayHeldInsert(data: RaiserArrayData, index: number, val: RaiserValue): void {
-	arrayHeldPush(data, val);
-	for (let i = arrayHeldCount(data) - 1; i > index; i -= 1) heldSwap(data, i, i - 1);
+export function arrayHeldInsert(heap: RaiserArrayHeap, handle: int64, index: number, val: RaiserValue): void {
+	if (isSeqHandle(handle)) {
+		const refused = arrayRefusal(heap, handle, val);
+		if (refused != "") throw new Error(refused);
+		const c = seqCellOf(handle);
+		seqInsert(heap.mem, c, index, slotWord(seqClass(c), val));
+		return;
+	}
+	arrayHeldPush(heap, handle, val);
+	for (let i = arrayHeldCount(heap, handle) - 1; i > index; i -= 1) heldSwap(heap, handle, i, i - 1);
 }
 
-export function arrayHeldReverse(data: RaiserArrayData): void {
-	let j = arrayHeldCount(data) - 1;
+export function arrayHeldReverse(heap: RaiserArrayHeap, handle: int64): void {
+	if (isSeqHandle(handle)) {
+		seqReverse(seqCellOf(handle));
+		return;
+	}
+	let j = arrayHeldCount(heap, handle) - 1;
 	for (let i = 0; i < j; i += 1) {
-		heldSwap(data, i, j);
+		heldSwap(heap, handle, i, j);
 		j -= 1;
 	}
 }
@@ -702,19 +825,20 @@ function heldLess(heap: RaiserArrayHeap, cls: RaiserRegClass, x: int64, y: int64
 
 // Sorts the held values in place, stable: numbers by value (a NaN compares equal to everything, as the C kernel's
 // comparator does) and strings by bytes. "" on success, otherwise why the array cannot be sorted.
-export function arrayHeldSort(heap: RaiserArrayHeap, data: RaiserArrayData): string {
-	const cls = data.elemClass;
-	if (cls == RaiserRegClass.Dyn) return "internal: sort of an array of tagged values";
-	const n = data.words.wlen();
+export function arrayHeldSort(heap: RaiserArrayHeap, handle: int64): string {
+	if (!isSeqHandle(handle)) return "internal: sort of an array of tagged values";
+	const c = seqCellOf(handle);
+	const cls = seqClass(c);
+	const n = seqLen(c);
 	if (cls == RaiserRegClass.Ref) {
 		for (let i = 0; i < n; i += 1) {
-			if (!isStringHandleTag(handleTag(data.words.wat(i)))) return "internal: sort of an array whose element is no string";
+			if (!isStringHandleTag(handleTag(seqLoad(c, i)))) return "internal: sort of an array whose element is no string";
 		}
 	}
 	const from: int64[] = [];
 	const to: int64[] = [];
 	for (let i = 0; i < n; i += 1) {
-		from.push(data.words.wat(i));
+		from.push(seqLoad(c, i));
 		to.push(0);
 	}
 	let width = 1;
@@ -751,7 +875,7 @@ export function arrayHeldSort(heap: RaiserArrayHeap, data: RaiserArrayData): str
 		for (let i = 0; i < n; i += 1) from[i] = to[i];
 		width *= 2;
 	}
-	for (let i = 0; i < n; i += 1) data.words.wput(i, from[i]);
+	for (let i = 0; i < n; i += 1) seqStore(c, i, from[i]);
 	return "";
 }
 
@@ -759,56 +883,57 @@ function isStringHandleTag(tag: int64): boolean {
 	return tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64);
 }
 
-function arrayHeldPush(data: RaiserArrayData, val: RaiserValue): void {
-	if (data.elemClass == RaiserRegClass.Dyn) {
+function arrayHeldPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
+	if (!isSeqHandle(handle)) {
 		const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
-		data.items.push(copy);
+		heap.arrays[handleIndex(handle)].items.push(copy);
 		return;
 	}
-	const refused = arrayRefusal(data, val);
+	const refused = arrayRefusal(heap, handle, val);
 	if (refused != "") throw new Error(refused);
-	data.words.wpush(slotWord(data.elemClass, val));
-}
-
-// The array a view stands on, or the array itself.
-export function arrayBaseOf(heap: RaiserArrayHeap, data: RaiserArrayData): RaiserArrayData {
-	return data.viewOff >= 0 ? heap.arrays[handleIndex(data.items[0].intVal)] : data;
+	const c = seqCellOf(handle);
+	seqPush(heap.mem, c, slotWord(seqClass(c), val));
 }
 
 export function heapArrayLen(heap: RaiserArrayHeap, handle: int64): int32 {
+	if (isSeqHandle(handle)) return seqLen(seqCellOf(handle)) as int32;
 	const data = heap.arrays[handleIndex(handle)];
-	return data.viewOff >= 0 ? data.viewLen : arrayHeldCount(data) as int32;
+	return data.viewOff >= 0 ? data.viewLen : data.items.length as int32;
 }
 
 export function heapArrayGet(heap: RaiserArrayHeap, handle: int64, index: int64): RaiserValue {
+	if (isSeqHandle(handle)) return arrayHeldAt(heap, handle, index as number);
 	const data = heap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) return arrayHeldAt(arrayBaseOf(heap, data), (data.viewOff + index) as number);
-	return arrayHeldAt(data, index as number);
+	if (data.viewOff >= 0) return heap.arrays[handleIndex(data.items[0].intVal)].items[(data.viewOff + index) as number];
+	return data.items[index as number];
 }
 
 export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64, val: RaiserValue): void {
-	const data = heap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) {
-		arrayHeldStore(arrayBaseOf(heap, data), (data.viewOff + index) as number, val);
+	if (isSeqHandle(handle)) {
+		arrayHeldStore(heap, handle, index as number, val);
 		return;
 	}
-	arrayHeldStore(data, index as number, val);
+	const data = heap.arrays[handleIndex(handle)];
+	if (data.viewOff >= 0) {
+		arrayHeldStore(heap, data.items[0].intVal, (data.viewOff + index) as number, val);
+		return;
+	}
+	arrayHeldStore(heap, handle, index as number, val);
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
-	arrayHeldPush(heap.arrays[handleIndex(handle)], val);
+	arrayHeldPush(heap, handle, val);
 }
 
 // The only shrink primitive on the heap: truncate drops references (arena
 // regime — no per-value RC), extend pads with the zero of the element class.
 export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
-	const data = heap.arrays[handleIndex(handle)];
 	const target = newLen < 0 ? 0 : newLen;
-	if (data.elemClass != RaiserRegClass.Dyn) {
-		if (target < (data.words.wlen() as int64)) data.words.wshrink(target as number);
-		while ((data.words.wlen() as int64) < target) data.words.wpush(0);
+	if (isSeqHandle(handle)) {
+		seqSetLen(heap.mem, seqCellOf(handle), target);
 		return;
 	}
+	const data = heap.arrays[handleIndex(handle)];
 	if (newLen < data.items.length) {
 		data.items.shrink(target);
 	} else {
@@ -1191,6 +1316,7 @@ export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc += 1; },
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) + 1); },
 		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc += 1; },
+		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) + 1); },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 }
@@ -1220,6 +1346,12 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyBox(arrHeap, objHeap, index); }
 		},
+		RaiserHeapKind.Seq => {
+			const cell = seqCellOf(handle);
+			const left = cellRc(cell) - 1;
+			setCellRc(cell, left);
+			if (left <= 0) { rcDestroySeq(arrHeap, objHeap, handle); }
+		},
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 }
@@ -1236,6 +1368,7 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) - 1); last = textRc(cell) <= 0; },
 		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 	return last;
@@ -1251,6 +1384,7 @@ export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h
 		RaiserHeapKind.Object => { count = objHeap.objects[index].rc; },
 		RaiserHeapKind.String => { count = textRc(textAddress(handle)) as int32; },
 		RaiserHeapKind.Box => { count = arrHeap.boxes.items[index].rc; },
+		RaiserHeapKind.Seq => { count = cellRc(seqCellOf(handle)) as int32; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 	return count;
@@ -1272,9 +1406,9 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 			data.views.length = 0;
 			data.viewOff = -1;
 			data.items.length = 0;
-			data.words.wclear();
 			arrHeap.freeList.push(index);
 		},
+		RaiserHeapKind.Seq => rcFreeSeq(arrHeap, handle),
 		RaiserHeapKind.Object => {
 			const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 			data.slots.length = 0;
@@ -1309,19 +1443,52 @@ function rcDestroyString(arrHeap: RaiserArrayHeap, handle: int64): void {
 function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.arrays[index];
 	if (!data.elemUncounted) {
-		if (data.elemClass == RaiserRegClass.Ref) {
-			for (let i = 0; i < data.words.wlen(); i += 1) {
-				const handle = data.words.wat(i);
-				if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
-			}
-		}
 		for (const item of data.items) {
 			rcDecref(arrHeap, objHeap, item);
 		}
 	}
 	data.items.length = 0;
-	data.words.wclear();
 	arrHeap.freeList.push(index);
+}
+
+function removeSeqView(arrHeap: RaiserArrayHeap, base: int64, view: int64): void {
+	const held = arrHeap.seqViews.get(base);
+	if (held == null) return;
+	const at = held.indexOf(view);
+	if (at >= 0) held.splice(at, 1);
+	if (held.length == 0) arrHeap.seqViews.delete(base);
+}
+
+@noinline
+function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	const c = seqCellOf(handle);
+	const base = seqBase(c);
+	if (base != 0) {
+		removeSeqView(arrHeap, base, handle);
+		rcDecrefHandle(arrHeap, objHeap, base);
+	} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
+		for (let i = 0; i < seqLen(c); i += 1) {
+			const child = seqLoad(c, i);
+			if (child != 0) rcDecrefHandle(arrHeap, objHeap, child);
+		}
+	}
+	rcFreeSeq(arrHeap, handle);
+}
+
+// Frees the cell of a typed array and, with a plain one, the views over it.
+function rcFreeSeq(arrHeap: RaiserArrayHeap, handle: int64): void {
+	const c = seqCellOf(handle);
+	const base = seqBase(c);
+	if (base != 0) {
+		removeSeqView(arrHeap, base, handle);
+	} else {
+		const views = arrHeap.seqViews.get(handle);
+		if (views != null) {
+			for (const view of views) seqFree(arrHeap.mem, seqCellOf(view));
+			arrHeap.seqViews.delete(handle);
+		}
+	}
+	seqFree(arrHeap.mem, c);
 }
 
 @noinline
@@ -1373,6 +1540,7 @@ export interface RaiserCopyMap {
 	registerSlots: Map<int64, int64>;
 	globalSlots: Map<int64, int64>;
 	jobs: RaiserCopyJob[];
+	viewFixups: int64[];
 	sourceWords: int64[] | null;
 	sourceRefs: int64[] | null;
 	sourceGlobals: RaiserValue[] | null;
@@ -1386,6 +1554,7 @@ export function createCopyMap(): RaiserCopyMap {
 		registerSlots: new Map<int64, int64>(),
 		globalSlots: new Map<int64, int64>(),
 		jobs: [],
+		viewFixups: [],
 		sourceWords: null,
 		sourceRefs: null,
 		sourceGlobals: null,
@@ -1424,6 +1593,7 @@ function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: 
 		RaiserHeapKind.Object => { dstObj.objects[index].rc = 0; },
 		RaiserHeapKind.String => { setTextRc(textAddress(handle), 0); },
 		RaiserHeapKind.Box => { dstArr.boxes.items[index].rc = 0; },
+		RaiserHeapKind.Seq => { setCellRc(seqCellOf(handle), 0); },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
 }
@@ -1451,15 +1621,44 @@ function copyArrayShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, val: R
 		const known = map.arrays.get(val.intVal)!;
 		return isArray ? raiserArray(known) : raiserElemAddr(known, val.floatVal as int64);
 	}
-	if (handleIndex(val.intVal) >= srcArr.arrays.length) {
+	if (!isSeqHandle(val.intVal) && handleIndex(val.intVal) >= srcArr.arrays.length) {
 		if (!isArray) throw new Error("internal: a copied element address must have an array owner");
 		return raiserNil();
 	}
-	const dstHandle = heapAllocArrayOf(dstArr, srcArr.arrays[handleIndex(val.intVal)].elemClass);
-	dstArr.arrays[handleIndex(dstHandle)].rc = 0;
+	if (isSeqHandle(val.intVal) && seqBase(seqCellOf(val.intVal)) != 0) {
+		const view = copySeqViewShell(srcArr, dstArr, val.intVal, map);
+		return isArray ? raiserArray(view) : raiserElemAddr(view, val.floatVal as int64);
+	}
+	const dstHandle = heapAllocArrayLike(dstArr, srcArr, val.intVal);
+	heapArraySetRc(dstArr, dstHandle, 0);
 	map.arrays.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Array, source: raiserArray(val.intVal), dst: dstHandle });
 	return isArray ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
+}
+
+// A view of a typed array is copied as a view of the copy of the array it stands on; it points into that copy's
+// payload once the copy is filled (see the fixups at the end of copyGraphWith).
+function copySeqViewShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, view: int64, map: RaiserCopyMap): int64 {
+	const sc = seqCellOf(view);
+	const sbase = seqBase(sc);
+	const baseCopy = copyArrayShell(srcArr, dstArr, raiserArray(sbase), map).intVal;
+	const dstView = seqNewView(dstArr.mem, seqCellOf(baseCopy), baseCopy, 0, seqLen(sc) as int64, 0) | (RaiserHeapKind.Seq as int64);
+	const held = dstArr.seqViews.get(baseCopy);
+	if (held == null) {
+		const list: int64[] = [dstView];
+		dstArr.seqViews.set(baseCopy, list);
+	} else {
+		held.push(dstView);
+	}
+	heapArrayIncref(dstArr, baseCopy);
+	map.arrays.set(view, dstView);
+	map.viewFixups.push(dstView);
+	map.viewFixups.push(seqViewOffset(sc));
+	return dstView;
+}
+
+function heapArrayIncref(heap: RaiserArrayHeap, handle: int64): void {
+	heapArraySetRc(heap, handle, heapArrayRc(heap, handle) + 1);
 }
 
 function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
@@ -1501,15 +1700,18 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 }
 
 function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
-	const source = srcArr.arrays[handleIndex(job.source.intVal)];
-	const held = arrayHeldCount(source);
+	const sourceHandle = job.source.intVal;
+	const held = arrayHeldCount(srcArr, sourceHandle);
 	for (let i = 0; i < held; i = i + 1) {
-		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(source, i), map);
+		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(srcArr, sourceHandle, i), map);
 		heapArrayPush(dstArr, job.dst, copied);
 		rcIncref(dstArr, dstObj, copied);
 	}
-	dstArr.arrays[handleIndex(job.dst)].viewOff = source.viewOff;
-	dstArr.arrays[handleIndex(job.dst)].viewLen = source.viewLen;
+	if (!isSeqHandle(job.dst)) {
+		const source = srcArr.arrays[handleIndex(sourceHandle)];
+		dstArr.arrays[handleIndex(job.dst)].viewOff = source.viewOff;
+		dstArr.arrays[handleIndex(job.dst)].viewLen = source.viewLen;
+	}
 }
 
 function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
@@ -1538,6 +1740,7 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 			RaiserCopyKind.Slot => fillSlot(srcArr, srcObj, dstArr, dstObj, job, map),
 		}
 	}
+	for (let f = 0; f < map.viewFixups.length; f += 2) seqPointViewInto(seqCellOf(map.viewFixups[f]), map.viewFixups[f + 1]);
 	return root;
 }
 
