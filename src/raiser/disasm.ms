@@ -163,6 +163,15 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.DestroyValue => "DestroyValue",
 		RaiserOpcode.SinkValue => "SinkValue",
 		RaiserOpcode.RcHeld => "RcHeld",
+		RaiserOpcode.ArrayPop => "ArrayPop",
+		RaiserOpcode.ArrayShift => "ArrayShift",
+		RaiserOpcode.ArraySplice => "ArraySplice",
+		RaiserOpcode.ArraySplice3 => "ArraySplice3",
+		RaiserOpcode.ArrayReverse => "ArrayReverse",
+		RaiserOpcode.ArraySort => "ArraySort",
+		RaiserOpcode.ArrayFill => "ArrayFill",
+		RaiserOpcode.ArraySliceCopy => "ArraySliceCopy",
+		RaiserOpcode.ArrayConcat => "ArrayConcat",
 		RaiserOpcode.RcKeptCheck => "RcKeptCheck",
 	};
 }
@@ -279,6 +288,8 @@ test "the reference-count opcodes print their register and the cyclic flag" {
 	assert disasmInst(raiserABC(RaiserOpcode.DestroyValue, 1, 0, 4)) == "DestroyValue R1 plan 4";
 	assert disasmInst(raiserABC(RaiserOpcode.SinkValue, 1, 2, 4)) == "SinkValue R1 R2 plan 4";
 	assert disasmInst(raiserABC(RaiserOpcode.RcHeld, 1, 3, 0)) == "RcHeld R1 W3";
+	assert disasmInst(raiserABC(RaiserOpcode.ArrayReverse, 1, 0, 0)).startsWith("ArrayReverse R1");
+	assert disasmInst(raiserABC(RaiserOpcode.ArrayConcat, 1, 2, 3)) == "ArrayConcat R1 R2 R3";
 	assert disasmInst(raiserABC(RaiserOpcode.RcKeptCheck, 1, 3, 0)) == "RcKeptCheck R1 W3";
 }
 
