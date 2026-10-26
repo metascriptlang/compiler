@@ -3,7 +3,7 @@ import { hasFlag } from "../../checker/symbol";
 import { isMaybeType, isStructType, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
-import { RaiserCompState, emitInst, allocBlock, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
+import { RaiserCompState, emitInst, allocBlock, allocDyn, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { getOpByKey } from "../c/types";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
@@ -19,9 +19,14 @@ function placeOf(arg: Node): Node {
 }
 
 function refRegister(s: RaiserCompState, name: string, arg: Node): int32 {
-	const reg = compileExpr(s, placeOf(arg));
-	if (!inRefFile(classOfReg(s, reg))) throw new Error(`internal: ${name} reached a ${classOfReg(s, reg).toString()} register at ${getRaiserModulePath()}:${arg.location.line}:${arg.location.column}, and Raiser lowers it only on a register of the ref file`);
-	return reg;
+	const place = placeOf(arg);
+	const reg = compileExpr(s, place);
+	if (inRefFile(classOfReg(s, reg))) return reg;
+	const held = skipModifier(place.nodeType);
+	if (held == null || held.kind != TypeKind.Union) throw new Error(`internal: ${name} reached a ${classOfReg(s, reg).toString()} register at ${getRaiserModulePath()}:${arg.location.line}:${arg.location.column}, and Raiser lowers it only on a register of the ref file or a union slot holding a scalar`);
+	const boxed = allocDyn(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, boxed, reg, 0));
+	return boxed;
 }
 
 function emitPlaceStore(s: RaiserCompState, name: string, place: Node, value: int32): void {
