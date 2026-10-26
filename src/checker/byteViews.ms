@@ -64,13 +64,13 @@ function pointerCastSupported(source: Type, target: Type, vmObjects: boolean): b
 		&& (samePointee(source.typeReturn, target) || samePointee(source.typeReturn, target.typeReturn));
 }
 
-export function byteViewRefusal(sourceType: Type | null, targetType: Type | null, vmObjects: boolean = false): string {
+export function byteViewRefusal(sourceType: Type | null, targetType: Type | null, vmObjects: boolean = false): string | null {
 	const source = castType(sourceType);
 	const dest = castType(targetType);
-	if (source == null || dest == null) return "";
-	if (source.kind != TypeKind.Ptr && dest.kind != TypeKind.Ptr && dest.kind != TypeKind.Span) return "";
-	if (hasGenericParams(source) || hasGenericParams(dest)) return "";
-	if (pointerCastSupported(source, dest, vmObjects)) return "";
+	if (source == null || dest == null) return null;
+	if (source.kind != TypeKind.Ptr && dest.kind != TypeKind.Ptr && dest.kind != TypeKind.Span) return null;
+	if (hasGenericParams(source) || hasGenericParams(dest)) return null;
+	if (pointerCastSupported(source, dest, vmObjects)) return null;
 	return "cannot convert " + typeDisplayName(source) + " to " + typeDisplayName(dest);
 }
 
@@ -83,7 +83,7 @@ function literalZero(node: Node): boolean {
 	return node.kind == NodeKind.NumberLiteral && (node.data as NumberLiteralData).value == 0;
 }
 
-export function pointerOpRefusal(node: Node): string {
+export function pointerOpRefusal(node: Node): string | null {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		const op = d.operator;
@@ -96,7 +96,7 @@ export function pointerOpRefusal(node: Node): string {
 		const d = node.data as ArrayAccessData;
 		if (isPointer(d.array.nodeType) && !literalZero(d.index)) return "cannot index a pointer past the element it addresses";
 	}
-	return "";
+	return null;
 }
 
 export const NO_ADDRESS_ARITHMETIC = ": a location there has no address arithmetic; index the Span it came from instead";
@@ -105,7 +105,7 @@ export const NO_BYTE_MEMORY = ": no byte representation or recoverable typed loc
 
 function checkPointerCast(ctx: CheckerContext, node: Node, expr: Node, target: Type | null): void {
 	const refusal = byteViewRefusal(expr != null ? expr.nodeType : null, target);
-	if (refusal != "") addError(ctx, refusal + " on JS" + NO_BYTE_MEMORY, node.location.line, node.location.column);
+	if (refusal != null) addError(ctx, refusal + " on JS" + NO_BYTE_MEMORY, node.location.line, node.location.column);
 }
 
 function checkNode(ctx: CheckerContext, node: Node): void {
@@ -117,7 +117,7 @@ function checkNode(ctx: CheckerContext, node: Node): void {
 		checkPointerCast(ctx, node, d.convExpr, d.convType);
 	}
 	const opRefusal = pointerOpRefusal(node);
-	if (opRefusal != "") addError(ctx, opRefusal + " on JS" + NO_ADDRESS_ARITHMETIC, node.location.line, node.location.column);
+	if (opRefusal != null) addError(ctx, opRefusal + " on JS" + NO_ADDRESS_ARITHMETIC, node.location.line, node.location.column);
 	forEachChild(node, (child: Node): void => { checkNode(ctx, child); });
 }
 
