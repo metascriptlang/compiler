@@ -6,11 +6,11 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
-	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles
+	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, stringHandleRc
 } from "./value";
 
 interface LedgerTally {
-	strings: int32[];
+	strings: HashMap<int64, int32>;
 	arrays: int32[];
 	objects: int32[];
 	boxes: int32[];
@@ -26,7 +26,7 @@ function tallyRef(tally: LedgerTally, v: RaiserValue): void {
 	if (v.kind < RaiserValueKind.String) return;
 	const index = handleIndex(v.intVal);
 	match (handleHeapKind(v.intVal)) {
-		RaiserHeapKind.String => { tally.strings[index] += 1; },
+		RaiserHeapKind.String => { const held = tally.strings.get(v.intVal); tally.strings.set(v.intVal, (held != null ? held : 0) + 1); },
 		RaiserHeapKind.Array => { tally.arrays[index] += 1; },
 		RaiserHeapKind.Object => { tally.objects[index] += 1; },
 		RaiserHeapKind.Box => { tally.boxes[index] += 1; },
@@ -46,15 +46,14 @@ function freeFlags(count: int32, freeList: int64[]): boolean[] {
 // make to it; otherwise the message that names the first disagreement.
 export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string): string {
 	const tally: LedgerTally = {
-		strings: zeros(arr.strings.texts.length), arrays: zeros(arr.arrays.length),
+		strings: new HashMap<int64, int32>(), arrays: zeros(arr.arrays.length),
 		objects: zeros(obj.objects.length), boxes: zeros(arr.boxes.items.length),
 	};
-	const freeStrings = freeFlags(arr.strings.texts.length, arr.strings.freeList);
 	const freeArrays = freeFlags(arr.arrays.length, arr.freeList);
 	const freeObjects = freeFlags(obj.objects.length, obj.freeList);
 	const freeBoxes = freeFlags(arr.boxes.items.length, arr.boxes.freeList);
 	for (const root of roots) tallyRef(tally, root);
-	for (const bytes of stringBytesHandles(arr.strings)) tallyRef(tally, raiserArray(bytes));
+	for (const bytes of stringBytesHandles(arr)) tallyRef(tally, raiserArray(bytes));
 	for (let i = 0; i < arr.arrays.length; i += 1) {
 		if (freeArrays[i] || !arrayHoldsHandles(arr.arrays[i])) continue;
 		const held = arrayHeldCount(arr.arrays[i]);
@@ -72,10 +71,12 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	let leakedArrays = 0;
 	let leakedObjects = 0;
 	let leakedBoxes = 0;
-	for (let i = 0; i < tally.strings.length; i += 1) {
-		if (freeStrings[i]) continue;
-		if (arr.strings.rc[i] < tally.strings[i]) return `internal: string ${i} counts ${arr.strings.rc[i]} holders but ${tally.strings[i]} hold it at ${where} end`;
-		if (arr.strings.rc[i] > tally.strings[i]) leakedStrings += 1;
+	for (const handle of heapStringHandles(arr)) {
+		const held = tally.strings.get(handle);
+		const holders = held != null ? held : 0;
+		const counted = stringHandleRc(handle);
+		if (counted < holders) return `internal: string ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
+		if (counted > holders) leakedStrings += 1;
 	}
 	for (let i = 0; i < tally.arrays.length; i += 1) {
 		if (freeArrays[i]) continue;
@@ -128,5 +129,5 @@ test "the audit names an item held more often than it is counted" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "twice");
-	assert ledgerAudit(arr, obj, [s, s], "program") == "internal: string 0 counts 1 holders but 2 hold it at program end";
+	assert ledgerAudit(arr, obj, [s, s], "program").endsWith("counts 1 holders but 2 hold it at program end");
 }

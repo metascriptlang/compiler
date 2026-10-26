@@ -3,6 +3,8 @@
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, regClassLetter, TYPED_SLOTS } from "./bytecode";
+import { VmMemory, createVmMemory, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory } from "./memory";
+import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
 extern function msBitsFloat64(u: int64): float64;
@@ -192,64 +194,29 @@ export function heldHandle(v: RaiserValue): RaiserValue {
 }
 
 // --- String Heap ---
-// A string is immutable text on a side heap, like arrays and objects: the value
-// holds an index, rc counts the holders, a freed slot
-// goes on the free list. The heap hangs off the array heap, so every place that
-// already carries the strand's heaps reaches it. Handles below zero index the
-// constant table instead; the table is shared, append-only and never freed.
+// A string is an msString value (len, payload) in VM memory, and its handle is the address of that value with the heap
+// kind in the low bits. A run-time string is a counted cell on the strand's VmMemory; a constant sits in the
+// process-wide constant segment, shared, append-only and never freed. Read-only operations run the string runtime on
+// the stored value in place.
 
-export interface RaiserStringHeap {
-	texts: string[];
-	rc: int32[];
-	freeList: int64[];
-	bytes: int64[];        // per heap string, the array a placed asBytes handed out (0 for none); the string owns it
-	constBytes: int64[];   // the same for a constant string, kept to the end of the heap
-}
-
-export function createStringHeap(): RaiserStringHeap {
-	const texts: string[] = [];
-	const rc: int32[] = [];
-	const freeList: int64[] = [];
-	const bytes: int64[] = [];
-	const constBytes: int64[] = [];
-	return { texts, rc, freeList, bytes, constBytes };
-}
-
-function bytesSlots(heap: RaiserStringHeap, h: int64): int64[] {
-	return isConstHandle(h) ? heap.constBytes : heap.bytes;
-}
-
-// The byte array a placed asBytes handed out for this string, or 0. A borrowed view in the C runtime, so
-// the string holds the only count and frees the array with itself; the array stays when the text changes
-// and is refilled by the next asBytes.
-export function stringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue): int64 {
-	const slots = bytesSlots(arr.strings, str.intVal);
-	const index = handleIndex(str.intVal) as number;
-	return index < slots.length ? slots[index] : 0;
-}
-
-export function setStringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue, bytes: int64): void {
-	const slots = bytesSlots(arr.strings, str.intVal);
-	const index = handleIndex(str.intVal) as number;
-	while (slots.length <= index) slots.push(0);
-	slots[index] = bytes;
-}
-
-export function stringBytesHandles(heap: RaiserStringHeap): int64[] {
-	const held: int64[] = [];
-	for (const h of heap.bytes) if (h != 0) held.push(h);
-	for (const h of heap.constBytes) if (h != 0) held.push(h);
-	return held;
-}
-
-const constTexts: string[] = [""];
 const constIndex: Map<string, int64> = new Map<string, int64>();
-constIndex.set("", makeHandle(0, RaiserHeapKind.ConstString));
+constIndex.set("", emptyTextHandle());
+
+function constMemoryHandle(at: int64): int64 {
+	return at | (RaiserHeapKind.ConstString as int64);
+}
+
+function heapTextHandle(at: int64): int64 {
+	return at | (RaiserHeapKind.String as int64);
+}
+
+function textAddress(handle: int64): int64 {
+	return handle - handleTag(handle);
+}
 
 function constHandle(text: string): int64 {
 	if (constIndex.has(text)) return constIndex.get(text)!;
-	constTexts.push(text);
-	const handle = makeHandle((constTexts.length - 1) as int64, RaiserHeapKind.ConstString);
+	const handle = constMemoryHandle(allocConstText(text));
 	constIndex.set(text, handle);
 	return handle;
 }
@@ -261,11 +228,39 @@ export function constNameIds(names: string[]): int64[] {
 }
 
 function constText(handle: int64): string {
-	return constTexts[handleIndex(handle) as number];
+	return textLoad(textAddress(handle));
 }
 
 function isConstHandle(handle: int64): boolean {
 	return handleHeapKind(handle) == RaiserHeapKind.ConstString;
+}
+
+function isTextHandle(handle: int64): boolean {
+	const kind = handleHeapKind(handle);
+	return kind == RaiserHeapKind.String || kind == RaiserHeapKind.ConstString;
+}
+
+// The stored value a handle names; a handle that names no string reads as the empty constant, like a non-String value.
+function textOf(handle: int64): int64 {
+	return isTextHandle(handle) ? textAddress(handle) : EMPTY_TEXT;
+}
+
+// The byte array a placed asBytes handed out for this string, or 0. A borrowed view in the C runtime, so
+// the string holds the only count and frees the array with itself; the array stays when the text changes
+// and is refilled by the next asBytes.
+export function stringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue): int64 {
+	const held = arr.stringBytes.get(str.intVal);
+	return held != null ? held : 0;
+}
+
+export function setStringBytesHandle(arr: RaiserArrayHeap, str: RaiserValue, bytes: int64): void {
+	arr.stringBytes.set(str.intVal, bytes);
+}
+
+export function stringBytesHandles(arr: RaiserArrayHeap): int64[] {
+	const held: int64[] = [];
+	for (const h of arr.stringBytes.values()) if (h != 0) held.push(h);
+	return held;
 }
 
 // Module constants and field names are interned, so reading one needs no heap.
@@ -275,157 +270,117 @@ export function constStringText(v: RaiserValue): string {
 }
 
 export function constStringCount(): number {
-	return constTexts.length;
+	return constIndex.size;
+}
+
+export function emptyTextHandle(): int64 {
+	return constMemoryHandle(EMPTY_TEXT);
 }
 
 export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue {
-	if (text.byteLength == 0) return { kind: RaiserValueKind.String, intVal: makeHandle(0, RaiserHeapKind.ConstString), floatVal: 0.0 };
-	const heap = arr.strings;
-	let index: int64 = 0;
-	if (heap.freeList.length > 0) {
-		index = heap.freeList[heap.freeList.length - 1];
-		heap.freeList.length = heap.freeList.length - 1;
-		heap.texts[index] = text;
-		heap.rc[index] = OWNED_BY_RECEIVER_RC;
-	} else {
-		index = heap.texts.length;
-		heap.texts.push(text);
-		heap.rc.push(OWNED_BY_RECEIVER_RC);
-	}
-	return { kind: RaiserValueKind.String, intVal: makeHandle(index, RaiserHeapKind.String), floatVal: 0.0 };
+	if (text.byteLength == 0) return { kind: RaiserValueKind.String, intVal: emptyTextHandle(), floatVal: 0.0 };
+	return { kind: RaiserValueKind.String, intVal: heapTextHandle(allocHeapText(arr.mem, text, OWNED_BY_RECEIVER_RC as int64)), floatVal: 0.0 };
 }
 
 // A string the host stores into a container it built: the container holds the first count.
 export function heapAllocStoredString(arr: RaiserArrayHeap, text: string): RaiserValue {
 	const v = heapAllocString(arr, text);
-	if (!isConstHandle(v.intVal)) arr.strings.rc[handleIndex(v.intVal)] = 1;
+	if (!isConstHandle(v.intVal)) setTextRc(textAddress(v.intVal), 1);
 	return v;
 }
 
 // A value that is not a String reads as "", the way an unset text field always did.
 export function heapStringText(arr: RaiserArrayHeap, v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String) return "";
-	if (isConstHandle(v.intVal)) return constText(v.intVal);
-	return arr.strings.texts[handleIndex(v.intVal)];
+	return textLoad(textOf(v.intVal));
 }
 
-// The operations below read a string where it lives and never hand its text out as an
-// owned copy: a handle below zero selects the constant table, otherwise the strand's
-// heap, and an element read inside an expression is a cursor.
+// The operations below read a string where it lives and never hand its text out as an owned copy.
 
-function textTable(arr: RaiserArrayHeap, v: RaiserValue): string[] {
-	return v.kind == RaiserValueKind.String && !isConstHandle(v.intVal) ? arr.strings.texts : constTexts;
-}
-
-function textIndex(v: RaiserValue): number {
-	if (v.kind != RaiserValueKind.String) return 0;
-	return handleIndex(v.intVal) as number;
+function textOfValue(v: RaiserValue): int64 {
+	return v.kind == RaiserValueKind.String ? textOf(v.intVal) : EMPTY_TEXT;
 }
 
 export function heapStringEquals(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
 	if (a.intVal == b.intVal) return true;
-	const ta = textTable(arr, a);
-	const tb = textTable(arr, b);
-	const ia = textIndex(a);
-	const ib = textIndex(b);
-	return ta[ia] == tb[ib];
+	return textEquals(textOfValue(a), textOfValue(b));
 }
 
 export function heapStringLess(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
-	const ta = textTable(arr, a);
-	const tb = textTable(arr, b);
-	const ia = textIndex(a);
-	const ib = textIndex(b);
-	return ta[ia] < tb[ib];
+	return textLess(textOfValue(a), textOfValue(b));
 }
 
 export function heapStringLessEq(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
-	const ta = textTable(arr, a);
-	const tb = textTable(arr, b);
-	const ia = textIndex(a);
-	const ib = textIndex(b);
-	return ta[ia] <= tb[ib];
+	return textLessEq(textOfValue(a), textOfValue(b));
 }
 
 export function heapStringLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
-	const t = textTable(arr, v);
-	const i = textIndex(v);
-	return t[i].length as int64;
+	return textLength(textOfValue(v));
 }
 
 export function heapStringByteLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
-	const t = textTable(arr, v);
-	const i = textIndex(v);
-	return t[i].byteLength as int64;
+	return textByteLength(textOfValue(v));
 }
 
 export function heapStringSlice(arr: RaiserArrayHeap, v: RaiserValue, start: int32, end: int32): string {
-	const t = textTable(arr, v);
-	const i = textIndex(v);
-	return t[i].slice(start, end);
+	return textSlice(textOfValue(v), start, end);
+}
+
+function concatText(arr: RaiserArrayHeap, a: int64, b: int64): int64 {
+	if (textByteLength(a) + textByteLength(b) == 0) return emptyTextHandle();
+	return heapTextHandle(textConcat(arr.mem, a, b, OWNED_BY_RECEIVER_RC as int64));
 }
 
 export function heapConcat(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): RaiserValue {
-	const ta = textTable(arr, a);
-	const tb = textTable(arr, b);
-	const ia = textIndex(a);
-	const ib = textIndex(b);
-	return heapAllocString(arr, ta[ia] + tb[ib]);
+	return { kind: RaiserValueKind.String, intVal: concatText(arr, textOfValue(a), textOfValue(b)), floatVal: 0.0 };
 }
 
 // Appends in place to a heap string; the caller has checked that the destination is
 // held once and that the suffix is not the destination itself.
 export function heapAppend(arr: RaiserArrayHeap, dst: int64, suffix: RaiserValue): void {
-	const texts = arr.strings.texts;
-	const tb = textTable(arr, suffix);
-	const i = textIndex(suffix);
-	texts[handleIndex(dst) as number] += tb[i];
+	textAppend(arr.mem, textAddress(dst), textOfValue(suffix));
 }
 
 export function heapStringHeldOnce(arr: RaiserArrayHeap, v: RaiserValue): boolean {
-	return handleHeapKind(v.intVal) == RaiserHeapKind.String && arr.strings.rc[handleIndex(v.intVal)] == 1;
+	return handleHeapKind(v.intVal) == RaiserHeapKind.String && textRc(textAddress(v.intVal)) == 1;
 }
 
-// The handle forms of the readers above, for an operand a typed Ref register holds: the heap kind
-// in the handle picks the table, and a handle that names no string reads as "" like a non-String value.
-function handleTexts(arr: RaiserArrayHeap, h: int64): string[] {
-	return handleHeapKind(h) == RaiserHeapKind.String ? arr.strings.texts : constTexts;
-}
-
-function handleTextIndex(h: int64): number {
-	const kind = handleHeapKind(h);
-	return kind == RaiserHeapKind.String || kind == RaiserHeapKind.ConstString ? handleIndex(h) as number : 0;
-}
-
+// The handle forms of the readers above, for an operand a typed Ref register holds: a handle that names no
+// string reads as "" like a non-String value.
 export function heapConcatHandles(arr: RaiserArrayHeap, a: int64, b: int64): int64 {
-	return heapAllocString(arr, handleTexts(arr, a)[handleTextIndex(a)] + handleTexts(arr, b)[handleTextIndex(b)]).intVal;
+	return concatText(arr, textOf(a), textOf(b));
 }
 
 export function heapAppendHandle(arr: RaiserArrayHeap, dst: int64, suffix: int64): void {
-	arr.strings.texts[handleIndex(dst) as number] += handleTexts(arr, suffix)[handleTextIndex(suffix)];
+	textAppend(arr.mem, textAddress(dst), textOf(suffix));
 }
 
 export function heapHandleHeldOnce(arr: RaiserArrayHeap, h: int64): boolean {
-	return handleHeapKind(h) == RaiserHeapKind.String && arr.strings.rc[handleIndex(h)] == 1;
+	return handleHeapKind(h) == RaiserHeapKind.String && textRc(textAddress(h)) == 1;
 }
 
 // -1 outside the text, the way msStringByteAt answers.
 export function heapHandleCharCodeAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
-	const t = handleTexts(arr, h);
-	const i = handleTextIndex(h);
-	if (idx < 0 || idx >= (t[i].length as int64)) return -1;
-	return t[i].charCodeAt(idx as int32) as int64;
+	return textCharCodeAt(textOf(h), idx);
 }
 
 export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
-	const t = handleTexts(arr, h);
-	const i = handleTextIndex(h);
-	if (idx < 0 || idx >= (t[i].byteLength as int64)) return -1;
-	return t[i].byteAt(idx as int32) as int64;
+	return textByteAt(textOf(h), idx);
 }
 
 export function heapStringLive(arr: RaiserArrayHeap): number {
-	return arr.strings.texts.length - arr.strings.freeList.length;
+	return liveCellBlocks(arr.mem).length;
+}
+
+// The handle of every live string cell on the heap, for the ledger.
+export function heapStringHandles(arr: RaiserArrayHeap): int64[] {
+	const handles: int64[] = [];
+	for (const block of liveCellBlocks(arr.mem)) handles.push(heapTextHandle(block + refBlockOffset(8)));
+	return handles;
+}
+
+export function stringHandleRc(handle: int64): int64 {
+	return textRc(textAddress(handle));
 }
 
 // --- Accessors ---
@@ -594,7 +549,8 @@ export interface RaiserArrayData {
 export interface RaiserArrayHeap {
 	arrays: RaiserArrayData[];
 	freeList: int64[];
-	strings: RaiserStringHeap;
+	mem: VmMemory;
+	stringBytes: HashMap<int64, int64>;
 	boxes: RaiserBoxHeap;
 	orcRoots: int64[];
 	orcThreshold: number;
@@ -608,7 +564,7 @@ export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
 	const orcRoots: int64[] = [];
-	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { arrays, freeList, mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
@@ -1232,7 +1188,7 @@ export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => { const data: Cursor<RaiserArrayData> = arrHeap.arrays[index]; data.rc += 1; },
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc += 1; },
-		RaiserHeapKind.String => { const strings: Cursor<RaiserStringHeap> = arrHeap.strings; strings.rc[index] += 1; },
+		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) + 1); },
 		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc += 1; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1253,10 +1209,10 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 			if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.String => {
-			const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
-			const left = strings.rc[index] - 1;
-			strings.rc[index] = left;
-			if (left <= 0) { rcDestroyString(arrHeap, index); }
+			const cell = textAddress(handle);
+			const left = textRc(cell) - 1;
+			setTextRc(cell, left);
+			if (left <= 0) { rcDestroyString(arrHeap, handle); }
 		},
 		RaiserHeapKind.Box => {
 			const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index];
@@ -1277,7 +1233,7 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => { const data: Cursor<RaiserArrayData> = arrHeap.arrays[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
-		RaiserHeapKind.String => { const strings: Cursor<RaiserStringHeap> = arrHeap.strings; strings.rc[index] = strings.rc[index] - 1; last = strings.rc[index] <= 0; },
+		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) - 1); last = textRc(cell) <= 0; },
 		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1292,7 +1248,7 @@ export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => { count = arrHeap.arrays[index].rc; },
 		RaiserHeapKind.Object => { count = objHeap.objects[index].rc; },
-		RaiserHeapKind.String => { count = arrHeap.strings.rc[index]; },
+		RaiserHeapKind.String => { count = textRc(textAddress(handle)) as int32; },
 		RaiserHeapKind.Box => { count = arrHeap.boxes.items[index].rc; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1327,7 +1283,7 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 			data.added.length = 0;
 			objHeap.freeList.push(index);
 		},
-		RaiserHeapKind.String => rcDestroyString(arrHeap, index),
+		RaiserHeapKind.String => rcDestroyString(arrHeap, handle),
 		RaiserHeapKind.Box => {
 			arrHeap.boxes.items[index].value = raiserNil();
 			arrHeap.boxes.freeList.push(index);
@@ -1337,16 +1293,15 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 }
 
 @noinline
-function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
-	const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
-	if (index < strings.bytes.length && strings.bytes[index] != 0) {
-		const bytes = arrHeap.arrays[handleIndex(strings.bytes[index])];
+function rcDestroyString(arrHeap: RaiserArrayHeap, handle: int64): void {
+	const held = arrHeap.stringBytes.get(handle);
+	if (held != null && held != 0) {
+		const bytes = arrHeap.arrays[handleIndex(held)];
 		bytes.items.length = 0;
-		arrHeap.freeList.push(handleIndex(strings.bytes[index]));
-		strings.bytes[index] = 0;
+		arrHeap.freeList.push(handleIndex(held));
 	}
-	strings.texts[index] = "";
-	strings.freeList.push(index);
+	arrHeap.stringBytes.delete(handle);
+	freeHeapText(arrHeap.mem, textAddress(handle));
 }
 
 @noinline
@@ -1465,7 +1420,7 @@ function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: 
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => { dstArr.arrays[index].rc = 0; },
 		RaiserHeapKind.Object => { dstObj.objects[index].rc = 0; },
-		RaiserHeapKind.String => { dstArr.strings.rc[index] = 0; },
+		RaiserHeapKind.String => { setTextRc(textAddress(handle), 0); },
 		RaiserHeapKind.Box => { dstArr.boxes.items[index].rc = 0; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1699,7 +1654,7 @@ test "copyGraph passes scalars and future handles through" {
 	assert copyGraph(sArr, sObj, dArr, dObj, raiserInt(3)).intVal == 3;
 	const text = copyGraph(sArr, sObj, dArr, dObj, heapAllocString(sArr, "s"));
 	assert heapStringText(dArr, text) == "s";
-	assert handleIndex(text.intVal) == 0 && sArr.strings.texts.length == 1 && dArr.strings.texts.length == 1;
+	assert heapStringLive(sArr) == 1 && heapStringLive(dArr) == 1;
 	const fut = copyGraph(sArr, sObj, dArr, dObj, raiserFuture(4));
 	assert fut.kind == RaiserValueKind.Future;
 	assert fut.intVal == 4;
@@ -1844,7 +1799,8 @@ export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: int64,
 export function clearArrayHeap(heap: RaiserArrayHeap): void {
 	heap.arrays.length = 0;
 	heap.freeList.length = 0;
-	heap.strings = createStringHeap();
+	heap.mem = createVmMemory();
+	heap.stringBytes.clear();
 	heap.boxes = createBoxHeap();
 }
 
@@ -1962,6 +1918,17 @@ test "a string frees at rc zero and its slot is reused" {
 	assert heapStringText(arr, again) == "xyz";
 }
 
+test "a string is an msString in VM memory: the length, then a payload that opens with its capacity and ends in a zero byte" {
+	const arr = createArrayHeap();
+	const v = heapAllocString(arr, "g\u00e9");
+	const at = textAddress(v.intVal);
+	assert ld64(at) == 3 && ld64(ld64(at + 8)) >= 3 && ldByte(ld64(at + 8) + 8 + 3) == 0 && isHeapBlock(arr.mem, ld64(at + 8)) && !isHeapBlock(constMemory, ld64(at + 8));
+	assert heapStringHandles(arr).length == 1 && heapStringHandles(arr)[0] == v.intVal;
+	const konst = raiserConstString("kept");
+	const constAt = textAddress(konst.intVal);
+	assert ld64(constAt) == 4 && (ld64(ld64(constAt + 8)) & 4611686018427387904) != 0 && isConstMemory(constMemory, constAt);
+}
+
 test "a constant string is shared by every heap and never freed" {
 	const a = createArrayHeap();
 	const b = createArrayHeap();
@@ -1981,7 +1948,7 @@ test "a string whose bytes are not a whole UTF-8 sequence is stored, not taken f
 		assert v.intVal >= 0;
 		assert heapStringText(heap, v).byteLength == text.byteLength;
 	}
-	assert heapAllocString(heap, "").intVal == makeHandle(0, RaiserHeapKind.ConstString);
+	assert heapAllocString(heap, "").intVal == emptyTextHandle();
 }
 
 test "destroying a container releases its strings" {
@@ -2014,7 +1981,7 @@ test "a handle names its heap kind: the kind recomputed from the handle equals t
 		assert handleKind(v.intVal) == v.kind, `${v.kind}`;
 		assert handleAgrees(v.kind, v.intVal);
 	}
-	assert handleHeapKind(strand.intVal) == RaiserHeapKind.String && handleIndex(strand.intVal) == 0;
+	assert handleHeapKind(strand.intVal) == RaiserHeapKind.String && textRc(textAddress(strand.intVal)) == OWNED_BY_RECEIVER_RC;
 	assert handleHeapKind(constant.intVal) == RaiserHeapKind.ConstString;
 	assert handleKind(0) == RaiserValueKind.Nil && handleAgrees(RaiserValueKind.Nil, 0);
 	assert handleKind(heapAllocString(arr, "").intVal) == RaiserValueKind.String;
