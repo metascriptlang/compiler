@@ -3279,11 +3279,12 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 			const tc = retag(OPERAND_KINDS[k + 2], ic);
 			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
 				ip = vm.ip;
-				if (vm.halted) break;
+				if (vm.halted) { vmNoteSite(vm, func, pc); break; }
 				slots = vm.regs.slots;
 				objects = vm.objectHeap.objects;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
+				if (vm.halted) vmNoteSite(vm, func, pc);
 				if (vm.halted || vm.yielded) break;
 				ip = vm.ip;
 				fb = vm.base;
@@ -4216,6 +4217,10 @@ function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int
 		vmIncref(vm, elem);
 	}
 	setRegRef(vm, ia, RaiserValueKind.Array, handle);
+}
+
+function vmNoteSite(vm: RaiserVM, func: RaiserFunction, pc: int32): void {
+	if (vm.error.startsWith("expected a") && !vm.error.includes(" (in ")) vm.error = `internal: ${vm.error} (in ${func.name} at instruction ${pc})`;
 }
 
 function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expected: string): int64 {
@@ -8710,6 +8715,16 @@ test "placed: a store through an array cell names the function and instruction t
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error.startsWith("internal: cannot write through a value of kind Array") && vm.error.endsWith(" at instruction 2)"), vm.error;
+}
+
+test "placed: an operand of the wrong kind names the function and instruction that read it" {
+	const main = mainWithClasses([
+		slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+		raiserABC(RaiserOpcode.LoadField, 1, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [], ["f"]);
+	const vm = execModule(createRaiserModule("placed", [main], 0));
+	assert vm.error.startsWith("internal: expected an object, got value kind Array") && vm.error.endsWith(" at instruction 1)"), vm.error;
 }
 
 test "placed: a nil stored through an array cell empties the cell in place and releases nothing" {
