@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-match r=5000000-2
 // matchLower already expands a return-position match into arms that return
 // directly, but it wraps them in a block — and transformStmt used to ignore

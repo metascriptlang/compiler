@@ -295,9 +295,14 @@ export function ensureRefs(regs: RaiserRegFile, count: number): void {
 // --max-vm-iterations=<n> (options.ms calls setDefaultLoopLimit).
 const DEFAULT_LOOP_LIMIT = 10000000;
 let vmLoopLimitDefault: int64 = DEFAULT_LOOP_LIMIT;
+let vmLoopLimitChosen = false;
+const NO_LOOP_LIMIT: int64 = 9223372036854775807;
 
 export function setDefaultLoopLimit(n: number): void {
-	if (n > 0) vmLoopLimitDefault = n as int64;
+	if (n > 0) {
+		vmLoopLimitDefault = n as int64;
+		vmLoopLimitChosen = true;
+	}
 }
 
 export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM {
@@ -326,7 +331,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", comptime, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
@@ -2790,7 +2795,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer division by zero"); return;
+				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
 				} else if (rhs == -1) {
 					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
 					} else { words[wb + ia] = -lhs; }
@@ -2813,7 +2818,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer division by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
 				}
@@ -3905,7 +3910,7 @@ function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
 	}
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
-		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return false;
+		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return false;
 	}
 	return true;
 }
@@ -3987,7 +3992,7 @@ function vmHandleLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	}
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
-		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
+		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return;
 	}
 	setRegConform(vm, ia, heapArrayGet(vm.arrayHeap, handle, idx));
 }
@@ -4004,7 +4009,7 @@ function vmHandleStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	}
 	const arrLen = heapArrayLen(vm.arrayHeap, handle);
 	if (idx < 0 || idx >= arrLen) {
-		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
+		vmError(vm, `index ${idx} out of bounds (length ${arrLen})`); return;
 	}
 	if (vmElemRefused(vm, handle, val)) return;
 	vmIncref(vm, val);
@@ -4076,7 +4081,7 @@ function vmHandleArrayPop(vm: RaiserVM, ia: int32, ib: int32): void {
 	const data = vm.arrayHeap.arrays[handleIndex(handle)];
 	const n = arrayHeldCount(data);
 	if (n == 0) {
-		vmError(vm, "array index out of bounds: -1 (length 0)"); return;
+		vmError(vm, "index -1 out of bounds (length 0)"); return;
 	}
 	const val = arrayHeldAt(data, n - 1);
 	heapArraySetLen(vm.arrayHeap, handle, (n - 1) as int64);
@@ -6045,7 +6050,7 @@ test "instruction line field preserved" {
 
 test "div by zero sets error" {
 	const vm = execBinOp(RaiserOpcode.DivI64, 10, 0);
-	assert vm.error == "integer division by zero";
+	assert vm.error == "division by zero";
 	assert vm.halted;
 }
 
@@ -7090,7 +7095,7 @@ test "a runtime error after a loop reports the line of the instruction that rais
 	code[5].line = 6;
 	code[6].line = 9;
 	const vm = execModule(makeTestModule(code, [raiserInt(0), raiserInt(3), raiserInt(1)]));
-	assert vm.error == "integer division by zero";
+	assert vm.error == "division by zero";
 	assert vm.loopCount == 2;
 	assert vmDumpStack(vm).endsWith("line 9 in test (current)");
 }
@@ -7111,7 +7116,7 @@ test "a runtime error after a call reports the caller's line and the caller's re
 	const main = createRaiserFunction("main", mainCode, [raiserInt(1)], 0, 0, 6);
 	const funcs: RaiserFunction[] = [callee, main];
 	const vm = execModule(createRaiserModule("test", funcs, 1));
-	assert vm.error == "integer division by zero";
+	assert vm.error == "division by zero";
 	assert vmDumpStack(vm).endsWith("line 12 in main (current)");
 }
 
@@ -8005,7 +8010,7 @@ test "array kernels: pop and shift hand the element out, an empty shift gives th
 	vm.regs.refs[0] = numberArray(vm, [1, 2]);
 	execLoop(vm);
 	assert vm.output == "2\n1\n0\n", vm.output;
-	assert vm.error.includes("array index out of bounds: -1 (length 0)"), vm.error;
+	assert vm.error.includes("index -1 out of bounds (length 0)"), vm.error;
 }
 
 function stringKernel(texts: string[], code: RaiserInstruction[], consts: RaiserValue[]): RaiserVM {

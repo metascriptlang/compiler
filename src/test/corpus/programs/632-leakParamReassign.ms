@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @maxrss: 20
 // @stdout: leak-param-reassign r=6000000-2
 // Params are borrowed slots the DRC injector never destroys; assigning an
