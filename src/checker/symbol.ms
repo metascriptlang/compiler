@@ -284,7 +284,7 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 
 export function lookupSymbolReadonly(table: Readonly<SymbolTable>, name: string): Readonly<Symbol> {
 	const nameId = findIdentId(table.identCache, name);
-	if (nameId == 0) return null as unknown as Readonly<Symbol>;
+	if (nameId == null) return null as unknown as Readonly<Symbol>;
 	return scopeSymbol(table.current, nameId);
 }
 

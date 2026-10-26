@@ -1,4 +1,4 @@
-// Interns a name as a unique int32 id (1-based, 0 is absent) so symbol names compare in O(1).
+// Interns a name as a unique int32 id (1-based) so symbol names compare in O(1).
 
 import { hashStringSigned } from "std/hash";
 
@@ -29,7 +29,7 @@ export function createIdentCache(): IdentCache {
 		buckets.push(null);
 		i = i + 1;
 	}
-	return { buckets, counter: 0, names: [""] };
+	return { buckets, counter: 0, names: [] };
 }
 
 // ===== Core: Intern String → ID =====
@@ -64,10 +64,11 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 }
 
 export function identName(cache: Readonly<IdentCache>, id: int32): string {
-	return id > 0 && id < cache.names.length ? cache.names[id] : "";
+	if (id < 1 || id > cache.names.length) throw new Error("internal: identName of id " + id.toString() + " that was never interned");
+	return cache.names[id - 1];
 }
 
-export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {
+export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 | null {
 	const h = hashStringSigned(name);
 	const idx = h & BUCKET_MASK;
 	let entry = cache.buckets[idx];
@@ -75,7 +76,7 @@ export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {
 		if (entry.hash == h && entry.name == name) return entry.id;
 		entry = entry.next;
 	}
-	return 0;
+	return null;
 }
 
 // ===== Tests =====
@@ -98,6 +99,14 @@ test "ids start at 1" {
 	const cache = createIdentCache();
 	const id = getIdentId(cache, "first");
 	assert id == 1;
+}
+
+test "identName and findIdentId round-trip, and an unknown name is null" {
+	const cache = createIdentCache();
+	const id = getIdentId(cache, "alpha");
+	assert identName(cache, id) == "alpha";
+	assert findIdentId(cache, "alpha") == id;
+	assert findIdentId(cache, "beta") == null;
 }
 
 test "empty string interns" {
