@@ -4,7 +4,7 @@ import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqLen, seqClass, seqWidth
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex } from "./memory";
+import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell } from "./memory";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -71,7 +71,8 @@ export function handleKind(handle: int64): RaiserValueKind {
 	return match (handleHeapKind(handle)) {
 		RaiserHeapKind.None => RaiserValueKind.Nil,
 		RaiserHeapKind.String | RaiserHeapKind.ConstString => RaiserValueKind.String,
-		RaiserHeapKind.Array | RaiserHeapKind.Seq => RaiserValueKind.Array,
+		RaiserHeapKind.Array => RaiserValueKind.Array,
+		RaiserHeapKind.Seq => isObjectCell(handle) ? RaiserValueKind.Object : RaiserValueKind.Array,
 		RaiserHeapKind.Object => RaiserValueKind.Object,
 		RaiserHeapKind.Future => RaiserValueKind.Future,
 		RaiserHeapKind.Box => RaiserValueKind.Box,
@@ -92,8 +93,8 @@ export function handleValue(h: int64): RaiserValue {
 export function handleAgrees(kind: RaiserValueKind, handle: int64): boolean {
 	const tag = handleTag(handle);
 	return match (kind) {
-		RaiserValueKind.ElemAddr | RaiserValueKind.Array => tag == (RaiserHeapKind.Array as int64) || tag == (RaiserHeapKind.Seq as int64),
-		RaiserValueKind.FieldAddr | RaiserValueKind.Object => tag == (RaiserHeapKind.Object as int64),
+		RaiserValueKind.ElemAddr | RaiserValueKind.Array => tag == (RaiserHeapKind.Array as int64) || (tag == (RaiserHeapKind.Seq as int64) && !isObjectCell(handle)),
+		RaiserValueKind.FieldAddr | RaiserValueKind.Object => tag == (RaiserHeapKind.Object as int64) || (tag == (RaiserHeapKind.Seq as int64) && isObjectCell(handle)),
 		RaiserValueKind.String => tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64),
 		RaiserValueKind.Future => tag == (RaiserHeapKind.Future as int64),
 		RaiserValueKind.Box => tag == (RaiserHeapKind.Box as int64),
@@ -587,6 +588,11 @@ export function isSeqHandle(handle: int64): boolean {
 @inline
 export function seqCellOf(handle: int64): int64 {
 	return (handle >> HEAP_KIND_BITS) << HEAP_KIND_BITS;
+}
+
+// A Seq-tagged handle is a cell; an array cell carries SEQ_TYPE_INDEX in its header and an object cell its class's table index.
+export function isObjectCell(handle: int64): boolean {
+	return isSeqHandle(handle) && cellTypeIndex(seqCellOf(handle)) >= 0;
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
@@ -1085,6 +1091,26 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1 };
 }
 
+export const OBJECT_CELL_SLOT_BYTES: int64 = 8;
+
+const classTypes: RaiserClassType[] = [];
+const registeredClassTypes: Map<string, int32> = new Map<string, int32>();
+
+// The table index of a class type, adding it on first use. Two types of one name and one field layout share an index.
+export function classTypeIndex(t: RaiserClassType): int32 {
+	const key = `${t.name}/${t.depth}/${t.fields.join(",")}`;
+	if (registeredClassTypes.has(key)) return registeredClassTypes.get(key)!;
+	const index = classTypes.length as int32;
+	classTypes.push(t);
+	registeredClassTypes.set(key, index);
+	return index;
+}
+
+export function classTypeAt(index: int64): RaiserClassType {
+	if (index < 0 || index >= classTypes.length) throw new Error(`internal: type index ${index} is not in the type table`);
+	return classTypes[index as number];
+}
+
 export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
 
 export interface RaiserObjectData {
@@ -1465,6 +1491,10 @@ function removeSeqView(arrHeap: RaiserArrayHeap, base: int64, view: int64): void
 @noinline
 function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	const c = seqCellOf(handle);
+	if (cellTypeIndex(c) >= 0) {
+		rcDestroyObjectCell(arrHeap, objHeap, c);
+		return;
+	}
 	const base = seqBase(c);
 	if (base != 0) {
 		removeSeqView(arrHeap, base, handle);
@@ -1480,6 +1510,10 @@ function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handl
 // Frees the cell of a typed array and, with a plain one, the views over it.
 function rcFreeSeq(arrHeap: RaiserArrayHeap, handle: int64): void {
 	const c = seqCellOf(handle);
+	if (cellTypeIndex(c) >= 0) {
+		if (!disposeCell(arrHeap.mem, c, 8)) throw new Error(`internal: object cell ${c} is not a live cell`);
+		return;
+	}
 	const base = seqBase(c);
 	if (base != 0) {
 		removeSeqView(arrHeap, base, handle);
@@ -1509,6 +1543,19 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, in
 	data.values.length = 0;
 	data.added.length = 0;
 	objHeap.freeList.push(index);
+}
+
+@noinline
+function rcDestroyObjectCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, cell: int64): void {
+	const t = classTypeAt(cellTypeIndex(cell));
+	for (let i = 0; i < t.kinds.length; i += 1) {
+		const cls = t.kinds[i];
+		if (cls != RaiserRegClass.Ref && cls != RaiserRegClass.Dyn) continue;
+		if (cls == RaiserRegClass.Ref && t.uncounted[i]) continue;
+		const held = ld64(cell + (i as int64) * OBJECT_CELL_SLOT_BYTES);
+		if (held != 0) rcDecrefHandle(arrHeap, objHeap, held);
+	}
+	if (!disposeCell(arrHeap.mem, cell, 8)) throw new Error(`internal: object cell ${cell} is not a live cell`);
 }
 
 @noinline

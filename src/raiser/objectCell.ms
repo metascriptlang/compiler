@@ -1,30 +1,10 @@
 import { VmMemory, createVmMemory, newCell, disposeCell, cellRc, setCellRc, setCellRootIdx, cellTypeIndex, cellAllocSize, isLiveCell, liveCellBlocks, ld64, st64 } from "./memory";
 import { RaiserRegClass } from "./bytecode";
-import { RaiserClassType, createClassType } from "./value";
+import { RaiserClassType, RaiserValueKind, RaiserHeapKind, createClassType, createArrayHeap, createStructHeap, handleKind, handleAgrees, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcCountOf, rcFreeHandle, OBJECT_CELL_SLOT_BYTES, classTypeIndex, classTypeAt } from "./value";
 
 // An object with a layout is a cell: the reference header, then one 8 byte slot per laid field in layout order.
-// The header's type word indexes the table below, so a cell knows its class and its destroy routine without a handle
+// The header's type word indexes the class type table, so a cell knows its class and its destroy routine without a handle
 // heap. A Dyn slot holds the handle of its box, as a Dyn register does; every other slot holds the word its class holds.
-export const OBJECT_CELL_SLOT_BYTES: int64 = 8;
-
-const classTypes: RaiserClassType[] = [];
-const registered: Map<string, int32> = new Map<string, int32>();
-
-// The table index of a class type, adding it on first use. Two types of one name and one field layout share an index.
-export function classTypeIndex(t: RaiserClassType): int32 {
-	const key = `${t.name}/${t.depth}/${t.fields.join(",")}`;
-	if (registered.has(key)) return registered.get(key)!;
-	const index = classTypes.length as int32;
-	classTypes.push(t);
-	registered.set(key, index);
-	return index;
-}
-
-export function classTypeAt(index: int64): RaiserClassType {
-	if (index < 0 || index >= classTypes.length) throw new Error(`internal: type index ${index} is not in the type table`);
-	return classTypes[index as number];
-}
-
 export function objectCellNew(mem: VmMemory, t: RaiserClassType, rc: int64): int64 {
 	when (mode != "danger") { if (t.kinds.length != t.fields.length) throw new Error(`internal: class ${t.name} has ${t.fields.length} fields and ${t.kinds.length} slot classes`); }
 	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_CELL_SLOT_BYTES, 8, classTypeIndex(t) as int64, true);
@@ -72,6 +52,29 @@ test "an object cell starts zeroed, keeps its slots and names its class through 
 	assert cellRc(cell) == 0 && cellAllocSize(cell) >= 24 + 24;
 	objectCellFree(mem, cell);
 	assert liveCellBlocks(mem).length == 0;
+}
+
+function cellHandle(cell: int64): int64 {
+	return cell | (RaiserHeapKind.Seq as int64);
+}
+
+test "an object cell's handle reads as an object and a release of the last holder frees the cells it holds" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const t = pointType();
+	const inner = objectCellNew(arr.mem, t, 1);
+	const outer = objectCellNew(arr.mem, t, 1);
+	objectCellSetSlot(outer, 2, cellHandle(inner));
+	assert handleKind(cellHandle(outer)) == RaiserValueKind.Object;
+	assert handleAgrees(RaiserValueKind.Object, cellHandle(outer)) && !handleAgrees(RaiserValueKind.Array, cellHandle(outer));
+	rcIncrefHandle(arr, obj, cellHandle(inner));
+	assert rcCountOf(arr, obj, cellHandle(inner)) == 2;
+	rcDecrefHandle(arr, obj, cellHandle(outer));
+	assert rcCountOf(arr, obj, cellHandle(inner)) == 1;
+	assert liveCellBlocks(arr.mem).length == 1;
+	assert rcDecIsLast(arr, obj, cellHandle(inner));
+	rcFreeHandle(arr, obj, cellHandle(inner));
+	assert liveCellBlocks(arr.mem).length == 0;
 }
 
 test "one class type shares a table index however many cells hold it" {
