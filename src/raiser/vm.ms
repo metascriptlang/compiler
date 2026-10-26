@@ -1,3 +1,4 @@
+import { wlen, wat, wput, wpush, watIn, wputIn } from "./vmSeq";
 // Raiser VM — Bytecode executor
 
 import {
@@ -3153,9 +3154,9 @@ function fastLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
 	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
 	const cls = ia & 7;
-	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= arr.words.length) return false;
-	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), arr.words[idx as number]);
-	else vm.regs.words[vm.wordBase + (ia >> 3)] = arr.words[idx as number];
+	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (arr.words.wlen() as int64)) return false;
+	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), arr.words.watIn(idx as number));
+	else vm.regs.words[vm.wordBase + (ia >> 3)] = arr.words.watIn(idx as number);
 	return true;
 }
 
@@ -3166,17 +3167,17 @@ function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean 
 	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
 	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
 	const cls = ic & 7;
-	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= arr.words.length) return false;
+	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (arr.words.wlen() as int64)) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.refs[vm.refBase + (ic >> 3)];
-		const old = arr.words[idx as number];
+		const old = arr.words.watIn(idx as number);
 		if (old != held) {
 			holdShell(vm, held);
-			arr.words[idx as number] = held;
+			arr.words.wputIn(idx as number, held);
 			releaseShell(vm, old);
 		}
 	} else {
-		arr.words[idx as number] = vm.regs.words[vm.wordBase + (ic >> 3)];
+		arr.words.wputIn(idx as number, vm.regs.words[vm.wordBase + (ic >> 3)]);
 	}
 	return true;
 }
@@ -3200,10 +3201,10 @@ function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.refs[vm.refBase + (ib >> 3)];
-		arr.words.push(held);
+		arr.words.wpush(held);
 		holdShell(vm, held);
 	} else {
-		arr.words.push(vm.regs.words[vm.wordBase + (ib >> 3)]);
+		arr.words.wpush(vm.regs.words[vm.wordBase + (ib >> 3)]);
 	}
 	return true;
 }
@@ -3776,9 +3777,9 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 			const data = vm.arrayHeap.arrays[index];
 			if (!data.elemUncounted) {
 				if (data.elemClass == RaiserRegClass.Ref) {
-					for (let i = 0; i < data.words.length; i += 1) {
-						const child = data.words[i];
-						data.words[i] = 0;
+					for (let i = 0; i < data.words.wlen(); i += 1) {
+						const child = data.words.wat(i);
+						data.words.wput(i, 0);
 						vmReleaseChild(vm, child, data.elemCyclic);
 					}
 				}
@@ -3898,9 +3899,9 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 		const data = vm.arrayHeap.arrays[index];
 		if (data.elemUncounted) return;
 		if (data.elemClass == RaiserRegClass.Ref) {
-			for (let i = 0; i < data.words.length; i += 1) {
-				const held = data.words[i];
-				data.words[i] = 0;
+			for (let i = 0; i < data.words.wlen(); i += 1) {
+				const held = data.words.wat(i);
+				data.words.wput(i, 0);
 				vmReleasePlanned(vm, held, plans, plan.children[0], data.elemCyclic);
 			}
 		}
@@ -8359,7 +8360,7 @@ test "placed: AssignInPlace gives an array behind a pointer the source's element
 	assert vm.error == "", vm.error;
 	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
 	const dest = vm.arrayHeap.arrays[handleIndex(vm.regs.refs[0])];
-	assert dest.words.length == 2 && dest.rc == 2, `${dest.words.length} ${dest.rc}`;
+	assert dest.words.wlen() == 2 && dest.rc == 2, `${dest.words.wlen()} ${dest.rc}`;
 	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 1 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
 }
 

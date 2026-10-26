@@ -1,3 +1,4 @@
+import { wput, wpush } from "./vmSeq";
 // Raiser ORC — cycle collector (Bacon synchronous trial deletion).
 //
 // ARC (rcIncref/rcDecref in value.ms) reclaims everything except reference
@@ -108,7 +109,7 @@ function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: i
 	if (handleHeapKind(owner) == RaiserHeapKind.Array) {
 		const data = arrHeap.arrays[handleIndex(owner)];
 		if (data.elemClass == RaiserRegClass.Dyn) { data.items[index] = raiserNil(); }
-		else if (data.elemClass == RaiserRegClass.Ref) { data.words[index] = 0; }
+		else if (data.elemClass == RaiserRegClass.Ref) { data.words.wput(index, 0); }
 		else throw new Error("internal: a collector slot names an array that holds no handles");
 		return;
 	}
@@ -385,7 +386,7 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	arr.arrays[handleIndex(words)].elemCyclic = true;
 	heapObjectSetField(obj, o, "items", raiserArray(items));
 	heapArrayPush(arr, items, raiserArray(words));
-	arr.arrays[handleIndex(words)].words.push(o);
+	arr.arrays[handleIndex(words)].words.wpush(o);
 	rcIncref(arr, obj, raiserObject(o));
 	orcRegisterCandidate(arr, obj, items);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 3;
