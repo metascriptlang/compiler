@@ -1,6 +1,6 @@
 import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
-import { isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
+import { isStructType, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocRef, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
@@ -168,10 +168,22 @@ function isSizedArrayType(type: Type | null): boolean {
 	return t != null && t.kind == TypeKind.SizedArray;
 }
 
+const LIFTED_OPS: AttachedOp[] = [AttachedOp.AttachedDestructor, AttachedOp.AttachedWasMoved, AttachedOp.AttachedAsgn, AttachedOp.AttachedSink];
+
+function runsDistinctHook(call: CallExprData, type: Type | null): boolean {
+	const own = skipModifier(type);
+	if (own == null || distinctBody(own) == null) return false;
+	for (const op of LIFTED_OPS) {
+		if (getOpByKey(own, op) == call.callee.resolvedSym) return true;
+	}
+	return false;
+}
+
 function isCellHook(call: CallExprData, flag: SymbolFlag): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || !hasFlag(sym, flag) || call.arguments.length != 1) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
+	if (runsDistinctHook(call, type)) return false;
 	return isCellType(type) || isSizedArrayType(type);
 }
 
@@ -179,7 +191,7 @@ function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	return type != null && isCellType(type) && getOpByKey(type, op) == sym;
+	return type != null && isCellType(type) && !runsDistinctHook(call, type) && getOpByKey(type, op) == sym;
 }
 
 function isLiftedCellSink(call: CallExprData): boolean {
