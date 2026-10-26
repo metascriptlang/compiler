@@ -1050,6 +1050,15 @@ function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: i
 	setRegConform(vm, operandTagged(heldRank as int32, RaiserRegClass.Dyn), value);
 }
 
+function freePendingBox(vm: RaiserVM, abs: int64): void {
+	const h = vm.regs.refs[abs];
+	if (h == 0) return;
+	if (!vm.placed) { writeRef(vm, abs, 0); return; }
+	vm.regs.refs[abs] = 0;
+	vm.arrayHeap.boxes.items[handleIndex(h)].value = raiserNil();
+	rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
+}
+
 // Landing on a Catch ends the unwind; landing on a Finally runs it and comes
 // back through FinallyEnd. Out of frames means nobody handled it.
 function unwindStep(vm: RaiserVM): void {
@@ -3283,9 +3292,11 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.FinallyEnd => {
 			const kind = vm.regs.words[absOf(vm, ia)];
-			const held = getDyn(vm, operandTagged(ib, RaiserRegClass.Dyn));
+			const heldReg = operandTagged(ib, RaiserRegClass.Dyn);
+			const held = getDyn(vm, heldReg);
+			if (kind == FINALLY_RAISE) setException(vm, held);
+			freePendingBox(vm, absOf(vm, heldReg) as int64);
 			if (kind == FINALLY_RAISE) {
-				setException(vm, held);
 				unwindStep(vm);
 			} else if (kind == FINALLY_RETURN) {
 				vm.ip = held.intVal as int32;
@@ -8158,4 +8169,33 @@ test "array kernels: object elements are shared by a slice and freed by the spli
 	const sliced = make([...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(0), raiserInt(2)]);
 	execLoop(sliced);
 	assert objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 0)) == 2 && objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 1;
+}
+
+function returnThroughFinally(placed: boolean): RaiserVM {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 1, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 1, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [], 0, 0, 2, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4, [RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Dyn]);
+	return execModule(placedModule([fMain, fGuarded], placed), "orc");
+}
+
+test "a return through a finally frees the box that held it, placed or not" {
+	const placed = returnThroughFinally(true);
+	assert placed.error == "" && placed.exitValue.intVal == 7, placed.error;
+	assert heapBoxLive(placed.arrayHeap) == 0, `${heapBoxLive(placed.arrayHeap)}`;
+	const plain = returnThroughFinally(false);
+	assert plain.error == "" && plain.exitValue.intVal == 7, plain.error;
+	assert heapBoxLive(plain.arrayHeap) == 0, `${heapBoxLive(plain.arrayHeap)}`;
 }
