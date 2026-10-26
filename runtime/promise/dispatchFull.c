@@ -176,10 +176,20 @@ static MS_THREAD_LOCAL msDispatcher* gDispatcher = NULL;
 
 extern _Thread_local bool msIsPoolWorker;  /* pool.c — true only on pool worker threads */
 
-/* Requests in flight on the main thread's I/O engine. An engine runs on its own thread,
- * so the main engine's calls and the main-thread reader never race. */
+/* Requests in flight on the main thread's I/O engine. Only the first non-worker thread
+ * to make a request may make one, so the count has a single writer, its reader. */
 static int32_t msMainIoOps = 0;
-void msIoOpsAdd(int32_t delta) { if (!msIsPoolWorker) msMainIoOps += delta; }
+static _Atomic(int64_t) msMainIoThread = 0;
+void msIoOpsAdd(int32_t delta) {
+	if (msIsPoolWorker) return;
+	int64_t self = msLockedSelf();
+	int64_t owner = 0;
+	if (!atomic_compare_exchange_strong_explicit(&msMainIoThread, &owner, self, memory_order_acq_rel, memory_order_acquire) && owner != self) {
+		fputs("internal: an I/O engine request was made on a thread that is neither the main thread nor a pool worker\n", stderr);
+		abort();
+	}
+	msMainIoOps += delta;
+}
 extern _Thread_local int msPoolWorkerSchedId;
 extern void msPoolWakeWorker(int schedulerID);
 extern void msPoolPendingAdd(int32_t delta);
