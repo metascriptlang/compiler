@@ -3411,6 +3411,13 @@ second `onDestroy` parameter failed in the C compiler (`too few arguments to fun
 expected 2, have 1`), a wrong `onCopy` source type failed there or compiled, and a value returned
 from `onDestroy` was accepted and ran (control `./msc`).
 
+A value still in a garbage cycle when the program exits is not collected, as in the reference, so
+its `onDestroy` and `onTrace` do not run. A program that needs them calls `collectCycles()` from
+`std/runtime` before it ends; on JS and the Raiser it does nothing. Measured on C by train t10zw
+(2026-10-26, main d58d26aaa): corpus `cycleHookNotRunAtExit` prints no hook line, and
+`collectCyclesRunsCycleHook` prints it once, both also after an `await`. A build with the DRC
+ledger still collects at exit, so the SAN lane can tell a leaked cell from a floating cycle.
+
 The receiver names the type the hook belongs to, and the checker refuses a hook whose receiver
 cannot be that type, with an error that names the hook and the shapes it takes. A class or an
 interface is held by reference, so it is never copied, moved or cloned by value: `onCopy`,
