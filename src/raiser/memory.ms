@@ -396,6 +396,14 @@ export function allocConst(mem: VmMemory, size: int64, align: int64): int64 {
 	return bumpAlloc(mem, mem.consts, size, align);
 }
 
+// A frame stack for registers: one block that never moves, so the address of a slot stays valid for as long as the memory lives.
+export function reserveSlots(mem: VmMemory, count: int64): int64 {
+	const bytes = count * 8;
+	const address = hostGrow(mem, bytes);
+	addRegion(mem, address, bytes, RegionKind.Stack);
+	return address;
+}
+
 export function stackMark(mem: VmMemory): StackMark {
 	return { seg: mem.sp.seg, used: mem.sp.used, boxes: mem.sp.boxes };
 }
