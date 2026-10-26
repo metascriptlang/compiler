@@ -126,7 +126,7 @@ test "anyDescendant: stops testing after the first match" {
 	assert calls == 2;
 }
 
-function numNode(v: number): Node {
+function numNode(v: float64): Node {
 	return createNodeAt(NodeKind.NumberLiteral, { value: v, isFloat: false }, makeLoc(1, 1));
 }
 
