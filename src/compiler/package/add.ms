@@ -104,35 +104,36 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	return { name: arg, version: "" };
 }
 
-function registryLockEntry(
-	name: string,
-	version: string,
-	found: RegistryVersion | null,
-): LockEntry {
+function registryLockEntry(name: string, version: string, found: RegistryVersion): LockEntry {
 	return {
 		key: name + "@" + version,
 		source: SourceKind.Registry,
 		version,
-		integrity: found != null ? found.integrity : "",
-		url: found != null ? found.archiveUrl : "",
+		integrity: found.integrity,
+		url: found.archiveUrl,
 		gitRef: "",
 		commit: "",
-		depKeys: found != null ? found.depKeys : [],
-		depValues: found != null ? found.depValues : [],
+		depKeys: found.depKeys,
+		depValues: found.depValues,
 	};
 }
 
 // Version details from registry (archiveUrl + integrity + deps); fetches the package when
-// not yet known.
+// not yet known. The error says why the version cannot be added.
 function registryVersionOf(
 	name: string,
 	version: string,
 	known: RegistryPackage | null,
-): RegistryVersion | null {
-	if (known != null) return findVersion(known, version);
-	const info = fetchPackageInfo(name);
-	if (!info.ok) return null;
-	return findVersion(info.value, version);
+): Result<RegistryVersion, string> {
+	let pkg = known;
+	if (pkg == null) {
+		const info = fetchPackageInfo(name);
+		if (!info.ok) return Result.err(info.error.message);
+		pkg = info.value;
+	}
+	const found = findVersion(pkg, version);
+	if (found == null) return Result.err("version " + version + " is not published");
+	return Result.ok(found);
 }
 
 // A git source in any spelling: `git:…`, `name@git:…` or `alias=git:…`.
@@ -237,6 +238,12 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
+	const record = registryVersionOf(parsed.name, parsed.version, registryPkg);
+	if (!record.ok) {
+		console.log("error: cannot add " + parsed.name + "@" + parsed.version + ": " + record.error);
+		return false;
+	}
+
 	// Add to build.ms
 	const scope = isDev ? "devDeps" : "deps";
 	const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
@@ -245,11 +252,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
-	const entry = registryLockEntry(
-		parsed.name,
-		parsed.version,
-		registryVersionOf(parsed.name, parsed.version, registryPkg),
-	);
+	const entry = registryLockEntry(parsed.name, parsed.version, record.value);
 
 	// Check if already in lockfile — match by package name (not full key,
 	// since the key includes the version and we're updating to a new version)
@@ -317,15 +320,6 @@ test "a plain name@version is unchanged" {
 	assert p.version == "1.2.3";
 }
 
-test "a registry lock entry without registry details has no integrity or url" {
-	const entry = registryLockEntry("cool-json", "1.2.3", null);
-	assert entry.key == "cool-json@1.2.3";
-	assert entry.source == SourceKind.Registry;
-	assert entry.integrity == "";
-	assert entry.url == "";
-	assert entry.depKeys.length == 0;
-}
-
 test "a registry lock entry takes integrity, url and deps from the registry record" {
 	const found: RegistryVersion = {
 		version: "1.2.3",
@@ -340,6 +334,17 @@ test "a registry lock entry takes integrity, url and deps from the registry reco
 	assert entry.url == "https://example.test/cool-json.zip";
 	assert entry.depKeys[0] == "dep";
 	assert entry.depValues[0] == "0.1.0";
+}
+
+test "a version the registry record lacks is an error naming the version" {
+	const known: RegistryPackage = {
+		name: "cool-json", description: "", license: "", repository: "", homepage: "",
+		versions: [{ version: "1.2.3", integrity: "sha256-abc", archiveUrl: "u", publishedAt: "", depKeys: [], depValues: [] }],
+	};
+	assert registryVersionOf("cool-json", "1.2.3", known).ok;
+	const missing = registryVersionOf("cool-json", "9.9.9", known);
+	assert !missing.ok;
+	if (!missing.ok) assert missing.error == "version 9.9.9 is not published";
 }
 
 function addProject(label: string): string {
