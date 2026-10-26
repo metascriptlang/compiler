@@ -1,5 +1,6 @@
 1	_msActorJobCancelMark
 1	_msActorLendBusy
+1	_msGetDispatcher
 1	_msPoolInit
 1	_msThreadChannel
 1	_msWorkerLoopPump
