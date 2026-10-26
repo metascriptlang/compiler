@@ -4,10 +4,10 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, NodeFlag, ArrowFunctionData, FunctionDeclData, FunctionExprData, MethodDeclData, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet } from "../checker/symbol";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
+import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, setFlag } from "../checker/symbol";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
 import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
@@ -1068,7 +1068,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 }
 
 export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
-	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspends(sym, routineDecl(w, sym))) return true;
+	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym)) return true;
 	const known = w.tables.retainedParams.get(sym);
 	if (known != null) return (known & (1 << i)) != 0;
 	w.tables.retainedParams.set(sym, -1);
@@ -1079,19 +1079,10 @@ export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
 	return (bits & (1 << i)) != 0;
 }
 
-function suspends(sym: Symbol, decl: Node | null): boolean {
-	if (hasFlag(sym, SymbolFlag.Async)) return true;
-	if (decl == null) return false;
-	if (decl.flags.has(NodeFlag.WasAsync)) return true;
-	const text = match (decl.kind) {
-		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnFlags,
-		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodFlags,
-		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowFlags,
-		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprFlags,
-		_ => "",
-	};
-	const flags = routineFlagSet(text);
-	return flags.has(RoutineFlag.Async) || flags.has(RoutineFlag.Generator);
+function suspendsAcrossLowering(w: WriteEffects, sym: Symbol): boolean {
+	if (routineSuspends(sym)) return true;
+	const decl = routineDecl(w, sym);
+	return decl != null && decl.flags.has(NodeFlag.WasAsync);
 }
 
 function retainedParams(w: WriteEffects, body: Node, params: Symbol[]): int32 {
@@ -1631,6 +1622,7 @@ function callbackRoutine(name: string, flags: string, forwardTo: Symbol | null, 
 	const use = forwardTo == null ? makeCall(makeIdentResolved(f, loc), [], loc) : makeCallResolved(makeIdentResolved(forwardTo, loc), [makeIdentResolved(f, loc)], forwardTo, loc);
 	const sym = makeSymbol(name, SymbolKind.Function, createFunction([callbackType], ["f"], int32Type()), false);
 	sym.declNode = makeFnDecl(name, [f], [""], makeBlock([makeExprStmt(use, loc)], loc), flags, "", loc);
+	if (flags == "async") setFlag(sym, SymbolFlag.Async);
 	return sym;
 }
 
