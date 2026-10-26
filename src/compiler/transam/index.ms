@@ -611,7 +611,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		if (depPath == "") continue;
 
 		// Skip if registered at current revision (reference: incremental cache hit)
-		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
+		const registeredAt = getRegisteredAt(db.moduleDeps, depId);
+		if (registeredAt != null && registeredAt >= db.revision.value) continue;
 
 		// Skip if already registered (but still recurse for transitive deps).
 		if (findModuleExports(db.exportRegistry, depPath) != null) {
@@ -632,7 +633,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		dbRecordDepImports(db, depPath, depProgram);
 		// Recurse into transitive deps BEFORE resolving this dep
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
-		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
+		const registeredAtNow = getRegisteredAt(db.moduleDeps, depId);
+		if (registeredAtNow != null && registeredAtNow >= db.revision.value) continue;
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).

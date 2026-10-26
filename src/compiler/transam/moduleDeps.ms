@@ -13,35 +13,25 @@
 export class TaModuleDepGraph {
 	forwardAdj: int32[][];  // importerFileId → [importedFileId, ...] in import order
 	reverseAdj: int32[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
-	registeredAt: int32[];  // fileId → revision when exports registered (-1 = never)
+	registeredAt: HashMap<int32, int32>;  // fileId → revision when exports registered; absent = never
 }
 
 export function createModuleDepGraph(): TaModuleDepGraph {
-	return { forwardAdj: [], reverseAdj: [], registeredAt: [] };
+	return { forwardAdj: [], reverseAdj: [], registeredAt: new HashMap<int32, int32>() };
 }
 
 // ===== Export Registration Revision =====
 
-function ensureRegisteredAtCapacity(deps: TaModuleDepGraph, fileId: int32): void {
-	while (deps.registeredAt.length <= fileId) {
-		deps.registeredAt.push(-1);
-	}
-}
-
-export function getRegisteredAt(deps: TaModuleDepGraph, fileId: int32): int32 {
-	if (fileId < 0 || fileId >= deps.registeredAt.length) return -1;
-	return deps.registeredAt[fileId];
+export function getRegisteredAt(deps: TaModuleDepGraph, fileId: int32): int32 | null {
+	return deps.registeredAt.get(fileId);
 }
 
 export function setRegisteredAt(deps: TaModuleDepGraph, fileId: int32, rev: int32): void {
-	ensureRegisteredAtCapacity(deps, fileId);
-	deps.registeredAt[fileId] = rev;
+	deps.registeredAt.set(fileId, rev);
 }
 
 export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: int32): void {
-	if (fileId >= 0 && fileId < deps.registeredAt.length) {
-		deps.registeredAt[fileId] = -1;
-	}
+	deps.registeredAt.delete(fileId);
 }
 
 // ===== Edge Operations =====
@@ -89,7 +79,7 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: int32): void {
 
 // ===== Queries =====
 
-export function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32[] {
+function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32[] {
 	if (fileId < 0 || fileId >= deps.reverseAdj.length) return [];
 	const rev = deps.reverseAdj[fileId];
 	const result: int32[] = [];
@@ -296,9 +286,11 @@ test "reverse index after clear" {
 
 test "registeredAt tracking" {
 	const deps = createModuleDepGraph();
-	assert getRegisteredAt(deps, 0) == -1;
+	assert getRegisteredAt(deps, 0) == null;
 	setRegisteredAt(deps, 0, 5);
 	assert getRegisteredAt(deps, 0) == 5;
+	assert getRegisteredAt(deps, 1) == null;
 	resetRegisteredAt(deps, 0);
-	assert getRegisteredAt(deps, 0) == -1;
+	assert getRegisteredAt(deps, 0) == null;
+	assert getRegisteredAt(deps, -1) == null;
 }
