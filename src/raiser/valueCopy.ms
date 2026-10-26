@@ -58,9 +58,9 @@ function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: Ra
 		if (kind == RaiserRegClass.Ref || kind == RaiserRegClass.Dyn) {
 			const original = fieldValueAt(source, f);
 			let copied = original;
-			if (children[f] >= 0) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
+			if (children[f] >= 0 && !cls.uncounted[f]) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
 			fieldStoreAt(objects.objects[at], f, copied);
-			holdCopied(arrays, objects, original, copied);
+			if (!cls.uncounted[f]) holdCopied(arrays, objects, original, copied);
 		} else {
 			objects.objects[at].slots[f] = source.slots[f];
 		}

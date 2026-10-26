@@ -251,6 +251,8 @@ export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: s
 	const classType = createClassType("", -1, [], fields, kinds);
 	const cyclic = slotCyclicOf(t);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
+	const uncounted = slotUncountedOf(t);
+	for (let i = 0; i < uncounted.length && i < classType.uncounted.length; i += 1) classType.uncounted[i] = uncounted[i];
 	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
 	s.classTypes.push(classType);
 	return s.classTypes.length;
@@ -398,6 +400,15 @@ export function layoutOf(t: Type | null): string[] {
 	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
+}
+
+// Per slot of layoutOf(t): a cursor field borrows its referent.
+export function slotUncountedOf(t: Type | null): boolean[] {
+	const shape = peelToStructOrUnion(t);
+	const flags: boolean[] = [];
+	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && isUncountedElement(shape.typeChildren[i]));
+	return flags;
 }
 
 const cyclicTypes = createNameSet();

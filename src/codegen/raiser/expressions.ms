@@ -21,7 +21,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
+import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay } from "../../checker/types";
@@ -2854,6 +2854,8 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	const classType = createClassType(shown, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
 	const cyclic = slotCyclicOf(classSym.symbolType);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
+	const uncounted = slotUncountedOf(classSym.symbolType);
+	for (let i = 0; i < uncounted.length && i < classType.uncounted.length; i += 1) classType.uncounted[i] = uncounted[i];
 	const destroyOp = getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedDestructor);
 	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
 	s.classTypes.push(classType);
