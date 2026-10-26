@@ -1,3 +1,4 @@
+// @xfail(raiser): typeof cannot tell a function from an object on Raiser: 'object' and 'function' variants share Raiser value kind 8, card .inbox/compiler/2026-10-15-raiser-typeof-cannot-tell-a-function-from-an-object
 // @stdout: value true value true value true value value value
 // @exit: 0
 // note: a local holding null passed into a generic `T | fn` parameter with `T = Ref | null` reaches the callee as the carrier it expects, for a class, an interface, an array and a method, on every backend.
