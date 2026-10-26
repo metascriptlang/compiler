@@ -143,6 +143,7 @@ function emitAppendCodePoint(s: RaiserCompState, name: string, dest: Node, codeP
 	emitInst(s, raiserABC(RaiserOpcode.Move, block + 1, point, 0));
 	emitInst(s, raiserABC(RaiserOpcode.CallHost, block, addConst(s, raiserConstString("msStringFromCodePoint")), 1));
 	emitAppend(s, name, dest, block);
+	emitInst(s, raiserABC(RaiserOpcode.RcDec, block, 0, 0));
 }
 
 function emitShare(s: RaiserCompState, name: string, dest: Node, src: Node): void {
