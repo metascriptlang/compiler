@@ -10,6 +10,7 @@ import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerEnumNames } from "./native/builtinLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
+import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
@@ -83,6 +84,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	result = lowerStaticInit(result, ctx);
 	result = lowerRestParams(result, ctx);
 	result = lowerObjectSpreadEager(result, ctx);
 	result = lowerOptionalChain(result, ctx);

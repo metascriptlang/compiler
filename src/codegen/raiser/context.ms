@@ -177,7 +177,7 @@ export function raiserClassKey(classSym: Symbol): string {
 }
 
 export function resolveGlobal(s: RaiserCompState, sym: Symbol | null): int32 {
-	if (sym == null || !sym.symFlags.has(SymbolFlag.Global)) return -1;
+	if (sym == null || !(sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.Static))) return -1;
 	for (const entry of s.globals.items) {
 		if (entry.symbol == sym) return entry.index;
 	}
