@@ -1234,7 +1234,8 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type, ctx: Ch
 	if (formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType, ctx);
 		if (thunk != null as unknown as Node) payload = thunk;
-		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
+		const payloadUnion = instantiatedUnionBehind(formal.typeReturn);
+		if (payloadUnion.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType)) && isTagCarriedUnion(payloadUnion)) {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType, ctx);
 			if (injected != null as unknown as Node) payload = injected;
 		}
