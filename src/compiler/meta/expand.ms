@@ -336,8 +336,26 @@ function addQuotedTypeOperands(keys: string[], values: Node[], text: string, loc
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 }
 
+function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[], returnType: string, loc: SourceLocation): void {
+	const elements: Node[] = [];
+	let anyBound = false;
+	for (const text of paramTypes) {
+		const operand = quotedTypeOperand(text.trim(), loc);
+		anyBound = anyBound || operand != null;
+		elements.push(nodeToASTLiteral(operand, loc, false));
+	}
+	if (anyBound) {
+		keys.push("boundTypeExprs");
+		values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
+	}
+	if (returnType != "void" && returnType.indexOf(" is ") < 0 &&!returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, loc);
+}
+
 function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {
 	match (node.kind) {
+		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; addQuotedSignature(keys, values, d.fnParamTypes, d.fnReturnType, loc); },
+		NodeKind.ArrowFunction => { const d = node.data as ArrowFunctionData; addQuotedSignature(keys, values, d.arrowParamTypes, d.arrowReturnType, loc); },
+		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, loc); },
 		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, loc),
 		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, loc),
 		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, loc),

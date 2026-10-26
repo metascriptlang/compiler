@@ -1680,14 +1680,17 @@ function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: R
 }
 
 function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
-	if (out.kind != NodeKind.VariableDecl && out.kind != NodeKind.TypeAssertion && out.kind != NodeKind.CallExpr && out.kind != NodeKind.NewExpr) return;
+	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
+		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr;
+	if (!carriesTypeText) return;
 	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
 	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
 	const many = heapObjectGetField(objHeap, handle, "boundTypeExprs");
 	if (many.kind != RaiserValueKind.Array) return;
 	const operands: Node[] = [];
 	for (let i = 0; i < heapArrayLen(arrHeap, many.intVal); i += 1) {
-		operands.push(readTypeOperand(heapArrayGet(arrHeap, many.intVal, i), objHeap, arrHeap, loc));
+		const element = heapArrayGet(arrHeap, many.intVal, i);
+		operands.push(element.kind == RaiserValueKind.Nil ? null as unknown as Node : readTypeOperand(element, objHeap, arrHeap, loc));
 	}
 	out.typeExprs = operands;
 }
