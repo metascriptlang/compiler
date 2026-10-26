@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its close entries)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: literal|close 1|param|close 2|let|close 3|inner|close 4|after|annotated|close 6|close 5|beside|close 9|close 7|view|close 8|close 10|reassign|close 11|end
 // note: a value a cast makes of a distinct type with a destroy hook is owned by its local and destroyed at scope exit.
