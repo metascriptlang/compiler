@@ -99,8 +99,9 @@ static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
 	for (int i = 0; i < gLedgerRowCount; i++) {
-		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld\n",
-			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i]);
+		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld hooks=%d\n",
+			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i],
+			gLedgerType[i] != NULL && gLedgerType[i]->destroyFn != NULL);
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
