@@ -11,6 +11,7 @@
 
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
+import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, ownedEdgeOf } from "../checker/types";
@@ -2648,6 +2649,7 @@ function processIf(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	// condition. Retires callHoist's expandIf plain-hoist for this position.
 	d.condition = processNonRcRead(d.condition, dctx);
 	d.consequent = processBlockBody(d.consequent, dctx, false, false, loc);
+	wrapElseIfWhen(d, (alt: Node): boolean => condBecomesStatements((alt.data as IfStmtData).condition));
 	if (d.alternate != null) {
 		if (d.alternate.kind == NodeKind.IfStmt) {
 			processIf(d.alternate, dctx, loc);
@@ -2656,6 +2658,16 @@ function processIf(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 		}
 	}
 	return stmt;
+}
+
+function condBecomesStatements(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if (n.kind == NodeKind.ConditionalExpr || isGuardedBoolValue(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && condBecomesStatements(c)) found = true;
+	});
+	return found;
 }
 
 function processWhile(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
