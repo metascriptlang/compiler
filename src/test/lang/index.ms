@@ -108,3 +108,4 @@ import "./proxyTraps";
 import "./commentLookahead";
 import "./nonNullAssertionOwns";
 import "./logicalAssignment";
+import "./compoundAssignmentEvaluation";
