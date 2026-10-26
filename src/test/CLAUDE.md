@@ -31,42 +31,63 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 
 ## Running
 
-**The edit loop: during an edit, check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed (`--danger --lto=off`), then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff, and a wrong choice is accepted: the land's gate runs every lane once and catches what the choice missed, while a lane, `msc test src/index.ms` or a corpus sweep during the edit costs most of an hour. When the smallest consumer cannot finish in 60 s, run it once and record the slow step on card `fast-loop`.
+Every run belongs to one of three flows, chosen by when it runs:
 
-**When the slice is ready to land, queue `~/nerdtools/claude/tools/wt.sh land <name> --async` and wait in the background with `land <name> --wait`.** The land runs the acceptance gate once or reuses a valid verdict; do not run a separate gate first, because that duplicates the land's verification. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract; `--release` belongs to cutting a release. Follow the root `CLAUDE.md` for commit checks and verdict reuse.
+| flow | when | what runs | wall |
+|---|---|---|---|
+| **edit loop** | while a slice is in work, including before each commit | `./msc check src/index.ms`, then one check per changed contract, red on the old compiler and green on the candidate | candidate build 2–2.5 min, then under 60 s per check |
+| **land gate** | once, when something outside the worktree needs the commits (root `CLAUDE.md` §Git Rules) | `tools/gate.sh` on the gate train: lanes picked from the diff, compared with `known-red.json` | 30–50 min, not waited on |
+| **release ladder** | cutting a release (`docs/GIT-FLOW.md`) | `tools/gate.sh --release` plus the fixpoint check | hours |
+
+Lanes, `msc test src/index.ms`, the tier indexes and corpus sweeps run only in the land gate and the release ladder, because one of them during an edit holds the person for most of an hour while the land gate runs it anyway.
+
+### Edit loop
+
+**Check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff, and a wrong choice is accepted, because the land gate runs every lane once and catches what the choice missed. When the smallest consumer cannot finish in 60 s, run it once and add it with its measurement to the over-budget list below.
 
 Build the candidate once per compiler edit: `msc build src/index.ms --danger --lto=off --output=msc`. It takes 2–2.5 min on 8 cores and is the only step allowed over the budget. Then run one check per changed contract:
 
 | the diff changes | check | measured |
 |---|---|---|
 | a function or language invariant in one module | `./msc test <owner-file> --tests-in-dir` | 4–50 s |
-| program output, exit status or lifetime | `MSC=./msc MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_SAN=1` for its SAN contract | 4–10 s per program |
+| program output, exit status or lifetime | `MSC=./msc MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_RAISER=1` when the diff adds or edits that program, and `MSCORPUS_SAN=1` for its SAN contract | 4–10 s per program; the Raiser cells about 0.25 s each |
 | one lifecycle invariant | `MSC=./msc GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms`; keep its ledger oracle (`guard/README.md`) | 1–5 s per guard |
 | what one program emits | `./msc build <prog.ms> --emit=c`, then read that module's C | seconds |
 | the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/test/perf/run.ms`, read the rows of the flow you changed (`docs/BUILD-PERF.md` §Measuring by flow) | one program per arm |
 | Solana, native boundary, HCR or formatter | the named failing consumer with its host and backend; recipes in `docs/TESTING.md` | not measured |
 | `std/` or `runtime/` inputs | the checks above, with a candidate beside the changed support trees; `tools/syncLocalBinary.ms` belongs to delivery | as above |
 
-Measured on lc-1, tree 651e100ee, 2026-10-26, cache warm:
-
-- **`msc test <file>` without `--tests-in-dir` also runs the tests of every module the file imports.**
-  - For `src/analyzer/inject.ms` that is 102 test files in 85–122 s, against 7 files in 49.5 s with the flag.
-  - The tier indexes (`lang/`, `handoff/`, `c/`, `js/`) and `src/index.ms` are gate entries, never checks during an edit.
+- **`msc test <file>` without `--tests-in-dir` also runs the tests of every module the file imports.** For `src/analyzer/inject.ms` that is 102 test files in 85–122 s, against 7 files with the flag (lc-1, tree 651e100ee).
 - **Split a performance question by flow.** Run one program and one flow per measurement (`MSC_FLOWS`, `MS_DRC_STAT`, `src/test/perf/emitCostScan.ms --diff`). A whole-compiler A/B waits for the land.
-- **Over budget now; these are tracked on card `fast-loop`:**
-  - `src/checker/checkPass.ms` takes 65 s with the flag, 30 s of it its own tests.
-  - `src/codegen/raiser/eval.ms` takes 76 s with the flag, 19 s of it its own tests.
-  - Every test binary costs about 40 s to build, because the front end checks and transforms every module the tested file imports. For `inject.ms` with the flag, `MSC_FLOWS` splits 62–72 s into graph 7, phase A 23, DCE 6–8, link 7–11 and the run of the `-O0` test binary 12–19.
+- **`MSC_FLOWS=<file>` splits a test run** into graph, phases A/B/C, cc, link and the run of the test binary. `msc test src/analyzer/inject.ms --tests-in-dir` on lc-1 alone, tree 54af0f26a, ms:
+
+  | run | graph | A | B | C | cc | link | test run | total |
+  |---|---|---|---|---|---|---|---|---|
+  | default, warm | 9538 | 18564 | 3610 | 1178 | 31 | 922 | 3056 | 36900 |
+  | `--release`, warm | 9228 | 17044 | 3548 | 1085 | 22 | 123 | 379 | 31431 |
+  | default, cold | 9887 | 18340 | 4119 | 1663 | 28219 | 926 | 7121 | 70276 |
+  | `--release`, cold | 9828 | 20222 | 5421 | 3569 | 80089 | 145 | 847 | 120121 |
+
+  The front end (graph and phase A) is three quarters of a warm check. `--release` saves 5.5 s warm and costs 52 s of clang cold, so test builds stay at the default.
+- **Over budget now:**
+  - `src/checker/checkPass.ms` took 65 s with the flag, 30 s of it its own tests (tree 651e100ee, before its prelude tests shared one std check; not remeasured).
+  - `src/codegen/raiser/eval.ms` took 76 s with the flag, 19 s of it its own tests, mostly `numericCondsFailure` (tree 651e100ee).
 - **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 
-**After a RED land, rerun the named failures in the owning worktree before requeueing.** Fix new reds before requeueing; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
+### Land gate
+
+**When the slice is ready, `./msc check src/index.ms` is clean and its own checks are green, send the session named `merge-train` the slice name and tip** (workspace `CLAUDE.md` §Worktrees). Land with `~/nerdtools/claude/tools/wt.sh land <name>` once its keyed verdict is GREEN. Use the Mac land queue (`land <name> --async`, then `--wait` in the background) only when `.gate-host/gate-item.sh` says the changed lines are macOS-only or no `merge-train` is live. Do not run a separate gate first, because that duplicates the land gate. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract.
+
+**After a RED land, return to the edit loop: rerun the named failures in the owning worktree, then send the new tip.** The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
+
+### Traps
 
 - **A compiler reads `std/` and `runtime/` from beside its own binary** — `./msc` is the candidate with this repo's trees, `msc` on `PATH` is the last published build with `~/.metascript/`.
 - **Runners test `./msc` when it exists, else the installed `msc`** — `MSC=<path>` overrides, and the runner header prints the choice.
 - **`msc run <runner>` runs the harness, `MSC` names the subject** — `./msc run <runner>` alone inverts that: the harness gets the new compiler while every program is still built by the old one.
 - **One `msc` build at a time per tree, and never `rm -rf out` first** — both produce a red that names a different file every run; check `uptime` before trusting a timing.
 - **Checker-source handoff contracts run natively**; a runtime/backend claim additionally needs a real language or corpus consumer.
-- **The owning tier indexes are gate entries**. `src/test/index.ms` is not; run a new module with `msc test <file> --tests-in-dir`, then its owning tier index.
+- **The owning tier indexes are land-gate entries**. `src/test/index.ms` is not; run a new module with `msc test <file> --tests-in-dir` and register it in its owning tier index, which the land gate runs.
 
 ## When you fix a bug
 
@@ -75,6 +96,6 @@ Measured on lc-1, tree 651e100ee, 2026-10-26, cache warm:
 3. Add a contract to the owner module under `lang/`, `handoff/`, `c/` or `js/`, or create a semantic family there when no owner exists. Import new runnable modules in the tier index.
 4. If the bug changes program output or exit status, add a standalone semantic corpus consumer with an absolute expected oracle, and exercise its required backends. A duplicate of the same owner and oracle is not a new contract.
 5. If found by self-host, prove the user-visible path with a focused language test.
-6. Run the focused regression and any owning-tier check needed for discovery or integration. When the slice is ready, queue the land as above; its gate must have no new red. Do not add a standalone gate between the focused checks and the land.
+6. Run the focused regression in the edit loop, plus the owning-tier module when discovery or integration needs it. When the slice is ready, send it to the land gate as above; the land gate must show no new red.
 
 A user-visible feature lands together with the corpus programs that pin its observable behaviour through every lane.
