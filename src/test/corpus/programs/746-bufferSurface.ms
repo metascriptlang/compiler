@@ -1,4 +1,3 @@
-// @xfail(raiser): error: bigint is not supported on the Raiser VM
 // @stdout: buffer surface ok
 
 // Pins the Buffer byte-container surface, the same on C and JS.
