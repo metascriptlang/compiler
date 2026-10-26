@@ -11,9 +11,9 @@ import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
 import { parseExpressionFromState } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
-import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved , parseObjectPattern, parseArrayPattern } from "./declaration";
+import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
-import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser, registerPatternParsers } from "./callbacks";
+import { registerStmtBlockParser, registerStmtExprParser, registerStateProgramParser } from "./callbacks";
 import { attachComments, isIdentLike, continuesIdentifier } from "../util";
 
 
@@ -476,11 +476,9 @@ export function parseProgram(state: ParserState): NodeResult {
 
 // Register real implementations for callbacks
 export function registerCoreParsers(): void {
-	registerStmtParser(parseStatement);
 	registerStmtBlockParser(parseBlockStmt);
 	registerStmtExprParser(parseExpressionFromState);
 	registerStateProgramParser(parseProgram);
-	registerPatternParsers(parseObjectPattern, parseArrayPattern);
 }
 
 // Auto-register at module load so parser tests work without explicit init
