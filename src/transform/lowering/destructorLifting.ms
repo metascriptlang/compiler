@@ -566,22 +566,13 @@ function elemNeedsLoop(elem: Type | null): boolean {
 		&& elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor);
 }
 
-function copiesAsMemory(t: Type, lctx: LiftCtx): boolean {
-	const elem = arrayOpElement(t);
-	if (elem == null || hasAnyUserHook(t, lctx) || hasAnyUserHook(elem, lctx)) return false;
-	const namedStruct = (elem.kind == TypeKind.Struct && elem.typeName != "" && !isAnonTypeName(elem.typeName))
-		|| (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && elem.typeExtra.kind == TypeKind.Struct);
-	return namedStruct && !arrayElementNeedsCleanup(elem);
-}
-
 // --- Standard sequence/array hook generator (reference parity: reference sequence op) ---
 // Primitive elements: runtime macros (no per-element cleanup).
 // Non-primitive elements: inline loops via genArrayLoop (reference loop pattern).
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const managedElem = elemNeedsLoop(elem);
+	const needsElemLoop = elemNeedsLoop(elem);
 	const isU8Elem = elem != null && elem.kind == TypeKind.Uint8;
-	if (managedElem && elem != null) registerArrayOps(createArray(elem), lctx);
-	const needsElemLoop = managedElem && !copiesAsMemory(elem, lctx);
+	if (needsElemLoop && elem != null) registerArrayOps(createArray(elem), lctx);
 	match (hook) {
 		"destroy" => {
 			if (needsElemLoop) {
@@ -791,7 +782,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType, lctx) && !copiesAsMemory(fieldType, lctx)) {
+					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -854,7 +845,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (unwrapped.mangledName != "") {
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(unwrapped.body, lctx) && !copiesAsMemory(fieldType, lctx)) {
+					if (namedTypeHasHooks(unwrapped.body, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
