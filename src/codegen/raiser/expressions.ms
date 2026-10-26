@@ -1811,8 +1811,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return held;
 	}
 	if (ownershipRow(d.callee.resolvedSym) == ROW_STR_CONCAT) {
+		const lReg = compileExpr(s, d.arguments[0]);
+		const rReg = compileExpr(s, d.arguments[1]);
 		const dest = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, compileExpr(s, d.arguments[0]), compileExpr(s, d.arguments[1])));
+		const typed = hasStringType(d.arguments[0]) && hasStringType(d.arguments[1])
+			&& classOfReg(s, lReg) == RaiserRegClass.Ref && classOfReg(s, rReg) == RaiserRegClass.Ref;
+		emitInst(s, raiserABC(typed ? RaiserOpcode.ConcatStrR : RaiserOpcode.ConcatStr, dest, lReg, rReg));
 		return dest;
 	}
 	if (ownershipRow(d.callee.resolvedSym) == ROW_STR_TEXT) return compileTextOf(s, d.arguments[0]);
@@ -1883,6 +1887,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
+		if (isClosureLiteral(d.arguments[0])) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
 		return dest;
 	}
 	if (asyncKind == "PromiseThen") {
@@ -2140,16 +2145,39 @@ function compileFutureThen(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
+function runsCode(n: Node): boolean {
+	const k = n.kind;
+	if (k == NodeKind.CallExpr || k == NodeKind.NewExpr || k == NodeKind.UpdateExpr) return true;
+	if (k == NodeKind.BinaryExpr) {
+		const d = n.data as BinaryExprData;
+		return isAssignOp(d.operator) || runsCode(d.left) || runsCode(d.right);
+	}
+	if (k == NodeKind.UnaryExpr) return runsCode((n.data as UnaryExprData).operand);
+	if (k == NodeKind.TypeAssertion) return runsCode((n.data as TypeAssertionData).asExpr);
+	if (k == NodeKind.HiddenStdConv) return runsCode((n.data as HiddenStdConvData).convExpr);
+	if (k == NodeKind.MemberExpr) return runsCode((n.data as MemberExprData).object);
+	if (k == NodeKind.ArrayAccess) return runsCode((n.data as ArrayAccessData).array) || runsCode((n.data as ArrayAccessData).index);
+	return false;
+}
+
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const calleeLiteral = closureLiteralOf(d.callee);
-	const calleeHeld = calleeLiteral != null ? allocRef(s) : -1;
-	const closureReg = compileExpr(s, d.callee);
+	let argRunsCode = false;
+	for (const a of d.arguments) {
+		if (runsCode(a)) argRunsCode = true;
+	}
+	const calleeHeld = calleeLiteral != null || argRunsCode ? allocRef(s) : -1;
+	let closureReg = compileExpr(s, d.callee);
 	if (calleeLiteral != null) {
 		const env = allocRef(s);
 		emitInst(s, fieldInst(s, calleeLiteral.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, closureReg, addConst(s, raiserConstString("env"))));
 		emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
 		emitInst(s, raiserABC(RaiserOpcode.Move, calleeHeld, closureReg, 0));
+	} else if (argRunsCode) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, calleeHeld, closureReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.RcInc, calleeHeld, 0, 0));
+		closureReg = calleeHeld;
 	}
 
 	let argCount = 0;
