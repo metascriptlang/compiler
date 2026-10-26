@@ -42,3 +42,28 @@ test "a bit-field width is a constant expression" {
 	assert members[1].bitWidth == 3;
 	assert members[2].bitWidth == null;
 }
+
+test "an unknown identifier in an array size is a diagnostic" {
+	const out = parseHeader("int a[NOPE];", "arr.h", defaultOptions());
+	assert out.diagnostics.length == 1;
+	assert out.diagnostics[0].message.includes("NOPE");
+}
+
+test "an unknown identifier in a bit-field width is a diagnostic" {
+	const out = parseHeader("struct S { int b : NOPE; };", "bits.h", defaultOptions());
+	assert out.diagnostics.length == 1;
+	assert out.diagnostics[0].message.includes("NOPE");
+}
+
+test "an unknown identifier in an enum value is a diagnostic" {
+	const out = parseHeader("enum { A = NOPE };", "enum.h", defaultOptions());
+	assert out.diagnostics.length == 1;
+	assert out.diagnostics[0].message.includes("NOPE");
+}
+
+test "an identifier left in an #if expression is 0" {
+	const out = parseHeader("#if UNDEFINED_NAME\nint no;\n#else\nint yes;\n#endif\n", "if.h", defaultOptions());
+	assert out.diagnostics.length == 0;
+	assert out.objs.length == 1;
+	assert out.objs[0].name == "yes";
+}

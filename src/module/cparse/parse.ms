@@ -456,10 +456,14 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 	// Parse constant expression for array size
 	let size = 0;
 	if (!eq(ctx, "]")) {
+		const sizeAt = ctx.tok;
 		const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+		ctx.tok = evalResult.tok;
 		if (evalResult.ok) {
 			size = evalResult.value as int32;
-			ctx.tok = evalResult.tok;
+		} else {
+			ctx.diags.push(makeDiag(DiagSeverity.Error, sizeAt.file, sizeAt.line, sizeAt.col,
+				`array size: ${evalResult.error}`));
 		}
 	}
 	expect(ctx, "]");
@@ -681,9 +685,9 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			if (consume(ctx, ":")) {
 				const widthAt = ctx.tok;
 				const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+				ctx.tok = evalResult.tok;
 				if (evalResult.ok) {
 					bitWidth = evalResult.value as int32;
-					ctx.tok = evalResult.tok;
 				} else {
 					ctx.diags.push(makeDiag(DiagSeverity.Error, widthAt.file, widthAt.line, widthAt.col,
 						`bit-field width: ${evalResult.error}`));
@@ -744,9 +748,12 @@ function enumSpecifier(ctx: ParseCtx): CType {
 
 		if (consume(ctx, "=")) {
 			const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+			ctx.tok = evalResult.tok;
 			if (evalResult.ok) {
 				enumVal = evalResult.value;
-				ctx.tok = evalResult.tok;
+			} else {
+				ctx.diags.push(makeDiag(DiagSeverity.Error, nameAt.file, nameAt.line, nameAt.col,
+					`enum value: ${evalResult.error}`));
 			}
 		}
 

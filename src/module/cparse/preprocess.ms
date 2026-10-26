@@ -655,6 +655,14 @@ function evalCondition(tok: CToken, ctx: PPContext): int64 {
 
 	convertPPTokens(expanded, ctx.diags);
 
+	for (let t = expanded; t.kind != CTokenKind.Eof; t = t.next) {
+		if (t.kind == CTokenKind.Ident || t.kind == CTokenKind.Keyword) {
+			t.kind = CTokenKind.Num;
+			t.intVal = 0 as int64;
+			t.stringVal = "0";
+		}
+	}
+
 	const r = evalConstExpr(expanded, new HashMap<string, int64>());
 	if (!r.ok) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col, r.error));
