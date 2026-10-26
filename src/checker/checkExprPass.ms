@@ -490,17 +490,28 @@ export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null 
 }
 
 function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
+	if (node.typeExpr == null) return;
+	const tag = node.typeExpr;
+	const base = (tag.data as IdentifierData).name;
+	const intrinsics = ctx.jsxMacroArgDepth > 0 ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
+	if (intrinsics != null) ensureShaped(intrinsics, ctx);
 	const sym = jsxComponentSym(ctx, node);
-	if (sym == null) {
-		recordIntrinsicJsx(ctx, node);
-		return;
+	if (sym != null) {
+		tag.resolvedSym = sym;
+		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+		const fn = sym.symbolType;
+		if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
+	} else if (intrinsics != null) {
+		const attrs = recordJsxProperty(ctx, intrinsics.symbolType, base, tag.location);
+		if (attrs != null) recordJsxAttrs(ctx, node, attrs);
 	}
-	const base = (node.typeExpr!.data as IdentifierData).name;
-	node.typeExpr!.resolvedSym = sym;
-	const loc = node.typeExpr!.location;
-	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
-	const fn = sym.symbolType;
-	if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
+	// The tag's contextual type (TS completes a tag from IntrinsicElements' properties). Its span
+	// includes the column after the name, where the cursor sits while the tag is typed; recorded
+	// after the tag's own symbol so hover keeps finding that first.
+	if (intrinsics != null) {
+		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength + 1,
+			null, intrinsics.symbolType, SymbolKind.Interface, "", intrinsics.name, false);
+	}
 }
 
 // TS resolves a lowercase tag as a property of `JSX.IntrinsicElements`, taking `JSX` from the
@@ -529,18 +540,12 @@ function recordJsxProperty(ctx: CheckerContext, owner: Type, name: string, loc: 
 	return t;
 }
 
-function recordIntrinsicJsx(ctx: CheckerContext, node: Node): void {
-	if (ctx.jsxMacroArgDepth == 0 || node.typeExpr == null) return;
-	const intrinsics = jsxNamespaceMember(ctx, "IntrinsicElements");
-	if (intrinsics == null) return;
-	ensureShaped(intrinsics, ctx);
-	const attrs = recordJsxProperty(ctx, intrinsics.symbolType, (node.typeExpr.data as IdentifierData).name, node.typeExpr.location);
-	if (attrs != null) recordJsxAttrs(ctx, node, attrs);
-}
-
 // An element's attributes are the properties of its props type: an intrinsic tag's field type,
-// a function component's first parameter.
+// a function component's first parameter. The props type is also the contextual type of the
+// attributes, recorded at the element's `<` for attribute completion.
 function recordJsxAttrs(ctx: CheckerContext, node: Node, props: Type): void {
+	const at = node.location;
+	sgRecordSym(ctx, at.line, at.column, at.column + 1, null, props, SymbolKind.Interface, "", "", false);
 	for (const attr of (node.data as JSXElementData).jsxAttrs) {
 		if (attr.kind == NodeKind.JSXAttribute) recordJsxProperty(ctx, props, (attr.data as JSXAttributeData).jsxAttrName, attr.location);
 	}
