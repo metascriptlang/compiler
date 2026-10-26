@@ -19,7 +19,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, Ro
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool, isRuntimeProcCall,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -313,7 +313,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
 	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
-	if (isViewCall(node) || node.flags.has(NodeFlag.Closure)) return node;
+	if (isViewCall(node) || node.flags.has(NodeFlag.Closure) || isRuntimeProcCall(node, "msMaybeGet")) return node;
 	const exprType = node.nodeType;
 	if (exprType == null) return node;
 	// Inside a non-RC binding/condition walk (skipAwaitableCapture), never capture a future:
@@ -2435,7 +2435,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	if (dctx.ctx.checkerCtx == null) return false;
 	// Fresh expressions produce owned values — no incref needed
 	if (isFreshExpr(expr.kind)) return false;
-	if (expr.kind == NodeKind.CallExpr) return false;
+	if (expr.kind == NodeKind.CallExpr || expr.kind == NodeKind.AwaitExpr) return false;
 	if (expr.kind == NodeKind.MoveExpr) return false;
 
 	// Identifier: function-local RC vars are moved (not borrowed) — no incref

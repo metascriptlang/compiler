@@ -241,24 +241,26 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 	return noRcInfo();
 }
 
-// A Raiser union whose members are all value structs is the member's cell, with no tag beside it; the cell
-// is released and copied through the analyzer's cell rows.
+// A Raiser union whose members are value structs, beside closures at most, is the member's cell, with no tag beside
+// it; the cell is released and copied through the analyzer's cell rows.
 export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	let structs = 0;
 	for (const child of t.typeChildren) {
-		if (child.kind != TypeKind.Struct) return false;
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind != TypeKind.Function) return false;
 	}
-	return true;
+	return structs > 0;
 }
 
-// A Raiser union whose members are class refs, strings or scalars stays the member's own value, with no tag
+// A Raiser union whose members are class refs, closures, strings or scalars stays the member's own value, with no tag
 // beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
 export function raiserBareUnion(t: Type): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
 	for (const child of t.typeChildren) {
 		if (child.kind == TypeKind.Ref) {
 			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
-		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && !isPrimitiveKind(child.kind)) {
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function && !isPrimitiveKind(child.kind)) {
 			return false;
 		}
 	}
@@ -387,6 +389,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
+			if (ctx.raiserBackend && raiserFlatCellUnion(t)) return structCellInfo();
 			if (t.typeName != "" && hasAsgnFlag(t)) {
 				return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
 			}
@@ -394,7 +397,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				const an = anonUnionCName(t);
 				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
-			if (ctx.raiserBackend && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t))) return structCellInfo();
+			if (ctx.raiserBackend && t.typeFlags.has(TypeFlag.ValueUnion)) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {

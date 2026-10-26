@@ -1,5 +1,4 @@
 // @stdout: value-or-function ok 18
-// @xfail(raiser): raiser runtime error: cannot evaluate typeof at comptime: 'function' and 'number' variants share Raiser value kind 2 (inbox 2026-09-26-raiser-typeof-yields-the-value, 2026-10-15-raiser-typeof-cannot-tell-a-function-from-an-object)
 // note: a generic overload pair over one generic implementation `first: T | ((prev: T | null) => T)` runs the implementation instantiated from the arguments: a value picks the value signature and a function picks the function signature, for a number, a string, an object literal, an interface value, an annotated or contextually typed arrow, in either declaration order, for a pair that returns `T`, and for a pair where each overload has its own body (an object literal is not taken for the function parameter while `T` is unbound). Same output on C and JS.
 interface P { a: number; }
 let wrong = "";
