@@ -177,7 +177,7 @@ export async function cmdLogin(projectRoot: string): Promise<boolean> {
 	console.log("\nGitHub authorized! Exchanging for registry token...");
 
 	// Step 4: Exchange GitHub token for registry token
-	const authBody = "{\"github_token\":\"" + githubToken + "\"}";
+	const authBody = JSON.stringify({ github_token: githubToken });
 	const authResult = registryRequest("POST", "/auth/github/token", authBody, "", "application/json");
 
 	if (!authResult.ok) {
