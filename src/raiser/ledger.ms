@@ -6,9 +6,11 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
-	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, stringHandleRc,
-	heapArrayIsView, heapArrayRc, makeHandle
+	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, stringHandleRc,
+	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
 } from "./value";
+import { RaiserRegClass } from "./bytecode";
+import { objectCellNew, objectCellSetSlot } from "./objectCell";
 
 interface LedgerTally {
 	strings: HashMap<int64, int32>;
@@ -75,6 +77,11 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 			for (let k = 0; k < held; k += 1) tallyRef(tally, arrayHeldAt(arr, handle, k));
 		}
 	}
+	const cellHandles = heapObjectCellHandles(arr);
+	for (const handle of cellHandles) {
+		const count = objectCellClass(handle).fields.length;
+		for (let f = 0; f < count; f += 1) tallyRef(tally, objectCellFieldValue(handle, f));
+	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
 		if (freeObjects[i]) continue;
 		const count = objectFieldCount(obj.objects[i]);
@@ -101,6 +108,13 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		const counted = heapArrayRc(arr, handle);
 		if (counted < holders) return `internal: array ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
 		if (counted > holders) leakedArrays += 1;
+	}
+	for (const handle of cellHandles) {
+		const held = tally.seqs.get(handle);
+		const holders = held != null ? held : 0;
+		const counted = heapArrayRc(arr, handle);
+		if (counted < holders) return `internal: object ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
+		if (counted > holders) leakedObjects += 1;
 	}
 	for (let i = 0; i < tally.arrays.length; i += 1) {
 		if (freeArrays[i]) continue;
@@ -154,4 +168,17 @@ test "the audit names an item held more often than it is counted" {
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "twice");
 	assert ledgerAudit(arr, obj, [s, s], "program").endsWith("counts 1 holders but 2 hold it at program end");
+}
+
+test "the audit counts the references an object cell holds and names a cell that outlives its roots" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const holder = createClassType("Holder", -1, [], ["item"], [RaiserRegClass.Ref]);
+	const s = heapAllocString(arr, "kept");
+	const cell = objectCellNew(arr.mem, holder, 1);
+	objectCellSetSlot(cell, 0, s.intVal);
+	const root = raiserObject(objectCellHandle(cell));
+	assert ledgerAudit(arr, obj, [root], "program") == "", ledgerAudit(arr, obj, [root], "program");
+	assert ledgerAudit(arr, obj, [], "program") == "internal: 1 object items live after program end";
+	assert ledgerAudit(arr, obj, [root, root], "program").endsWith("counts 1 holders but 2 hold it at program end");
 }

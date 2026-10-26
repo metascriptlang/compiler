@@ -380,7 +380,8 @@ export function heapStringHandles(arr: RaiserArrayHeap): int64[] {
 	const handles: int64[] = [];
 	for (const block of liveCellBlocks(arr.mem)) {
 		const cell = block + refBlockOffset(8);
-		if (cellTypeIndex(cell) != SEQ_TYPE_INDEX) handles.push(heapTextHandle(cell));
+		const typeIndex = cellTypeIndex(cell);
+		if (typeIndex < 0 && typeIndex != SEQ_TYPE_INDEX) handles.push(heapTextHandle(cell));
 	}
 	return handles;
 }
@@ -391,6 +392,16 @@ export function heapSeqHandles(arr: RaiserArrayHeap): int64[] {
 	for (const block of liveCellBlocks(arr.mem)) {
 		const cell = block + refBlockOffset(8);
 		if (cellTypeIndex(cell) == SEQ_TYPE_INDEX) handles.push(cell | (RaiserHeapKind.Seq as int64));
+	}
+	return handles;
+}
+
+// The handle of every live object cell on the heap, for the ledger.
+export function heapObjectCellHandles(arr: RaiserArrayHeap): int64[] {
+	const handles: int64[] = [];
+	for (const block of liveCellBlocks(arr.mem)) {
+		const cell = block + refBlockOffset(8);
+		if (cellTypeIndex(cell) >= 0) handles.push(objectCellHandle(cell));
 	}
 	return handles;
 }
