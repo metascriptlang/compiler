@@ -897,7 +897,7 @@ export function isPtrField(objType: Type | null, fieldName: string): boolean {
 	const ft = t.typeChildren[fieldIdx];
 	if (ft == null) return false;
 	const bare = ft.kind == TypeKind.Union ? unwrapRefNullUnion(ft) : ft;
-	return bare != null && (bare.kind == TypeKind.Ptr || bare.kind == TypeKind.Cursor);
+	return bare != null && (bare.kind == TypeKind.Ptr || bare.kind == TypeKind.Cursor || bare.kind == TypeKind.Span);
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
