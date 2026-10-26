@@ -172,6 +172,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ArrayFill => "ArrayFill",
 		RaiserOpcode.ArraySliceCopy => "ArraySliceCopy",
 		RaiserOpcode.ArrayConcat => "ArrayConcat",
+		RaiserOpcode.AssignInPlace => "AssignInPlace",
 		RaiserOpcode.RcKeptCheck => "RcKeptCheck",
 	};
 }
@@ -211,7 +212,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
 	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved) return `${name} ${ra}`;
 	if (op == RaiserOpcode.DestroyValue) return `${name} ${ra} plan ${inst.c}`;
-	if (op == RaiserOpcode.SinkValue) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
+	if (op == RaiserOpcode.SinkValue || op == RaiserOpcode.AssignInPlace) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
 	if (op == RaiserOpcode.RcHeld || op == RaiserOpcode.RcKeptCheck) return `${name} ${ra} ${regText(op, 1, inst.b)}`;
 	if (op == RaiserOpcode.RcDec) return inst.b == 1 ? `${name} ${ra} cyclic` : `${name} ${ra}`;
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
