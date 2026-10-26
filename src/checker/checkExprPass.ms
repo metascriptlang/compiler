@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
@@ -491,11 +491,52 @@ export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null 
 
 function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 	const sym = jsxComponentSym(ctx, node);
-	if (sym == null) return;
+	if (sym == null) {
+		recordIntrinsicJsx(ctx, node);
+		return;
+	}
 	const base = (node.typeExpr!.data as IdentifierData).name;
 	node.typeExpr!.resolvedSym = sym;
 	const loc = node.typeExpr!.location;
 	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+}
+
+// TS resolves a lowercase tag as a property of `JSX.IntrinsicElements`, taking `JSX` from the
+// module of the element's factory, else from scope; the consumer macro is that factory here.
+function jsxNamespaceMember(ctx: CheckerContext, name: string): Symbol | null {
+	const consumer = ctx.jsxConsumer;
+	let ns: Symbol | null = null;
+	if (consumer != null && consumer.modulePath != "") {
+		const exported = findExportedSymbol(ctx.exportRegistry, consumer.modulePath, "JSX");
+		if (exported != null) ns = exported.sym;
+	}
+	if (ns == null) ns = lookupSymbol(ctx.table, "JSX");
+	if (ns == null || ns.symbolKind != SymbolKind.Module || ns.modulePath == "") return null;
+	const member = findExportedSymbol(ctx.exportRegistry, ns.modulePath, name);
+	return member != null ? member.sym : null;
+}
+
+function recordJsxProperty(ctx: CheckerContext, owner: Type, name: string, loc: SourceLocation): Type | null {
+	const t = getProperty(peelToStructOrUnion(owner), name);
+	if (isUnresolvedType(t)) return null;
+	const container = declaringSymOf(owner);
+	const declarer = fieldDeclarer(container, name);
+	const fieldSym = makeSymbolState(name, SymbolKind.Property, t, false, SymbolState.Shaped);
+	inheritContainerInfo(fieldSym, container);
+	sgRecordSym(ctx, loc.line, loc.column, loc.column + name.byteLength, fieldSym, t, SymbolKind.Property, name, declarer != null ? declarer.name : "", false);
+	return t;
+}
+
+function recordIntrinsicJsx(ctx: CheckerContext, node: Node): void {
+	if (ctx.jsxMacroArgDepth == 0 || node.typeExpr == null) return;
+	const intrinsics = jsxNamespaceMember(ctx, "IntrinsicElements");
+	if (intrinsics == null) return;
+	ensureShaped(intrinsics, ctx);
+	const attrs = recordJsxProperty(ctx, intrinsics.symbolType, (node.typeExpr.data as IdentifierData).name, node.typeExpr.location);
+	if (attrs == null) return;
+	for (const attr of (node.data as JSXElementData).jsxAttrs) {
+		if (attr.kind == NodeKind.JSXAttribute) recordJsxProperty(ctx, attrs, (attr.data as JSXAttributeData).jsxAttrName, attr.location);
+	}
 }
 
 
@@ -3332,7 +3373,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 	}
 	// @import args are pure syntax (not evaluated) — skip type-checking
 	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
-	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs); }
+	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs, invokedMacroSym(ctx, node)); }
 	// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
 	// with concrete types. After mono clones a generic body, replaceTypeVars
 	// substitutes T→concrete in arg.nodeType. The re-check then hits this

@@ -285,7 +285,9 @@ export function bindRefsTo(node: Node, syms: Symbol[]): void {
 // Walk `nodes` with the unconsumed-JSX leak check suppressed. A raw JSX node is legal as a
 // macro argument (the macro consumes it) or as a child of a JSX node already accounted for by
 // its parent — jsxMacroArgDepth > 0 marks both, so reportUnconsumedJsx stays silent inside.
-export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
+export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[], consumer: Symbol | null = ctx.jsxConsumer): void {
+	const outer = ctx.jsxConsumer;
+	ctx.jsxConsumer = consumer;
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 	// nodeTypeAst is only ever set from a node that was typed before a macro
 	// round-trip (bridge valueToNode); re-checking such an arg re-infers from
@@ -297,6 +299,7 @@ export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[]): void {
 		callCheckExpr(ctx, n, null);
 	}
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
+	ctx.jsxConsumer = outer;
 }
 
 export function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): void {
@@ -1934,7 +1937,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
-			checkJsxConsumed(ctx, macroArgsRef);
+			checkJsxConsumed(ctx, macroArgsRef, sym);
 			rewriteCallAsMacroInvocation(node, sym);
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
