@@ -22,7 +22,7 @@ import { TransformContext, PendingTupleOp, reportTransformError } from "../conte
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, hasNullMember, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../place";
 import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
 
@@ -91,14 +91,14 @@ function hasValueEq(t: Type): boolean {
 }
 
 // A type that can never hold null: comparing it with `null` is a constant.
-// `Union(Ref<T>, Null)` / `Union(Ptr<T>, Null)` is the nullable pointer pattern and
-// stays a runtime check, as does a Maybe carrier.
+// A union with a Null member (`Ref<T> | null`, `Promise<T> | null`) and a Maybe carrier
+// stay runtime checks.
 function neverHoldsNull(t: Type): boolean {
 	if (hasValueEq(t)) return true;
 	if (isMaybeType(t)) return false;
 	const vk = t.kind;
 	if (vk == TypeKind.Array || vk == TypeKind.GenericInstance || vk == TypeKind.Tuple || vk == TypeKind.String || vk == TypeKind.BigInt) return true;
-	return vk == TypeKind.Union && unwrapRefNullUnion(t) == null;
+	return vk == TypeKind.Union && !hasNullMember(t);
 }
 
 // The operand of an `==`/`!=` against `null` whose answer is a constant, else null.
