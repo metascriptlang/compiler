@@ -8,6 +8,11 @@ for prog in startup callFib objectTree stringConcat arrayOps unionDyn closureMap
 		"$here/measure.sh" "$msc" "$here/$prog.ms" raiser
 	done
 done
+for prog in macroHeavy; do
+	for ((i = 0; i < runs; i++)); do
+		"$here/measure.sh" "$msc" "$here/$prog.ms" build
+	done
+done
 for ((i = 0; i < runs; i++)); do
 	"$here/measure.sh" "$msc" "$here/../../corpus/programs/506-jsonCodec.ms" build
 done
