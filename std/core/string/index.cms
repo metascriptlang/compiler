@@ -87,9 +87,12 @@ export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): 
 		} else {
 			let bytePos = 0;
 			let unit = 0;
-			while (bytePos < hb.length && unit < startIdx) {
-				bytePos = bytePos + unitWidth(hb[bytePos]);
-				unit = unit + 1;
+			while (bytePos < hb.length) {
+				const w = unitWidth(hb[bytePos]);
+				const next = unit + (w == 4 ? 2 : 1);
+				if (next > startIdx) break;
+				bytePos = bytePos + w;
+				unit = next;
 			}
 			if (bytePos < i) i = bytePos;
 		}

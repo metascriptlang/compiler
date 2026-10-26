@@ -17,6 +17,8 @@
 // @stdout: beyond -1 -1 5 -1 8 0 -1 -1
 // @stdout: edges 6 6 0 0 1 1 1 2 2 2
 // @stdout: longer -1 -1 -1 -1 -1
+// @stdout: lastIndexOf astral start -1,1,1,1,4,4,6,6,6,6,6
+// @stdout: mixed start -1|-1|1,1|-1|1,1|-1|4,1|3|4,4|3|4,4|3|-1,4|3|-1,4|3|-1
 function show(label: string, v: int32[]): void {
 	let acc = "";
 	for (const n of v) acc = acc + " " + n.toString();
@@ -47,3 +49,11 @@ show("negative", [ascii.indexOf("a", -1), ascii.indexOf("c", -100), ascii.lastIn
 show("beyond", [ascii.indexOf("a", 8), ascii.indexOf("a", 2147483647), ascii.lastIndexOf("c", 2147483647), astral.indexOf("c", 2147483647), astral.lastIndexOf("c", 2147483647), bmp.lastIndexOf("a", 2147483647), cjk.indexOf("y", 7), cjk.indexOf("y", 6)]);
 show("edges", [ascii.indexOf("ab", 6), ascii.lastIndexOf("ab"), "aa".indexOf("aa"), "aa".lastIndexOf("aa"), "aaa".indexOf("aa", 1), "aaa".lastIndexOf("aa"), "aaaa".lastIndexOf("aa", 1), "😀😀".indexOf("😀", 1), "😀😀".indexOf("😀", 2), "😀😀".lastIndexOf("😀", 2)]);
 show("longer", ["ab".indexOf("abc"), "ab".lastIndexOf("abc"), "é".indexOf("éé"), "é".lastIndexOf("éé"), "x".indexOf("xy", 0)]);
+
+const fromEach: string[] = [];
+for (let k = 0; k <= 10; k++) fromEach.push(`${astral.lastIndexOf("😀", k)}`);
+console.log(`lastIndexOf astral start ${fromEach.join(",")}`);
+const mixedStart = "é😀x😀";
+const mixedEach: string[] = [];
+for (let k = 0; k <= 7; k++) mixedEach.push(`${mixedStart.lastIndexOf("😀", k)}|${mixedStart.lastIndexOf("x", k)}|${mixedStart.indexOf("😀", k)}`);
+console.log(`mixed start ${mixedEach.join(",")}`);
