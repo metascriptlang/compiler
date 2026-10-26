@@ -189,7 +189,7 @@ function isCopiedAsValue(type: Type | null): boolean {
 
 function isSizedArrayType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
-	return t != null && t.kind == TypeKind.SizedArray;
+	return t != null && (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple);
 }
 
 const LIFTED_OPS: AttachedOp[] = [AttachedOp.AttachedDestructor, AttachedOp.AttachedWasMoved, AttachedOp.AttachedAsgn, AttachedOp.AttachedSink];
@@ -225,7 +225,15 @@ function isSizedArrayCopy(call: CallExprData): boolean {
 	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedAsgn) == sym;
 }
 
+function isSizedArraySink(call: CallExprData): boolean {
+	const sym = call.callee.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
+	const type = placeOf(call.arguments[0]).nodeType;
+	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedSink) == sym;
+}
+
 function isLiftedCellSink(call: CallExprData): boolean {
+	if (isSizedArraySink(call)) return true;
 	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookOf(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
 }
 
