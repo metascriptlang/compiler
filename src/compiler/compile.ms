@@ -3698,6 +3698,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resetCompiledOFiles();
 	registerCoreParsers();
 	const t0 = performance.now();
+	const fTotal = flowStart();
 	// Same compiler resolution as cmdBuildC: a test build emits and links C with
 	// the same flags, so it needs the same --cc normalization and the same
 	// LTO capability resolution once the compiler is known — and the same
@@ -3711,7 +3712,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
 resetLiftedOps();
+	const fGraph = flowStart();
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), null, true);
+	flowStop("phase.graph", fGraph);
+	const fA = flowStart();
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -3800,6 +3804,8 @@ resetLiftedOps();
 		registerIncludePaths(resolved, includePaths);
 	}
 
+	flowStop("phase.A", fA);
+	const fB = flowStart();
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	inferRaises(transformedPrograms);
@@ -3814,6 +3820,8 @@ resetLiftedOps();
 	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
 	for (const oFile of rtObjs) oFiles.push(oFile);
 
+	flowStop("phase.B", fB);
+	const fC = flowStart();
 	// Phase C: Codegen + compile each module (per-module .c cache)
 	const emissionFacts = new CEmissionFacts();
 	const emissionJobs: ModuleEmissionJob[] = [];
@@ -3901,6 +3909,8 @@ resetLiftedOps();
 	oSlots.push([]);
 	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
 
+	flowStop("phase.C", fC);
+	const fCc = flowStart();
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	let testFailed = false;
 	let cji = 0;
@@ -3919,6 +3929,7 @@ resetLiftedOps();
 		}
 		cji = cji + 1;
 	}
+	flowStop("cc", fCc);
 	if (testFailed) exit(1);
 	oFiles = [];
 	for (const slot of oSlots) {
@@ -3940,7 +3951,9 @@ resetLiftedOps();
 	let testLink = cliLinkFlags(allFlags, opts, true);
 	for (const obj of linkInputs(opts)) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
+	const fLink = flowStart();
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
+	flowStop("phase.link", fLink);
 	if (!linkRes.ok) {
 		printError(`link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
@@ -3949,7 +3962,11 @@ resetLiftedOps();
 
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
+	const fRun = flowStart();
 	const runCode = execFile(testBin);
+	flowStop("test.run", fRun);
+	flowStop("total", fTotal);
+	flowsWrite();
 	if (platform == "windows" && runCode >= 0xC0000000) {
 		printError(`test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
 		exit(1);
