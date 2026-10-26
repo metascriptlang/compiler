@@ -1390,6 +1390,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
 			setStr(objHeap, arrHeap, handle, "jsxTag", d.jsxTag);
+			setNode(objHeap, arrHeap, handle, "typeExpr", node.typeExpr, false);
 			setNodes(objHeap, arrHeap, handle, "jsxAttrs", d.jsxAttrs);
 			setNodes(objHeap, arrHeap, handle, "jsxChildren", d.jsxChildren);
 			setBool(objHeap, handle, "jsxSelfClosing", d.jsxSelfClosing);
@@ -2408,7 +2409,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const jsxAttrs = readNodes(objHeap, arrHeap, h, "jsxAttrs", loc);
 			const jsxChildren = readNodes(objHeap, arrHeap, h, "jsxChildren", loc);
 			const jsxSelfClosing = readBool(objHeap, h, "jsxSelfClosing");
-			return createNodeAt(NodeKind.JSXElement, { jsxTag, jsxAttrs, jsxChildren, jsxSelfClosing }, loc);
+			const element = createNodeAt(NodeKind.JSXElement, { jsxTag, jsxAttrs, jsxChildren, jsxSelfClosing }, loc);
+			element.typeExpr = readNode(objHeap, arrHeap, h, "typeExpr", loc);
+			return element;
 		},
 		NodeKind.JSXFragment => {
 			const jsxFragChildren = readNodes(objHeap, arrHeap, h, "jsxFragChildren", loc);
@@ -2685,6 +2688,30 @@ test "round-trip Identifier" {
 	assert back.kind == NodeKind.Identifier;
 	const d = back.data as IdentifierData;
 	assert d.name == "myVar";
+}
+
+function jsxElementAt(tag: string, loc: SourceLocation, children: Node[]): Node {
+	const element = createNodeAt(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: [] as Node[], jsxChildren: children, jsxSelfClosing: children.length == 0 }, loc);
+	element.typeExpr = createNodeAt(NodeKind.Identifier, { name: tag }, makeLoc(loc.line, loc.column + 1));
+	return element;
+}
+
+test "round-trip JSXElement keeps its positioned tag identifier, nested ones too" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const orig = jsxElementAt("div", makeLoc(3, 8), [jsxElementAt("span", makeLoc(4, 3), [] as Node[])]);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location);
+	assert back.typeExpr != null && (back.typeExpr.data as IdentifierData).name == "div";
+	assert back.typeExpr.location.line == 3 && back.typeExpr.location.column == 9;
+	const inner = (back.data as JSXElementData).jsxChildren[0];
+	assert inner.typeExpr != null && inner.typeExpr.location.line == 4 && inner.typeExpr.location.column == 4;
+}
+
+test "round-trip JSXElement a macro built without a tag identifier has none" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const orig = createNodeAt(NodeKind.JSXElement, { jsxTag: "p", jsxAttrs: [] as Node[], jsxChildren: [] as Node[], jsxSelfClosing: true }, makeLoc(1, 1));
+	assert valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location).typeExpr == null;
 }
 
 test "round-trip BinaryExpr" {
