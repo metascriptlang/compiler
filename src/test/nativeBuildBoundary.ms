@@ -1,6 +1,6 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { appendFile, chmod, copyFile, ensureDir, exists, readFile, remove, removeAll, writeFile } from "std/fs";
+import { appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile, remove, removeAll, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-timing, windows-cross, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
 	exit(2);
 }
 
@@ -1203,7 +1203,36 @@ function runWindowsCross(): void {
 	record("a std extern from a libc header builds for --os=windows", "0", `${command(dir, "windows-cross", compiler, ["build", "main.ms", "--os=windows", "--output=main.exe"]).code}`);
 }
 
+function sameBytes(dir: string, a: string, b: string): boolean {
+	return execFileCapture("cmp", [a, b], dir).ok;
+}
+
+function testBinaryIn(dir: string): string {
+	for (const name of readDir(`${dir}/out/debug`)) {
+		if (name.startsWith("_test_check_") && !name.endsWith("_link.rsp")) return `${dir}/out/debug/${name}`;
+	}
+	return "";
+}
+
+function runReproducibleLink(): void {
+	if (windows) return;
+	const dir = `${root}/reproducible-link`;
+	ensureDir(dir);
+	put(`${dir}/check.ms`, "test \"sum\" { assert 1 + 2 == 3; }\n");
+	need(command(dir, "repro-test1", compiler, ["test", "check.ms"]).code == 0, "first test run");
+	const bin = testBinaryIn(dir);
+	need(bin != "" && copyFile(bin, `${dir}/first.bin`).ok, "first test binary");
+	need(command(dir, "repro-test2", compiler, ["test", "check.ms"]).code == 0, "second test run");
+	recordTrue("an unchanged test source links to a byte-identical test binary", sameBytes(dir, `${dir}/first.bin`, bin));
+	put(`${dir}/main.ms`, "console.log(1 + 2);\n");
+	need(command(dir, "repro-build1", compiler, ["build", "main.ms", "--output=app"]).code == 0, "first build");
+	need(copyFile(`${dir}/app`, `${dir}/app.first`).ok, "first build output");
+	need(command(dir, "repro-build2", compiler, ["build", "main.ms", "--output=app"]).code == 0, "second build");
+	recordTrue("an unchanged program builds to a byte-identical binary", sameBytes(dir, `${dir}/app.first`, `${dir}/app`));
+}
+
 if (group == "argv" || group == "all") runArgv();
+if (group == "reproducible-link" || group == "all") runReproducibleLink();
 if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
