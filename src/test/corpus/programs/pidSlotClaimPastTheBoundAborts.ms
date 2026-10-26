@@ -1,4 +1,6 @@
 // @exit: 1
+// @ledger-slack(msFuture) 1
+// ledger-slack reason: the pid-table abort ends the process while the await on the fifth Cell is pending, so that future is still live at exit
 // @stdout: fatal: pid table full: 4 live actors (limit 4)
 // @stdout:   spawning: Cell
 // @stdout:   live by type: Cell 2 · Probe 1 · <untyped> 1

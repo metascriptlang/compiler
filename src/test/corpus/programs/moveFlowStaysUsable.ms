@@ -9,6 +9,10 @@
 // @stdout: top-level 2
 // @stdout: actor-ref 5
 // @exit: 0
+// @ledger-slack(Io) 1
+// @ledger-slack(Hub) 1
+// @ledger-slack(Peer) 5
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: a `move` that no later path uses stays accepted: the join keeps a move only on a path that reaches the use, a loop may move a binding it rebinds before the next iteration, and a move followed by `break` or `return` ends the path
 
 interface Counter { n: int32; }
