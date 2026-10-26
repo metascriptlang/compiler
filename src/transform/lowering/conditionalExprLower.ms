@@ -41,7 +41,7 @@ import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, has
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
-import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -736,11 +736,16 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 
 function compoundReadsTargetFirst(bd: BinaryExprData, rhsPre: Node[], writes: Symbol[], ctx: TransformContext): boolean {
 	if (ctx.jsBackend || bd.operator == "=" || !isNumeric(bd.left.nodeType)) return false;
+	if (!isIntegerType(bd.left.nodeType) && isBitwiseCompound(bd.operator)) return false;
 	if (readsAnyOf(bd.left, writes) || holdsCall(bd.right)) return true;
 	for (const s of rhsPre) {
 		if (holdsCall(s)) return true;
 	}
 	return false;
+}
+
+function isBitwiseCompound(op: string): boolean {
+	return op == "&=" || op == "|=" || op == "^=" || op == "<<=" || op == ">>=" || op == ">>>=";
 }
 
 function readCompoundTarget(bd: BinaryExprData, pre: Node[], ctx: TransformContext, loc: SourceLocation): void {

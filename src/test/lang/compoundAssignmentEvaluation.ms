@@ -100,6 +100,20 @@ function compoundInsideClosure(): string {
 	return `${s} ${t}`;
 }
 
+function compoundRaiseKeepsTarget(): string {
+	let bits: number = 6;
+	let n: int32 = 3;
+	let captured: int32 = 4;
+	const raise = (): int32 => { throw new Error("neg"); };
+	try { bits &= raise(); } catch (e) { }
+	try { n *= raise(); } catch (e) { }
+	const inner = (): void => {
+		try { captured += raise(); } catch (e) { }
+	};
+	inner();
+	return `${bits} ${n} ${captured}`;
+}
+
 test "compoundAssignmentEvaluation: a global target is read before a right side that writes it" {
 	assert compoundGlobals() == "3 9 9 6";
 }
@@ -118,4 +132,8 @@ test "compoundAssignmentEvaluation: a loop update reads its counter before the s
 
 test "compoundAssignmentEvaluation: a target captured by a closure is compounded inside that closure" {
 	assert compoundInsideClosure() == "9 4";
+}
+
+test "compoundAssignmentEvaluation: a raise on the right keeps a number, an int and a closure target" {
+	assert compoundRaiseKeepsTarget() == "6 3 4";
 }
