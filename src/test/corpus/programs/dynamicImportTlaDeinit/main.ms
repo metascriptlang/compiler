@@ -1,5 +1,4 @@
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
-// @xfail(raiser): the Raiser VM runs no user lifecycle hooks, as JS has no destructors
 // @stdout: slow start
 // @stdout: quick body
 // @stdout: slow end

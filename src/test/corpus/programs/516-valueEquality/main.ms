@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: expected an object, got value kind Array
 // Parity program — `==` on value types compares field by field on every backend: a struct, a
 // tuple, a struct nested in a struct, a generic struct instance, `!=` on a struct and on a
 // generic instance, and a struct declared in another module. Field kinds: string, bigint,
