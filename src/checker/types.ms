@@ -3564,6 +3564,18 @@ let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
 let _heldByFieldNames: HashMap<string, HashMap<Type, HeldBeyond>> = new HashMap<string, HashMap<Type, HeldBeyond>>();
 let _speculationDepth: int32 = 0;
 
+export class HeldBeyondState {
+	bySym: HashMap<Symbol, HeldBeyond>;
+	byName: HashMap<string, HeldBeyond>;
+}
+
+export function swapHeldBeyond(next: HeldBeyondState | null): HeldBeyondState {
+	const prev: HeldBeyondState = { bySym: _heldBySym, byName: _heldByName };
+	_heldBySym = next != null ? next.bySym : new HashMap<Symbol, HeldBeyond>();
+	_heldByName = next != null ? next.byName : new HashMap<string, HeldBeyond>();
+	return prev;
+}
+
 export function resetHeldBeyond(): void {
 	_heldBySym = new HashMap<Symbol, HeldBeyond>();
 	_heldByFieldNames = new HashMap<string, HashMap<Type, HeldBeyond>>();
