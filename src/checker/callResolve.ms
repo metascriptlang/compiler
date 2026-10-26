@@ -4688,7 +4688,7 @@ function collectArmTails(node: Node, out: ArmTails): void {
 			if (d.alternate == null || isEmptyBlock(d.alternate)) out.missing.push(node);
 			else collectArmTails(d.alternate, out);
 		},
-		NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt => {},
+		NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt => {},
 		_ => { out.missing.push(node); },
 	};
 }
@@ -6395,7 +6395,8 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 			if (vt != null && vt.kind != TypeKind.Never) joinTypes.push(vt);
 		}
 	}
-	const joined = joinBranchTypes(joinTypes);
+	let joined = joinBranchTypes(joinTypes);
+	if (joined.kind == TypeKind.Null && expectedType != null && !isUnresolvedType(expectedType) && isAssignable(joined, expectedType)) joined = expectedType;
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;

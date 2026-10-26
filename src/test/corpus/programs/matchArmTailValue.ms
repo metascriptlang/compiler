@@ -1,4 +1,4 @@
-// @stdout: tail=7,other ifElse=zero,small,big nested=2,1,0 maybe=hit,none bare=early|late loop=1+3+ ret=13,1,99 arrow=10,20,10 path=.f[]
+// @stdout: tail=7,other ifElse=zero,small,big nested=1,2,0 maybe=hit,none,z,none bare=early|late loop=1+3+ ret=13,1,99 arrow=10,20,10 path=.f[]
 // note: a block arm of a match used as a value gives its last expression, through a trailing if/else or a nested match; `return` always leaves the function, so in a returned match or an arrow body it returns the function's value and in a bound match a bare `return;` exits early.
 
 function tail(v: int32): string {
@@ -45,6 +45,16 @@ function find(key: string): string | null {
 		_ => { null },
 	};
 	return found;
+}
+
+function firstOrNone(v: int32): string | null {
+	return match (v) {
+		0 => {
+			if (v == 0) return "z";
+			null
+		},
+		_ => { return null; },
+	};
 }
 
 let log = "";
@@ -119,4 +129,4 @@ const pair = new T(); pair.kind = Kind.Pair; pair.kids = [list]; pair.names = ["
 
 bare(0);
 bare(1);
-console.log(`tail=${tail(0)},${tail(1)} ifElse=${size(0)},${size(3)},${size(30)} nested=${nested(0, false)},${nested(0, true)},${nested(5, true)} maybe=${find("a") ?? "none"},${find("b") ?? "none"} bare=${log} loop=${loop()} ret=${ret(0)},${ret(1)},${ret(2)} arrow=${pick(0)},${pick(1)},${apply((n: int32): int32 => match (n) { 1 => match (n + 1) { 2 => 10, _ => 0 }, _ => 0 }, 1)} path=${path(pair, [])}`);
+console.log(`tail=${tail(0)},${tail(1)} ifElse=${size(0)},${size(3)},${size(30)} nested=${nested(0, false)},${nested(0, true)},${nested(5, true)} maybe=${find("a") ?? "none"},${find("b") ?? "none"},${firstOrNone(0) ?? "none"},${firstOrNone(1) ?? "none"} bare=${log} loop=${loop()} ret=${ret(0)},${ret(1)},${ret(2)} arrow=${pick(0)},${pick(1)},${apply((n: int32): int32 => match (n) { 1 => match (n + 1) { 2 => 10, _ => 0 }, _ => 0 }, 1)} path=${path(pair, [])}`);
