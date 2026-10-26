@@ -6,7 +6,7 @@
 // An operand written left of the hoisted kind is evaluated first (operandOrder).
 // A loop condition becomes `while (true) { <hoisted>; if (!cond) break; body }`.
 
-import { Node, NodeKind, DeclKind, TypeKind, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IfStmtData, VariableDeclData, ExprStmtData, BinaryExprData, ConditionalExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, Symbol, SourceLocation, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IfStmtData, VariableDeclData, ExprStmtData, BinaryExprData, ConditionalExprData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { containsExprKind, mapExprChildren } from "../walker";
 import { isEagerAssignOp } from "../../ast/operators";
@@ -55,6 +55,11 @@ export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister,
 	return expr;
 }
 
+function armStmt(temp: Symbol, arm: Node, loc: SourceLocation): Node {
+	if (arm.nodeType != null && arm.nodeType.kind == TypeKind.Never) return makeExprStmt(arm, loc);
+	return makeExprStmt(makeAssign(makeIdentResolved(temp, loc), arm, loc), loc);
+}
+
 // c ? a : b → let $gtern; if (c) { $gtern = a; } else { $gtern = b; }
 export function lowerGuardedTernary(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const cd = expr.data as ConditionalExprData;
@@ -64,13 +69,9 @@ export function lowerGuardedTernary(expr: Node, hoisted: Node[], ctx: TransformC
 	letDecl.resolvedSym = t;
 	if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
 	hoisted.push(letDecl);
-	const thenStmt = (cd.ternaryConsequent.nodeType != null && cd.ternaryConsequent.nodeType.kind == TypeKind.Never)
-		? makeExprStmt(cd.ternaryConsequent, loc)
-		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
-	const elseStmt = (cd.ternaryAlternate.nodeType != null && cd.ternaryAlternate.nodeType.kind == TypeKind.Never)
-		? makeExprStmt(cd.ternaryAlternate, loc)
-		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
-	hoisted.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
+	const thenBlock = makeBlock([armStmt(t, cd.ternaryConsequent, loc)], loc);
+	const elseBlock = makeBlock([armStmt(t, cd.ternaryAlternate, loc)], loc);
+	hoisted.push(makeIf(cd.ternaryCondition, thenBlock, elseBlock, loc));
 	return makeIdentResolved(t, loc);
 }
 
