@@ -1821,8 +1821,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// as the inline-opcode shortcut for hot methods.
 	if (d.callee.kind == NodeKind.MemberExpr && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
-		if ((sym.nativeName == "msStringByteAt" || sym.nativeName == "msStringCharCodeAt") && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
-				&& hasStringType((d.callee.data as MemberExprData).object)) {
+		if (isStrIndexReadCall(node)) {
 			return compileStrIndexRead(s, node, sym.nativeName == "msStringByteAt" ? RaiserOpcode.StrByteAt : RaiserOpcode.StrCharCodeAt);
 		}
 		const hostName = runtimeHostName(sym);
@@ -2382,6 +2381,35 @@ function isToStringCall(node: Node): boolean {
 	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	return d.property == "toString";
+}
+
+function isStrIndexReadCall(node: Node): boolean {
+	const d = node.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr || d.callee.resolvedSym == null) return false;
+	const nativeName = d.callee.resolvedSym.nativeName;
+	return (nativeName == "msStringByteAt" || nativeName == "msStringCharCodeAt") && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
+		&& hasStringType((d.callee.data as MemberExprData).object);
+}
+
+function isInterceptedCall(s: RaiserCompState, node: Node): boolean {
+	const d = node.data as CallExprData;
+	return isArrayPush(d.callee)
+		|| (isArraySetLengthCall(s, d.callee) && d.arguments.length == 1)
+		|| (isToStringCall(d.callee) && d.arguments.length == 0)
+		|| (isStringMethod(s, d.callee, "charAt") && d.arguments.length == 1)
+		|| (isStringMethod(s, d.callee, "slice") && d.arguments.length == 2)
+		|| isStrIndexReadCall(node);
+}
+
+export function unservedCallReason(s: RaiserCompState, node: Node): string {
+	const d = node.data as CallExprData;
+	if (isInterceptedCall(s, node)) return "";
+	if (isToStringCall(d.callee)) return "toString with an argument";
+	const sym = d.callee.resolvedSym;
+	if (sym == null || (d.callee.kind != NodeKind.Identifier && d.callee.kind != NodeKind.MemberExpr)) return "";
+	const hostName = runtimeHostName(sym);
+	if (hostName != "" && hostName == sym.nativeName && lookupHost(sym.nativeName) == null) return `extern ${sym.nativeName}`;
+	return "";
 }
 
 function compileToStringCall(s: RaiserCompState, node: Node): int32 {

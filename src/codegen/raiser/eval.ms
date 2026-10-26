@@ -2,10 +2,9 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, MemberExprData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
-import { lookupHost } from "../../raiser/hostRegistry";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
@@ -35,7 +34,7 @@ import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
-import { hasHostCallback } from "./expressions";
+import { hasHostCallback, unservedCallReason } from "./expressions";
 import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
@@ -459,24 +458,10 @@ function noteRecheck(reason: string): void {
 const BUILD_LOWERING_BLOCKED: int32 = -2;
 let _buildLoweringBlockedBy = "";
 
-const INTERCEPTED_EXTERNS = ["msStringEquals", "msStringCompareLt", "msStringCompareLe", "msStringCharAt", "msStringSlice", "msStringByteAt", "msStringCharCodeAt"];
-
-function holdsValueSym(sym: Symbol): boolean {
-	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp
-		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Property;
-}
-
-function unservedExtern(call: Node): string {
-	const d = call.data as CallExprData;
-	const sym = d.callee.resolvedSym;
+function unservedCall(call: Node): string {
+	const sym = (call.data as CallExprData).callee.resolvedSym;
 	if (sym != null && sym.modulePath.endsWith(".jms")) return "js prelude routine";
-	if (sym == null || holdsValueSym(sym) || sym.nativeName == "" || sym.builtinKind != "") return "";
-	if (hasHostCallback(sym) || lookupHost(sym.nativeName) != null || INTERCEPTED_EXTERNS.includes(sym.nativeName)) return "";
-	if (d.callee.kind == NodeKind.MemberExpr && sym.symbolKind != SymbolKind.Method) {
-		const property = (d.callee.data as MemberExprData).property;
-		if (property == "push" || property == "setLength" || (property == "toString" && d.arguments.length == 0)) return "";
-	}
-	return `extern ${sym.nativeName}`;
+	return unservedCallReason(createCompState(), call);
 }
 
 function blockedForm(node: Node, afterTransform: boolean): string {
@@ -493,10 +478,8 @@ function blockedForm(node: Node, afterTransform: boolean): string {
 		}
 	}
 	if (afterTransform && node.kind == NodeKind.CallExpr) {
-		const extern = unservedExtern(node);
-		if (extern != "") return extern;
-		const d = node.data as CallExprData;
-		if (d.arguments.length > 0 && d.callee.kind == NodeKind.MemberExpr && (d.callee.data as MemberExprData).property == "toString") return "toString radix";
+		const unserved = unservedCall(node);
+		if (unserved != "") return unserved;
 	}
 	let found = "";
 	forEachChild(node, (child: Node): void => {
@@ -595,7 +578,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	}
 	let recheckReason = vmStd ? "vm std" : "";
 	if (recheckReason == "") {
-		const lowered = lowerBuildCheckedHelper(sym);		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
+		const lowered = lowerBuildCheckedHelper(sym);
+		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
 		recheckReason = _buildLoweringBlockedBy;
 	}
 	noteRecheck(recheckReason);
