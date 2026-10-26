@@ -10,7 +10,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
-	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
+	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
 import {
@@ -8066,7 +8066,7 @@ function refArray(vm: RaiserVM, elems: RaiserValue[]): int64 {
 }
 
 function stringRc(vm: RaiserVM, v: RaiserValue): int32 {
-	return vm.arrayHeap.strings.rc[handleIndex(v.intVal)];
+	return stringHandleRc(v.intVal) as int32;
 }
 
 function objectRc(vm: RaiserVM, v: RaiserValue): int32 {
@@ -8208,18 +8208,21 @@ test "array kernels: slice, concat, splice, pop and fill count string elements" 
 
 	const spliced = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(1), raiserInt(1)]);
 	const survivor = elemAt(spliced, spliced.regs.refs[0], 2);
+	const splicedLive = heapStringLive(spliced.arrayHeap);
 	execLoop(spliced);
-	assert heldText(spliced, spliced.regs.refs[0]) == "[p,r]" && spliced.arrayHeap.strings.freeList.length == 1 && stringRc(spliced, survivor) == 1;
+	assert heldText(spliced, spliced.regs.refs[0]) == "[p,r]" && heapStringLive(spliced.arrayHeap) == splicedLive - 1 && stringRc(spliced, survivor) == 1;
 
 	const inserted = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
 	inserted.regs.refs[2] = elemAt(inserted, inserted.regs.refs[0], 0).intVal;
+	const insertedLive = heapStringLive(inserted.arrayHeap);
 	execLoop(inserted);
-	assert heldText(inserted, inserted.regs.refs[0]) == "[p,p,r]" && inserted.arrayHeap.strings.freeList.length == 1 && stringRc(inserted, handleValue(inserted.regs.refs[2])) == 2;
+	assert heldText(inserted, inserted.regs.refs[0]) == "[p,p,r]" && heapStringLive(inserted.arrayHeap) == insertedLive - 1 && stringRc(inserted, handleValue(inserted.regs.refs[2])) == 2;
 
 	const itself = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
 	itself.regs.refs[2] = elemAt(itself, itself.regs.refs[0], 1).intVal;
+	const itselfLive = heapStringLive(itself.arrayHeap);
 	execLoop(itself);
-	assert heldText(itself, itself.regs.refs[0]) == "[p,q,r]" && itself.arrayHeap.strings.freeList.length == 0 && stringRc(itself, handleValue(itself.regs.refs[2])) == 1;
+	assert heldText(itself, itself.regs.refs[0]) == "[p,q,r]" && heapStringLive(itself.arrayHeap) == itselfLive && stringRc(itself, handleValue(itself.regs.refs[2])) == 1;
 
 	const popped = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0), raiserABC(RaiserOpcode.ArrayShift, 4, 0, 0), halt], []);
 	execLoop(popped);
@@ -8228,8 +8231,9 @@ test "array kernels: slice, concat, splice, pop and fill count string elements" 
 	const filled = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayFill, 0, 4, 0), halt], []);
 	const z = ownedString(filled, "z");
 	filled.regs.refs[2] = z.intVal;
+	const filledLive = heapStringLive(filled.arrayHeap);
 	execLoop(filled);
-	assert heldText(filled, filled.regs.refs[0]) == "[z,z,z]" && filled.arrayHeap.strings.freeList.length == 3 && stringRc(filled, z) == 4;
+	assert heldText(filled, filled.regs.refs[0]) == "[z,z,z]" && heapStringLive(filled.arrayHeap) == filledLive - 3 && stringRc(filled, z) == 4;
 }
 
 test "array kernels: a sort of strings is by bytes and keeps equal strings in their order" {

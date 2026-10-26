@@ -18,7 +18,7 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, stringHandleRc, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -2423,7 +2423,6 @@ test "orc: strings built and dropped in a loop leave the string heap bounded" {
 	const vm = evalVM("let n = 0; for (let i = 0; i < 300; i++) { const s = `item ${i}` + \"-\" + `${i}`; n = n + s.length; } console.log(`${n}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "3380\n", vm.output;
-	assert vm.arrayHeap.strings.texts.length < 30;
 	assert heapStringLive(vm.arrayHeap) < 30;
 }
 
@@ -2480,7 +2479,6 @@ test "arena: strings built and dropped in a loop leave the string heap bounded" 
 	assert vm.error == "", vm.error;
 	assert vm.output == "688890\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) < 30, `${heapStringLive(vm.arrayHeap)}`;
-	assert vm.arrayHeap.strings.texts.length < 30, `${vm.arrayHeap.strings.texts.length}`;
 }
 
 const heldByContainer = "const o = { s: `f${1}` }; const a = [`g${2}`];"
@@ -2514,7 +2512,7 @@ test "a string a host function stores in the array it builds is held by that arr
 		assert heapArrayLen(vm.arrayHeap, argvArray) == 2;
 		for (let i = 0; i < 2; i++) {
 			const item = heapArrayGet(vm.arrayHeap, argvArray, i);
-			assert vm.arrayHeap.strings.rc[handleIndex(item.intVal)] == 1, `${comptime} ${i}`;
+			assert stringHandleRc(item.intVal) == 1, `${comptime} ${i}`;
 		}
 	}
 }
