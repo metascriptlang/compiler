@@ -55,8 +55,7 @@ function advance(s: ScanState): void {
 }
 
 function skipN(s: ScanState, n: int32): void {
-	let i = 0;
-	while (i < n) { advance(s); i = i + 1; }
+	for (let i = 0; i < n; i += 1) advance(s);
 }
 
 function isSpace(ch: int32): boolean {

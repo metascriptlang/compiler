@@ -17,22 +17,18 @@ export function decodeUtf8(source: string, pos: int32): int32[] {
 	else if (ch >= 0xE0) { len = 3; cp = ch & 0x0F; }
 	else { len = 2; cp = ch & 0x1F; }
 
-	let i = 1;
-	while (i < len) {
+	for (let i = 1; i < len; i += 1) {
 		const b = source.byteAt(pos + i);
 		if (b < 0 || (b >> 6) != 2) return [0xFFFD, 1];
 		cp = (cp << 6) | ((b as int32) & 0x3F);
-		i = i + 1;
 	}
 	return [cp, len];
 }
 
 // C11 Annex D identifier-start characters.
 function inRange(ranges: int32[], cp: int32): boolean {
-	let i = 0;
-	while (i < ranges.length) {
+	for (let i = 0; i < ranges.length; i += 2) {
 		if (cp >= ranges[i] && cp <= ranges[i + 1]) return true;
-		i = i + 2;
 	}
 	return false;
 }
@@ -78,12 +74,10 @@ export function fromHex(ch: int32): int32 | null {
 // Read a universal character: 4 hex digits for \u, 8 for \U. Null if invalid.
 export function readUniversalChar(source: string, pos: int32, len: int32): int32 | null {
 	let cp: int32 = 0;
-	let i = 0;
-	while (i < len) {
+	for (let i = 0; i < len; i += 1) {
 		const h = fromHex(source.byteAt(pos + i));
 		if (h == null) return null;
 		cp = (cp << 4) | h;
-		i = i + 1;
 	}
 	return cp;
 }
