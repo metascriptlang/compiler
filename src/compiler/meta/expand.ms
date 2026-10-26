@@ -348,7 +348,7 @@ function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[]
 		keys.push("boundTypeExprs");
 		values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 	}
-	if (returnType != "void" && returnType.indexOf(" is ") < 0 &&!returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, loc);
+	if (returnType != "void" && returnType.indexOf(" is ") < 0 && !returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, loc);
 }
 
 function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {

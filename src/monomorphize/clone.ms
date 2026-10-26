@@ -68,6 +68,15 @@ export function cloneNodeKeepSem(node: Node): Node {
 // dropped). All of it is pinned by the exhaustive per-kind payload roundtrip
 // test at the bottom of this file.
 
+export function bindsSignatureTypes(node: Node): boolean {
+	if (node.typeExpr != null && node.typeExpr.flags.has(NodeFlag.BoundSym)) return true;
+	if (node.typeExprs == null) return false;
+	for (const operand of node.typeExprs) {
+		if (operand != null && operand.flags.has(NodeFlag.BoundSym)) return true;
+	}
+	return false;
+}
+
 // Copy node-level metadata from source to clone. Behavior depends on currentCloneMode.
 //
 // Shared (both modes):
@@ -84,7 +93,8 @@ export function cloneNodeKeepSem(node: Node): Node {
 //     and fall back to a location-keyed side channel holding the original strings,
 //     defeating substitution. replaceTypeVars substitutes this field too.
 //   - Skips resolvedSym (name rewriting path, re-resolved via shared IdentCache).
-//   - Skips typeExpr/typeExprs (LSP side channel — mono clones don't need positions).
+//   - Skips typeExpr/typeExprs (LSP side channel — mono clones don't need positions),
+//     except a type a quote bound where it was written, which carries the Type.
 //
 // Check (dbTypeCheck clone-before-mutate):
 //   - Skips nodeType (checker will re-populate during resolvePass + checkPass).
@@ -96,15 +106,6 @@ export function cloneNodeKeepSem(node: Node): Node {
 // The mode distinction ensures that dbTypeCheck can safely mutate the clone without
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
-export function bindsSignatureTypes(node: Node): boolean {
-	if (node.typeExpr != null && node.typeExpr.flags.has(NodeFlag.BoundSym)) return true;
-	if (node.typeExprs == null) return false;
-	for (const operand of node.typeExprs) {
-		if (operand != null && operand.flags.has(NodeFlag.BoundSym)) return true;
-	}
-	return false;
-}
-
 function copyNodeMeta(src: Node, dst: Node): Node {
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
