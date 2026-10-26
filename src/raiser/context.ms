@@ -21,6 +21,7 @@ export interface RaiserContext {
 	objectHeap: RaiserObjectHeap;
 	lastError: string;
 	comptime: boolean;
+	auditLedger: boolean;
 	orphanFailures: string[];   // futures that failed with nobody reading them
 	programArgv: string[] | null;   // the program's `argv`; null leaves the host's own argv visible
 	printSink: RaiserPrintSink | null;
@@ -35,7 +36,7 @@ export function createContext(comptime: boolean = true): RaiserContext {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const orphanFailures: string[] = [];
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", comptime, orphanFailures, programArgv: null, printSink: null, vm: null };
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", comptime, auditLedger: true, orphanFailures, programArgv: null, printSink: null, vm: null };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -46,6 +47,7 @@ export function load(ctx: RaiserContext, mod: RaiserModule): void {
 export function execute(ctx: RaiserContext): boolean {
 	if (!ctx.hasModule) return false;
 	const vm = createVM(ctx.mod, ctx.comptime);
+	vm.auditLedger = ctx.auditLedger;
 	vm.programArgv = ctx.programArgv;
 	vm.printSink = ctx.printSink;
 	execLoop(vm);
