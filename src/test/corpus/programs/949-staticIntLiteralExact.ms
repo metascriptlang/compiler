@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser bytecode compiler cannot evaluate a class static field (symbol kind is Class), also on the baseline
 // @stdout: 9007199254740993 18446744073709551615 -9007199254740993 -5 0.5 true
 // note: a static field's integer initializer reaches C spelled from its exact value (codegen-c-11: int64 lost its last digit and uint64 max did not compile).
 

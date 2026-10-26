@@ -36,6 +36,7 @@ import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHos
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
+import { lowerStaticFieldReads } from "../../transform/lowering/staticLower";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destructorLifting";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
@@ -80,7 +81,7 @@ export function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: Wri
 	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
 	try {
 		ctx.gcMode = GcMode.Drc;
-		return analyzeProgram(program, ctx, tables, true);
+		return lowerStaticFieldReads(analyzeProgram(program, ctx, tables, true));
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
@@ -368,14 +369,14 @@ function hasGlobal(globals: RaiserGlobalMap, symbol: Symbol): boolean {
 }
 
 function collectRaiserGlobals(node: Node, globals: RaiserGlobalMap, nextSlot: int32): int32 {
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null
-			&& node.resolvedSym.symFlags.has(SymbolFlag.Global) && !hasGlobal(globals, node.resolvedSym)) {
-		const d = node.data as VariableDeclData;
+	const isStaticField = node.kind == NodeKind.PropertyDecl && (node.data as PropertyDeclData).propIsStatic;
+	if ((node.kind == NodeKind.VariableDecl || isStaticField) && node.resolvedSym != null
+			&& (node.resolvedSym.symFlags.has(SymbolFlag.Global) || isStaticField) && !hasGlobal(globals, node.resolvedSym)) {
 		const index = nextSlot;
 		nextSlot += 1;
 		let initGuard: int32 = -1;
-		if (node.resolvedSym.symFlags.has(SymbolFlag.StaticLocal)
-			&& d.declKind == DeclKind.Const && d.initializer != null) {
+		if (!isStaticField && node.resolvedSym.symFlags.has(SymbolFlag.StaticLocal)
+			&& (node.data as VariableDeclData).declKind == DeclKind.Const && (node.data as VariableDeclData).initializer != null) {
 			initGuard = nextSlot;
 			nextSlot += 1;
 		}
