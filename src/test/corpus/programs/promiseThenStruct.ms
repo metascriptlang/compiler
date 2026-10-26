@@ -1,5 +1,4 @@
 // @stdout: then 2,3 | text a:1 | handled 5 1 | direct 9 | two 4,0 -1,2
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: A then or catch callback that returns an object literal, under a destination that
 // names the struct (const p: Promise<Pt> = ...), builds that struct, as it does for a plain call;
 // so do both callbacks of a two-callback then, on a fulfilled and on a rejected input.

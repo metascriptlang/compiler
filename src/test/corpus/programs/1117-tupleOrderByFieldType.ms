@@ -1,6 +1,4 @@
-// @xfail(raiser): raiser runtime error: operand A of instruction 1 (opcode BltI64) of lastIsText is R0, a R register, where the opcode needs WB
 // @stdout: last=true,false first=true,false le=true gt=true ge=false nested=false,true deep=true,false big=false,true
-// @xfail(raiser): raiser runtime error: operand A of instruction 1 (opcode BltI64) of lastIsText is R0, a R register, where the opcode needs WB
 // note: tuple `<`, `<=`, `>`, `>=` walk the fields in order and compare each by its own type: a string by its text, a bigint by its value, a nested tuple by its own ordering. Same output on every backend.
 
 function lastIsText(x: [int32, string], y: [int32, string]): boolean { return x < y; }
