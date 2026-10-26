@@ -174,6 +174,12 @@ test "quoteBindsWhereWritten: a type written in a quote names the macro module's
 		typeCases("(() => { const b: Box[] = [new Box()]; return b[0].v; })()", "m(0)", "int32", "nested array annotation"),
 		typeCases("(() => { const m = new Map<string, Box>(); m.set(\"a\", new Box()); return m.get(\"a\")!.v; })()", "m(0)", "int32", "new Map type arguments"),
 		typeCases("(() => { function id<T>(x: T): T { return x; } return id<Box>(new Box()).v; })()", "m(0)", "int32", "explicit type argument"),
+		typeCases("(() => { function get(b: Box): int32 { return b.v; } return get(new Box()); })()", "m(0)", "int32", "nested function parameter"),
+		typeCases("(() => { function mk(): Box { return new Box(); } return mk().v; })()", "m(0)", "int32", "nested function return"),
+		typeCases("((b: Box) => b.v)(new Box())", "m(0)", "int32", "arrow parameter"),
+		typeCases("((): Box => new Box())().v", "m(0)", "int32", "arrow return"),
+		typeCases("(function (b: Box): int32 { return b.v; })(new Box())", "m(0)", "int32", "function expression parameter"),
+		typeCases("((f: (b: Box, n: int32) => int32) => f(new Box(), 1))((b: Box, n) => b.v + n)", "m(0)", "int32", "mixed bound and contextually typed parameters"),
 	].filter((r: string): boolean => r != "").join("\n");
 	assert bad == "", bad;
 }
@@ -186,7 +192,8 @@ export macro m(x: Node): Node {
 		const b: Box = new Box();
 		const m = new Map<string, Box>();
 		m.set("a", b);
-		return (m.get("a")! as Box).v;
+		function get(c: Box): int32 { return c.v; }
+		return (m.get("a")! as Box).v + get(b);
 	})() };
 }
 `;
