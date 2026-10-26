@@ -13,13 +13,13 @@ import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
-import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, ownedEdgeOf } from "../checker/types";
+import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -597,6 +597,19 @@ function processShortCircuitValue(node: Node, dctx: DrcContext, mode: DrcMode): 
 	return processConditional(asConditional, dctx, mode, true);
 }
 
+function isGuardedBoolValue(node: Node): boolean {
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	const bd = node.data as BinaryExprData;
+	return (bd.operator == "||" || bd.operator == "&&") && node.nodeType != null && isBoolType(node.nodeType) && hasEffect(bd.right);
+}
+
+function processGuardedBool(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	const bd = node.data as BinaryExprData;
+	const asConditional = bd.operator == "||" ? makeConditional(bd.left, makeBool(true, node.location), bd.right, node.location) : makeConditional(bd.left, bd.right, makeBool(false, node.location), node.location);
+	asConditional.nodeType = node.nodeType;
+	return processConditional(asConditional, dctx, mode, true);
+}
+
 function isCountedAssignValue(node: Node, dctx: DrcContext): boolean {
 	const bd = node.data as BinaryExprData;
 	return bd.operator == "=" && bd.left.kind == NodeKind.Identifier && bd.left.nodeType != null && classifyRc(bd.left.nodeType, dctx).needsCleanup;
@@ -606,6 +619,7 @@ function processAssignValue(node: Node, dctx: DrcContext): Node {
 	const bd = node.data as BinaryExprData;
 	const read = cloneIfPure(bd.left);
 	if (read == null) throw new Error("internal: a counted assignment value reached the analyzer with an impure target");
+	if (bd.left.resolvedSym == null || !bd.left.resolvedSym.name.startsWith("__once_")) throw new Error("internal: a counted assignment value reached the analyzer that the lowering of `??` or `?.` did not bind");
 	const stmt = makeExprStmt(node, node.location);
 	addPre(dctx, processAssignment(stmt, -1, [stmt], dctx, node.location));
 	return read;
@@ -615,6 +629,7 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const bd = node.data as BinaryExprData;
 	if (mode != DrcMode.Normal && isCountedShortCircuitValue(node, dctx)) return processShortCircuitValue(node, dctx, mode);
 	if (isCountedAssignValue(node, dctx)) return processAssignValue(node, dctx);
+	if (isGuardedBoolValue(node)) return processGuardedBool(node, dctx, mode);
 	bd.left = processNode(bd.left, dctx, bd.operator == "=" ? DrcMode.Consumed : DrcMode.Normal);
 	const ordered = !isAssignOp(bd.operator) && bd.operator != "&&" && bd.operator != "||" && bd.operator != "??";
 	if (!ordered) {
@@ -1002,11 +1017,17 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
+// A value ternary whose arm runs a call builds that arm's temporaries and calls inside the arm
+// (reference: injectdestructors.nim:995-1008 gives an if-expression one destination every branch assigns).
+function runsInArm(cd: ConditionalExprData, t: Type | null): boolean {
+	return t != null && t.kind != TypeKind.Void && (hasEffect(cd.ternaryConsequent) || hasEffect(cd.ternaryAlternate));
+}
+
 function processConditional(node: Node, dctx: DrcContext, mode: DrcMode, perBranch: boolean = false): Node {
 	const cd = node.data as ConditionalExprData;
 	const loc = node.location;
 	cd.ternaryCondition = processNode(cd.ternaryCondition, dctx, DrcMode.Normal);
-	if (mode == DrcMode.Normal && !perBranch) {
+	if (mode == DrcMode.Normal && !perBranch && !runsInArm(cd, node.nodeType)) {
 		cd.ternaryConsequent = processNode(cd.ternaryConsequent, dctx, mode);
 		cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
 		return node;
@@ -1180,6 +1201,13 @@ function makeDestroyCall(sym: Symbol, rcInfo: RcInfo, loc: SourceLocation): Node
 		return makeExprStmt(makeCall(callee, [makeHiddenAddr(makeIdentResolved(sym, loc), loc)], loc), loc);
 	}
 	return makeRcCallStmt(callee, sym, loc);
+}
+
+// The source of a move is zeroed by its own type's hook (reference: genWasMoved on the moved expression), which
+// differs from the destination's when the value converts on the way, a string into a Maybe.
+function ownRcOrDest(sym: Symbol, destRc: RcInfo, dctx: DrcContext): RcInfo {
+	const own = classifyRc(sym.symbolType, dctx);
+	return own.needsCleanup ? own : destRc;
 }
 
 function makeWasMovedCall(sym: Symbol, rcInfo: RcInfo, loc: SourceLocation): Node {
@@ -1519,8 +1547,9 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 			const rhsSym = rhs.resolvedSym;
 			if (rhsSym != null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
 				// Move: sink + wasMoved (Reference: genSink + genWasMoved)
-				if (rcInfo.wasMovedFn != null) {
-					addPending(dctx, makeWasMovedCall(rhsSym, rcInfo, loc));
+				const sourceRc = ownRcOrDest(rhsSym, rcInfo, dctx);
+				if (sourceRc.wasMovedFn != null) {
+					addPending(dctx, makeWasMovedCall(rhsSym, sourceRc, loc));
 				}
 				recordMove(dctx, rhsSym);
 				return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
@@ -1593,8 +1622,9 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 // Returns true if wasMoved was emitted.
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
 	if (moveArg.kind == NodeKind.Identifier && moveArg.resolvedSym != null) {
-		if (rcInfo.wasMovedFn != null) {
-			addPending(dctx, makeWasMovedCall(moveArg.resolvedSym, rcInfo, loc));
+		const sourceRc = ownRcOrDest(moveArg.resolvedSym, rcInfo, dctx);
+		if (sourceRc.wasMovedFn != null) {
+			addPending(dctx, makeWasMovedCall(moveArg.resolvedSym, sourceRc, loc));
 		}
 		recordMoveInContext(dctx, moveArg.resolvedSym);
 		return true;
