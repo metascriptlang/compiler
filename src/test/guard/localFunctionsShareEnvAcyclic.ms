@@ -83,7 +83,8 @@ function main(): void {
 	for (let r: int32 = 0; r < 200; r++) {
 		total = total + counterA()() + counterB()() + deeper()() + inLoop();
 		ring = cycle()();
-		for (const v of walk(4)) total = total + v;
+		let walker = walk(4);
+		for (const v of walker) total = total + v;
 	}
 	console.log(`total=${total} ring=${ring}`);
 	if (total != 21400) throw "GUARD RED: a local function read the wrong value, got=" + total.toString();

@@ -1,7 +1,10 @@
 // @stdout: loop total=3 0/1 1/11 2/21
 // @stdout: shared 7 8
 // @stdout: header c5 u1 u2 u3 j1 j3 j4 j5
-// note: a closure made in a loop shares the function's variables and owns the bindings its iteration declares, one env per iteration shared by every closure of that iteration (JS per-iteration binding). A `let` of a for header is copied per iteration: a closure in the condition sees the running iteration, one in the update sees the next. Before the fix C gave every closure a private copy of every capture: total stayed 0, a later write to the function's variable was not seen, sibling closures of one iteration did not share their binding, and a header closure saw the wrong iteration.
+// @stdout: switch a1 b12
+// @stdout: once o2 o3
+// @stdout: top t1 t2
+// note: a closure made in a loop shares the function's variables and owns the bindings its iteration declares, one env per iteration shared by every closure of that iteration (JS per-iteration binding). A `let` of a for header is copied per iteration: a closure in the condition sees the running iteration, one in the update sees the next. Before the fix C gave every closure a private copy of every capture: total stayed 0, a later write to the function's variable was not seen, sibling closures of one iteration did not share their binding, and a header closure saw the wrong iteration. A binding declared in a switch case or in a `do..while (false)` of the loop belongs to its iteration the same way; inside a closure or at top level, C used to stop with "the env of 'bump' is not reachable".
 
 type Thunk = () => string;
 type Get = () => int32;
@@ -114,6 +117,59 @@ function refsPerIteration(): string {
 	return `refs ${c.hits} ${c.names.join(",")}`;
 }
 
+function inClosureSwitch(): string {
+	let log = "switch";
+	const run = (): void => {
+		for (let i: int32 = 0; i < 2; i += 1) {
+			switch (i) {
+				case 0: {
+					let seen: int32 = 0;
+					const bump = (): void => { seen = seen + 1; };
+					bump();
+					log += ` a${seen}`;
+					break;
+				}
+				default: {
+					let seen: int32 = 10;
+					const bump = (): void => { seen = seen + 1; };
+					bump();
+					bump();
+					log += ` b${seen}`;
+				}
+			}
+		}
+	};
+	run();
+	return log;
+}
+
+function inClosureOnceLoop(): string {
+	let log = "once";
+	const run = (): void => {
+		for (let i: int32 = 0; i < 2; i += 1) {
+			do {
+				let seen: int32 = i;
+				const bump = (): void => { seen = seen + 1; };
+				bump();
+				bump();
+				log += ` o${seen}`;
+			} while (false);
+		}
+	};
+	run();
+	return log;
+}
+
+let topOnce = "top";
+for (let i: int32 = 0; i < 2; i += 1) {
+	do {
+		let seen: int32 = i;
+		const bump = (): void => { seen = seen + 1; };
+		bump();
+		topOnce += ` t${seen}`;
+	} while (false);
+}
+
 function reportValue(actual: string, expected: string): void {
 	if (actual != expected) throw new Error("expected=" + expected + " actual=" + actual);
 	console.log(actual);
@@ -124,3 +180,6 @@ reportValue(outerShared(), "outer 12 99 100");
 reportValue(nested(), "nested 10 21 1010 1021");
 reportValue(header(), "header c5 u1 u2 u3 j1 j3 j4 j5");
 reportValue(refsPerIteration(), "refs 6 a!,bb!,ccc!");
+reportValue(inClosureSwitch(), "switch a1 b12");
+reportValue(inClosureOnceLoop(), "once o2 o3");
+reportValue(topOnce, "top t1 t2");

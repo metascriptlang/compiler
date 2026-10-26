@@ -405,7 +405,7 @@ export function statementCanRaise(value: Readonly<Node>): boolean {
 // True when running the body can neither set nor observe the error flag: every call is a
 // never-raising runtime or lifecycle routine and nothing throws, awaits, nests a try or jumps out
 // (a jump out of a finally drops the exception in flight, which the error scaffold clears).
-function bodyIsErrorBlind(node: Node | null): boolean {
+export function bodyIsErrorBlind(node: Node | null): boolean {
 	_blindBroken = false;
 	blindStep(node);
 	return !_blindBroken;

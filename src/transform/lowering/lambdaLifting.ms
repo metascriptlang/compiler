@@ -26,7 +26,7 @@ import {
 	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym,
 } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
+import { forEachChild, initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeReturn, makeBlock, makeVarDecl, makeFnDecl, makeObjectLiteral,
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
@@ -635,38 +635,10 @@ function walkLift(node: Node, state: LiftState): void {
 				}
 				pi += 1;
 			}
-			const savedShared = saveSharedEnv(state);
-
-			// Read pre-computed captures from detection state (populated by
-			// Pass 1 / `detectPass` at start of `lowerLambda`). FunctionDecl
-			// Node identity is the lookup key.
-			const allCaptures = detectionGetCaptures(state.detection, node);
-			const allCapturedIdents = detectionGetCapturedIdents(state.detection, node);
-
-			// Pre-register VarDecl types from the function body so setupSharedEnv
-			// can resolve env field types for vars not yet walked (async transforms, etc.)
-			if (allCaptures.items.length > 0) {
-				preRegisterVarTypes(d.fnBody, state);
-			}
-
-			// Walk + manage hoisted env decls via the shared helper. The
-			// preWalk slot is where `setupSharedEnv` runs — it MUST happen
-			// after the helper has reset `hoistedEnvDecls` (so the shared
-			// env decl lands here, not in the outer scope) and before the
-			// body walk (so the env name is in scope when closures inside
-			// reference it).
-			const fnLoc = node.location;
-			const fnChain = frameChain(state);
-			const fnLoopSyms = frameLoopSyms(d.fnBody, state);
-			walkLiftBody(d.fnBody, state, () => {
-				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, d.fnBody, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null, fnLoopSyms);
-				}
-			});
+			walkLiftFrame(node, d.fnBody, state);
 			popFuncBoundary(state.ss);
 			state.currentParams = savedParams;
 			state.activeEnvRewrites = savedActiveRewrites;
-			restoreSharedEnv(state, savedShared);
 			state.currentFnName = savedName;
 		},
 		NodeKind.VariableDecl => {
@@ -720,6 +692,10 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
+			if (isOnceLoop(node)) {
+				walkLift(d.doBody, state);
+				return;
+			}
 			state.insideLoop += 1;
 			pushLoopBoundary(state.ss);
 			const savedDoRewrites = state.activeEnvRewrites;
@@ -727,7 +703,7 @@ function walkLift(node: Node, state: LiftState): void {
 			for (const rw of savedDoRewrites) doBodyRewrites.push(rw);
 			state.activeEnvRewrites = doBodyRewrites;
 			const openLoops = state.loopEnvs.length;
-			if (!isOnceLoop(node)) d.doBody = openLoopEnv(d.doBody, state, node.location);
+			d.doBody = openLoopEnv(d.doBody, state, node.location);
 			walkLift(d.doBody, state);
 			if (state.loopEnvs.length > openLoops) state.loopEnvs.pop();
 			state.activeEnvRewrites = savedDoRewrites;
@@ -774,17 +750,11 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			if (routineFlagSet(d.methodFlags).has(RoutineFlag.Generic)) return;
-			pushFuncBoundary(state.ss);
-			defineParams(state.ss, node.paramSyms, d.methodParams);
-			walkLiftBody(d.methodBody, state);
-			popFuncBoundary(state.ss);
+			walkLiftMember(node, d.methodParams, d.methodParamTypes, d.methodBody, state);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			pushFuncBoundary(state.ss);
-			defineParams(state.ss, node.paramSyms, d.ctorParams);
-			walkLiftBody(d.ctorBody, state);
-			popFuncBoundary(state.ss);
+			walkLiftMember(node, d.ctorParams, d.ctorParamTypes, d.ctorBody, state);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
@@ -815,24 +785,10 @@ function walkLift(node: Node, state: LiftState): void {
 			const savedActiveRewrites = state.activeEnvRewrites;
 			state.currentParams = createSymSet();
 			state.activeEnvRewrites = [];
-			const savedShared = saveSharedEnv(state);
-			const allCaptures = detectionGetCaptures(state.detection, node);
-			const allCapturedIdents = detectionGetCapturedIdents(state.detection, node);
-			if (allCaptures.items.length > 0) {
-				preRegisterVarTypes(d.testBody, state);
-			}
-			const testLoc = node.location;
-			const testChain = frameChain(state);
-			const testLoopSyms = frameLoopSyms(d.testBody, state);
-			walkLiftBody(d.testBody, state, () => {
-				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, d.testBody, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null, testLoopSyms);
-				}
-			});
+			walkLiftFrame(node, d.testBody, state);
 			popFuncBoundary(state.ss);
 			state.currentParams = savedParams;
 			state.activeEnvRewrites = savedActiveRewrites;
-			restoreSharedEnv(state, savedShared);
 			state.currentFnName = savedName;
 		},
 		NodeKind.CallExpr => {
@@ -934,6 +890,41 @@ function noopPreWalk(): void {}
 // step — so any closure capturing a `let` inside a test block ended up with a
 // dangling `_envN_` reference at codegen. Owning the full lifecycle inside
 // this helper means callers physically can't skip the prepend.
+// One frame's body: the captures detection recorded for `node` become its shared
+// env, set up in walkLiftBody's preWalk so the env decl is hoisted into this frame
+// and its name is in scope before any closure in the body is lifted.
+function walkLiftFrame(node: Node, body: Node, state: LiftState): void {
+	const savedShared = saveSharedEnv(state);
+	const allCaptures = detectionGetCaptures(state.detection, node);
+	const allCapturedIdents = detectionGetCapturedIdents(state.detection, node);
+	if (allCaptures.items.length > 0) preRegisterVarTypes(body, state);
+	const chain = frameChain(state);
+	const loopSyms = frameLoopSyms(body, state);
+	walkLiftBody(body, state, () => {
+		if (allCaptures.items.length > 0) {
+			setupSharedEnv(state, body, allCaptures, allCapturedIdents, node.location, chain.names, chain.types, null, loopSyms);
+		}
+	});
+	restoreSharedEnv(state, savedShared);
+}
+
+function walkLiftMember(node: Node, params: string[], paramTypes: string[], body: Node, state: LiftState): void {
+	pushFuncBoundary(state.ss);
+	const savedParams = state.currentParams;
+	const savedActiveRewrites = state.activeEnvRewrites;
+	state.currentParams = createSymSet();
+	state.activeEnvRewrites = [];
+	defineParams(state.ss, node.paramSyms, params);
+	for (let i = 0; node.paramSyms != null && i < node.paramSyms.length; i += 1) {
+		symSetAdd(state.currentParams, node.paramSyms[i]);
+		if (i < paramTypes.length && paramTypes[i] != "") registerVarType(state, node.paramSyms[i], paramTypes[i]);
+	}
+	walkLiftFrame(node, body, state);
+	popFuncBoundary(state.ss);
+	state.currentParams = savedParams;
+	state.activeEnvRewrites = savedActiveRewrites;
+}
+
 function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPreWalk): void {
 	const savedHoisted = state.hoistedEnvDecls;
 	// Loop depth is per-function-frame; every call site of this helper is a frame boundary.
@@ -1018,30 +1009,9 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 //
 function collectOwnDeclSyms(node: Node, acc: SymSet): void {
 	if (node == null) return;
-	match (node.kind) {
-		NodeKind.VariableDecl => {
-			if (node.resolvedSym != null) symSetAdd(acc, node.resolvedSym);
-			collectOwnDeclSyms((node.data as VariableDeclData).initializer, acc);
-		},
-		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction | NodeKind.MethodDecl | NodeKind.ConstructorDecl => {},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { collectOwnDeclSyms(s, acc); }
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectOwnDeclSyms(d.consequent, acc);
-			collectOwnDeclSyms(d.alternate, acc);
-		},
-		NodeKind.WhileStmt => { collectOwnDeclSyms((node.data as WhileStmtData).whileBody, acc); },
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectOwnDeclSyms(d.tryBody, acc);
-			collectOwnDeclSyms(d.catchBody, acc);
-			collectOwnDeclSyms(d.finallyBody, acc);
-		},
-		_ => {},
-	};
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) symSetAdd(acc, node.resolvedSym);
+	forEachChild(node, (child: Node): void => collectOwnDeclSyms(child, acc));
 }
 
 interface LoopPlan {

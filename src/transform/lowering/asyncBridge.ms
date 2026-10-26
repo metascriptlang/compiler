@@ -566,7 +566,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// 4. Split at yield points (reuse generatorLower's algorithm)
 	const curExcSym = mintSym(ctx, SymbolKind.Variable, "$curExc", null);
 	setFlag(curExcSym, SymbolFlag.Mutable);
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym };
 	const initState = allocState(sc);
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);

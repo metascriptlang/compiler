@@ -47,6 +47,8 @@ import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBound
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
+import { lowerIterInline } from "../../transform/lowering/iterInline";
+import { createTransformContextWithChecker } from "../../transform/context";
 import { analyzeProgram } from "../../analyzer/index";
 import { RoutineDecls, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -62,7 +64,7 @@ import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../.
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
-import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount, addError } from "../../checker/context";
 import { modulePasses, modulePassExempt, setModulePassExempt, ModulePass } from "../../checker/prelude";
@@ -1950,6 +1952,30 @@ test "a module's lowering reruns after its check reruns" {
 	dbParse(db, "/lower/c.ms");
 	dbLower(db, "/lower/c.ms", countLowering, count);
 	assert count.n == 2;
+}
+
+function inlineLowering(checked: Node, ctx: CheckerContext, count: LowerCount): Node {
+	count.n += 1;
+	return lowerIterInline(cloneNodeKeepSem(checked), createTransformContextWithChecker(ctx));
+}
+
+test "a module's lowering reruns after a generator body it expanded changes in another module" {
+	const db = createTransAmDb(100);
+	const gen = "export function* g(): Iterator<int32> { yield 1; }";
+	dbSetFileText(db, "/inl/a.ms", gen);
+	dbSetFileText(db, "/inl/b.ms", 'import { g } from "./a";\nlet s: int32 = 0;\nfor (const x of g()) { s += x; }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/inl/b.ms"), getFileId(db.fileInput, "/inl/a.ms"));
+	const a: LowerCount = { n: 0 };
+	const b: LowerCount = { n: 0 };
+	dbLower(db, "/inl/a.ms", inlineLowering, a);
+	const expanded = dbLower(db, "/inl/b.ms", inlineLowering, b);
+	assert (expanded.data as ProgramData).programStmts[2].kind == NodeKind.BlockStmt;
+	dbSetFileText(db, "/inl/a.ms", gen.replace("yield 1", "yield 2"));
+	dbParse(db, "/inl/a.ms");
+	dbLower(db, "/inl/a.ms", inlineLowering, a);
+	dbLower(db, "/inl/b.ms", inlineLowering, b);
+	assert a.n == 2;
+	assert b.n == 2;
 }
 
 test "a user module's check keeps its file's durability" {

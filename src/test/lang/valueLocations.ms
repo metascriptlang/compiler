@@ -242,6 +242,29 @@ test "valueLocations: a for-of over an indexed path of a fresh value evaluates e
 	assert forOfMiddleFromCall() == 3 && movedIndexReads == 1;
 }
 
+function sliceSum(s: Readonly<Span<int32>>): int32 {
+	let sum: int32 = 0;
+	for (const x of s[1..3]) sum += x;
+	return sum;
+}
+
+test "valueLocations: a for-of over a slice written in the loop head iterates the window" {
+	const v: Vec<int32> = [1, 2, 3, 4];
+	let fromVec: int32 = 0;
+	for (const x of v[1..3]) fromVec += x;
+	assert fromVec == 5;
+	const fixed: int32[3] = [8, 9, 10];
+	let fromFixed: int32 = 0;
+	for (const x of fixed[0...1]) fromFixed += x;
+	assert fromFixed == 17;
+	const rows: int32[][] = [[3, 4, 5], [1, 2]];
+	let fromRow: int32 = 0;
+	movedIndexReads = 0;
+	for (const x of rows[movedIndex()][1..3]) fromRow += x;
+	assert fromRow == 9 && movedIndexReads == 1;
+	assert sliceSum(v) == 5;
+}
+
 struct MovedPair { n: int32; kids: Vec<int32>; }
 class MovedBox { kids: Vec<int32> = []; }
 class MovedLink {

@@ -8,9 +8,11 @@
 //     while (i < max) {              let i;
 //         yield i;           →       return { next: function() {
 //         i = i + 1;                     while (true) {
-//     }                                      if ($state === 0) { i = 0; $state = 1; }
-// }                                          else if ($state === 1) { ... }
-//                                            else { return { value: null, done: true }; }
+//     }                                      switch ($state) {
+// }                                          case 0: i = 0; $state = 1; break;
+//                                            case 1: ...
+//                                            default: return { value: null, done: true };
+//                                            }
 //                                        }
 //                                    }};
 //                                }
@@ -20,9 +22,9 @@ import {
 	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	SwitchStmtData, SwitchCaseData, BreakStmtData, ContinueStmtData,
-	ExprStmtData, TryCatchStmtData, YieldExprData,
+	ExprStmtData, TryCatchStmtData, YieldExprData, BinaryExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
-	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
+	IdentifierData, NumberLiteralData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
 import { isScopeBoundary } from "../../ast/shape";
@@ -30,16 +32,17 @@ import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor"
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
+import { wrapMaybeValue } from "../maybeCarrier";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
-	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
+	makeIf, makeWhile, makeBinary, makeAssign, makeContinue, makeCall,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	makeTryCatch, makeCatchSym, makeMoveExpr,
+	makeTryCatch, makeTryFinally, makeCatchSym, makeMoveExpr, makeString,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, booleanType, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -55,7 +58,7 @@ export interface GenState {
 	stmts: Node[];
 	yieldVarSym: Symbol | null;  // binding assigned from yield (for async resume)
 	yieldVarType: Type | null;     // type of the variable (for unboxing msFutureRead)
-	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
+	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = not yet marked, RAISES_OUT = past every try)
 }
 
 // Active while-with-yield scope. break/continue inside the body must
@@ -76,18 +79,22 @@ export interface LoopFrame {
 export interface FinallyFrame {
 	stmts: Node[];
 	loopDepth: number;
-	hasYield: boolean;
+	landingDepth: number;
 }
+
+const RAISES_OUT: number = -2;
 
 export interface StateCollector {
 	items: GenState[];
 	loopStack: LoopFrame[];
 	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
 	finallyStack: FinallyFrame[];
+	landings: number[];
 	stateSym: Symbol;
 	curExcSym: Symbol;
 	genReturns?: boolean;
 	genResultType?: Type;
+	closeOpSym?: Symbol;
 }
 
 interface SplitDiag {
@@ -282,6 +289,12 @@ function finallyPrefix(frames: FinallyFrame[], n: number): FinallyFrame[] {
 	return out;
 }
 
+function landingPrefix(landings: number[], n: number): number[] {
+	const out: number[] = [];
+	for (let i = 0; i < n; i += 1) out.push(landings[i]);
+	return out;
+}
+
 function lookupDeclIdx(syms: Symbol[], sym: Symbol): int32 {
 	let i = 0;
 	while (i < syms.length) {
@@ -362,25 +375,11 @@ function jumpExit(stmt: Node, sc: StateCollector, frameIdx: number, loc: SourceL
 	return [makeStateAssign(frame.continueState, loc, sc.stateSym)];
 }
 
-function crossesYieldFinally(sc: StateCollector, frameIdx: number): boolean {
+function crossesFinally(sc: StateCollector, frameIdx: number): boolean {
 	for (const f of sc.finallyStack) {
-		if (f.loopDepth > frameIdx && f.hasYield) return true;
+		if (f.loopDepth > frameIdx) return true;
 	}
 	return false;
-}
-
-function inlineCrossedFinallies(sc: StateCollector, frameIdx: number, out: Node[], loc: SourceLocation): void {
-	const loops = sc.loopStack;
-	const fins = sc.finallyStack;
-	for (let f = fins.length - 1; f >= 0; f -= 1) {
-		if (fins[f].loopDepth > frameIdx) {
-			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
-			sc.finallyStack = finallyPrefix(fins, f);
-			for (const s of fins[f].stmts) out.push(rewriteJumps(cloneNodeKeepSem(s), sc, false, false, loc));
-		}
-	}
-	sc.loopStack = loops;
-	sc.finallyStack = fins;
 }
 
 // The emitted `continue` must reach the state dispatcher: a jump nested in a C
@@ -389,18 +388,12 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 	if (node == null || isScopeBoundary(node)) return node;
 	if (node.kind == NodeKind.ReturnStmt) {
 		if (sc.genReturns != true) return node;
-		const out: Node[] = [];
-		inlineCrossedFinallies(sc, -1, out, loc);
-		for (const s of jumpExit(node, sc, -1, loc)) out.push(s);
-		return makeBlock(out, loc);
+		return makeBlock(jumpExit(node, sc, -1, loc), loc);
 	}
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
 		if (idx < 0) return node;
-		const exits = jumpExit(node, sc, idx, loc);
-		const out: Node[] = [];
-		inlineCrossedFinallies(sc, idx, out, loc);
-		for (const s of exits) out.push(s);
+		const out = jumpExit(node, sc, idx, loc);
 		out.push(makeContinue(loc));
 		return makeBlock(out, loc);
 	}
@@ -421,10 +414,10 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 
 function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, inCLoop: boolean): boolean {
 	if (node == null || isScopeBoundary(node)) return false;
-	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesYieldFinally(sc, -1);
+	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesFinally(sc, -1);
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
-		return idx >= 0 && (inCLoop || crossesYieldFinally(sc, idx));
+		return idx >= 0 && (inCLoop || crossesFinally(sc, idx));
 	}
 	let cb = capBreak;
 	let cc = capContinue;
@@ -497,20 +490,72 @@ function splitJump(stmt: Node, sc: StateCollector, currentState: number, loc: So
 	const exits = jumpExit(stmt, sc, frameIdx, loc);
 	const loops = sc.loopStack;
 	const fins = sc.finallyStack;
+	const landings = sc.landings;
 	let cur = currentState;
 	for (let f = fins.length - 1; f >= 0; f -= 1) {
 		if (fins[f].loopDepth > frameIdx) {
 			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
 			sc.finallyStack = finallyPrefix(fins, f);
-			cur = emitInline(cloneStmts(fins[f].stmts), sc, cur, loc, resultType);
+			sc.landings = landingPrefix(landings, fins[f].landingDepth);
+			const finSt = allocState(sc);
+			sc.items[cur].stmts.push(makeStateAssign(finSt, loc, sc.stateSym));
+			cur = emitInline(cloneStmts(fins[f].stmts), sc, finSt, loc, resultType);
+			const outside = fins[f].landingDepth > 0 ? landings[fins[f].landingDepth - 1] : RAISES_OUT;
+			for (let s = finSt; s < sc.items.length; s += 1) {
+				if (sc.items[s].excLanding == -1) sc.items[s].excLanding = outside;
+			}
 		}
 	}
 	sc.loopStack = loops;
 	sc.finallyStack = fins;
+	sc.landings = landings;
 	for (const s of exits) sc.items[cur].stmts.push(s);
 }
 
-export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+const CLOSE_OP: int32 = 2;
+
+function isYieldStmt(stmt: Node): boolean {
+	if (stmt.kind == NodeKind.ExprStmt) return isDirectYield((stmt.data as ExprStmtData).expr);
+	if (stmt.kind != NodeKind.VariableDecl) return false;
+	const init = (stmt.data as VariableDeclData).initializer;
+	return init != null && isDirectYield(init);
+}
+
+function isCloseCheck(stmt: Node, opSym: Symbol): boolean {
+	if (stmt.kind != NodeKind.IfStmt) return false;
+	const cond = (stmt.data as IfStmtData).condition;
+	return cond.kind == NodeKind.BinaryExpr && (cond.data as BinaryExprData).left.resolvedSym == opSym;
+}
+
+function makeCloseCheck(opSym: Symbol, loc: SourceLocation): Node {
+	const closing = makeBinary(makeTypedIdentResolved(opSym, int32Type(), loc), "===", makeNumber(CLOSE_OP, loc), loc);
+	const consume = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(0, loc), loc), loc);
+	return makeIf(closing, makeBlock([consume, makeReturn(null, loc)], loc), null, loc);
+}
+
+const RUNNING_MESSAGE = "Generator is already running";
+
+function makeRunningCheck(runSym: Symbol, loc: SourceLocation): Node {
+	const raise = createNode(NodeKind.ThrowStmt, { throwArg: makeString(RUNNING_MESSAGE, loc) }, syntheticToken(loc));
+	return makeIf(makeTypedIdentResolved(runSym, booleanType(), loc), makeBlock([raise], loc), null, loc);
+}
+
+function makeRunningAssign(runSym: Symbol, value: boolean, loc: SourceLocation): Node {
+	return makeExprStmt(makeAssign(makeTypedIdentResolved(runSym, booleanType(), loc), makeBool(value, loc), loc), loc);
+}
+
+function withCloseChecks(stmts: Node[], opSym: Symbol, loc: SourceLocation): Node[] {
+	const out: Node[] = [];
+	for (let i = 0; i < stmts.length; i += 1) {
+		out.push(stmts[i]);
+		const checked = i + 1 < stmts.length && isCloseCheck(stmts[i + 1], opSym);
+		if (isYieldStmt(stmts[i]) && !checked) out.push(makeCloseCheck(opSym, loc));
+	}
+	return out;
+}
+
+export function splitStmts(given: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+	const stmts = sc.closeOpSym != null ? withCloseChecks(given, sc.closeOpSym, loc) : given;
 	let currentState = startState;
 	let i = 0;
 	while (i < stmts.length) {
@@ -704,11 +749,13 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
 
+	sc.landings.push(catchSt);
 	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+	sc.landings.pop();
 	// exceptionTable: every state produced for the try body lands on the catch.
-	// Guard `excLanding < 0` so a nested inner try keeps its own (already-set) catch.
+	// Guard `excLanding == -1` so a nested inner try keeps its own (already-set) catch.
 	for (let s = tryStart; s < sc.items.length; s += 1) {
-		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+		if (sc.items[s].excLanding == -1) sc.items[s].excLanding = catchSt;
 	}
 	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 
@@ -779,14 +826,16 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
-	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, hasYield: containsYield(td.finallyBody) };
+	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, landingDepth: sc.landings.length };
 	sc.finallyStack.push(frame);
 
 	if (!td.hasCatchClause) {
 		const finReraise = allocState(sc);
+		sc.landings.push(finReraise);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		sc.landings.pop();
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s != finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && sc.items[s].excLanding == -1) sc.items[s].excLanding = finReraise;
 		}
 		sc.finallyStack.pop();
 		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
@@ -797,9 +846,11 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		// catch from landing on itself (splitTryCatch avoids this by allocating
 		// catchSt first; here the two mark loops below cover both orders).
 		const catchSt = allocState(sc);
+		sc.landings.push(catchSt);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		sc.landings.pop();
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s != catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+			if (s != catchSt && sc.items[s].excLanding == -1) sc.items[s].excLanding = catchSt;
 		}
 		sc.finallyStack.pop();
 		const finNormalStart = sc.items.length;
@@ -809,13 +860,15 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		const catchExit = allocState(sc);
 		const finReraise = allocState(sc);
 		bindCatchToCurExc(node, sc);
+		sc.landings.push(finReraise);
 		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
+		sc.landings.pop();
 		// The normal-exit finally states stay landing-free (single finally run);
 		// everything else in the catch range — catchSt itself, catchExit's entry
 		// read included — runs the finally then re-raises.
 		for (let s = catchSt; s < sc.items.length; s += 1) {
 			const inFinNormal = s >= finNormalStart && s < finNormalEnd;
-			if (s != finReraise && !inFinNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && !inFinNormal && sc.items[s].excLanding == -1) sc.items[s].excLanding = finReraise;
 		}
 		sc.finallyStack.pop();
 		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
@@ -1003,30 +1056,217 @@ export function convertDeclsToAssigns(stmts: Node[], lifted: SymSet, loc: Source
 				init.nodeType = stmt.nodeType;
 			}
 			stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
+		} else {
+			convertNestedDeclsToAssigns(stmt, lifted, loc);
 		}
 	}
+}
+
+function convertNestedDeclsToAssigns(node: Node, lifted: SymSet, loc: SourceLocation): void {
+	if (node == null || isScopeBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			convertDeclsToAssigns((node.data as BlockStmtData).statements, lifted, loc);
+		},
+		NodeKind.SwitchCase => {
+			convertDeclsToAssigns((node.data as SwitchCaseData).caseStmts, lifted, loc);
+		},
+		_ => {
+			forEachChild(node, (c: Node): void => { convertNestedDeclsToAssigns(c, lifted, loc); });
+		},
+	}
+}
+
+type StateAssignVisitor = (lit: Node, beforeReturn: boolean) => void;
+
+function stateAssignLit(stmt: Node, stateSym: Symbol): Node | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr) return null;
+	const bd = e.data as BinaryExprData;
+	if (bd.operator != "=" || bd.left.resolvedSym != stateSym) return null;
+	if (bd.right.kind != NodeKind.NumberLiteral) return null;
+	return bd.right;
+}
+
+function litState(lit: Node): number {
+	return (lit.data as NumberLiteralData).value;
+}
+
+function setLitState(lit: Node, state: number): void {
+	const d = lit.data as NumberLiteralData;
+	d.value = state;
+	d.intVal = state as int64;
+}
+
+function eachStateAssign(list: Node[], stateSym: Symbol, f: StateAssignVisitor): void {
+	for (let i = 0; i < list.length; i += 1) {
+		const lit = stateAssignLit(list[i], stateSym);
+		if (lit != null) {
+			f(lit, i + 1 < list.length && list[i + 1].kind == NodeKind.ReturnStmt);
+		} else {
+			eachNestedStateAssign(list[i], stateSym, f);
+		}
+	}
+}
+
+function eachNestedStateAssign(node: Node, stateSym: Symbol, f: StateAssignVisitor): void {
+	if (node == null || isScopeBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			eachStateAssign((node.data as BlockStmtData).statements, stateSym, f);
+		},
+		NodeKind.SwitchCase => {
+			eachStateAssign((node.data as SwitchCaseData).caseStmts, stateSym, f);
+		},
+		_ => {
+			if (stateAssignLit(node, stateSym) != null) {
+				throw new Error("internal: a state assignment outside a statement list");
+			}
+			forEachChild(node, (c: Node): void => { eachNestedStateAssign(c, stateSym, f); });
+		},
+	}
+}
+
+function skipTarget(sc: StateCollector, state: number): number {
+	let to = state;
+	for (let steps = 0; steps < sc.items.length; steps += 1) {
+		if (to <= 0) return to;
+		const body = sc.items[to].stmts;
+		const lit = body.length == 1 ? stateAssignLit(body[0], sc.stateSym) : null;
+		if (lit == null) return to;
+		to = litState(lit);
+	}
+	return state;
+}
+
+function remapStates(sc: StateCollector, map: (state: number) => number): void {
+	for (const st of sc.items) {
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			if (litState(lit) >= 0) setLitState(lit, map(litState(lit)));
+		});
+		if (st.excLanding >= 0) st.excLanding = map(st.excLanding);
+		if (st.nextState >= 0) st.nextState = map(st.nextState);
+	}
+}
+
+function inlineStates(list: Node[], sc: StateCollector, inline: boolean[]): Node[] {
+	const out: Node[] = [];
+	for (const stmt of list) {
+		const lit = stateAssignLit(stmt, sc.stateSym);
+		if (lit != null && litState(lit) >= 0 && inline[litState(lit)]) {
+			for (const s of inlineStates(sc.items[litState(lit)].stmts, sc, inline)) out.push(s);
+		} else {
+			if (lit == null) inlineNestedStates(stmt, sc, inline);
+			out.push(stmt);
+		}
+	}
+	return out;
+}
+
+function inlineNestedStates(node: Node, sc: StateCollector, inline: boolean[]): void {
+	if (node == null || isScopeBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			const bd = node.data as BlockStmtData;
+			bd.statements = inlineStates(bd.statements, sc, inline);
+		},
+		NodeKind.SwitchCase => {
+			const cd = node.data as SwitchCaseData;
+			cd.caseStmts = inlineStates(cd.caseStmts, sc, inline);
+		},
+		_ => { forEachChild(node, (c: Node): void => { inlineNestedStates(c, sc, inline); }); },
+	}
+}
+
+export function optimizeStates(sc: StateCollector): void {
+	const n = sc.items.length;
+	const skipped: boolean[] = [];
+	for (let i = 0; i < n; i += 1) skipped.push(i != 0 && skipTarget(sc, i) != i);
+	remapStates(sc, (state: number): number => skipTarget(sc, state));
+	const pinned: boolean[] = [];
+	const refs: int32[] = [];
+	const host: number[] = [];
+	for (let i = 0; i < n; i += 1) {
+		pinned.push(i == 0);
+		refs.push(0);
+		host.push(-1);
+	}
+	for (const st of sc.items) {
+		if (skipped[st.index]) continue;
+		if (st.excLanding >= 0) pinned[st.excLanding] = true;
+		if (st.nextState >= 0) pinned[st.nextState] = true;
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			const to = litState(lit);
+			if (to < 0) return;
+			if (beforeReturn) pinned[to] = true;
+			refs[to] += 1;
+			host[to] = st.index;
+		});
+	}
+	const inline: boolean[] = [];
+	for (let i = 0; i < n; i += 1) {
+		const once = !pinned[i] && refs[i] == 1 && host[i] != i;
+		inline.push(once && sc.items[host[i]].excLanding == sc.items[i].excLanding);
+	}
+	for (let i = 0; i < n; i += 1) {
+		let h = host[i];
+		for (let steps = 0; inline[i] && h >= 0 && steps < n; steps += 1) {
+			if (h == i) inline[i] = false;
+			h = inline[h] ? host[h] : -1;
+		}
+	}
+	for (let i = 0; i < n; i += 1) {
+		if (!inline[i]) sc.items[i].stmts = inlineStates(sc.items[i].stmts, sc, inline);
+	}
+	const live: boolean[] = [];
+	for (let i = 0; i < n; i += 1) live.push(i == 0);
+	for (const st of sc.items) {
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			if (litState(lit) >= 0) live[litState(lit)] = true;
+		});
+		if (st.excLanding >= 0) live[st.excLanding] = true;
+	}
+	const renumber: number[] = [];
+	const kept: GenState[] = [];
+	for (let i = 0; i < n; i += 1) {
+		const keep = live[i] && !inline[i];
+		renumber.push(keep ? kept.length : -1);
+		if (keep) kept.push(sc.items[i]);
+	}
+	sc.items = kept;
+	remapStates(sc, (state: number): number => {
+		if (renumber[state] < 0) {
+			throw new Error(`internal: state ${state} is still reached after it was removed`);
+		}
+		return renumber[state];
+	});
+	for (let i = 0; i < kept.length; i += 1) kept[i].index = i;
 }
 
 // ===== State Machine Builder =====
 
 function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType: Type | null): Node {
-	// Default (terminal) state: return { value: null, done: true }
-	let current: Node = makeBlock([makeReturn(makeDoneResult(loc, resultType), loc)], loc);
-
-	// Build if-else chain from last state to first
-	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
-		const stateIdx = sc.items[i].index;
-		const cond = makeBinary(
-			makeTypedIdentResolved(sc.stateSym, null, loc), "===",
-			makeNumber(stateIdx, loc), loc,
-		);
-		const body = makeBlock(sc.items[i].stmts, loc);
-		current = makeIf(cond, body, current, loc);
-	}
-	return current;
+	const cases: Node[] = [];
+	for (const st of sc.items) cases.push(makeSwitchCase([makeNumber(st.index, loc)], st.stmts, false, loc));
+	cases.push(makeSwitchCase([], [makeReturn(makeDoneResult(loc, resultType), loc)], true, loc));
+	return makeSwitch(makeTypedIdentResolved(sc.stateSym, int32Type(), loc), cases, loc);
 }
 
 // ===== Generator Function Transform =====
+
+function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Node {
+	const fn = createNode(NodeKind.FunctionExpr, {
+		funcExprParams: [],
+		funcExprParamTypes: [],
+		funcExprBody: body,
+		funcExprFlags: "",
+		funcExprReturnType: "",
+	}, syntheticToken(loc));
+	if (fnType != null) fn.nodeType = fnType;
+	fn.paramSyms = [];
+	return fn;
+}
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
 	// 1. Collect all locals and their types
@@ -1047,12 +1287,22 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	setFlag(stateSym, SymbolFlag.StateMachine);
 	const curExcSym = newLoweredSym(ctx, SymbolKind.Variable, "$curExc", null as unknown as Type, true);
 
+	const closable = returnNodeType != null && isIterator(returnNodeType);
+	const opSym = newLoweredSym(ctx, SymbolKind.Variable, "$op", int32Type(), true);
+
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
-	const initState = allocState(sc);
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
+	if (closable) sc.closeOpSym = opSym;
+	const entryState = allocState(sc);
+	const initState = closable ? allocState(sc) : entryState;
+	if (closable) {
+		sc.items[entryState].stmts.push(rewriteJumps(makeCloseCheck(opSym, loc), sc, false, false, loc));
+		sc.items[entryState].stmts.push(makeStateAssign(initState, loc, stateSym));
+	}
 	const doneState = -1;  // terminal
 
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
+	optimizeStates(sc);
 
 	// 5. Convert the declarations of the locals that outlive a state to assignments
 	const spanning = localsSpanningStates(sc, locals);
@@ -1063,7 +1313,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
 
-	// 6. Build the state dispatch (if-else chain)
+	// 6. Build the state dispatch (a switch on $state)
 	const dispatch = buildStateDispatch(sc, loc, iterResultType);
 
 	// 6b. If any state has an exception landing (a try with a yield inside),
@@ -1075,37 +1325,48 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 
-	// 8. Build next() function body
-	const nextBody = makeBlock([...hoisted, loop], loc);
+	// 8. Build the resume body
+	const runSym = newLoweredSym(ctx, SymbolKind.Variable, "$running", booleanType(), true);
+	const guarded = makeTryFinally(makeBlock([...hoisted, loop], loc), makeBlock([makeRunningAssign(runSym, false, loc)], loc), loc);
+	const resumeBody = makeBlock([makeRunningCheck(runSym, loc), makeRunningAssign(runSym, true, loc), guarded], loc);
 
-	// 9. Create next FunctionExpr with proper return type (IteratorResult<T>)
+	// 9. Create the FunctionExprs with proper return type (IteratorResult<T>)
 	// Lambda lifting uses nodeType to determine the lifted function's return type.
 	const nextFnType = getIteratorNextFnType(returnNodeType);
-	const nextFn = createNode(NodeKind.FunctionExpr, {
-		funcExprParams: [],
-		funcExprParamTypes: [],
-		funcExprBody: nextBody,
-		funcExprFlags: "",
-		funcExprReturnType: "",
-	}, syntheticToken(loc));
-	if (nextFnType != null) nextFn.nodeType = nextFnType;
-	nextFn.paramSyms = [];
+	const resumeFn = makeResultFn(resumeBody, nextFnType, loc);
+	const resumeSym = newLoweredSym(ctx, SymbolKind.Variable, "$resume", nextFnType, false);
+	setFlag(resumeSym, SymbolFlag.StateMachine);
+	const resumeDecl = makeVarDecl(resumeSym.name, resumeFn, DeclKind.Const, loc);
+	resumeDecl.resolvedSym = resumeSym;
+	if (nextFnType != null) resumeDecl.nodeType = nextFnType;
+	const setOp = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(CLOSE_OP, loc), loc), loc);
+	const resumeCall = makeCall(makeTypedIdentResolved(resumeSym, nextFnType, loc), [], loc);
+	resumeCall.nodeType = iterResultType;
+	const closeFn = makeResultFn(makeBlock([makeRunningCheck(runSym, loc), setOp, makeReturn(resumeCall, loc)], loc), nextFnType, loc);
 
-	// 10. Build iterator object: { next: function() { ... } }
+	// 10. Build iterator object: { next, return } over the one resume routine
 	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
-	const iterObj = makeObjectLiteral(["next"], [nextFn], loc);
-	if (returnNodeType != null && isIterator(returnNodeType)) {
-		iterObj.nodeType = returnNodeType;
-	}
+	const iterObj = closable
+		? makeObjectLiteral(["next", "return"], [makeTypedIdentResolved(resumeSym, nextFnType, loc), wrapMaybeValue(closeFn, getProperty(returnNodeType!, "return"), loc)], loc)
+		: makeObjectLiteral(["next"], [resumeFn], loc);
+	if (closable) iterObj.nodeType = returnNodeType;
 
 	// 11. Build new function body:
 	//   let $state = 0;
 	//   let local1; let local2; ...
-	//   return { next: function() { while(true) { if-else dispatch } } };
+	//   return { next: function() { while(true) { switch dispatch } } };
 	const newBodyStmts: Node[] = [];
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
 	stateDecl.resolvedSym = stateSym;
 	newBodyStmts.push(stateDecl);
+	if (closable) {
+		const opDecl = makeVarDecl(opSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+		opDecl.resolvedSym = opSym;
+		newBodyStmts.push(opDecl);
+	}
+	const runDecl = makeVarDecl(runSym.name, makeBool(false, loc), DeclKind.Let, loc);
+	runDecl.resolvedSym = runSym;
+	newBodyStmts.push(runDecl);
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
 	for (const sym of lifted.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
@@ -1116,6 +1377,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		if (dtIdx >= 0) decl.nodeType = dtTypes[dtIdx];
 		newBodyStmts.push(decl);
 	}
+	if (closable) newBodyStmts.push(resumeDecl);
 	newBodyStmts.push(makeReturn(iterObj, loc));
 
 	return makeBlock(newBodyStmts, loc);
@@ -1290,4 +1552,42 @@ test "a generator's state and current-exception variables are minted with their 
 	const excs = hoistedDeclsOf(src, "$curExc");
 	assert states.length == 1 && excs.length == 1;
 	assert states[0].resolvedSym.item > 0 && excs[0].resolvedSym.item > 0;
+}
+
+function stateCases(node: Node): int32 {
+	if (node.kind == NodeKind.SwitchStmt) {
+		const sd = node.data as SwitchStmtData;
+		if (sd.switchDisc.resolvedSym != null && sd.switchDisc.resolvedSym.name == "$state") return (sd.switchCases.length - 1) as int32;
+	}
+	let found: int32 = -1;
+	forEachChild(node, (c: Node): void => {
+		if (found < 0) found = stateCases(c);
+	});
+	return found;
+}
+
+function stateCasesOf(src: string): int32 {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return -1 as int32;
+	checkProgram(parsed.value);
+	lowerGenerator(parsed.value, makeCtx());
+	return stateCases(parsed.value);
+}
+
+function declsNamed(node: Node, name: string): int32 {
+	let count: int32 = node.kind == NodeKind.VariableDecl && node.resolvedSym != null && node.resolvedSym.name == name ? 1 : 0;
+	forEachChild(node, (c: Node): void => { count += declsNamed(c, name); });
+	return count;
+}
+
+test "a local declared in a state run in place of its jump is still hoisted once" {
+	const parsed = parseInput("function* g(n: int32): Iterator<int32> { let i: int32 = 0; while (i < n) { const x: int32 = i * 2; yield x; yield x; i += 1; } }");
+	assert parsed.ok;
+	checkProgram(parsed.value);
+	lowerGenerator(parsed.value, makeCtx());
+	assert declsNamed(parsed.value, "x") == 1;
+}
+
+test "a state reached by one jump runs in place of the jump" {
+	assert stateCasesOf("function* g(n: int32): Iterator<int32> { let i: int32 = 0; while (i < n) { yield i; i += 1; } }") == 3;
 }

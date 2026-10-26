@@ -1,5 +1,5 @@
-// @stdout: 3 | false 012eoeo | 6 | 3 yzxyzx
-// note: adjacent local function declarations see each other, so they can call each other however they are ordered; a local function without a return annotation returns what its body returns, and one that only recurses on itself infers void. Same output on C, JS and the Raiser.
+// @stdout: 3 | false 012eoeo | 6 | 3 yzxyzx | 15
+// note: adjacent local function declarations see each other, so they can call each other however they are ordered; a local function without a return annotation returns what its body returns, and one that only recurses on itself infers void. A method or a constructor holds local closures that call each other the same way; the Raiser used to stop with "no closure recorded for the routine". Same output on C, JS and the Raiser.
 function counter(): () => number {
 	let n = 0;
 	function a(): number {
@@ -40,4 +40,21 @@ function inferred() {
 	return inner() + 1;
 }
 
-console.log(`${counter()()} | ${parity()} | ${inferred()} | ${returnsLater()()} ${ring()}`);
+class Tally {
+	total: int32 = 0;
+	constructor(start: int32) {
+		let n = start;
+		const bump = (): void => { n += 1; };
+		const twice = (): void => { bump(); bump(); };
+		twice();
+		this.total = n;
+	}
+	add(k: int32): int32 {
+		const bump = (): void => { k += 1; };
+		const twice = (): void => { bump(); bump(); };
+		twice();
+		return this.total + k;
+	}
+}
+
+console.log(`${counter()()} | ${parity()} | ${inferred()} | ${returnsLater()()} ${ring()} | ${new Tally(1).add(10)}`);

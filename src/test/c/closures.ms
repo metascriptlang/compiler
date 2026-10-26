@@ -148,7 +148,7 @@ test "E2E C: a nested routine that never escapes is rebuilt from its frame env a
 }
 
 test "E2E C: a nested routine of a generator is rebuilt from its resume env at each use, with no owning closure local" {
-	const c = compileToC(ROUTINE_AT_USE("function* sums(root: Tree, weight: (t: Tree) => int32): Iterator<int32>", "walk(root); yield total; eachKid(root, walk); yield total + weight(root);") + "\nfor (const s of sums(new Tree(), (t: Tree): int32 => t.v)) console.log(s);");
+	const c = compileToC(ROUTINE_AT_USE("function* sums(root: Tree, weight: (t: Tree) => int32): Iterator<int32>", "walk(root); yield total; eachKid(root, walk); yield total + weight(root);") + "\nlet machine = sums(new Tree(), (t: Tree): int32 => t.v);\nfor (const s of machine) console.log(s);");
 	assert c.ok, c.ok ? "" : c.error;
 	assert !ownsRoutineLocal(c.ok ? c.value : ""), c.ok ? c.value : "";
 }

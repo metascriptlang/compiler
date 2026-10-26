@@ -28,15 +28,8 @@ function setEndWrite<T>(s: Set<T>): void { if (!s.writing) { msMapFatal("concurr
 // Return type for function* generators. Matches generatorLower's output shape.
 // Users write: function* range(): Iterator<int32> { yield 1; }
 
-export struct IteratorResult<T> {
-	value: T;
-	done: boolean;
-}
-
-@builtin("Iterator")
-export struct Iterator<T> {
-	next: () => IteratorResult<T>;
-}
+import { Iterator, IteratorResult } from "./array/iteratorBase";
+export { Iterator, IteratorResult, ZipMode, ZipOptions, peekable, toItems, Peekable, min, max, RangeOptions } from "./array/iteratorBase";
 
 // Drain iterator to array. Uses while+next() (not for...of — would be circular).
 export function toItems<T>(this iter: Iterator<T>): T[] {
@@ -52,13 +45,9 @@ export function toItems<T>(this iter: Iterator<T>): T[] {
 // Array items iterator — standard library parity (items for openArray).
 // Arrays normally hit the fast path in iterableElemType and never need this.
 // Exists as fallback: if the fast path fails, the checker's synthetic toItems() call resolves.
-// Uses while (not for-of) to avoid circular dependency.
-export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
-	let i = 0;
-	while (i < arr.length) {
-		yield arr[i];
-		i = i + 1;
-	}
+// Uses an indexed for (not for-of) to avoid circular dependency.
+export function* toItems<T>(this arr: T[]): Iterator<T> {
+	for (let i = 0; i < arr.length; i++) yield arr[i];
 }
 
 // ===== Hash Functions =====

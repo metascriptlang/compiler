@@ -342,10 +342,9 @@ export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
  */
 export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
 	const out: U[] = [];
-	let i = 0;
-	while (i < arr.length) {
+	const n = arr.length;
+	for (let i = 0; i < n && i < arr.length; i += 1) {
 		out.push(fn(arr[i], i));
-		i = i + 1;
 	}
 	return out;
 }
@@ -421,7 +420,8 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
-export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find, every, reduce, values, keys, entries } from "./shared";
+export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;
