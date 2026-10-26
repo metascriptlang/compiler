@@ -2836,6 +2836,22 @@ function tearDownGlobals(dctx: DrcContext, baked: Symbol[], loc: SourceLocation)
 	return result;
 }
 
+// A module-level declaration the walk turns into a block (the declaration plus its copy or
+// sink) stays a statement list in the module scope, so the statements after it still see it.
+function spliceTopLevelDeclGroups(stmts: Node[], declaredAtTop: Symbol[]): Node[] {
+	if (declaredAtTop.length == 0) return stmts;
+	const out: Node[] = [];
+	for (const stmt of stmts) {
+		const inner = stmt.kind == NodeKind.BlockStmt ? (stmt.data as BlockStmtData).statements : null;
+		if (inner != null && inner.length > 0 && inner[0].kind == NodeKind.VariableDecl && inner[0].resolvedSym != null && declaredAtTop.includes(inner[0].resolvedSym)) {
+			for (const s of inner) out.push(s);
+		} else {
+			out.push(stmt);
+		}
+	}
+	return out;
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2862,7 +2878,9 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	const fWalk = flowStart();
-	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
+	const declaredAtTop: Symbol[] = [];
+	if (dctx.ctx.raiserBackend) for (const s of d.programStmts) if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null) declaredAtTop.push(s.resolvedSym);
+	d.programStmts = spliceTopLevelDeclGroups(processStmtList(d.programStmts, dctx, program.location), declaredAtTop);
 	flowStop("inject.walk", fWalk);
 	const fExits = flowStart();
 	const moduleScope = popScope(dctx);
