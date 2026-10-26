@@ -1,5 +1,4 @@
 // @stdout: 3 2 x 2 5 a
-// @xfail(raiser): raiser runtime error: expected an array, got value kind Object
 function applyT<T>(v: T | ((prev: T) => T), cur: T): T {
 	if (typeof v === "function") { return v(cur); }
 	return v;

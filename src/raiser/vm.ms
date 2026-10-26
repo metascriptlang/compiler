@@ -813,6 +813,42 @@ function futureFailPrepared(vm: RaiserVM, handle: int64): void {
 	futureSettled(vm, handle);
 }
 
+// The display of the union member `held` is when the plan marks that member refused; "" when it is allowed.
+function unionConvRefusal(vm: RaiserVM, held: RaiserValue, plan: string): string {
+	let i = 0;
+	while (i < plan.length) {
+		const semi = plan.indexOf(";", i);
+		const colon = plan.indexOf(":", semi);
+		const token = plan.substring(i + 1, semi);
+		const length = parseIntStr(plan.substring(semi + 1, colon));
+		if (unionTokenHolds(vm, held, token)) return plan.charAt(i) == "+" ? "" : plan.substring(colon + 1, colon + 1 + length);
+		i = colon + 1 + length;
+	}
+	return held.kind.toString();
+}
+
+function discriminantHolds(vm: RaiserVM, held: RaiserValue, spec: string): boolean {
+	const eq = spec.indexOf("=");
+	const obj = vm.objectHeap.objects[handleIndex(held.intVal)];
+	const at = obj.classType.fields.indexOf(spec.substring(0, eq));
+	if (at < 0) return false;
+	const stored = fieldValueAt(obj, at);
+	return stored.kind == RaiserValueKind.Int && stored.intVal == parseIntStr(spec.substring(eq + 1)) as int64;
+}
+
+function unionTokenHolds(vm: RaiserVM, held: RaiserValue, token: string): boolean {
+	const head = token.charAt(0);
+	if (head == "n") return held.kind == RaiserValueKind.Nil;
+	if (head == "b") return held.kind == RaiserValueKind.Bool;
+	if (head == "u") return held.kind == RaiserValueKind.Int || held.kind == RaiserValueKind.Float;
+	if (head == "s") return held.kind == RaiserValueKind.String;
+	if (head == "a") return held.kind == RaiserValueKind.Array;
+	if (head == "o") return held.kind == RaiserValueKind.Object;
+	if (head == "d") return held.kind == RaiserValueKind.Object && discriminantHolds(vm, held, token.substring(1));
+	if (head == "c") return held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, raiserInt(parseIntStr(token.substring(1)) as int64));
+	throw new Error("internal: the union conversion plan names the kind token '" + token + "'");
+}
+
 function literalListHolds(arr: RaiserArrayHeap, list: string, held: RaiserValue): boolean {
 	const text = held.kind == RaiserValueKind.String ? heapStringText(arr, held) : "";
 	const num = held.kind == RaiserValueKind.Float ? held.floatVal : held.intVal as float64;
@@ -1878,6 +1914,10 @@ function sigPrefix(sig: int64, count: int64): int64 {
 // The function a closure pair laid out as `fn`, `env` calls at a CallClosureTyped site, whose callee type the checker
 // holds to the site's signature, so a danger build skips the checks of the pair and the signature,
 // with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
+function isClosurePair(classType: RaiserClassType): boolean {
+	return classType.fields.length == 2 && classType.fields[0] == "fn" && classType.fields[1] == "env";
+}
+
 function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
 	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
 	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
@@ -2009,7 +2049,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if ((ib & 7) == CLS_REF) {
+				if ((ib & 7) == CLS_REF && ic < 64) {
 					words[wb + ia] = (handleKind(refs[rb + (ib >> 3)]) as number) == ic ? 1 : 0;
 				} else {
 					slow = true;
@@ -2893,7 +2933,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3052,6 +3092,12 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 				vmError(vm, "invalid union conversion: " + shown + " is not " + constStringText(getFuncConst(func, ic)));
 			}
 		},
+		RaiserOpcode.UnionConv => {
+			when (mode != "danger") {
+				const shown = unionConvRefusal(vm, getDyn(vm, ia), constStringText(getFuncConst(func, ib)));
+				if (shown != "") vmError(vm, constStringText(getFuncConst(func, ic)) + shown + "'");
+			}
+		},
 		RaiserOpcode.SameLoc => {
 			const l = getDyn(vm, ib);
 			const r = getDyn(vm, ic);
@@ -3059,7 +3105,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.IsKind => {
 			const v = getDyn(vm, ib);
-			setRegBool(vm, ia, (v.kind as number) == ic);
+			setRegBool(vm, ia, ic < 64 ? (v.kind as number) == ic : v.kind == RaiserValueKind.Object && isClosurePair(vm.objectHeap.objects[handleIndex(v.intVal)].classType) == (ic == 64));
 		},
 		RaiserOpcode.AddrIndex => {
 			vmHandleAddrIndex(vm, ia, ib, ic);

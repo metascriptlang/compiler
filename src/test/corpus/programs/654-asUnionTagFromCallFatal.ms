@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before text
-// @xfail(raiser): the Raiser VM does not test union conversions
 // @xfail(danger): --danger drops the tag test, so the read of the other member is undefined behaviour
 
 function pick(n: number): number | string {

@@ -24,8 +24,8 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
-import { isSlotUnion } from "../../checker/fit";
+import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay } from "../../checker/types";
+import { isSlotUnion, storesUnionTag } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
@@ -35,7 +35,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
+	callRaiserStmtCompiler, emitTrapNil, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
@@ -666,7 +666,10 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			if (refused >= 0) return refused;
 			const reg = compileExpr(s, d.asExpr);
 			if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, reg);
-			if (node.flags.has(NodeFlag.ConvCheck)) emitLitConv(s, node, reg);
+			if (node.flags.has(NodeFlag.ConvCheck)) {
+				if (d.asExpr.kind != NodeKind.HiddenSubConv) emitUnionConv(s, reg, d.asExpr.nodeType, node.nodeType);
+				emitLitConv(s, node, reg);
+			}
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
 		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node, false); },
@@ -713,6 +716,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const refused = refuseByteView(s, node, hd.convExpr.nodeType, hd.convType);
 			if (refused >= 0) return refused;
 			const reg = compileExpr(s, hd.convExpr);
+			if (node.variantSlot > 0 && node.flags.has(NodeFlag.ConvCheck)) emitUnionConv(s, reg, hd.convExpr.nodeType, hd.convType);
 			if (isSpanType(hd.convType) && exprIsString(s, hd.convExpr)) return compileStringBytes(s, reg);
 			return emitNumericConv(s, reg, hd.convExpr.nodeType, hd.convType);
 		},
@@ -944,6 +948,103 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 	}
 	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, classTargetOperand(s, node.nodeType, key), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
+}
+
+function unionMemberToken(m: Type): string {
+	const kind = jsMemberKind(m);
+	if (kind == "class") return "c" + classPackedKey(m, classTargetKey(m)).toString();
+	if (kind == "null") return "n";
+	if (kind == "boolean") return "b";
+	if (kind == "number") return "u";
+	if (kind == "string") return "s";
+	if (kind == "array") return "a";
+	return "o";
+}
+
+function classDepthOf(t: Type): int32 {
+	let depth = 0;
+	let up = classParentOf(t);
+	while (up != null) {
+		depth += 1;
+		up = classParentOf(up);
+	}
+	return depth;
+}
+
+// A checked `as` out of a union whose members the VM tells apart by the held value, as C tells them
+// apart by the stored tag: the members the target does not keep refuse the conversion.
+function emitUnionConv(s: RaiserCompState, reg: int32, source: Type | null, target: Type | null): void {
+	if (source == null || target == null) return;
+	const nullable = isMaybeType(source) && source.typeReturn != null;
+	const union = peelTransparentInstance(nullable ? source.typeReturn! : source);
+	if (union.kind != TypeKind.Union || storesUnionTag(union)) return;
+	const members = union.typeChildren.slice(0);
+	if (nullable) members.push(nullType());
+	const kept: string[] = [];
+	const aimed = isMaybeType(target) && target.typeReturn != null ? target.typeReturn : target;
+	for (const m of aimed.kind == TypeKind.Union ? aimed.typeChildren : [aimed]) kept.push(unionMemberToken(m));
+	if (isMaybeType(target)) kept.push("n");
+	const classes: Type[] = [];
+	const rest: Type[] = [];
+	for (const m of members) {
+		if (jsMemberKind(m) == "class") classes.push(m); else rest.push(m);
+	}
+	let deepest = 0;
+	for (const m of classes) {
+		if (classDepthOf(m) > deepest) deepest = classDepthOf(m);
+	}
+	const ordered: Type[] = [];
+	for (let depth = deepest; depth >= 0; depth -= 1) {
+		for (const m of classes) {
+			if (classDepthOf(m) == depth) ordered.push(m);
+		}
+	}
+	for (const m of rest) ordered.push(m);
+	let plan = "";
+	let refuses = false;
+	for (const m of ordered) {
+		const token = unionMemberToken(m);
+		const allowed = kept.includes(token);
+		if (!allowed) refuses = true;
+		const shown = unionMemberDisplay(m);
+		plan += (allowed ? "+" : "-") + token + ";" + shown.length.toString() + ":" + shown;
+	}
+	if (!refuses) return;
+	const names: string[] = [];
+	for (const m of members) names.push(unionMemberDisplay(m));
+	const unionShown = union.sym != null && union.sym.name != "" ? union.sym.name : names.join(" | ");
+	const head = "member '" + typeDisplayName(aimed) + "' is not accessible for type '" + unionShown + "' using '";
+	emitInst(s, raiserABC(RaiserOpcode.UnionConv, reg, addConst(s, raiserConstString(plan)), addConst(s, raiserConstString(head))));
+}
+
+// A field read through a narrowed member of an enum-discriminated union, which C guards with the
+// stored discriminant: the object the VM holds says its own, so a read of another member's field refuses.
+function emitVariantRead(s: RaiserCompState, reg: int32, object: Node, field: string): void {
+	const projection = object.kind == NodeKind.HiddenDeref ? (object.data as HiddenDerefData).expr : object;
+	if (projection.kind != NodeKind.HiddenSubConv || projection.variantSlot <= 0) return;
+	const hd = projection.data as HiddenStdConvData;
+	const source = hd.convExpr.nodeType;
+	if (source == null || isMaybeType(source) || isMaybeType(hd.convType)) return;
+	const union = peelTransparentInstance(source);
+	if (!isDiscriminatedUnion(union) || union.typeExtra == null || union.typeExtra.kind != TypeKind.Enum) return;
+	const disc = getDiscriminantName(union);
+	const members = union.typeExtra;
+	let plan = "";
+	for (let vi = 0; vi < union.typeChildren.length && vi + 1 < union.typeNames.length; vi += 1) {
+		const stored = union.typeNames[vi + 1];
+		const dot = stored.lastIndexOf(".");
+		const bare = dot >= 0 ? stored.slice(dot + 1, stored.length) : stored;
+		let ordinal = -1;
+		for (let i = 0; i < members.typeNames.length; i += 1) {
+			if (members.typeNames[i] == bare) ordinal = i < members.typeChildren.length ? members.typeChildren[i].typeValue : i;
+		}
+		if (ordinal < 0) return;
+		const label = disc + " = " + bare;
+		plan += (vi == projection.variantSlot - 1 ? "+" : "-") + "d" + disc + "=" + ordinal.toString() + ";" + label.length.toString() + ":" + label;
+	}
+	const shown = union.sym != null && union.sym.name != "" ? union.sym.name : typeDisplayName(union);
+	const head = "field '" + field + "' is not accessible for type '" + shown + "' using '";
+	emitInst(s, raiserABC(RaiserOpcode.UnionConv, reg, addConst(s, raiserConstString(plan)), addConst(s, raiserConstString(head))));
 }
 
 function emitLitConv(s: RaiserCompState, node: Node, reg: int32): void {
@@ -1297,8 +1398,8 @@ function typeofValueKinds(variant: Type, tag: string): int32[] {
 		"number" => [RaiserValueKind.Int as int32, RaiserValueKind.Float as int32],
 		"string" => [RaiserValueKind.String as int32],
 		"boolean" => [RaiserValueKind.Bool as int32],
-		"function" => [RaiserValueKind.Int as int32, RaiserValueKind.Object as int32],
-		"object" => [RaiserValueKind.Object as int32, RaiserValueKind.Array as int32, RaiserValueKind.Future as int32],
+		"function" => [RaiserValueKind.Int as int32, RAISER_KIND_CLOSURE],
+		"object" => [RAISER_KIND_PLAIN_OBJECT, RaiserValueKind.Array as int32, RaiserValueKind.Future as int32],
 		_ => [],
 	};
 }
@@ -1510,9 +1611,19 @@ function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	}
 }
 
-function isClosureLiteral(node: Node): boolean {
+function closureLiteralOf(node: Node): Node | null {
+	if (node.kind == NodeKind.HiddenSubConv || node.kind == NodeKind.HiddenStdConv) {
+		const hd = node.data as HiddenStdConvData;
+		const target = hd.convType;
+		if (target.kind != TypeKind.Union || !isSlotUnion(target) || storesUnionTag(target)) return null;
+		return closureLiteralOf(hd.convExpr);
+	}
 	const bare = skipModifier(node.nodeType);
-	return node.kind == NodeKind.ObjectLiteral && bare != null && bare.kind == TypeKind.Function;
+	return node.kind == NodeKind.ObjectLiteral && bare != null && bare.kind == TypeKind.Function ? node : null;
+}
+
+function isClosureLiteral(node: Node): boolean {
+	return closureLiteralOf(node) != null;
 }
 
 // A closure literal passed to a call is a temporary pair the call borrows. Its env is counted
@@ -1532,7 +1643,7 @@ function compileClosureArg(s: RaiserCompState, arg: Node, slot: int32, held: int
 	}
 	const pair = compileExpr(s, arg);
 	const env = allocRef(s);
-	emitInst(s, fieldInst(s, arg.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, pair, addConst(s, raiserConstString("env"))));
+	emitInst(s, fieldInst(s, closureLiteralOf(arg)!.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, pair, addConst(s, raiserConstString("env"))));
 	emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
 	emitInst(s, raiserABC(RaiserOpcode.Move, held, pair, 0));
 	emitInst(s, raiserABC(RaiserOpcode.Move, slot, pair, 0));
@@ -2175,6 +2286,12 @@ function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32
 	return array;
 }
 
+function sharedNewKind(t: Type | null, sym: Symbol | null): string {
+	if (sym != null && sym.symbolKind == SymbolKind.Actor) return "actors";
+	if (t != null && isAtomicRef(t)) return "Arc and Locked cells";
+	return "";
+}
+
 function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as NewExprData;
 
@@ -2204,7 +2321,10 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 		}
 	}
 
-	const newMsg = "cannot compile 'new' here: no matching constructor in the Raiser function table";
+	const sharedKind = sharedNewKind(node.nodeType, newCallee.resolvedSym);
+	const newMsg = sharedKind != ""
+		? `cannot compile 'new' here: ${sharedKind} are not built on the Raiser VM yet (a strand heap is copied at spawn, so a shared cell needs the custody design)`
+		: "cannot compile 'new' here: no matching constructor in the Raiser function table";
 	queueRaiserCompileError(newMsg, node.location.line, node.location.column);
 	return emitTrapValue(s, newMsg, node.nodeType);
 }
@@ -2405,6 +2525,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 
 	// General field access on objects
 	const objReg = compileExpr(s, d.object);
+	emitVariantRead(s, objReg, d.object, d.property);
 	const nameIdx = addConst(s, raiserConstString(d.property));
 	const dest = allocFor(s, node.nodeType);
 	emitInst(s, fieldInst(s, d.object.nodeType, d.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, dest, objReg, nameIdx));
@@ -2678,8 +2799,7 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	return s.classTypes.length;
 }
 
-// The operand InstanceOf and ObjConv carry: the id of the class `t` names and its depth, packed.
-function classTargetOperand(s: RaiserCompState, t: Type | null, key: string): int32 {
+function classPackedKey(t: Type | null, key: string): int64 {
 	let up = classParentOf(t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
 	let depth = 0;
 	while (up != null && classTargetKey(up) != "") {
@@ -2687,7 +2807,12 @@ function classTargetOperand(s: RaiserCompState, t: Type | null, key: string): in
 		if (depth == 64) throw new Error(`internal: the class chain of '${key}' is deeper than 64`);
 		up = classParentOf(up);
 	}
-	return addConst(s, raiserInt(raiserClassId(key) * 64 + depth));
+	return raiserClassId(key) * 64 + depth;
+}
+
+// The operand InstanceOf and ObjConv carry: the id of the class `t` names and its depth, packed.
+function classTargetOperand(s: RaiserCompState, t: Type | null, key: string): int32 {
+	return addConst(s, raiserInt(classPackedKey(t, key)));
 }
 
 function literalClass(t: Type | null): Symbol | null {
