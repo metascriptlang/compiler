@@ -298,6 +298,20 @@ export function fill<T>(this arr: T[], value: T): void {
 	}
 }
 
+export function shift(this arr: string[]): string {
+	if (arr.length == 0) return "";
+	const v = arr[0];
+	arr.splice(0, 1);
+	return v;
+}
+
+export function shift(this arr: number[]): number {
+	if (arr.length == 0) return 0;
+	const v = arr[0];
+	arr.splice(0, 1);
+	return v;
+}
+
 export function shift<T>(this arr: T[]): T {
 	const v = arr[0];
 	arr.splice(0, 1);
