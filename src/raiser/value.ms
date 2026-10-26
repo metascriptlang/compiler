@@ -562,12 +562,17 @@ export interface RaiserArrayHeap {
 	freeList: int64[];
 	strings: RaiserStringHeap;
 	boxes: RaiserBoxHeap;
+	orcRoots: int64[];
+	orcThreshold: number;
 }
+
+export const ORC_DEFAULT_THRESHOLD = 128;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
-	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap() };
+	const orcRoots: int64[] = [];
+	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
