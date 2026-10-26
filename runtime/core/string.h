@@ -236,10 +236,31 @@ static inline bool msEqualMem(const uint8_t* a, int64_t aLen, const uint8_t* b, 
 }
 
 /* Ordering in UTF-16 code units (< 0, 0, > 0) */
-int msStringCompare(msString a, msString b);
+int32_t msStringCompare(msString a, msString b);
 
 /* Ordering in raw bytes, for binary data held in a string */
-int msStringCompareBytes(msString a, msString b);
+int32_t msStringCompareBytes(msString a, msString b);
+
+/* Index of the first differing byte of `a` and `b`, or the shorter length when one is a prefix of the other. */
+static inline int64_t msMemMismatch(const uint8_t* a, int64_t aLen, const uint8_t* b, int64_t bLen) {
+	int64_t n = aLen < bLen ? aLen : bLen;
+	if (a == b) return n;
+	int64_t i = 0;
+	while (i + 8 <= n) {
+		uint64_t wa, wb;
+		memcpy(&wa, a + i, 8);
+		memcpy(&wb, b + i, 8);
+		if (wa != wb) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ && defined(__GNUC__)
+			return i + (__builtin_ctzll(wa ^ wb) >> 3);
+#endif
+			break;
+		}
+		i += 8;
+	}
+	while (i < n && a[i] == b[i]) i++;
+	return i;
+}
 
 /* Operator overload helpers — prelude `<` and `<=` base operators */
 static inline bool msStringCompareLt(msString a, msString b) { return msStringCompare(a, b) < 0; }

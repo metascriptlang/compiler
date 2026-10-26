@@ -16,6 +16,34 @@ function msStringEquals(a: string, b: string): boolean {
 }
 
 extern function msEqualMem(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean;
+extern function msMemMismatch(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): int64;
+
+// UTF-16 code unit order differs from UTF-8 byte order only where the first differing code points
+// are a supplementary one (lead 0xF0..0xF4, a surrogate pair) against a BMP one at or above U+E000
+// (lead 0xEE/0xEF): the pair sorts below.
+@exportName("msStringCompare")
+function stringCompare(a: string, b: string): int32 {
+	const x = a.asBytes();
+	const y = b.asBytes();
+	const i = msMemMismatch(x, y);
+	if (i < x.length && i < y.length) {
+		const p = x[i];
+		const q = y[i];
+		if (p >= 0xF0 && (q == 0xEE || q == 0xEF)) return -1;
+		if (q >= 0xF0 && (p == 0xEE || p == 0xEF)) return 1;
+		return p < q ? -1 : 1;
+	}
+	return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
+}
+
+@exportName("msStringCompareBytes")
+function stringCompareBytes(a: string, b: string): int32 {
+	const x = a.asBytes();
+	const y = b.asBytes();
+	const i = msMemMismatch(x, y);
+	if (i < x.length && i < y.length) return x[i] < y[i] ? -1 : 1;
+	return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
+}
 
 @inline export function `==`(this a: string, b: string): boolean { return msStringEquals(a, b); }
 export extern function `<`(this a: string, b: string): boolean from "msStringCompareLt";
