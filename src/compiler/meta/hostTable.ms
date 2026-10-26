@@ -844,6 +844,26 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
 
+function _bridgeMsStringTrim(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trim());
+}
+
+function _bridgeMsStringTrimStart(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trimStart());
+}
+
+function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trimEnd());
+}
+
+function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).toLowerCase());
+}
+
+function bridgeMsStringToUpper(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).toUpperCase());
+}
+
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
 function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	const start = args.length > 2 ? args[2].intVal : 0;
