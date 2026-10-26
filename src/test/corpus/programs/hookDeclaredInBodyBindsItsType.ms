@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its destroy entries)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: in 1|destroy plain 1|in 2|destroy block 2|in 3|destroy shared 3|in 4|destroy fd 4|in 5|destroy local 5|end
 // note: a lifecycle hook declared in a function or block body binds its type like a module-level one.
