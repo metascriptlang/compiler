@@ -27,7 +27,7 @@ import {
 	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
-	setRaiserModulePath, getRaiserModulePath, setRaiserPlaced,
+	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
 	isScalarClass
 } from "./context";
@@ -36,8 +36,12 @@ import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHos
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
-import { ExportedSymInfo } from "../../checker/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
+import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destructorLifting";
+import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
+import { analyzeProgram } from "../../analyzer/index";
+import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
+import { CheckerContext, GcMode, ExportedSymInfo } from "../../checker/context";
 import { unboxFloat } from "../../raiser/marshal";
 
 registerCoreParsers();
@@ -71,6 +75,25 @@ export function unwrapToClassDecl(node: Node): Node | null {
 // Two-phase compilation:
 //   Phase 1: Collect FunctionDecl names → assign module indices
 //   Phase 2: Compile each function body + top-level code
+
+export function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: WriteSummaries): Node {
+	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
+	try {
+		ctx.gcMode = GcMode.Drc;
+		return analyzeProgram(program, ctx, tables, true);
+	} finally {
+		leaveCompilerFuncs(outer);
+	}
+}
+
+export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
+	const outer = swapLiftedOps(lifted);
+	try {
+		return analyzeForRaiser(transformForRaiser(program, ctx, true), ctx, createWriteSummaries(createRoutineDecls(), []));
+	} finally {
+		swapLiftedOps(outer);
+	}
+}
 
 export function generateRaiser(program: Node): RaiserModule {
 	const input: RaiserModuleInput = { modulePath: "main", program: program };
@@ -373,18 +396,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = [], placed: boolean = false): RaiserModule {
-	setRaiserPlaced(placed);
-	try {
-		const compiled = generateProjectBody(modules, plan, exported);
-		compiled.drcPlaced = placed;
-		return compiled;
-	} finally {
-		setRaiserPlaced(false);
-	}
-}
-
-function generateProjectBody(modules: RaiserModuleInput[], plan: DynamicModulePlan, exported: ExportedSymInfo[]): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -593,8 +605,7 @@ function evalRaiser(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	checkProgram(parseResult.value);
-	return runProgram(parseResult.value);
+	return runProgram(lowerForRaiser(parseResult.value, checkProgram(parseResult.value)));
 }
 
 function evalLowered(code: string): RaiserContext {
@@ -604,7 +615,7 @@ function evalLowered(code: string): RaiserContext {
 		return createContext();
 	}
 	const program = parseResult.value;
-	return runProgram(transformForRaiser(program, checkProgram(program)));
+	return runProgram(lowerForRaiser(program, checkProgram(program)));
 }
 
 // --- Tests ---
@@ -1564,7 +1575,7 @@ test "one-way link only" {
 }
 
 test "reverse link only" {
-	const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.n = n; return self; } const c = mk(5); return c.n;");
+	const ctx = evalRaiser("class N { n: int32 = 0; ref: N | null = null; } function mk(n: int32): N { const self = new N(); const cl = new N(); cl.ref = self; self.n = n; return self; } const c = mk(5); return c.n;");
 	assert ctx.lastResult.intVal == 5;
 }
 
@@ -1639,7 +1650,7 @@ test "bidir top level" {
 }
 
 test "two objects linked" {
-	const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
+	const ctx = evalRaiser("class N { n: int32 = 0; ref: N | null = null; get: N | null = null; } function mk(n: int32): N { const self = new N(); const cl = new N(); cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
 	assert ctx.lastResult.intVal == 5;
 }
 
@@ -1681,9 +1692,10 @@ test "an extern let or const is refused by its name in a bitwise, arithmetic or 
 	}
 }
 
-test "trap: unsupported node kind errors at runtime" {
+test "a match expression is lowered before the bytecode compiler sees it" {
 	const ctx = evalRaiser("return match (1) { _ => 2 };");
-	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
+	assert ctx.lastError == "", ctx.lastError;
+	assert ctx.lastResult.intVal == 2;
 }
 
 test "update on an index target: postfix yields the old value and stores the new one" {

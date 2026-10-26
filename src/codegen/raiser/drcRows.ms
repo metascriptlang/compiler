@@ -15,6 +15,8 @@ export const ROW_STR_TEXT: int32 = 12;
 export const ROW_STR_APPEND: int32 = 13;
 export const ROW_STR_APPEND_CHAR: int32 = 14;
 export const ROW_STR_APPEND_CODEPOINT: int32 = 15;
+export const ROW_TRACE: int32 = 16;
+export const ROW_SET_LEN: int32 = 17;
 
 const rows = new HashMap<string, int32>();
 
@@ -44,6 +46,8 @@ define(ROW_COPY_VALUE, [
 
 define(ROW_STR_CONCAT, ["msStringConcat"]);
 define(ROW_STR_TEXT, ["msNumberToString", "msIntToString", "msUint64ToString", "msBoolToString", "msCharToString"]);
+define(ROW_TRACE, ["msOrcTraceRef"]);
+define(ROW_SET_LEN, ["msArraySetLen"]);
 define(ROW_STR_APPEND, ["msStringAppend"]);
 define(ROW_STR_APPEND_CHAR, ["msStringAppendChar"]);
 define(ROW_STR_APPEND_CODEPOINT, ["msStringAppendCodePoint"]);

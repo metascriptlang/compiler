@@ -193,7 +193,7 @@ export function heldHandle(v: RaiserValue): RaiserValue {
 
 // --- String Heap ---
 // A string is immutable text on a side heap, like arrays and objects: the value
-// holds an index, rc counts the holders (only under gcMode "orc"), a freed slot
+// holds an index, rc counts the holders, a freed slot
 // goes on the free list. The heap hangs off the array heap, so every place that
 // already carries the strand's heaps reaches it. Handles below zero index the
 // constant table instead; the table is shared, append-only and never freed.
@@ -286,11 +286,11 @@ export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue
 		index = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		heap.texts[index] = text;
-		heap.rc[index] = arr.allocRc;
+		heap.rc[index] = OWNED_BY_RECEIVER_RC;
 	} else {
 		index = heap.texts.length;
 		heap.texts.push(text);
-		heap.rc.push(arr.allocRc);
+		heap.rc.push(OWNED_BY_RECEIVER_RC);
 	}
 	return { kind: RaiserValueKind.String, intVal: makeHandle(index, RaiserHeapKind.String), floatVal: 0.0 };
 }
@@ -596,18 +596,19 @@ export interface RaiserArrayHeap {
 	freeList: int64[];
 	strings: RaiserStringHeap;
 	boxes: RaiserBoxHeap;
-	allocRc: int32;   // the count a fresh string, array or box starts with: 0, or 1 when the allocating register owns it (a placed module)
 	orcRoots: int64[];
 	orcThreshold: number;
 }
 
 export const ORC_DEFAULT_THRESHOLD = 128;
 
+export const OWNED_BY_RECEIVER_RC: int32 = 1;
+
 export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
 	const orcRoots: int64[] = [];
-	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), allocRc: 0, orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { arrays, freeList, strings: createStringHeap(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
@@ -622,7 +623,7 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 		data.items.length = 0;
 		data.words.length = 0;
 		data.elemClass = elemClass;
-		data.rc = heap.allocRc;
+		data.rc = OWNED_BY_RECEIVER_RC;
 		data.color = 0;
 		data.viewOff = -1;
 		data.viewLen = 0;
@@ -635,7 +636,7 @@ export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClas
 	const items: RaiserValue[] = [];
 	const words: int64[] = [];
 	const views: int64[] = [];
-	const data: RaiserArrayData = { items, words, elemClass, rc: heap.allocRc, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
+	const data: RaiserArrayData = { items, words, elemClass, rc: OWNED_BY_RECEIVER_RC, color: 0, viewOff: -1, viewLen: 0, views, elemCyclic: false, elemUncounted: false };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -647,7 +648,7 @@ export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int
 	heapArrayPush(heap, handle, base);
 	heap.arrays[handleIndex(handle)].viewOff = off;
 	heap.arrays[handleIndex(handle)].viewLen = len;
-	if (heap.allocRc != 0) heap.arrays[handleIndex(base.intVal)].views.push(handle);
+	heap.arrays[handleIndex(base.intVal)].views.push(handle);
 	return handle;
 }
 
@@ -938,11 +939,11 @@ export function heapAllocBox(heap: RaiserArrayHeap, value: RaiserValue): int64 {
 		const reused = boxes.freeList[boxes.freeList.length - 1];
 		boxes.freeList.length = boxes.freeList.length - 1;
 		boxes.items[reused].value = copy;
-		boxes.items[reused].rc = heap.allocRc;
+		boxes.items[reused].rc = OWNED_BY_RECEIVER_RC;
 		return makeHandle(reused, RaiserHeapKind.Box);
 	}
 	const index = boxes.items.length;
-	boxes.items.push({ value: copy, rc: heap.allocRc });
+	boxes.items.push({ value: copy, rc: OWNED_BY_RECEIVER_RC });
 	return makeHandle(index, RaiserHeapKind.Box);
 }
 
@@ -1023,13 +1024,12 @@ export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): 
 export interface RaiserObjectHeap {
 	objects: RaiserObjectData[];
 	freeList: int64[];
-	allocRc: int32;   // the count a fresh object starts with: 0, or 1 when the allocating register owns it (a placed module)
 }
 
 export function createStructHeap(): RaiserObjectHeap {
 	const objects: RaiserObjectData[] = [];
 	const freeList: int64[] = [];
-	return { objects, freeList, allocRc: 0 };
+	return { objects, freeList };
 }
 
 export function heapAllocObject(heap: RaiserObjectHeap): int64 {
@@ -1042,7 +1042,7 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		data.refSlots = 0;
 		data.values.length = 0;
 		data.added.length = 0;
-		data.rc = heap.allocRc;
+		data.rc = OWNED_BY_RECEIVER_RC;
 		data.color = 0;
 		data.classType = RAISER_NO_CLASS;
 		return makeHandle(reused, RaiserHeapKind.Object);
@@ -1051,7 +1051,7 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 	const slots: int64[] = [];
 	const values: RaiserValue[] = [];
 	const added: string[] = [];
-	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: heap.allocRc, color: 0, classType: RAISER_NO_CLASS };
+	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: OWNED_BY_RECEIVER_RC, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return makeHandle(idx, RaiserHeapKind.Object);
 }
@@ -1459,6 +1459,18 @@ function copiedRegisterValue(map: RaiserCopyMap, address: int64): RaiserValue {
 	return raiserFloat(bitsToFloat(words[abs]));
 }
 
+function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: int64): void {
+	if (handle == 0) return;
+	const index = handleIndex(handle);
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Array => { dstArr.arrays[index].rc = 0; },
+		RaiserHeapKind.Object => { dstObj.objects[index].rc = 0; },
+		RaiserHeapKind.String => { dstArr.strings.rc[index] = 0; },
+		RaiserHeapKind.Box => { dstArr.boxes.items[index].rc = 0; },
+		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+	}
+}
+
 function copySlotShell(dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	const isRegister = val.kind == RaiserValueKind.RegAddr;
 	const source = map.sourceGlobals;
@@ -1469,6 +1481,7 @@ function copySlotShell(dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCop
 	const slots = isRegister ? map.registerSlots : map.globalSlots;
 	if (slots.has(val.intVal)) return raiserElemAddr(slots.get(val.intVal)!, 0);
 	const handle = heapAllocArray(dstArr);
+	dstArr.arrays[handleIndex(handle)].rc = 0;
 	slots.set(val.intVal, handle);
 	const held = isRegister ? copiedRegisterValue(map, val.intVal) : source![val.intVal];
 	map.jobs.push({ kind: RaiserCopyKind.Slot, source: held, dst: handle });
@@ -1486,6 +1499,7 @@ function copyArrayShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, val: R
 		return raiserNil();
 	}
 	const dstHandle = heapAllocArrayOf(dstArr, srcArr.arrays[handleIndex(val.intVal)].elemClass);
+	dstArr.arrays[handleIndex(dstHandle)].rc = 0;
 	map.arrays.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Array, source: raiserArray(val.intVal), dst: dstHandle });
 	return isArray ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
@@ -1503,6 +1517,7 @@ function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val
 	}
 	const dstHandle = heapAllocObject(dstObj);
 	dstObj.objects[handleIndex(dstHandle)].classType = srcObj.objects[handleIndex(val.intVal)].classType;
+	dstObj.objects[handleIndex(dstHandle)].rc = 0;
 	map.objects.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Object, source: raiserObject(val.intVal), dst: dstHandle });
 	return isObject ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
@@ -1513,10 +1528,15 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) return copySlotShell(dstArr, val, map);
 	if (val.kind == RaiserValueKind.Array || val.kind == RaiserValueKind.ElemAddr) return copyArrayShell(srcArr, dstArr, val, map);
 	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) return copyObjectShell(srcObj, dstObj, val, map);
-	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) return heapAllocString(dstArr, heapStringText(srcArr, val));
+	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) {
+		const text = heapAllocString(dstArr, heapStringText(srcArr, val));
+		disownFresh(dstArr, dstObj, text.intVal);
+		return text;
+	}
 	if (val.kind == RaiserValueKind.Box) {
 		const inner = copyShell(srcArr, srcObj, dstArr, dstObj, heapBoxValue(srcArr, val.intVal), map);
 		const copy = heapAllocBox(dstArr, inner);
+		dstArr.boxes.items[handleIndex(copy)].rc = 0;
 		rcIncref(dstArr, dstObj, inner);
 		return { kind: RaiserValueKind.Box, intVal: copy, floatVal: 0.0 };
 	}
@@ -1751,7 +1771,6 @@ test "rc incref/decref frees at zero" {
 	const obj = createStructHeap();
 	const h = heapAllocArray(arr);
 	const v = raiserArray(h);
-	rcIncref(arr, obj, v);
 	assert arr.arrays[handleIndex(h)].rc == 1;
 	rcIncref(arr, obj, v);
 	assert arr.arrays[handleIndex(h)].rc == 2;
@@ -1768,10 +1787,8 @@ test "rc destroy decrefs children" {
 	const parent = heapAllocArray(arr);
 	const child = heapAllocArray(arr);
 	const childVal = raiserArray(child);
-	rcIncref(arr, obj, childVal);
 	heapArrayPush(arr, parent, childVal);
 	const parentVal = raiserArray(parent);
-	rcIncref(arr, obj, parentVal);
 	assert arr.arrays[handleIndex(child)].rc == 1;
 	rcDecref(arr, obj, parentVal);
 	assert arr.freeList.length == 2;
@@ -1782,7 +1799,6 @@ test "alloc reuses free-list slot" {
 	const obj = createStructHeap();
 	const h1 = heapAllocArray(arr);
 	const v = raiserArray(h1);
-	rcIncref(arr, obj, v);
 	rcDecref(arr, obj, v);
 	const h2 = heapAllocArray(arr);
 	assert h2 == h1;
@@ -1795,10 +1811,8 @@ test "rc object destroy decrefs field refs" {
 	const o = heapAllocObject(obj);
 	const childArr = heapAllocArray(arr);
 	const childVal = raiserArray(childArr);
-	rcIncref(arr, obj, childVal);
 	heapObjectSetField(obj, o, "kids", childVal);
 	const oVal = raiserObject(o);
-	rcIncref(arr, obj, oVal);
 	assert arr.arrays[handleIndex(childArr)].rc == 1;
 	rcDecref(arr, obj, oVal);
 	assert obj.freeList.length == 1;
@@ -1939,7 +1953,6 @@ test "a string frees at rc zero and its slot is reused" {
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "abc");
 	rcIncref(arr, obj, s);
-	rcIncref(arr, obj, s);
 	rcDecref(arr, obj, s);
 	assert heapStringLive(arr) == 1;
 	rcDecref(arr, obj, s);
@@ -1977,8 +1990,6 @@ test "destroying a container releases its strings" {
 	const holder = heapAllocArray(arr);
 	const s = heapAllocString(arr, "kept");
 	heapArrayPush(arr, holder, s);
-	rcIncref(arr, obj, s);
-	rcIncref(arr, obj, raiserArray(holder));
 	assert heapStringLive(arr) == 1;
 	rcDecref(arr, obj, raiserArray(holder));
 	assert heapStringLive(arr) == 0;
@@ -2046,9 +2057,7 @@ test "a box shares through its handle and frees its held value when its last hol
 	const obj = createStructHeap();
 	const text = heapAllocString(arr, "inside");
 	const handle = heapAllocBox(arr, text);
-	rcIncref(arr, obj, text);
 	const box: RaiserValue = { kind: RaiserValueKind.Box, intVal: handle, floatVal: 0.0 };
-	rcIncref(arr, obj, box);
 	rcIncref(arr, obj, box);
 	assert heapBoxLive(arr) == 1 && heapStringLive(arr) == 1;
 	rcDecref(arr, obj, box);

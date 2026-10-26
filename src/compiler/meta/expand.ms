@@ -2041,7 +2041,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		arrayHeap: vm.arrayHeap,
 		objectHeap: vm.objectHeap,
 		lastError: vm.error,
-		gcMode: vm.gcMode,
+		comptime: vm.comptime,
 		orphanFailures: [],
 	};
 

@@ -41,10 +41,8 @@ function laidChildrenOf(plan: RaiserCopyPlan, cls: RaiserClassType): int32[] {
 	return children;
 }
 
-// A copy that is a fresh cell already holds the count its allocation gave it when that count is 1 (a placed module);
-// an alias of the original, and every copy under counting by the VM, takes one more.
 function holdCopied(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, original: RaiserValue, copied: RaiserValue): void {
-	if (arrays.allocRc > 0 && copied.intVal != original.intVal) return;
+	if (copied.intVal != original.intVal) return;
 	rcIncref(arrays, objects, copied);
 }
 
@@ -144,9 +142,6 @@ test "typed copy releases owned children and retained shared references" {
 	const source = raiserObject(heapAllocObject(objects));
 	heapObjectSetField(objects, source.intVal, "items", items);
 	heapObjectSetField(objects, source.intVal, "shared", shared);
-	rcIncref(arrays, objects, items);
-	rcIncref(arrays, objects, shared);
-	rcIncref(arrays, objects, source);
 	const preserve: RaiserCopyPlan = {
 		kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [],
 	};
@@ -160,7 +155,6 @@ test "typed copy releases owned children and retained shared references" {
 		discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [],
 	};
 	const copied = copyTypedValue(arrays, objects, source, [preserve, sequence, plan], 2);
-	rcIncref(arrays, objects, copied);
 	assert heapObjectGetField(objects, copied.intVal, "items").intVal != items.intVal;
 	assert heapObjectGetField(objects, copied.intVal, "shared").intVal == shared.intVal;
 	assert objects.objects[handleIndex(shared.intVal)].rc == 2;
@@ -195,7 +189,6 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	const innerClass: RaiserClassType = createClassType("Inner", -1, [], ["n"], [RaiserRegClass.Word]);
 	layOutObject(objects.objects[handleIndex(inner.intVal)], innerClass);
 	objects.objects[handleIndex(inner.intVal)].slots[0] = 7;
-	rcIncref(arrays, objects, inner);
 	const source = raiserObject(heapAllocObject(objects));
 	const outerClass: RaiserClassType = createClassType("Outer", -1, [], ["w", "f", "b", "next", "any"], [RaiserRegClass.Word, RaiserRegClass.Float, RaiserRegClass.Bool, RaiserRegClass.Ref, RaiserRegClass.Dyn]);
 	layOutObject(objects.objects[handleIndex(source.intVal)], outerClass);
@@ -206,14 +199,12 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	fieldStoreAt(objects.objects[at], 2, raiserBool(true));
 	fieldStoreAt(objects.objects[at], 3, inner);
 	fieldStoreAt(objects.objects[at], 4, box);
-	rcIncref(arrays, objects, source);
 	const preserve: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const innerPlan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["n"], children: [0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const outerPlan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["any", "next", "w"], children: [0, 1, 0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const plans = [preserve, innerPlan, outerPlan];
 	for (let round = 0; round < 2; round += 1) {
 		const copied = copyTypedValue(arrays, objects, source, plans, 2);
-		rcIncref(arrays, objects, copied);
 		assert copied.intVal != source.intVal;
 		assert heapObjectGetField(objects, copied.intVal, "w").intVal == 41;
 		assert heapObjectGetField(objects, copied.intVal, "f").floatVal == 2.5;

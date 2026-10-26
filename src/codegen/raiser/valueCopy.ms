@@ -11,7 +11,7 @@ import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isUncountedElement, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
-import { raiserPlaced, RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
@@ -87,10 +87,6 @@ export function emitValueCopy(
 	return destination;
 }
 
-export function emitStoreCopy(s: RaiserCompState, source: int32, valueType: Readonly<Type | null>): int32 {
-	return raiserPlaced() ? source : emitValueCopy(s, source, valueType);
-}
-
 export function needsValueAssign(s: RaiserCompState, valueType: Type | null): boolean {
 	const index = copyPlan(s, valueType);
 	if (index < 0) return false;
@@ -110,8 +106,7 @@ function valueShape(t: Type | null): Type | null {
 export function emitValueAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): int32 {
 	const t = valueShape(valueType);
 	if (t == null) return source;
-	if (!needsValueAssign(s, t)) return emitStoreCopy(s, source, t);
-	const index = copyPlan(s, t);
+	if (!needsValueAssign(s, t)) return source;
 	const result = allocRef(s);
 	const toEnd: int32[] = [];
 	const sourceNil = allocBool(s);
@@ -123,8 +118,7 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	const destinationNil = allocBool(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, destinationNil, destination, RaiserValueKind.Nil as number));
 	const destinationHeld = emitBranchIfFalsy(s, destinationNil);
-	if (raiserPlaced()) emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
-	else emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
+	emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
 	toEnd.push(emitJumpPlaceholder(s));
 	patchJumpTo(s, destinationHeld, codeLen(s));
 	if (t.kind == TypeKind.Struct) {
@@ -244,7 +238,6 @@ function isValueStruct(t: Type | null): boolean {
 }
 
 export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: string[], kinds: RaiserRegClass[]): int32 {
-	if (!raiserPlaced()) return layoutOperand(s, fields, kinds);
 	const body = t != null && t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
 	const destroyOp = t != null && body != null && (body.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
 	if (fields.length == 0 && destroyOp == null) return 0;
@@ -359,7 +352,7 @@ export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolea
 		const body = peelToStructOrUnion(t);
 		if (body != null && body.kind == TypeKind.Struct) return false;
 	}
-	if (raiserPlaced() && (isUnionCell(t) || t.kind == TypeKind.SizedArray)) return false;
+	if (isUnionCell(t) || t.kind == TypeKind.SizedArray) return false;
 	return !needsValueAssign(s, t);
 }
 
@@ -394,7 +387,7 @@ const cyclicTypes = createNameSet();
 const acyclicTypes = createNameSet();
 
 export function isCyclicType(t: Type | null): boolean {
-	return raiserPlaced() && canFormAcycle(t, cyclicTypes, acyclicTypes);
+	return canFormAcycle(t, cyclicTypes, acyclicTypes);
 }
 
 export function slotCyclicOf(t: Type | null): boolean[] {
@@ -425,7 +418,7 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 
 // An array holds its elements in the register class of their type.
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType), raiserPlaced() && isUncountedElement(elementType)));
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType), isUncountedElement(elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

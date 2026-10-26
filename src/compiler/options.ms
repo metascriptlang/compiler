@@ -547,6 +547,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 	if (opts.target == Target.Raiser && (opts.command == "build" || opts.command == "test")) {
 		return Result.err(`msc ${opts.command} has no Raiser output; --target=raiser runs a program: msc run --target=raiser ${opts.inputFile}`);
 	}
+	if (opts.target == Target.Raiser && opts.gcMode != "drc") {
+		return Result.err(`--mm=${opts.gcMode} has no Raiser memory model; --target=raiser runs drc only`);
+	}
 	return Result.ok(null);
 }
 
