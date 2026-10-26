@@ -40,9 +40,7 @@ function collectVarDecls(node: Node | null, out: Node[]): void {
 }
 
 function convertVarsInStmts(stmts: Node[], loc: SourceLocation): void {
-	for (let i = 0; i < stmts.length; i += 1) {
-		convertVarInNode(stmts, i, loc);
-	}
+	for (let i = 0; i < stmts.length; i += 1) convertVarInNode(stmts, i, loc);
 }
 
 function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void {
@@ -83,12 +81,7 @@ function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void
 		},
 		NodeKind.SwitchStmt => {
 			const d = stmt.data as SwitchStmtData;
-			let si = 0;
-			while (si < d.switchCases.length) {
-				const sc = d.switchCases[si].data as SwitchCaseData;
-				convertVarsInStmts(sc.caseStmts, loc);
-				si += 1;
-			}
+			for (const switchCase of d.switchCases) convertVarsInStmts((switchCase.data as SwitchCaseData).caseStmts, loc);
 		},
 		_ => {},
 	};
@@ -121,17 +114,14 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 	const hoisted: Symbol[] = [];
 	for (const decl of decls) {
 		const sym = varSymOf(decl);
-		if (hoisted.indexOf(sym) >= 0) continue;
+		if (hoisted.includes(sym)) continue;
 		hoisted.push(sym);
 		const letDecl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Let, loc);
 		letDecl.resolvedSym = sym;
 		letDecl.nodeType = decl.nodeType;
 		newStmts.push(letDecl);
 	}
-	for (let oi = 0; oi < bd.statements.length; oi += 1) {
-		newStmts.push(bd.statements[oi]);
-	}
-	body.data = { statements: newStmts };
+	body.data = { statements: [...newStmts, ...bd.statements] };
 }
 
 // ===== Top-Down Walk =====
@@ -140,11 +130,7 @@ function walkVarHoist(node: Node): void {
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
-			let i = 0;
-			while (i < d.programStmts.length) {
-				walkVarHoist(d.programStmts[i]);
-				i += 1;
-			}
+			for (const stmt of d.programStmts) walkVarHoist(stmt);
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
@@ -173,11 +159,7 @@ function walkVarHoist(node: Node): void {
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			let i = 0;
-			while (i < d.classBody.length) {
-				walkVarHoist(d.classBody[i]);
-				i += 1;
-			}
+			for (const member of d.classBody) walkVarHoist(member);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -189,11 +171,7 @@ function walkVarHoist(node: Node): void {
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			let i = 0;
-			while (i < d.statements.length) {
-				walkVarHoist(d.statements[i]);
-				i += 1;
-			}
+			for (const stmt of d.statements) walkVarHoist(stmt);
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
