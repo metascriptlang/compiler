@@ -19,6 +19,12 @@ export function byteAt(this s: string, idx: int32): int32 {
 	return b[idx] as int32;
 }
 
+@exportName("msStringByteAt")
+function byteAtOrNone(s: string, idx: int64): int64 {
+	const b = s.asBytes();
+	return idx < 0 || idx >= b.length ? -1 : b[idx] as int64;
+}
+
 extern function byteSliceKernel(s: string, start: int32, end: int32): string from "msStringByteSlice";
 
 export function byteSlice(this s: string, start: int32, end: int32): string {

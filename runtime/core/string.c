@@ -326,10 +326,6 @@ bool msStringEquals(msString a, msString b) {
 
 /* ---- Byte-level access (for lexer, hashing, protocol parsing) ---- */
 
-int64_t msStringByteAt(msString s, int64_t idx) {
-	if (idx < 0 || idx >= s.len || s.p == NULL) return -1;
-	return (int64_t)(unsigned char)s.p->data[idx];
-}
 
 /* ===== Transformation ===== */
 
