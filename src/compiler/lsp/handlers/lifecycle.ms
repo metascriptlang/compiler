@@ -622,6 +622,34 @@ test "hover on an inherited field read through a member access shows its declari
 	assert jsxQuery(db, 1, 46, false).indexOf("Unique id of the element.") >= 0;
 }
 
+// line 5: `function f(p: P): number { return p.x; }` — x at 36
+const ALIAS_BODY = "import { view } from \"./uiPlain\";\ntype P = {\n\t/** The x coordinate. */\n\tx: number;\n};\nfunction f(p: P): number { return p.x; }";
+
+test "hover on a field declared in a type alias's object body shows its doc" {
+	const r = jsxQuery(jsxDb(ALIAS_BODY), 5, 36, false);
+	assert r.indexOf("The x coordinate.") >= 0;
+	assert r.indexOf("P.x") >= 0;
+}
+
+test "definition on a field declared in a type alias's object body jumps to the field" {
+	assert jsxQuery(jsxDb(ALIAS_BODY), 5, 36, true).indexOf("\"line\":3") >= 0;
+}
+
+test "a field of an alias body declared in another module shows its doc and jumps there" {
+	// line 1: `function f(p: Point): number { return p.y; }` — y at 40; html.ms declares it on line 14
+	const db = jsxDb("import { Point } from \"./html\";\nfunction f(p: Point): number { return p.y; }");
+	assert jsxQuery(db, 1, 40, false).indexOf("The y coordinate.") >= 0;
+	const r = jsxQuery(db, 1, 40, true);
+	assert r.indexOf("html.ms") >= 0;
+	assert r.indexOf("\"line\":14") >= 0;
+}
+
+test "hover on a function component's JSX attribute typed by an alias body shows its doc" {
+	// line 6: `const v: number = <Card title="x"/>;` — title at 24
+	const main = "import { view } from \"./uiPlain\";\ntype CardProps = {\n\t/** The heading the card shows. */\n\ttitle: string;\n};\nfunction Card(props: CardProps): number { return 0; }\nconst v: number = <Card title=\"x\"/>;";
+	assert jsxQuery(jsxDb(main), 6, 24, false).indexOf("The heading the card shows.") >= 0;
+}
+
 function jsxComplete(main: string, line: int32, character: int32): string {
 	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
 	return handleCompletion("72", params, jsxDb(main), testCache());

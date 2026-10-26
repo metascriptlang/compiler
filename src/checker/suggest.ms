@@ -12,9 +12,9 @@ import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filt
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
-import { JSXElementData, JSXAttributeData } from "../ast/node";
+import { JSXElementData, JSXAttributeData, TypeObjectData } from "../ast/node";
 import { peelToStructOrUnion } from "./types";
-import { declaringSymOf, fieldDeclarer } from "./visibility";
+import { declaringSymOf, fieldDeclarer, aliasObjectBody } from "./visibility";
 
 // ===== Data Types =====
 
@@ -134,7 +134,7 @@ export function sgFieldDeclLine(program: Node, container: SourceLocation, field:
 function walkForContainer(node: Node, at: SourceLocation, found: (n: Node) => void): void {
 	if (node == null) return;
 	const isContainer = node.kind == NodeKind.InterfaceDecl || node.kind == NodeKind.StructDecl
-		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl;
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl || node.kind == NodeKind.TypeAliasDecl;
 	if (isContainer && node.location.line == at.line && node.location.column == at.column) {
 		found(node);
 		return;
@@ -143,6 +143,12 @@ function walkForContainer(node: Node, at: SourceLocation, found: (n: Node) => vo
 }
 
 function fieldLineIn(decl: Node, field: string): int32 {
+	if (decl.kind == NodeKind.TypeAliasDecl) {
+		const body = aliasObjectBody(decl);
+		if (body == null) return FIELD_NOT_DECLARED_HERE;
+		const at = (body.data as TypeObjectData).typExprFieldNames.indexOf(field);
+		return at >= 0 && body.paramLocations != null && at < body.paramLocations.length ? body.paramLocations[at].line : FIELD_NOT_DECLARED_HERE;
+	}
 	if (decl.kind == NodeKind.InterfaceDecl || decl.kind == NodeKind.StructDecl) {
 		const d = decl.data as InterfaceDeclData;
 		for (let i = 0; i < d.interfaceFields.length; i += 1) {

@@ -9,7 +9,7 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { TokenKind, isIdentLikeKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
@@ -367,6 +367,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	advance(state); // consume {
 
 	const fieldNames: string[] = [];
+	const fieldLocations: SourceLocation[] = [];
 	const optionalFields: string[] = [];
 	const fieldTypes: Node[] = [];
 	let indexKey: Node = null as unknown as Node;
@@ -421,6 +422,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
 			const fieldName = current(state).value;
 			fieldNames.push(fieldName);
+			fieldLocations.push(makeLoc(current(state).line, current(state).column));
 			advance(state); // consume field name
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 				optionalFields.push(fieldName);
@@ -448,7 +450,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	// only sourced from `class` declarations (see bridge.ms collectFieldDecorators).
 	const emptyDecorators: Node[][] = [];
 	for (let i = 0; i < fieldNames.length; i = i + 1) emptyDecorators.push([]);
-	return createNode(NodeKind.TypeObject, {
+	const objectNode = createNode(NodeKind.TypeObject, {
 		typExprFieldNames: fieldNames,
 		typExprFieldTypes: fieldTypes,
 		typExprIndexKey: indexKey,
@@ -457,6 +459,8 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		typExprTypeName: "",
 		typExprOptionalFields: optionalFields,
 	}, braceToken);
+	objectNode.paramLocations = fieldLocations;
+	return objectNode;
 }
 
 // Tier 3: skip a type atom WITHOUT consuming the trailing '?' (needed for conditional types
