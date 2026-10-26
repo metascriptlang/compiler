@@ -1110,8 +1110,8 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 		return;
 	}
 	if (!isNullableShape([tested.nodeType])) {
-		endOptionalRoot(root);
 		checkExprKind(ctx, node, expectedType);
+		endOptionalRoot(root);
 		return;
 	}
 	const loc = node.location;
