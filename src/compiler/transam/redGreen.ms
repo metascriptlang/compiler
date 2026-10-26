@@ -64,10 +64,7 @@ function markGreen(
 	entry.state = TaQueryState.Yellow;
 
 	// Check each dependency
-	let i = 0;
-	while (i < entry.dependencies.length) {
-		const dep = entry.dependencies[i];
-
+	for (const dep of entry.dependencies) {
 		if (dep.depKey.queryKind == TaQueryKind.FileText) {
 			// Input query: check if file content hash changed
 			const currentHash = getFileHash(fileInput, dep.depKey.fileId);
@@ -75,7 +72,6 @@ function markGreen(
 				entry.state = TaQueryState.Red;
 				return false;
 			}
-			i = i + 1;
 			continue;
 		}
 
@@ -89,7 +85,6 @@ function markGreen(
 					entry.state = TaQueryState.Red;
 					return false;
 				}
-				i = i + 1;
 				continue;
 			}
 		}
@@ -116,8 +111,6 @@ function markGreen(
 				// Output hash matches — comment/whitespace-only change, stay green
 			}
 		}
-
-		i = i + 1;
 	}
 
 	// All deps verified
@@ -143,9 +136,8 @@ export function executeQueryWith(
 	// Store or update cache entry
 	let entry = cacheGet(cache, key);
 	if (entry == null) {
-		const newEntry = createCacheEntry(key);
-		cachePut(cache, newEntry);
-		entry = cacheGet(cache, key);
+		entry = createCacheEntry(key);
+		cachePut(cache, entry);
 	}
 	const kind = key.queryKind as int32;
 	while (cache.recomputed.length <= kind) cache.recomputed.push(0);
