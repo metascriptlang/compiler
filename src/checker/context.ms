@@ -206,7 +206,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 		if (isExportedBy(ctx, sym)) pushExport(ctx, modulePath, exports, covered, sym);
 	}
 	if (ctx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			const extSym = ext.sym;
 			if (extSym != null && isExportedBy(ctx, extSym)) pushExport(ctx, modulePath, exports, covered, extSym);
 		}
@@ -235,21 +235,39 @@ export class ExtensionMethod {
 }
 
 export class ExtensionRegistry {
-	methods: ExtensionMethod[];
-	// methods[] chained by methodName in registration order (-1 ends a chain);
-	// registerExtension and truncateExtensions keep it in step with methods[].
+	// A registry reads through `base` (its first `baseCount` own entries, then its own
+	// base) before its own entries, the way a module reads an import's interface.
+	own: ExtensionMethod[];
+	// own[] chained by methodName in registration order (-1 ends a chain);
+	// registerExtension and truncateExtensions keep it in step with own[].
 	byNameHead: HashMap<string, int32>;
 	byNameTail: HashMap<string, int32>;
 	byNameNext: int32[];
 	byNamePrev: int32[];
+	base: ExtensionRegistry | null;
+	baseCount: int32;
+	sealed: boolean;
+	truncations: int32;
+	exportLayer: ExtensionRegistry | null;
+	sourceSeen: int32;
+	sourceTruncations: int32;
 }
 
 export function createExtensionRegistry(): ExtensionRegistry {
 	return {
-		methods: [],
+		own: [],
 		byNameHead: new HashMap<string, int32>(), byNameTail: new HashMap<string, int32>(),
 		byNameNext: [], byNamePrev: [],
+		base: null, baseCount: 0, sealed: false, truncations: 0,
+		exportLayer: null, sourceSeen: 0, sourceTruncations: 0,
 	};
+}
+
+export function createLayeredExtensionRegistry(base: ExtensionRegistry): ExtensionRegistry {
+	const r = createExtensionRegistry();
+	r.base = base;
+	r.baseCount = base.own.length;
+	return r;
 }
 
 export function createExtMethod(methodName: string, sourcePath: string, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
@@ -274,34 +292,39 @@ export function defaultCheckedAtDeclaration(def: Node): boolean {
 	return _defaultsCheckedAtDeclaration.has(def);
 }
 
-export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Both dedup rules need an equal methodName, so only that name's chain is scanned.
-	// The second rule: the same logical extension may register through several import /
-	// re-export paths producing distinct Symbol instances for one definition (same name,
-	// modulePath, kind and location); without it `obj.asNumber()` reports "Ambiguous
-	// overloaded extension method" though only one definition exists.
-	const msym = method.sym;
-	if (msym != null) {
-		let ci = registry.byNameHead.get(method.methodName) ?? -1;
-		while (ci >= 0) {
-			const other = registry.methods[ci];
-			const osym = other.sym;
-			if (osym != null) {
-				if (osym == msym) return;
-				if (msym.modulePath != ""
-						&& osym.name == msym.name
-						&& osym.modulePath == msym.modulePath
-						&& other.isStatic == method.isStatic
-						&& osym.location.line == msym.location.line
-						&& osym.location.column == msym.location.column) {
-					return;
-				}
+// Both dedup rules need an equal methodName, so only that name's chains are scanned.
+// The second rule: the same logical extension may register through several import /
+// re-export paths producing distinct Symbol instances for one definition (same name,
+// modulePath, kind and location); without it `obj.asNumber()` reports "Ambiguous
+// overloaded extension method" though only one definition exists.
+function holdsSameExtension(registry: ExtensionRegistry, limit: int32, method: ExtensionMethod, msym: Symbol): boolean {
+	const base = registry.base;
+	if (base != null && holdsSameExtension(base, registry.baseCount, method, msym)) return true;
+	let ci = registry.byNameHead.get(method.methodName) ?? -1;
+	while (ci >= 0 && ci < limit) {
+		const other = registry.own[ci];
+		const osym = other.sym;
+		if (osym != null) {
+			if (osym == msym) return true;
+			if (msym.modulePath != ""
+					&& osym.name == msym.name
+					&& osym.modulePath == msym.modulePath
+					&& other.isStatic == method.isStatic
+					&& osym.location.line == msym.location.line
+					&& osym.location.column == msym.location.column) {
+				return true;
 			}
-			ci = registry.byNameNext[ci];
 		}
+		ci = registry.byNameNext[ci];
 	}
-	const idx = registry.methods.length;
-	registry.methods.push(method);
+	return false;
+}
+
+function appendExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
+	const msym = method.sym;
+	if (msym != null && holdsSameExtension(registry, registry.own.length, method, msym)) return;
+	const idx = registry.own.length;
+	registry.own.push(method);
 	const tail = registry.byNameTail.get(method.methodName) ?? -1;
 	registry.byNameNext.push(-1);
 	registry.byNamePrev.push(tail);
@@ -313,12 +336,19 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	registry.byNameTail.set(method.methodName, idx);
 }
 
-// Drop every extension registered after the first `count` (instantiation
+export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
+	if (registry.sealed) throw new Error(`internal: extension '${method.methodName}' registered into a shared export layer`);
+	appendExtension(registry, method);
+}
+
+// Drop every own extension registered after the first `count` (instantiation
 // scratch). Entries leave from the end, so each is the tail of its name chain.
 export function truncateExtensions(registry: ExtensionRegistry, count: int32): void {
-	let i = registry.methods.length - 1;
+	if (registry.sealed) throw new Error("internal: truncating a shared export layer");
+	if (count < registry.own.length) registry.truncations += 1;
+	let i = registry.own.length - 1;
 	while (i >= count) {
-		const name = registry.methods[i].methodName;
+		const name = registry.own[i].methodName;
 		const prev = registry.byNamePrev[i];
 		if (prev >= 0) {
 			registry.byNameNext[prev] = -1;
@@ -329,27 +359,105 @@ export function truncateExtensions(registry: ExtensionRegistry, count: int32): v
 		}
 		i -= 1;
 	}
-	registry.methods.shrink(count);
+	registry.own.shrink(count);
 	registry.byNameNext.length = count;
 	registry.byNamePrev.length = count;
 }
 
+export function ownExtensionCount(registry: ExtensionRegistry): int32 {
+	return registry.own.length;
+}
+
+function collectExtensions(registry: ExtensionRegistry, limit: int32, out: ExtensionMethod[]): void {
+	const base = registry.base;
+	if (base != null) collectExtensions(base, registry.baseCount, out);
+	for (let i = 0; i < limit; i += 1) out.push(registry.own[i]);
+}
+
+// Every extension the registry sees, its layers first, in registration order.
+export function extensionsOf(registry: ExtensionRegistry): ExtensionMethod[] {
+	const out: ExtensionMethod[] = [];
+	collectExtensions(registry, registry.own.length, out);
+	return out;
+}
+
+// The extensions of `registry` that `reader` does not already see through a layer they share.
+export function extensionsUnsharedWith(registry: ExtensionRegistry, reader: ExtensionRegistry): ExtensionMethod[] {
+	if (registry.base == null || registry.base != reader.base || registry.baseCount > reader.baseCount) return extensionsOf(registry);
+	const out: ExtensionMethod[] = [];
+	for (const m of registry.own) out.push(m);
+	return out;
+}
+
+let _exportLayerBuilds: int32 = 0;
+export function exportLayerBuildCount(): int32 { return _exportLayerBuilds; }
+
+// The exported extensions of a prelude-like `source` as importers see them (scope depth 0),
+// built once and extended as the source grows; importers read it through
+// createLayeredExtensionRegistry instead of copying it. A source truncated or a base grown
+// since the layer was built gets a new layer, so a registry made from the old one keeps
+// exactly what it saw.
+export function exportedExtensionLayer(source: ExtensionRegistry, base: ExtensionRegistry | null): ExtensionRegistry {
+	if (source.base != null) throw new Error("internal: an export layer is built over a registry that reads through another");
+	const baseCount = base != null ? base.own.length : 0;
+	let layer = source.exportLayer;
+	if (layer == null || layer.base != base || layer.baseCount != baseCount || layer.sourceTruncations != source.truncations) {
+		_exportLayerBuilds += 1;
+		layer = createExtensionRegistry();
+		layer.base = base;
+		layer.baseCount = baseCount;
+		layer.sourceTruncations = source.truncations;
+		layer.sealed = true;
+		source.exportLayer = layer;
+	}
+	while (layer.sourceSeen < source.own.length) {
+		const ext = source.own[layer.sourceSeen];
+		if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+			appendExtension(layer, reexportExt(ext, ext.methodName, ext.sourcePath, ext.sym!, 0));
+		}
+		layer.sourceSeen += 1;
+	}
+	return layer;
+}
+
+function hasVisibleName(registry: ExtensionRegistry, limit: int32, methodName: string): boolean {
+	const head = registry.byNameHead.get(methodName) ?? -1;
+	if (head >= 0 && head < limit) return true;
+	const base = registry.base;
+	return base != null && hasVisibleName(base, registry.baseCount, methodName);
+}
+
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
-	return registry.byNameHead.has(methodName);
+	return hasVisibleName(registry, registry.own.length, methodName);
 }
 
 // findExtensionBySym — match by symbol identity (not name).
 // Class method symbols have mangled names (GPUInstance_release) but their extension
 // registry entries use original names (release). Symbol identity bridges the mismatch.
 export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol, name: string = ""): ExtensionMethod {
-	let first: ExtensionMethod | null = null;
-	for (const m of registry.methods) {
-		if (m.sym == null || m.sym != sym) continue;
-		if (name == "" || m.methodName == name) return m;
-		if (first == null) first = m;
+	if (name != "") {
+		const named = scanBySym(registry, registry.own.length, sym, name);
+		if (named != null) return named;
 	}
-	return first as unknown as ExtensionMethod;
+	return scanBySym(registry, registry.own.length, sym, "") as unknown as ExtensionMethod;
+}
+
+export function extensionOfSym(registry: ExtensionRegistry, sym: Symbol): ExtensionMethod | null {
+	return scanBySym(registry, registry.own.length, sym, "");
+}
+
+function scanBySym(registry: ExtensionRegistry, limit: int32, sym: Symbol, name: string): ExtensionMethod | null {
+	const base = registry.base;
+	if (base != null) {
+		const inBase = scanBySym(base, registry.baseCount, sym, name);
+		if (inBase != null) return inBase;
+	}
+	for (let i = 0; i < limit; i += 1) {
+		const m = registry.own[i];
+		if (m.sym == sym && (name == "" || m.methodName == name)) return m;
+	}
+	return null;
 }
 
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
@@ -359,17 +467,19 @@ let _faeCount: float64 = 0;
 export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount]; }
 export function findAllExtensionsByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	_faeCount = _faeCount + 1;
-	const r = findAllExtensionsByNameInner(registry, methodName);
-	return r;
-}
-function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
+	collectByName(registry, registry.own.length, methodName, results);
+	return results;
+}
+
+function collectByName(registry: ExtensionRegistry, limit: int32, methodName: string, results: ExtensionMethod[]): void {
+	const base = registry.base;
+	if (base != null) collectByName(base, registry.baseCount, methodName, results);
 	let i = registry.byNameHead.get(methodName) ?? -1;
-	while (i >= 0) {
-		results.push(registry.methods[i]);
+	while (i >= 0 && i < limit) {
+		results.push(registry.own[i]);
 		i = registry.byNameNext[i];
 	}
-	return results;
 }
 
 // An alias is transparent in type identity, so a receiver written through one
@@ -1898,7 +2008,7 @@ test "error collection" {
 
 test "create empty" {
 	const r = createExtensionRegistry();
-	assert r.methods.length == 0;
+	assert extensionsOf(r).length == 0;
 }
 
 test "register and find" {
@@ -1955,7 +2065,7 @@ test "registerExtension dedups by symbol, then by definition site, within one na
 	registerExtension(r, extAt("other", 3, 1, false));
 	registerExtension(r, first);
 	registerExtension(r, extAt("m", 3, 1, false));
-	assert r.methods.length == 2;
+	assert extensionsOf(r).length == 2;
 	registerExtension(r, extAt("m", 4, 1, false));
 	registerExtension(r, extAt("m", 3, 1, true));
 	registerExtension(r, extAt("m", 4, 1, false));

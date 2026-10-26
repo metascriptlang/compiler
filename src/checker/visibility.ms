@@ -1,6 +1,6 @@
 import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern } from "./context";
+import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern, extensionOfSym } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
@@ -241,12 +241,10 @@ function structFieldVisible(ctx: CheckerContext, owner: Symbol): boolean {
 export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | null {
 	const decl = unwrapDecl(method.declNode);
 	if (decl == null || decl.kind != NodeKind.MethodDecl || ctx.extensionRegistry == null) return null;
-	for (const ext of ctx.extensionRegistry.methods) {
-		if (ext.sym != method) continue;
-		const owner = ext.isStatic ? method.staticOwner : extReceiverSym(ext);
-		return owner != null && isClassLike(owner) ? owner : null;
-	}
-	return null;
+	const ext = extensionOfSym(ctx.extensionRegistry!, method);
+	if (ext == null) return null;
+	const owner = ext.isStatic ? method.staticOwner : extReceiverSym(ext);
+	return owner != null && isClassLike(owner) ? owner : null;
 }
 
 export function refusePrivateField(ctx: CheckerContext, typeSym: Symbol | null, field: string, line: int32, column: int32): boolean {

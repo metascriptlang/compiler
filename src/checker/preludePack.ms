@@ -23,7 +23,7 @@
 
 import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
-import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords } from "./context";
+import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords, extensionsOf } from "./context";
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
@@ -634,7 +634,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	// and every extension call fails to match on load. Same for converter
 	// payload types.
 	if (ctx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			enqSym(ext.sym, false);
 		}
 	}
@@ -779,7 +779,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	}
 
 	if (ctx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}`);
 		}
 	}
@@ -1792,9 +1792,10 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert loaded.includeDirectives == ctx.includeDirectives;
 		assert loaded.compilerFlags == ctx.compilerFlags;
 		assert loaded.compileDirectives == ctx.compileDirectives;
-		assert loaded.extensionRegistry.methods.length == 1;
-		assert loaded.extensionRegistry.methods[0].methodName == "pkExt";
-		assert loaded.extensionRegistry.methods[0].sym == got;
+		const loadedExts = extensionsOf(loaded.extensionRegistry);
+		assert loadedExts.length == 1;
+		assert loadedExts[0].methodName == "pkExt";
+		assert loadedExts[0].sym == got;
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);

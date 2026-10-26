@@ -9,7 +9,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, Dec
 import { forEachChild } from "../ast/visitor";
 import { getMinArity, typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
 import { ScopeKind, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findModuleExports, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord, sgSortRecords } from "./context";
+import { CheckerContext, findModuleExports, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord, sgSortRecords, extensionsOf } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
@@ -531,7 +531,7 @@ function sgFormatStructFields(t: Type | null): string {
 function sgBuildExtensionNameSet(ctx: CheckerContext): HashSet<string> {
 	const names: HashSet<string> = new HashSet<string>();
 	if (ctx.extensionRegistry != null) {
-		for (const m of ctx.extensionRegistry.methods) {
+		for (const m of extensionsOf(ctx.extensionRegistry)) {
 			names.add(m.methodName);
 		}
 	}
@@ -1983,8 +1983,9 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, nullableRec
 	if (ctx.extensionRegistry != null) {
 		// Collect unique method names first, then filter by receiver type
 		const seenMethods: string[] = [];
-		for (let j = 0; j < ctx.extensionRegistry.methods.length; j = j + 1) {
-			const ext = ctx.extensionRegistry.methods[j];
+		const exts = extensionsOf(ctx.extensionRegistry);
+		for (let j = 0; j < exts.length; j = j + 1) {
+			const ext = exts[j];
 			const ps = sgPrefixMatch(prefix, ext.methodName);
 			if (ps == 0) continue;
 			// Deduplicate: skip if we already added this method name
