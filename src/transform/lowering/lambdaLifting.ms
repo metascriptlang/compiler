@@ -26,7 +26,7 @@ import {
 	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym,
 } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { initializerHoldsClosure } from "../../ast/visitor";
+import { initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeReturn, makeBlock, makeVarDecl, makeFnDecl, makeObjectLiteral,
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
@@ -180,6 +180,58 @@ function routineClosure(liftedSym: Symbol, env: Node, ref: Node): Node {
 	pair.flags = pair.flags.incl(NodeFlag.Closure);
 	pair.nodeType = ref.nodeType;
 	return pair;
+}
+
+function isLocalClassScope(n: Node): boolean {
+	return n.kind == NodeKind.ClassDecl || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl;
+}
+
+function refsRoutineInLocalClass(stmts: Node[], from: number, routine: Symbol): boolean {
+	for (let k = from; k < stmts.length; k += 1) {
+		const hit = anyDescendant(stmts[k], (c: Node): Visit => {
+			if (!isLocalClassScope(c)) return Visit.Descend;
+			return refsAnySym(c, [routine]) ? Visit.Hit : Visit.Skip;
+		});
+		if (hit) return true;
+	}
+	return false;
+}
+
+function frameEnvRoutine(state: LiftState, stmt: Node): RoutineInfo | null {
+	if (!state.sharedEnvActive || stmt.kind != NodeKind.VariableDecl || !isRoutineSym(state, stmt.resolvedSym)) return null;
+	const info = routineInfoOf(state, stmt.resolvedSym);
+	if (info == null || info.envStructType == null || info.envStructType != state.sharedEnvStructType) return null;
+	if (loopEnvOf(state, info.sym) != null) return null;
+	const init = (stmt.data as VariableDeclData).initializer;
+	if (init == null || init.kind != NodeKind.ObjectLiteral || !init.flags.has(NodeFlag.Closure)) return null;
+	const pair = init.data as ObjectLiteralData;
+	const env = pair.properties[1];
+	if (env.kind != NodeKind.Identifier || env.resolvedSym != state.sharedEnvVarSym) return null;
+	if (pair.properties[0].resolvedSym != info.liftedSym) {
+		throw new Error(`internal: the closure of '${info.sym.name}' names another routine than its lift recorded`);
+	}
+	return info;
+}
+
+function rewriteFrameRoutineUses(node: Node, routine: Symbol, closureOf: (ref: Node) => Node): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.Identifier) {
+		return node.resolvedSym == routine ? closureOf(node) : node;
+	}
+	if (isFuncBoundary(node) || isLocalClassScope(node)) return node;
+	mapChildren(node, (child: Node): Node => rewriteFrameRoutineUses(child, routine, closureOf));
+	return node;
+}
+
+function buildRoutineClosuresAtUse(state: LiftState, stmts: Node[], si: number): boolean {
+	const info = frameEnvRoutine(state, stmts[si]);
+	if (info == null || refsRoutineInLocalClass(stmts, si + 1, info.sym)) return false;
+	const envVarSym = state.sharedEnvVarSym!;
+	const envType = state.sharedEnvStructType;
+	for (let k = si + 1; k < stmts.length; k += 1) {
+		stmts[k] = rewriteFrameRoutineUses(stmts[k], info.sym, (ref: Node): Node => routineClosure(info.liftedSym, envVarRef(envVarSym, envType, ref.location), ref));
+	}
+	return true;
 }
 
 // Shared logic for lifting arrow functions and function expressions
@@ -449,6 +501,10 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 		// Check if liftClosure queued new env rewrites
 		if (state.pendingEnvRewrites.length > pendingBefore) {
 			drainPendingRewrites(state, pendingBefore, result);
+		}
+		if (buildRoutineClosuresAtUse(state, stmts, si)) {
+			si += 1;
+			continue;
 		}
 		if (stmts[si].kind == NodeKind.VariableDecl) {
 			const vd = stmts[si].data as VariableDeclData;
