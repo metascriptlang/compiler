@@ -1,15 +1,11 @@
-// nim-guard: a Cursor<T> result that enters an owning slot is copied
-//
-// INVARIANT (injectdestructors.nim p() sinkArg arm: a cursor source is never
-//   moved, `not (n.kind == nkSym and isCursor(n))`, so it reaches passCopyToSink):
-//   a call whose result is Cursor<T> produces a borrow, and an owning binding,
-//   field, element or return that takes it takes its own reference (NIM-REF AN-9).
+// INVARIANT (AN-9): a cursor source is borrowed, never moved. An owning binding,
+//   field, element or return that takes it takes its own reference.
 //
 // WHAT IT CATCHES: processCall treating every call result as owned, so an owning
 //   slot that takes a cursor result releases a reference nobody gave it
 //   (DOUBLE-DESTROY of CoNode) once the cursor routine stops increfing its return.
 //
-// RED MEANS: the cursor result drifted from Nim. Run /trace-nim on processCall and
+// RED MEANS: the cursor result drifted from the reference. Run /trace-ref on processCall and
 //   passCopyToSink in inject.ms.
 // GUARD-BALANCE CoNode
 // GUARD-BALANCE CoClosurePayload
