@@ -241,6 +241,16 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 	return noRcInfo();
 }
 
+// A Raiser union whose members are all value structs is the member's cell, with no tag beside it; the cell
+// is released and copied through the analyzer's cell rows.
+export function raiserFlatCellUnion(t: Type): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	for (const child of t.typeChildren) {
+		if (child.kind != TypeKind.Struct) return false;
+	}
+	return true;
+}
+
 // A Raiser union whose members are all class refs stays the member's handle, with no tag beside it.
 export function raiserRefUnion(t: Type): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
