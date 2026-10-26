@@ -1463,7 +1463,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					registerConverter(ctx, primarySym, 1, nameLoc.line, nameLoc.column);
 				}
 				// Propagate -iquote for header search path
-				if (primarySym.headerPath != "" && primarySym.modulePath != "") {
+				if (primarySym.headerPath != "" && primarySym.modulePath != "" && !isBuiltinStubHeader(primarySym.modulePath)) {
 					const searchDir = getModuleDir(primarySym.modulePath);
 					if (searchDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + searchDir));
 				}
