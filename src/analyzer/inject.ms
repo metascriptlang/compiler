@@ -989,12 +989,8 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	registerVar(dctx, rcInfo, false, tmpSym);
 	markUninitialized(dctx, tmpSym);
 	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
-	pushScope(dctx, false, false);
-	const thenProcessed = processBranchAssign(tmpName, tmpSym, resultType!, cd.ternaryConsequent, dctx, loc);
-	popScope(dctx);
-	pushScope(dctx, false, false);
-	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType!, cd.ternaryAlternate, dctx, loc);
-	popScope(dctx);
+	const thenProcessed = processBranchAssign(tmpSym, resultType!, cd.ternaryConsequent, dctx, loc);
+	const elseProcessed = processBranchAssign(tmpSym, resultType!, cd.ternaryAlternate, dctx, loc);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
 	// $cond is single-use, consumed by the enclosing expression in SinkArg/Consumed mode.
 	// Move it out through destructiveMoveVar: blit to $move + wasMoved($cond) as pre-stmts,
@@ -1013,7 +1009,7 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // Mid-statement lowering: branch reads land in preStmts and run BEFORE any later
 // move's zero — safe as-is, must NOT be retro-hoisted (a rewrite is use-before-assign).
 // The enclosing statement's stmtBorrowReads must survive the nested clear: save/restore.
-function processBranchAssign(tmpName: string, tmpSym: Symbol, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
+function processBranchAssign(tmpSym: Symbol, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
 	let stmt = makeExprStmt(branchExpr, loc);
 	if (branchExpr.nodeType == null || branchExpr.nodeType.kind != TypeKind.Never) {
 		const lhs = makeIdentResolved(tmpSym, loc);
@@ -1022,9 +1018,18 @@ function processBranchAssign(tmpName: string, tmpSym: Symbol, resultType: Type, 
 	}
 	const savedReads = dctx.stmtBorrowReads;
 	dctx.stmtBorrowReads = [];
-	const processed = processStmtList([stmt], dctx, loc);
+	const processed = processBranchScoped(stmt, dctx, loc);
 	dctx.stmtBorrowReads = savedReads;
 	return processed;
+}
+
+// A branch is its own scope: the temporaries its value built are destroyed at its end, on the
+// path that ran (reference: processScope over each branch of handleNestedTempl, injectdestructors.nim:802-818).
+function processBranchScoped(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
+	pushScope(dctx, false, false);
+	const processed = processStmtList([stmt], dctx, loc);
+	const scope = popScope(dctx);
+	return assembleScope(processed, generateCleanup(scope, loc), scope, loc);
 }
 
 function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -1509,9 +1514,9 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 					: makeExprStmt(makeAssign(elseLhs, cd.ternaryAlternate, loc), loc);
 				const savedReads = dctx.stmtBorrowReads;
 				dctx.stmtBorrowReads = [];
-				const thenProcessed = processStmtList([thenAssign], dctx, loc);
+				const thenProcessed = processBranchScoped(thenAssign, dctx, loc);
 				dctx.stmtBorrowReads = [];
-				const elseProcessed = processStmtList([elseAssign], dctx, loc);
+				const elseProcessed = processBranchScoped(elseAssign, dctx, loc);
 				dctx.stmtBorrowReads = savedReads;
 				return makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc);
 			}
