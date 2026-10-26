@@ -459,7 +459,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const counterName = "$i_" + ctr.toString();
-	const counterSym = liftTempSym(lctx, counterName, numberType());
+	const counterSym = liftTempSym(lctx, counterName, lctx.raiserBackend ? int32Type() : numberType());
 	const counterDecl = makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc);
 	counterDecl.resolvedSym = counterSym;
 
@@ -507,7 +507,7 @@ function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: N
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const counterName = "$i_" + ctr.toString();
-	const counterSym = liftTempSym(lctx, counterName, numberType());
+	const counterSym = liftTempSym(lctx, counterName, lctx.raiserBackend ? int32Type() : numberType());
 	const counterDecl = makeVarDecl(counterName, makeMember(clonePath(xf, loc), "length", loc), DeclKind.Let, loc);
 	counterDecl.resolvedSym = counterSym;
 	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), ">", makeMember(clonePath(yf, loc), "length", loc), loc);
