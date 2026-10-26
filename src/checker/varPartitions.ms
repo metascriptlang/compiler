@@ -659,21 +659,6 @@ function takesAddress(node: Node | null): boolean {
 	return n != null && isAddressTaking(n);
 }
 
-function collectPointers(node: Node | null, out: Symbol[]): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
-		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && takesAddress((node.data as VariableDeclData).initializer)) {
-		out.push(node.resolvedSym);
-	}
-	if (node.kind == NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		if (d.operator == "=" && d.left.kind == NodeKind.Identifier && d.left.resolvedSym != null && takesAddress(d.right)) {
-			out.push(d.left.resolvedSym);
-		}
-	}
-	forEachChild(node, (child: Node): void => { collectPointers(child, out); });
-}
 
 function carriesPointer(t: Type | null, depth: int32 = 0): boolean {
 	if (t == null || depth > 8) return true;
@@ -1779,25 +1764,30 @@ function callWriteIn(u: BorrowUnit, l: Lend, root: int32): Node | null {
 	return null;
 }
 
-function spawnsIn(node: Node | null): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
-		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return false;
-	if (isSpawnCall(node)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => { if (!found && spawnsIn(child)) found = true; });
-	return found;
+interface UnitScan {
+	pointers: Symbol[];
+	view: boolean;
+	spawn: boolean;
+	clear: TypeVisitSet;
 }
 
-function declaresView(node: Node | null, clear: TypeVisitSet): boolean {
-	if (node == null) return false;
+function scanUnitBody(node: Node | null, scan: UnitScan): void {
+	if (node == null) return;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
-		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return false;
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && holdsViewSkippingClear(node.resolvedSym.symbolType, clear)) return true;
-	if (node.kind == NodeKind.ForOfStmt && node.resolvedSym != null && holdsViewSkippingClear(node.resolvedSym.symbolType, clear)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => { if (!found && declaresView(child, clear)) found = true; });
-	return found;
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
+	if (!scan.spawn && isSpawnCall(node)) scan.spawn = true;
+	if (!scan.view && node.resolvedSym != null && (node.kind == NodeKind.VariableDecl || node.kind == NodeKind.ForOfStmt)
+		&& holdsViewSkippingClear(node.resolvedSym.symbolType, scan.clear)) scan.view = true;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && takesAddress((node.data as VariableDeclData).initializer)) {
+		scan.pointers.push(node.resolvedSym);
+	}
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "=" && d.left.kind == NodeKind.Identifier && d.left.resolvedSym != null && takesAddress(d.right)) {
+			scan.pointers.push(d.left.resolvedSym);
+		}
+	}
+	forEachChild(node, (child: Node): void => { scanUnitBody(child, scan); });
 }
 
 function encloses(outer: int32[], inner: int32[]): boolean {
@@ -1868,7 +1858,8 @@ function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
 		innerParams(routine, own);
 	}
 	const pointers: Symbol[] = [];
-	for (const b of bodies) { collectPointers(b, pointers); }
+	const scan: UnitScan = { pointers, view: true, spawn: true, clear: new TypeVisitSet() };
+	for (const b of bodies) { scanUnitBody(b, scan); }
 	const u = newUnit(parent.ctx, pointers, true);
 	for (let pass = 1; pass <= 2; pass += 1) {
 		for (const b of bodies) { runPass(u, b, pass); }
@@ -1893,12 +1884,12 @@ function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
 
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	if (body == null) return;
-	if (spawnsIn(body)) refuseBorrowingHandleEscapes(ctx, body);
+	const scan: UnitScan = { pointers: [], view: false, spawn: false, clear: new TypeVisitSet() };
+	scanUnitBody(body, scan);
+	if (scan.spawn) refuseBorrowingHandleEscapes(ctx, body);
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
-	const pointers: Symbol[] = [];
-	collectPointers(body, pointers);
-	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet()) && !spawnsIn(body)) return;
-	const u = newUnit(ctx, pointers, false);
+	if (scan.pointers.length == 0 && !scan.view && !scan.spawn) return;
+	const u = newUnit(ctx, scan.pointers, false);
 	runPass(u, body, 1);
 	for (const l of u.lends) {
 		if (l.end < 0) l.end = u.p.abstractTime;
