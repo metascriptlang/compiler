@@ -17,6 +17,15 @@ function leafCapture(leaves: Readonly<Leaf[]>): int32 {
 	for (const x of leaves) if (ok(x)) n += 1;
 	return n;
 }
+function nullableCapture(items: Readonly<Item[]>): int32 {
+	const best = items[0].next;
+	const get = (): int32 => best != null ? best.v : 0;
+	return get();
+}
+function nullableLeafCapture(best: Readonly<Leaf> | null): int32 {
+	const get = (): int32 => best != null ? best.v : 0;
+	return get();
+}
 function nested(items: Readonly<Item[]>): int32 {
 	const best = items[3];
 	const outer = (x: Readonly<Item>): boolean => {
@@ -32,6 +41,17 @@ function returned(items: Item[]): () => int32 {
 	const get = (): int32 => kept.v;
 	return get;
 }
+function returnedNullable(items: Item[]): () => boolean {
+	const kept = items[0].next;
+	const get = (): boolean => kept != null;
+	return get;
+}
+const nullableSink: (() => boolean)[] = [];
+function pushedNullable(items: Item[]): int32 {
+	const held = items[0].next;
+	nullableSink.push((): boolean => held != null);
+	return nullableSink.length;
+}
 const sink: (() => int32)[] = [];
 function pushed(items: Item[]): int32 {
 	const held = items[0];
@@ -46,13 +66,14 @@ async function round(items: Item[], leaves: Leaf[]): Promise<int32> {
 		for (const x of items) if (ok(x)) n += 1;
 		return n;
 	});
-	const b = spawn((): int32 => viaCapture(items) + leafCapture(leaves) + nested(items));
+	const b = spawn((): int32 => viaCapture(items) + leafCapture(leaves) + nested(items) + nullableCapture(items) + nullableLeafCapture(leaves[0]) + nullableLeafCapture(null));
 	return await a + await b;
 }
 const items: Item[] = [];
 const leaves: Leaf[] = [];
 for (let i = 0; i < 8; i++) { const it = new Item(); it.v = i as int32; items.push(it); const l = new Leaf(); l.v = i as int32; leaves.push(l); }
-console.log(\`\${await round(items, leaves)} \${returned(items)()} \${pushed(items)}\`);
+items[0].next = items[3];
+console.log(\`\${await round(items, leaves)} \${returned(items)()} \${pushed(items)} \${returnedNullable(items)()} \${pushedNullable(items)}\`);
 `;
 
 function envInfos(prefix: string): string[] {
@@ -81,6 +102,18 @@ test "E2E C: a closure called in its routine holds a view of a lent acyclic elem
 	assert countsNothing(infos[0]);
 }
 
+test "E2E C: a called closure holds an inferred nullable cyclic ref without a count" {
+	const infos = envInfos("nullableCapture_");
+	assert infos.length == 1;
+	assert countsNothing(infos[0]), infos[0];
+}
+
+test "E2E C: a called closure holds a nullable acyclic ref parameter without a count" {
+	const infos = envInfos("nullableLeafCapture_");
+	assert infos.length == 1;
+	assert countsNothing(infos[0]), infos[0];
+}
+
 test "E2E C: a closure nested in a called closure reaches its parameter and the outer view without a count" {
 	const infos = envInfos("nested_");
 	assert infos.length == 2;
@@ -103,6 +136,20 @@ test "E2E C: a returned closure still counts the element it captured" {
 	assert infos.length == 1;
 	assert !countsNothing(infos[0]);
 	assert infos[0].contains("RttiDestroy");
+}
+
+test "E2E C: a returned closure still counts the nullable ref it captured" {
+	const infos = envInfos("returnedNullable_");
+	assert infos.length == 1;
+	assert !countsNothing(infos[0]);
+	assert infos[0].contains("RttiDestroy"), infos[0];
+}
+
+test "E2E C: a stored closure still counts the nullable ref it captured" {
+	const infos = envInfos("pushedNullable_");
+	assert infos.length == 1;
+	assert !countsNothing(infos[0]);
+	assert infos[0].contains("RttiDestroy"), infos[0];
 }
 
 test "E2E C: a closure pushed into a module array still counts the element it captured" {

@@ -1,4 +1,4 @@
-// @stdout: total=3000
+// @stdout: total=4200
 // note: three tasks share one lent array; each builds a closure over a view of it (in the task, in a called routine, and one closure level deeper) and calls it in place. The closure env holds the view uncounted, so no task touches a count of the shared graph.
 class Item { v: int32 = 0; next: Item | null = null; }
 
@@ -16,8 +16,20 @@ function viaCapture(items: Readonly<Item[]>): int32 {
 	return n;
 }
 
+function nullableCapture(item: Readonly<Item>): int32 {
+	const best = item.next;
+	const get = (): int32 => best != null ? best.v : 0;
+	return get();
+}
+
+function nullableParam(best: Readonly<Item> | null): int32 {
+	const get = (): int32 => best != null ? best.v : 0;
+	return get();
+}
+
 async function round(): Promise<int32> {
 	const items = make();
+	items[0].next = items[3];
 	const a = spawn((): int32 => {
 		const best = items[3];
 		const ok = (x: Readonly<Item>): boolean => x.v >= best.v;
@@ -25,7 +37,8 @@ async function round(): Promise<int32> {
 		for (const x of items) if (ok(x)) n += 1;
 		return n;
 	});
-	const b = spawn((): int32 => viaCapture(items));
+	const b = spawn((): int32 => viaCapture(items) + nullableCapture(items[0]) +
+		nullableCapture(items[1]) + nullableParam(items[0].next) + nullableParam(null));
 	const c = spawn((): int32 => {
 		const best = items[3];
 		const outer = (x: Readonly<Item>): boolean => {
