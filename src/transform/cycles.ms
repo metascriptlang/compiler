@@ -119,10 +119,10 @@ function holdsNoCell(t: Type): boolean {
 			| TypeKind.Float32 | TypeKind.Float64 | TypeKind.BigInt | TypeKind.CString
 			| TypeKind.Enum | TypeKind.StringLiteral | TypeKind.EnumLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
 			| TypeKind.Set | TypeKind.None | TypeKind.NonPrimitive
-			| TypeKind.Ptr | TypeKind.Borrow | TypeKind.Cursor => false,
+			| TypeKind.Ptr | TypeKind.Borrow | TypeKind.Cursor | TypeKind.Module | TypeKind.GenericParam | TypeKind.Inferred => false,
 		TypeKind.Ref | TypeKind.Varargs | TypeKind.Span | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Result => false,
-		TypeKind.Pending | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Error | TypeKind.Conditional
-			| TypeKind.Inferred | TypeKind.IndexedAccess | TypeKind.KeyOf | TypeKind.Mapped | TypeKind.Module
+		TypeKind.Pending | TypeKind.TypeReference | TypeKind.Error | TypeKind.Conditional
+			| TypeKind.IndexedAccess | TypeKind.KeyOf | TypeKind.Mapped
 			| TypeKind.Struct | TypeKind.Union | TypeKind.Tuple | TypeKind.GenericInstance | TypeKind.Array | TypeKind.SizedArray
 			| TypeKind.Function | TypeKind.Unknown | TypeKind.Distinct | TypeKind.Alias => {
 			throw new Error(`internal: cycle classification reached ${t.kind.toString()} (type "${t.typeName}")`);
@@ -425,7 +425,7 @@ function refusal(t: Type): string {
 }
 
 test "a kind that holds no cell is acyclic by name" {
-	for (const kind of [TypeKind.Number, TypeKind.Uint8, TypeKind.Enum, TypeKind.Cursor, TypeKind.Ptr]) {
+	for (const kind of [TypeKind.Number, TypeKind.Uint8, TypeKind.Enum, TypeKind.Cursor, TypeKind.Ptr, TypeKind.Module, TypeKind.GenericParam, TypeKind.Inferred]) {
 		assert refusal(createPrimitive(kind)) == "", kind.toString();
 		assert !canFormAcycle(createPrimitive(kind), createNameSet(), createNameSet());
 	}
@@ -434,7 +434,7 @@ test "a kind that holds no cell is acyclic by name" {
 
 test "an unresolved kind reaching cycle classification is an internal error naming it" {
 	assert refusal(createTypeRef("T")).contains("internal: cycle classification reached TypeReference");
-	assert refusal(createPrimitive(TypeKind.GenericParam)).contains("GenericParam");
+	assert refusal(createPrimitive(TypeKind.Conditional)).contains("Conditional");
 	assert refusal(createPrimitive(TypeKind.Error)).contains("Error");
 	assert refusal(createArray(createPrimitive(TypeKind.Pending))).contains("Pending");
 }
