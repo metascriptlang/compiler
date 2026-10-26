@@ -2571,7 +2571,8 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 		return;
 	}
 	const me = d.callee.data as MemberExprData;
-	const recvType = me.object.nodeType;
+	const recvActor = unwrapRef(recvFormal).sym;
+	const recvType = recvActor != null && recvActor.symbolKind == SymbolKind.Actor && me.object.nodeType != null ? withoutReadonlyView(me.object.nodeType) : me.object.nodeType;
 	if (recvType == null) {
 		relateCallArgs(ctx, node, calleeType, argTypes, isActorMethodCall);
 		return;
@@ -5804,7 +5805,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// actual object type (e.g. Promise<string>) to discover T → string,
 				// then substitute in parameter/return types.
 				const receiverType = methType.typeChildren[0];
-				if ((isReadonlyView(objType) || isReadonlyView(resolvedObjType)) && !isReadonlyView(receiverType)) {
+				if ((isReadonlyView(objType) || isReadonlyView(resolvedObjType)) && !isReadonlyView(receiverType)
+						&& (fieldOwnerSym == null || fieldOwnerSym.symbolKind != SymbolKind.Actor)) {
 					refuseReadonlyViewCall(ctx, node, d.property, objType, typeNameOf(receiverType));
 				}
 				const eb = createUnifyBindings();
