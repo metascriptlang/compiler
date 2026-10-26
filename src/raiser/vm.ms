@@ -1273,7 +1273,7 @@ function dropSafePoints(vm: RaiserVM, base: number): void {
 	while (vm.safePoints.length > base) {
 		const top = vm.safePoints[vm.safePoints.length - 1];
 		vm.safePoints.length = vm.safePoints.length - 1;
-		if (top < 0) freePendingBox(vm, (-1 - top) as int64);
+		if (top < 0) discardPendingBox(vm, (-1 - top) as int64);
 	}
 }
 
@@ -1284,6 +1284,16 @@ function freePendingBox(vm: RaiserVM, abs: int64): void {
 	releaseShell(vm, h);
 }
 
+// A pending value dropped without being re-raised or returned loses the one count it held in flight.
+function discardPendingBox(vm: RaiserVM, abs: int64): void {
+	const inner = innerHandle(vm, vm.regs.refs[abs]);
+	freePendingBox(vm, abs);
+	if (inner == 0) return;
+	if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, inner)) vmDestroyTop(vm, inner);
+	else vmRegisterCyclic(vm, inner);
+	vmDrain(vm);
+}
+
 // Landing on a Catch ends the unwind; landing on a Finally runs it and comes
 // back through FinallyEnd. Out of frames means nobody handled it.
 function unwindStep(vm: RaiserVM): void {
@@ -1291,7 +1301,7 @@ function unwindStep(vm: RaiserVM): void {
 		while (vm.safePoints.length > safePointBase(vm)) {
 			const sp = popSafePoint(vm);
 			if (sp < 0) {
-				freePendingBox(vm, (-1 - sp) as int64);
+				discardPendingBox(vm, (-1 - sp) as int64);
 				continue;
 			}
 			const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -1370,10 +1380,19 @@ function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
 }
 
 function vmHandleThrow(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const thrown = getDyn(vm, ia);
+	let thrown = getDyn(vm, ia);
 	if (vmTakeMacroError(vm, thrown)) return;
+	if (thrown.kind == RaiserValueKind.String) thrown = wrapThrownString(vm, thrown);
 	setException(vm, thrown);
 	unwindStep(vm);
+}
+
+function wrapThrownString(vm: RaiserVM, text: RaiserValue): RaiserValue {
+	const handle = heapAllocObject(vm.objectHeap);
+	vm.objectHeap.objects[handleIndex(handle)].rc = 0;
+	heapObjectSetField(vm.objectHeap, handle, "message", text);
+	vmIncref(vm, text);
+	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0 };
 }
 
 // Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
