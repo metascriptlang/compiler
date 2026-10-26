@@ -7,7 +7,7 @@ import { RaiserCompState, emitInst, allocBlock, allocRef, emitLoadConst, emitBra
 import { getOpByKey } from "../c/types";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
-import { fieldInst, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
+import { fieldInst, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
 import {
 	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT,
 	ownershipName, ownershipRow,
@@ -138,7 +138,7 @@ function emitCopyValue(s: RaiserCompState, name: string, dest: Node, src: Node):
 
 function isCellType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
-	return isStructType(t) || (t != null && t.kind == TypeKind.Union && t.typeFlags.has(TypeFlag.ValueUnion));
+	return isStructType(t) || (t != null && t.kind == TypeKind.Union && isUnionCell(t));
 }
 
 function isCellHook(call: CallExprData, flag: SymbolFlag): boolean {
