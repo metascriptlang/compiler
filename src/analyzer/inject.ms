@@ -3065,7 +3065,7 @@ test "finally-protected var blocks move in isLastReadSafe" {
 }
 
 test "finally-protected root blocks field move in isLastReadFieldSafe" {
-	const dctx = testDrcContext("interface Obj { f: string; } const exemplar: Obj = { f: \"\" };");
+	const dctx = testDrcContext("struct Obj { f: string; } const exemplar: Obj = { f: \"\" };");
 	const exemplar = lookupSymbol(dctx.ctx.checkerCtx.table, "exemplar");
 	assert exemplar != null;
 	assert exemplar.symbolType != null;
