@@ -2,7 +2,7 @@
 // name in C, so a pointer to it matches the C prototype (`size_t *`, `char **`) that a strict
 // C compiler checks. The base keeps its checker meaning: the imported name and the base interchange.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileProjectToCWithStd } from "../helpers";
 
 const prelude = "extern type CChar: uint8 from \"char\";\nextern type CSize: uint64 from \"size_t\";\nextern struct Node;\n";
 
@@ -59,4 +59,18 @@ test "importedScalarSpelling: the address of a pointer local does not outlive it
 	const result = compileToC(prelude + "function leak(): Ptr<Ptr<CChar>> {\n\tlet p: Ptr<CChar> = null as Ptr<CChar>;\n\treturn p as Ptr<Ptr<CChar>>;\n}\nconsole.log(leak() == null);");
 	assert !result.ok;
 	assert result.error.contains("escapes its stack frame");
+}
+
+test "importedScalarSpelling: the emitted C never includes a parse-only stub header or typedefs a standard scalar" {
+	const header = "#include <stddef.h>\n#include <stdint.h>\nsize_t sz(size_t *n);\nint64_t wide(void);\n";
+	const c = compileProjectToCWithStd([
+		{ entryPath: "/proj/main.ms", entrySource: "import { sz, wide } from \"./a.h\";\nlet n: uint64 = 0;\nconsole.log(wide());\n" },
+		{ entryPath: "/proj/a.h", entrySource: header },
+	], "/proj/main.ms");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("cparse/include");
+	for (const name of ["int64_t", "uint64_t", "intmax_t", "uintptr_t", "size_t"]) {
+		assert !c.contains("typedef " + name), name;
+		assert !c.contains(" " + name + ";\ntypedef"), name;
+	}
 }

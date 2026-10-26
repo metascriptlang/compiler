@@ -35,7 +35,7 @@ import { readFile, writeFile, ensureDir, realpath, readDir, removeAll } from "st
 import { translateHeaderModule, HeaderTranslation, registerCompleteStruct, completeStructKey, registerHeaderIncludes } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, builtinIncludeDir, isBuiltinStubHeader } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
 import { hashContent } from "../utils/contentHash";
@@ -163,15 +163,10 @@ export function headerTarget(): TargetInfo {
 	return os != "" && cpu != "" ? targetFor(os, cpu) : hostTarget();
 }
 
-function builtinIncludeDir(): string {
-	const root = resolveRuntimeDir();
-	return root != "" ? root + "/src/module/cparse/include" : "src/module/cparse/include";
-}
-
 // The real header goes to the C compiler with its companion `.c`; a builtin stub only stands
 // in for a system header while cparse reads, so the C compiler never sees it.
 function headerDirectives(path: string, provider: SourceProvider): string {
-	if (path.startsWith(canonicalModulePath(builtinIncludeDir()) + "/")) return "";
+	if (isBuiltinStubHeader(path)) return "";
 	const companion = path.slice(0, path.length - 2) + ".c";
 	const compile = provideSource(provider, companion).ok ? `@compile("${companion}");\n` : "";
 	return `@include("${path}");\n${compile}`;

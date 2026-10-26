@@ -1,6 +1,7 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
+import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet } from "./symbol";
 import { constantLiteralOf } from "./constFold";
@@ -1399,6 +1400,7 @@ function stripModuleExtension(path: string): string {
 // Importing a C header includes it in the importer's C, as `@include` does, so a C declaration
 // the importer writes itself (an `extern function`) sees the header's types and prototypes.
 function includeHeader(ctx: CheckerContext, path: string): void {
+	if (isBuiltinStubHeader(path)) return;
 	if (ctx.includeDirectives.split("\n").includes(path)) return;
 	ctx.includeDirectives = ctx.includeDirectives == "" ? path : `${ctx.includeDirectives}\n${path}`;
 }

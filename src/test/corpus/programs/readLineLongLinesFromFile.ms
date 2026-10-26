@@ -1,3 +1,4 @@
+// @xfail(raiser): spawn(argv[0]) fails on the Raiser VM (a self-spawn probe prints "spawn failed" on main too); card 2026-10-24-std-io-cgetline-fails-gcc-15-incompatible-pointer-types
 // @stdout: 5000 0 600 4
 // @skip-js: the child reads a real stdin through spawn, which the JS lane does not run
 // std/io readLine takes a line longer than its stack chunk through getline (`char **`, `size_t *`).
