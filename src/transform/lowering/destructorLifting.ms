@@ -28,7 +28,7 @@ import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBas
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, custodyReaches, custodyAddsEdge } from "../cycles";
+import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, cellTraceHasEdge, custodyReaches, custodyAddsEdge } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -1638,7 +1638,8 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	hasCycles = isCyclicType(objType, lctx, visited);
 	if (traceReachesCycle(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
-		if (!hasCycles) setFlag(traceSym, SymbolFlag.Acyclic);
+		const edgeless = !hasUserDefinedHook(orig, "trace", lctx) && !cellTraceHasEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache);
+		if (!hasCycles || edgeless) setFlag(traceSym, SymbolFlag.Acyclic);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 	if (!hasUserDefinedHook(orig, "trace", lctx) && custodyAddsEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {

@@ -26,6 +26,19 @@ function cyclicFlag(c: string, name: string): string {
 	return line.contains(".isCyclic = MS_TRUE") ? "cyclic" : "acyclic";
 }
 
+function anonWithFields(c: string, fields: string): string {
+	const lines = c.split("\n");
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = lines[i];
+		if (!line.startsWith("struct msAnon_") || !line.endsWith(" {")) continue;
+		const body: string[] = [];
+		let j = i + 1;
+		while (j < lines.length && lines[j] != "};") { body.push(lines[j].trim()); j += 1; }
+		if (body.join(" ") == fields) return line.substring(7, line.length - 2);
+	}
+	return "no anonymous struct with " + fields;
+}
+
 function compiled(src: string): string {
 	const r = compileToC(src);
 	return r.ok ? r.value : "compile error: " + r.error;
@@ -74,6 +87,41 @@ console.log(t.area);
 `);
 	assert cyclicFlag(c, "Holder") == "cyclic";
 	assert cyclicFlag(c, "Tile") == "cyclic";
+}
+
+test "E2E C: a record cell whose trace reaches no cell registers no root, though a cyclic class fits its type" {
+	const c = compiled(`type Tagged = { tag: string };
+type D = Tagged | { k: number };
+class Sym { tag: string = "s"; owner: Holder | null = null; }
+class Holder { data: D = { k: 1 }; }
+const h = new Holder();
+const s = new Sym();
+s.owner = h;
+const tagd: Tagged = s;
+h.data = tagd;
+h.data = { tag: "a" };
+console.log(s.tag);
+`);
+	assert cyclicFlag(c, anonWithFields(c, "msString tag;")) == "acyclic";
+	assert cyclicFlag(c, "Holder") == "cyclic";
+	assert cyclicFlag(c, "Sym") == "cyclic";
+}
+
+test "E2E C: a record cell holding a closure stays registered behind the same open slot" {
+	const c = compiled(`type Tagged = { tag: string, cb: () => void };
+type D = Tagged | { k: number };
+class Sym { tag: string = "s"; cb: () => void = () => {}; owner: Holder | null = null; }
+class Holder { data: D = { k: 1 }; }
+const h = new Holder();
+const s = new Sym();
+s.owner = h;
+const tagd: Tagged = s;
+h.data = tagd;
+h.data = { tag: "a", cb: () => {} };
+console.log(s.tag);
+`);
+	assert cyclicFlag(c, anonWithFields(c, "msString tag; msClosure cb;")) == "cyclic";
+	assert cyclicFlag(c, "Holder") == "cyclic";
 }
 
 test "E2E C: a generic over an interface registers the cycle" {

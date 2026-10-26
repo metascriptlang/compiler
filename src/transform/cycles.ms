@@ -216,6 +216,12 @@ export function traceReachesCycle(t: Type | null, cyclicCache: NameSet, acyclicC
 	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
 }
 
+export function cellTraceHasEdge(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	if (t == null) return false;
+	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+}
+
 function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
 	if (t == null) return false;
 	if (!top && (t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null)) {
