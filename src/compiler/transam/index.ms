@@ -162,6 +162,7 @@ export class TransAmDb {
 	passModules: HashMap<string, CheckerContext>; // global import → the check its module passes were bound from
 	passesExemptFor: ModulePass[] | null;
 	exemptFrom: TaGlobalImportClosures | null;
+	handedToCheck: HashSet<int32> | null;       // null for a kept db; else the files whose parse tree their check took over
 }
 
 interface TaGlobalImport {
@@ -194,7 +195,7 @@ function dbContext(db: TransAmDb, key: int32): CheckerContext {
 	return db.contexts.get(key) ?? null as unknown as CheckerContext;
 }
 
-export function createTransAmDb(cacheCapacity: int32): TransAmDb {
+export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): TransAmDb {
 	return {
 		revision: createRevision(),
 		fileInput: createFileInputStore(),
@@ -220,6 +221,7 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		passModules: new HashMap<string, CheckerContext>(),
 		passesExemptFor: null,
 		exemptFrom: null,
+		handedToCheck: kept ? null : new HashSet<int32>(),
 	};
 }
 
@@ -499,6 +501,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
+	if (db.handedToCheck != null && db.handedToCheck.has(fileId)) throw new Error(`internal: the parse tree of ${filePath} was handed to its check`);
 	const key = createQueryKey(TaQueryKind.Parse, fileId);
 
 	// Try cache
@@ -933,14 +936,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const visitedPaths: HashSet<string> = new HashSet<string>();
 	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
-	// Clone the parse tree before type-checking. The checker mutates nodeType/resolvedSym
-	// in-place; cloning keeps dbParse's cached tree immutable so other consumers
-	// (semantic tokens, syntax queries) see a clean AST. CloneMode.Check preserves
-	// typeExpr/typeExprs (resolvePass needs them) and drops nodeType/resolvedSym
-	// so the checker re-populates them fresh.
-	// This replaces the previous double-parse (parseSourceLenient was called twice).
+	// A kept db clones the parse tree so its cached tree stays clean for other consumers
+	// (semantic tokens, syntax queries); a db that is not kept checks the tree itself.
 	const bound = boundAtRevision(db, filePath);
-	const program = bound != null ? bound.program : cloneNodeForCheck(cachedProgram);
+	const program = bound != null ? bound.program : db.handedToCheck != null ? cachedProgram : cloneNodeForCheck(cachedProgram);
 
 	// Macro-declaring deps need a FULL check first: checkProgram registers their
 	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
@@ -998,6 +997,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	const outerDb = _checkingDb;
 	_checkingDb = db;
+	if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
 	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
 	const checkerCtx = finishModuleCheck(unit);
 	for (const message of unchecked) addError(checkerCtx, message, 1, 1);
