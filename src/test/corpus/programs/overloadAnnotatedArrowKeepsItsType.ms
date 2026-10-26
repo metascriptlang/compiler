@@ -1,5 +1,4 @@
 // @stdout: annotated-arrow 8 ok 4
-// @xfail(raiser): raiser runtime error: cannot evaluate typeof at comptime: 'function' and 'number' variants share Raiser value kind 2 (inbox 2026-09-26-raiser-typeof-yields-the-value)
 // note: an arrow with every parameter and its return annotated ranks overloads by its own type, so a generic overload binds `T` from it even where the call sits in an `unknown` context such as `console.log`, and a pair that differs only in the arrow's parameter type picks by it, in either declaration order. Same output on C and JS.
 let wrong = "";
 let rows = 0;

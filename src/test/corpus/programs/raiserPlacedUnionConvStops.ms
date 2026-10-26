@@ -1,5 +1,6 @@
 // @exit: 1
 // @stdout: before row:7 base:4
+// @stdout: member 'Row | null' is not accessible for type 'Row | number | null' using 'number'
 // @xfail(danger): --danger drops the union tag test, so the read of the other member is undefined behaviour
 // note: a checked `as` out of a union the Raiser tells apart by the held value refuses the members the target does not keep, as C does by the stored tag. Covered: a nullable source with a class and a number, a nullable class family, and a variant read through the other member's field. The last line is the refusal that stops the program.
 class Row {
