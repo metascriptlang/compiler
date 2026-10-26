@@ -21,7 +21,7 @@ import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef, isAtomicRef, isLockedRef } from "../../checker/types";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
 import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 import { enumMemberLiteral } from "../../checker/constFold";
@@ -834,6 +834,22 @@ export function emitSpreadExpr(gen: JSGenerator, node: Node): void {
 export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	if (emitCollectionNew(gen, node)) return;
 	const d = node.data as NewExprData;
+	if (isAtomicRef(node.nodeType) && d.newArguments.length == 1) {
+		if (!isLockedRef(node.nodeType)) {
+			emit(gen, "(");
+			emitNode(gen, d.newArguments[0]);
+			emit(gen, ")");
+			return;
+		}
+		if (!gen.helpers.lockedRuntime) {
+			gen.helpers.lockedRuntime = true;
+			gen.staticSlots.push("class msLocked { constructor(value) { this.value = value; this.held = false; } }\n");
+		}
+		emit(gen, "new msLocked(");
+		emitNode(gen, d.newArguments[0]);
+		emit(gen, ")");
+		return;
+	}
 	const arrayType = arrayOf(node.nodeType);
 	if (arrayType != null && d.newArguments.length == 1) {
 		const zero = jsDefaultValue(arrayType.typeReturn);
