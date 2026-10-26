@@ -2894,6 +2894,11 @@ export function resolveExtern(ctx: CheckerContext, node: Node): void {
 	if (d.externType != "") {
 		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(resolved)) {
+			if (d.externKind == ExternKind.Type && isNumeric(resolved)) {
+				assignType(sym.symbolType, resolved);
+				node.nodeType = sym.symbolType;
+				return;
+			}
 			sym.symbolType = resolved;
 			if (!declaresValue(d.externKind)) resolved.sym = sym;
 			node.nodeType = resolved;

@@ -78,6 +78,7 @@ import "./callResultInPlace";
 import "./websocket";
 import "./websocketServer";
 import "./arrayElementSpelling";
+import "./importedScalarSpelling";
 import "./oneValueFieldStorage";
 import "./blockReduce";
 import "./spanParamAbi";

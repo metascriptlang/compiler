@@ -74,10 +74,12 @@ export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void 
 function genExternDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as ExternDeclData;
 
-	if (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type) {
+	const isScalar = d.externKind == ExternKind.Type && node.nodeType != null && isNumeric(node.nodeType);
+	if (!isScalar && (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type)) {
 		// Opaque type forward decl for classes/types without @include definition
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.externName} ${d.externName};`);
 	}
+	// An imported scalar names a C typedef the header defines; a forward struct of that name would clash with it.
 	// extern interface: type defined in C header via @include — no forward decl needed.
 	// Reference parity (sfImportc): importc types use the C name directly, no codegen emission.
 	// Vars/consts/enums/macros: provided by @include headers, no emission needed.

@@ -625,11 +625,11 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			key = key + "):" + typeKeyIn(roots, t.typeReturn);
 			return key;
 		},
-		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
+		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.Cursor => { return typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
+		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.GenericInstance => {
 			const seen = peelTransparentInstance(t);
 			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKeyIn(roots, seen);
@@ -684,8 +684,17 @@ export function typeKey(t: Readonly<Type | null>): string {
 
 // ===== Primitive Type Mapping =====
 
+// An imported scalar (`extern type size_t: uint64 from "size_t"`) is the C name itself, so a pointer
+// to it matches the C prototype's pointee; a plain scalar of that kind is the fixed-width spelling.
+function importedScalarName(t: Readonly<Type | null>): string {
+	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.TypeAlias || !hasFlag(t.sym, SymbolFlag.ImportC) || !isNumeric(t)) return "";
+	return t.sym.nativeName;
+}
+
 export function getSimpleTypeDesc(t: Readonly<Type>): string {
 	if (!t) return "void";
+	const imported = importedScalarName(t);
+	if (imported != "") return imported;
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "double",
 		TypeKind.Float32 => "float",
