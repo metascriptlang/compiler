@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // note: Two then callbacks on one promise both receive its value, as in TypeScript.
 
 class Box { v: int32 = 0; }

@@ -116,6 +116,23 @@ export interface RaiserFuture {
 	dependents: int64[];
 	inputs: int64[];
 	combine: int32;
+	// The callbacks of `.then` registered on this future, run as strands once it settles.
+	thens: RaiserThen[];
+}
+
+// One `.then` (msFutureThenEnv): the output future, the callbacks, and the heaps of the strand that
+// registered it, which the callback strand shares so the captures it mutates are the ones the
+// registering code reads. `arg` and `shell` are what the started strand holds until it finishes.
+export interface RaiserThen {
+	output: int64;
+	fulfilled: RaiserValue;
+	rejected: RaiserValue;
+	globals: RaiserValue[];
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
+	strand: number;
+	arg: RaiserValue;
+	shell: int64;
 }
 
 export interface RaiserFutures {
@@ -196,6 +213,7 @@ export interface RaiserSched {
 	timers: RaiserTimers;
 	nextStrandId: number;
 	modules: RaiserModuleEval;
+	thenRuns: RaiserThen[];
 }
 
 export interface RaiserVM {
@@ -329,7 +347,8 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const timerItems: RaiserTimer[] = [];
 	const timers: RaiserTimers = { items: timerItems };
-	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
+	const thenRuns: RaiserThen[] = [];
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
 }
@@ -630,7 +649,7 @@ function suspendRun(vm: RaiserVM): void {
 	const strandItems: RaiserStrand[] = [];
 	const futureItems: RaiserFuture[] = [];
 	const timerItems: RaiserTimer[] = [];
-	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod) };
+	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[] };
 	vm.safePoints = [];
 	vm.currentException = raiserNil();
 }
@@ -701,7 +720,8 @@ function newFuture(vm: RaiserVM): int64 {
 	const valueObjectHeap = createStructHeap();
 	const dependents: int64[] = [];
 	const inputs: int64[] = [];
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1, dependents, inputs, combine: -1 };
+	const thens: RaiserThen[] = [];
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1, dependents, inputs, combine: -1, thens };
 	vm.sched.futures.items.push(f);
 	return makeHandle((vm.sched.futures.items.length - 1) as int64, RaiserHeapKind.Future);
 }
@@ -732,6 +752,148 @@ function futureSettled(vm: RaiserVM, handle: int64): void {
 	const dependents = f.dependents;
 	f.dependents = [] as int64[];
 	for (const d of dependents) combineStep(vm, d, handle);
+	const thens = f.thens;
+	f.thens = [] as RaiserThen[];
+	for (const t of thens) thenFire(vm, t, handle);
+}
+
+// --- .then (runtime/promise/combinator.c msFutureThen) ---
+
+function thenWriteArg(t: RaiserThen, regs: RaiserRegFile, tag: int32, val: RaiserValue): void {
+	const cls = tag & 7;
+	const at = tag >> 3;
+	if (cls == CLS_REF) {
+		regs.refs[at] = val.kind == RaiserValueKind.Nil ? 0 : val.intVal;
+		return;
+	}
+	if (cls == CLS_DYN) {
+		if (val.kind == RaiserValueKind.Nil) {
+			regs.refs[at] = 0;
+			return;
+		}
+		const box = heapAllocBox(t.arrayHeap, val);
+		t.arrayHeap.boxes.items[handleIndex(box)].rc = 0;
+		rcIncrefHandle(t.arrayHeap, t.objectHeap, box);
+		t.shell = box;
+		regs.refs[at] = box;
+		return;
+	}
+	if (cls == CLS_FLOAT) {
+		regs.words[at] = msFloat64Bits(val.kind == RaiserValueKind.Float ? val.floatVal : val.intVal as number);
+		return;
+	}
+	regs.words[at] = val.kind == RaiserValueKind.Float ? val.floatVal as int64 : val.intVal;
+}
+
+// A callback strand: the pair's function on the heaps of the registering strand, with the settled value
+// as its first argument when the function takes one before its environment, and the output future as its result.
+function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: RaiserValue): void {
+	if (closure.kind != RaiserValueKind.Object) {
+		vmError(vm, "internal: a .then callback is not a closure pair");
+		return;
+	}
+	const fnField = heapObjectGetField(t.objectHeap, closure.intVal, "fn");
+	const envField = heapObjectGetField(t.objectHeap, closure.intVal, "env");
+	if (fnField.kind != RaiserValueKind.Int || fnField.intVal < 0 || fnField.intVal >= vm.mod.functions.length) {
+		vmError(vm, `.then: function index out of bounds: ${fnField.intVal}`);
+		return;
+	}
+	const funcIdx = fnField.intVal as number;
+	const callee = getModuleFunc(vm.mod, funcIdx);
+	const regs: RaiserRegFile = { words: [], refs: [] };
+	ensureWords(regs, callee.wordRegs);
+	ensureRefs(regs, callee.refRegs);
+	const hasEnv = envField.kind == RaiserValueKind.Object;
+	const params = callee.arity - (hasEnv ? 1 : 0);
+	if (params > 1) {
+		vmError(vm, `internal: .then callback ${callee.name} takes ${params} parameters`);
+		return;
+	}
+	if (params == 1) thenWriteArg(t, regs, callee.regOps[0], arg);
+	if (hasEnv) {
+		if (callee.arity == 0 || (callee.regOps[params] & 7) != CLS_REF) {
+			vmError(vm, `internal: .then callback ${callee.name} does not take the closure environment in a ref register`);
+			return;
+		}
+		regs.refs[callee.regOps[params] >> 3] = envField.intVal;
+	}
+	const frames: RaiserCallFrame[] = [];
+	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
+	const id = vm.sched.nextStrandId;
+	vm.sched.nextStrandId = id + 1;
+	const sp: number[] = [];
+	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil() };
+	vm.sched.strands.items.push(s);
+	t.strand = vm.sched.strands.items.length - 1;
+	t.arg = arg;
+	vm.sched.thenRuns.push(t);
+}
+
+function thenRelease(t: RaiserThen): void {
+	rcDecref(t.arrayHeap, t.objectHeap, t.arg);
+	if (t.shell != 0) {
+		const data = t.arrayHeap.boxes.items[handleIndex(t.shell)];
+		if (data.rc <= 1) data.value = raiserNil();
+		rcDecrefHandle(t.arrayHeap, t.objectHeap, t.shell);
+	}
+	rcDecref(t.arrayHeap, t.objectHeap, t.fulfilled);
+	rcDecref(t.arrayHeap, t.objectHeap, t.rejected);
+}
+
+function thenFinished(vm: RaiserVM, strand: number): boolean {
+	const runs = vm.sched.thenRuns;
+	for (let i = 0; i < runs.length; i += 1) {
+		if (runs[i].strand != strand) continue;
+		const t = runs[i];
+		for (let j = i + 1; j < runs.length; j += 1) runs[j - 1] = runs[j];
+		runs.shrink(runs.length - 1);
+		thenRelease(t);
+		return true;
+	}
+	return false;
+}
+
+function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
+	const input = vm.sched.futures.items[handleIndex(settled)];
+	if (input.failed) {
+		if (t.rejected.kind == RaiserValueKind.Nil) {
+			futureFailFrom(vm, t.output, input);
+			thenRelease(t);
+			return;
+		}
+		const error = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.error);
+		rcIncref(t.arrayHeap, t.objectHeap, error);
+		thenStart(vm, t, t.rejected, error);
+		return;
+	}
+	const value = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.value);
+	rcIncref(t.arrayHeap, t.objectHeap, value);
+	thenStart(vm, t, t.fulfilled, value);
+}
+
+function vmHandleFutureThen(vm: RaiserVM, ia: int32, ic: int32): void {
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	const argc = func.blocks[ic + 2] as int32;
+	const source = getDyn(vm, func.blocks[ic + 4] as int32);
+	const fulfilled = getDyn(vm, func.blocks[ic + 5] as int32);
+	const rejected = argc > 2 ? getDyn(vm, func.blocks[ic + 6] as int32) : raiserNil();
+	let input: int64 = source.intVal;
+	if (source.kind != RaiserValueKind.Future) {
+		input = newFuture(vm);
+		futureComplete(vm, input, source);
+	} else if (!futureHandleValid(vm, input)) {
+		vmError(vm, `future handle out of bounds: ${input}`);
+		return;
+	}
+	const output = newFuture(vm);
+	const f = vm.sched.futures.items[handleIndex(input)];
+	f.errorObserved = true;
+	rcIncref(vm.arrayHeap, vm.objectHeap, fulfilled);
+	rcIncref(vm.arrayHeap, vm.objectHeap, rejected);
+	const t: RaiserThen = { output, fulfilled, rejected, globals: vm.globals, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, strand: -1, arg: raiserNil(), shell: 0 };
+	if (f.finished) thenFire(vm, t, input);
+	else f.thens.push(t);
+	setRegConform(vm, ia, raiserFuture(output));
 }
 
 // --- Combinators: Promise.all, race and any (runtime/promise/combinator.c) ---
@@ -1048,6 +1210,7 @@ function unhandledException(vm: RaiserVM): void {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
 		futureFail(vm, s.resultFuture, msg, vm.currentException);
+		thenFinished(vm, vm.current);
 		s.status = RaiserStrandStatus.Done;
 		vm.yielded = true;
 		return;
@@ -1245,6 +1408,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	s.result = value;
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
+	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
 		when (mode != "danger") { vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand"); }
 	}
@@ -2938,7 +3102,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3336,6 +3500,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.FutureCombine => {
 			vmHandleFutureCombine(vm, ia, ib, ic);
+		},
+		RaiserOpcode.FutureThen => {
+			vmHandleFutureThen(vm, ia, ic);
 		},
 		RaiserOpcode.Try => {
 			vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));
