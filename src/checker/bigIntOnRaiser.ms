@@ -5,7 +5,8 @@ import { peelToRepr } from "./types";
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
 
-export const RAISER_NO_BIGINT_MSG: string = "bigint is not supported on the Raiser VM: it has no arbitrary-precision integer";
+export const RAISER_NO_BIGINT_MSG: string =
+	"bigint is not supported on the Raiser VM: it has no arbitrary-precision integer";
 
 function isBigInt(t: Type | null): boolean {
 	const r = peelToRepr(t);
@@ -30,8 +31,11 @@ export function carriesBigInt(t: Type | null): boolean {
 }
 
 function holdsValue(kind: SymbolKind): boolean {
-	return kind == SymbolKind.Variable || kind == SymbolKind.Function || kind == SymbolKind.Parameter
-		|| kind == SymbolKind.Property || kind == SymbolKind.Method;
+	return match (kind) {
+		SymbolKind.Variable | SymbolKind.Function | SymbolKind.Parameter
+		| SymbolKind.Property | SymbolKind.Method => true,
+		_ => false,
+	};
 }
 
 function siteType(node: Node): Type | null {
@@ -52,7 +56,9 @@ function collect(node: Node, out: Node[]): void {
 export function refuseBigIntOnRaiser(ctx: CheckerContext, program: Node): void {
 	const sites: Node[] = [];
 	collect(program, sites);
-	for (const site of sites) addError(ctx, RAISER_NO_BIGINT_MSG, site.location.line, site.location.column);
+	for (const site of sites) {
+		addError(ctx, RAISER_NO_BIGINT_MSG, site.location.line, site.location.column);
+	}
 }
 
 function refusedLines(src: string): string {
@@ -64,18 +70,18 @@ function refusedLines(src: string): string {
 	return ctx.errors.map((e: CheckerError): string => `${e.line}`).join(" ");
 }
 
-test "a bigint literal, a conversion into bigint and each bigint operand of a comparison are refused on the Raiser at its site" {
-	const lines = refusedLines("function u(v: uint64): uint64 { return v; }\n"
-		+ "const a = 5n;\n"
-		+ "const n = Number(u(18446744073709551615) as bigint);\n"
-		+ "const k = a > 2n;\n");
+test "a bigint literal, a conversion into bigint and each bigint comparison operand are refused at their site" {
+	const lines = refusedLines("function u(v: uint64): uint64 { return v; }\n" +
+		"const a = 5n;\n" +
+		"const n = Number(u(18446744073709551615) as bigint);\n" +
+		"const k = a > 2n;\n");
 	assert lines == "2 3 4 4", lines;
 }
 
 test "a bigint parameter or return is refused at its declaration even when nothing calls it" {
-	const lines = refusedLines("function take(x: bigint): int32 { return 1; }\n"
-		+ "function give(n: int32): bigint { return n as bigint; }\n"
-		+ "const f: (v: bigint) => int32 = take;\n");
+	const lines = refusedLines("function take(x: bigint): int32 { return 1; }\n" +
+		"function give(n: int32): bigint { return n as bigint; }\n" +
+		"const f: (v: bigint) => int32 = take;\n");
 	assert lines == "1 2 3", lines;
 }
 
@@ -84,5 +90,9 @@ test "an expression is refused once, not once per bigint operand inside it" {
 }
 
 test "a program that holds no bigint value is not refused on the Raiser" {
-	assert refusedLines("type Big = bigint;\nconst n = sizeof(bigint);\nconst t = typeof 1 === \"bigint\";\nconst w: uint64 = 18446744073709551615;\n") == "";
+	const source = "type Big = bigint;\n" +
+		"const n = sizeof(bigint);\n" +
+		"const t = typeof 1 === \"bigint\";\n" +
+		"const w: uint64 = 18446744073709551615;\n";
+	assert refusedLines(source) == "";
 }
