@@ -34,6 +34,7 @@ import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { routineSyms } from "./lambdaLiftingDetect";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { statementCanRaise } from "../../checker/raises";
 import { stmtCountAfter } from "../testUtil";
 
@@ -270,7 +271,7 @@ function rewriteAsyncReturn(node: Node, promiseType: Type, fnReturnInner: Type |
 		const isVoidReturn = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
 		const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutSym, ctx);
 		const blockStmts: Node[] = [];
-		for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(fs);
+		for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(cloneNodeKeepSem(fs));
 		blockStmts.push(makeStateAssign(-1, loc, stateSym));
 		for (const cs of completeStmts) blockStmts.push(cs);
 		blockStmts.push(makeReturn(makeNull(loc), loc));
