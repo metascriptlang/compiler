@@ -3,6 +3,7 @@
 // each pass the imported type, so a strict C compiler (gcc 15) sees the exact prototype.
 //
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
+// @xfail(raiser): a C header import has no host bridge on the Raiser, card .inbox/compiler/2026-10-27-raiser-has-no-host-bridge-for-a-user-c-header-import
 // @stdout: 7,8,pointee|2,2|5
 // @stdout: 42,42
 // @stdout: line=6
