@@ -852,9 +852,11 @@ test "engine: a class appended to the live image after its ancestors keeps their
 	assert callWithComptimeHostPolicy(r2.vm, r2.funcIdx, noArgs, "").intVal == 19;
 	let b: RaiserClassType | null = null;
 	let c: RaiserClassType | null = null;
-	for (const obj of r2.vm.objectHeap.objects) {
-		if (obj.classType.name == "B") b = obj.classType;
-		if (obj.classType.name == "C") c = obj.classType;
+	for (const func of r2.vm.mod.functions) {
+		for (const ct of func.classTypes) {
+			if (ct.name == "B") b = ct;
+			if (ct.name == "C") c = ct;
+		}
 	}
 	assert b != null && c != null;
 	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1];
