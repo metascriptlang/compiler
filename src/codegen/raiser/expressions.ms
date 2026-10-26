@@ -1221,8 +1221,6 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 	return jumpIfValue(s, compileExpr(s, node), whenTrue);
 }
 
-function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
-	const refusedOp = refusePointerOp(s, node);
 function writesLocals(node: Node): boolean {
 	if (node.kind == NodeKind.UpdateExpr || node.kind == NodeKind.OutExpr || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.BlockStmt) return true;
 	if (node.kind == NodeKind.BinaryExpr) {
@@ -1243,6 +1241,8 @@ function keepAcross(s: RaiserCompState, reg: int32, writes: boolean): int32 {
 	return copy;
 }
 
+function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
+	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
@@ -1265,8 +1265,6 @@ function keepAcross(s: RaiserCompState, reg: int32, writes: boolean): int32 {
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
 			return emitTrapNil(s, msg);
 		}
-		const startPc = codeLen(s);
-		const firstTemp = s.nextReg;
 		if (d.left.kind == NodeKind.ArrayAccess) {
 			const ad = d.left.data as ArrayAccessData;
 			const writes = writesLocals(d.right);
@@ -1284,6 +1282,8 @@ function keepAcross(s: RaiserCompState, reg: int32, writes: boolean): int32 {
 			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
 			return srcReg;
 		}
+		const startPc = codeLen(s);
+		const firstTemp = s.nextReg;
 		const srcReg = compileExpr(s, d.right);
 		if (d.left.kind == NodeKind.Identifier) {
 			const global = resolveGlobal(s, d.left.resolvedSym);
@@ -1874,6 +1874,12 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (isArrayPush(node)) {
 		return compileArrayPushCall(s, node);
 	}
+	if (isLoweredArrayPush(d.callee)) {
+		const pushArgs = hostValues(d.arguments);
+		const arrReg = compileExpr(s, pushArgs[0]);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, compileExpr(s, pushArgs[1]), 0));
+		return arrReg;
+	}
 
 	// arr.setLength(n) — arrays only; strings fall through (their setLength
 	// is a C-backend in-place mutation with no comptime meaning).
@@ -1899,12 +1905,6 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == "SetSize" && d.arguments.length == 1) {
 		return compileSetSizeCall(s, node);
-	}
-	if (isLoweredArrayPush(d.callee)) {
-		const pushArgs = hostValues(d.arguments);
-		const arrReg = compileExpr(s, pushArgs[0]);
-		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, compileExpr(s, pushArgs[1]), 0));
-		return arrReg;
 	}
 	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
@@ -2611,6 +2611,11 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	}
 	const arrReg = compileExpr(s, d.array);
 	const idxReg = compileIndex(s, d.index);
+	if (exprIsString(s, d.array)) {
+		const text = allocRef(s);
+		emitInst(s, raiserABC(RaiserOpcode.StrCharAt, text, arrReg, idxReg));
+		return text;
+	}
 	const dest = allocFor(s, node.nodeType);
 	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
 	return dest;
@@ -2709,6 +2714,10 @@ function isArraySetLengthCall(call: Node): boolean {
 	return sym != null && ARRAY_SET_LENGTH_NATIVES.includes(sym.nativeName);
 }
 
+function isLoweredArrayPush(callee: Node): boolean {
+	return callee.kind == NodeKind.Identifier && callee.resolvedSym != null && callee.resolvedSym.nativeName == "msGenericArrayPush";
+}
+
 // A lowering that turns a value into text writes `.toString()` with no symbol; a checked call
 // carries the one it resolved to, and only the universal builtin is the text of the receiver.
 function isToStringCall(call: Node): boolean {
@@ -2728,22 +2737,18 @@ function isStrIndexReadCall(node: Node): boolean {
 
 function isInterceptedCall(s: RaiserCompState, node: Node): boolean {
 	const d = node.data as CallExprData;
-	return isArrayPush(d.callee) || isLoweredArrayPush(d.callee)
-		|| (isArraySetLengthCall(s, d.callee) && d.arguments.length == 1)
-		|| (isToStringCall(d.callee) && d.arguments.length == 0)
+	return isArrayPush(node) || isLoweredArrayPush(d.callee)
+		|| (isArraySetLengthCall(node) && d.arguments.length == 1)
+		|| (isToStringCall(node) && d.arguments.length == 0)
 		|| (isStringMethod(s, d.callee, "charAt") && d.arguments.length == 1)
 		|| (isStringMethod(s, d.callee, "slice") && d.arguments.length == 2)
 		|| isStrIndexReadCall(node);
 }
 
-function isLoweredArrayPush(callee: Node): boolean {
-	return callee.kind == NodeKind.Identifier && callee.resolvedSym != null && callee.resolvedSym.nativeName == "msGenericArrayPush";
-}
-
 export function unservedCallReason(s: RaiserCompState, node: Node): string {
 	const d = node.data as CallExprData;
 	if (isInterceptedCall(s, node)) return "";
-	if (isToStringCall(d.callee)) return "toString with an argument";
+	if (isToStringCall(node)) return "toString with an argument";
 	const sym = d.callee.resolvedSym;
 	if (sym == null || (d.callee.kind != NodeKind.Identifier && d.callee.kind != NodeKind.MemberExpr)) return "";
 	if (ownershipRow(sym) != 0) return "";
