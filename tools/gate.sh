@@ -874,6 +874,53 @@ self_host_boot() {
   done
 }
 
+test_one() {
+  local bin=$1 f=$2 part=$3; shift 3
+  printf 'gate: test job=%s %s\n' "${part##*/}" "$*" >"$part"
+  env -u NO_COLOR -u FORCE_COLOR "$bin" test --time "$f" "$@" >>"$part" 2>&1
+  echo $? >"$part.rc"
+}
+
+test_one_self_test() (
+  local d f="src/test/lang/entry with space.ms" part code got want bad=0
+  d=$(mktemp -d) || return 1
+  trap 'rm -rf "$d"' EXIT
+  cat >"$d/compiler" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$@" >"$GATE_TEST_ARGS"
+[ -z "${NO_COLOR+x}${FORCE_COLOR+x}" ] || exit 9
+[ "$2" != --time ] || printf 'compiled in 1.0ms\n'
+if [ "$GATE_TEST_RC" != 0 ]; then
+  printf ' FAIL  %s\n\n  × preserved failure\n' "$GATE_TEST_ENTRY"
+fi
+exit "$GATE_TEST_RC"
+FAKE
+  chmod +x "$d/compiler"
+  export GATE_TEST_ARGS="$d/args" GATE_TEST_ENTRY="$f" GATE_TEST_RC
+  part="$d/result"
+  for code in 0 7; do
+    GATE_TEST_RC=$code
+    NO_COLOR=1 FORCE_COLOR=1 test_one "$d/compiler" "$f" "$part" --tests-in-dir --tests-shard=1/3
+    got=$(paste -sd'|' "$d/args")
+    want="test|--time|$f|--tests-in-dir|--tests-shard=1/3"
+    [ "$got" = "$want" ] || { printf 'FAIL test timing: argv %s\n' "$got"; bad=1; }
+    [ "$(head -1 "$part")" = "gate: test job=result --tests-in-dir --tests-shard=1/3" ] \
+      && grep -q '^compiled in ' "$part" \
+      || { printf 'FAIL test timing: missing job identity or compiled timing\n'; bad=1; }
+    [ "$(<"$part.rc")" = "$code" ] || { printf 'FAIL test timing: exit %s was lost\n' "$code"; bad=1; }
+    got=$(reds_of tests "$part" "$code")
+    want=""; [ "$code" = 0 ] || want="$f > preserved failure"
+    [ "$got" = "$want" ] || { printf 'FAIL test timing: failure extraction %s\n' "$got"; bad=1; }
+    if [ "$code" = 0 ]; then
+      printf 'NORESULT %s\n  compiler cause\n' "$f" >>"$part"
+      got=$(grep -F -A1 -- "$f" "$part")
+      want=$(printf 'NORESULT %s\n  compiler cause' "$f")
+      [ "$got" = "$want" ] || { printf 'FAIL test timing: job identity hid the NORESULT cause\n'; bad=1; }
+    fi
+  done
+  return $bad
+)
+
 boot_self_test() {
   local bad=0 d cand got rc
   d=$(mktemp -d) || return 1
@@ -1928,6 +1975,7 @@ CASES
   adopt_self_test || bad=1
   adopt_cache_self_test || bad=1
   boot_self_test || bad=1
+  test_one_self_test || bad=1
   bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
   bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
@@ -2182,13 +2230,6 @@ run_solana_lane() {
 }
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
-
-test_one() {
-  local bin=$1 f=$2 part=$3; shift 3
-  env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" "$@" >"$part" 2>&1
-  echo $? >"$part.rc"
-}
-
 
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
