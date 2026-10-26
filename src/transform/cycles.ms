@@ -143,10 +143,11 @@ function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: Nam
 
 // An interface or unnamed record stands for every object type the checker accepted behind
 // it (noteHeldBeyond); a cycle can run through any of them. An implementer with generic
-// parameters, or no identity to key a walk by, has fields no walk can see, so it counts as closing one.
+// parameters, or with no key to mark a walk by, has fields no walk can see, so it counts as
+// closing one.
 function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || !hasTypeIdentity(held) || cfaAux(held, origKey, withRef, marker)) return true;
+		if (hasGenericParams(held) || typeIdentity(held) == "" || cfaAux(held, origKey, withRef, marker)) return true;
 	}
 	return false;
 }
