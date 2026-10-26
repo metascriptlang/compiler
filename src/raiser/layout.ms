@@ -1,7 +1,7 @@
 import { Type, TypeKind } from "../ast/node";
 import {
 	TargetInfo, hostTargetInfo, sizeOfType, alignOfType, offsetOfField, storesNothing, enumStorageKind, unwrapRefNullUnion, literalUnionBase,
-	createStruct, createPrimitive, isAwaitable, typeDisplayName,
+	createStruct, createPrimitive, isAwaitable, typeDisplayName, typeKey, offsetOfUnionPayload,
 } from "../checker/types";
 
 export enum MemKind { Block, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, Ptr }
@@ -24,12 +24,12 @@ export interface VmLayout {
 
 export interface VmLayouts {
 	target: TargetInfo;
-	values: HashMap<Type, VmLayout>;
-	cells: HashMap<Type, VmLayout>;
+	values: HashMap<string, VmLayout>;
+	cells: HashMap<string, VmLayout>;
 }
 
 export function createVmLayouts(): VmLayouts {
-	return { target: hostTargetInfo(), values: new HashMap<Type, VmLayout>(), cells: new HashMap<Type, VmLayout>() };
+	return { target: hostTargetInfo(), values: new HashMap<string, VmLayout>(), cells: new HashMap<string, VmLayout>() };
 }
 
 function stripped(t: Type): Type {
@@ -80,13 +80,7 @@ function tupleSlots(tg: TargetInfo, t: Type): VmSlot[] {
 function unionSlots(tg: TargetInfo, t: Type): VmSlot[] {
 	const tag = t.typeExtra != null && t.typeExtra.kind == TypeKind.Enum ? t.typeExtra : createPrimitive(TypeKind.Int32);
 	const slots: VmSlot[] = [{ name: "_tag", offset: 0, kind: memKindOf(tag) }];
-	let widest: Type | null = null;
-	for (const variant of t.typeChildren) {
-		if (variant.kind == TypeKind.Null) continue;
-		if (widest == null || alignOfType(tg, variant) > alignOfType(tg, widest)) widest = variant;
-	}
-	if (widest == null) return slots;
-	const payload = offsetOfField(tg, createStruct("", ["_tag", "payload"], [tag, widest], true), "payload");
+	const payload = offsetOfUnionPayload(tg, t);
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		if (t.typeChildren[i].kind == TypeKind.Null) continue;
 		slots.push({ name: `v${i}`, offset: payload, kind: memKindOf(t.typeChildren[i]) });
@@ -123,19 +117,21 @@ function buildLayout(tg: TargetInfo, t: Type, header: int32): VmLayout {
 }
 
 export function vmLayoutOf(layouts: VmLayouts, t: Type): VmLayout {
-	const cached = layouts.values.get(t);
+	const key = typeKey(t);
+	const cached = layouts.values.get(key);
 	if (cached != null) return cached;
 	const built = buildLayout(layouts.target, t, 0);
-	layouts.values.set(t, built);
+	layouts.values.set(key, built);
 	return built;
 }
 
 export function vmCellOf(layouts: VmLayouts, classType: Type): VmLayout {
-	const cached = layouts.cells.get(classType);
+	const key = typeKey(classType);
+	const cached = layouts.cells.get(key);
 	if (cached != null) return cached;
 	const body = stripped(classType);
 	if (body.kind != TypeKind.Ref || body.typeReturn == null) throw new Error(`internal: ${typeDisplayName(classType)} is not a class reference`);
 	const built = buildLayout(layouts.target, body.typeReturn, CELL_HEADER_SIZE);
-	layouts.cells.set(classType, built);
+	layouts.cells.set(key, built);
 	return built;
 }

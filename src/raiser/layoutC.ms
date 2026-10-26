@@ -134,3 +134,13 @@ test "a layout is built once per type and a type with no computable size is refu
 	try { vmCellOf(layouts, types[1]); } catch (e) { notClass = e.message; }
 	assert notClass.includes("not a class reference"), notClass;
 }
+
+test "two distinct Type objects of one shape share one layout entry" {
+	const layouts = createVmLayouts();
+	const first = aggregates();
+	const second = aggregates();
+	assert first[1] !== second[1] && first[3] !== second[3];
+	assert vmLayoutOf(layouts, first[1]) === vmLayoutOf(layouts, second[1]);
+	assert vmLayoutOf(layouts, first[3]) === vmLayoutOf(layouts, second[3]);
+	assert vmLayoutOf(layouts, first[1]) !== vmLayoutOf(layouts, first[3]);
+}
