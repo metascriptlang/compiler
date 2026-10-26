@@ -4473,6 +4473,7 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, params, concretes, active);
+				for (const child of copy.typeChildren) { propagateToOwner(copy, child); }
 				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
 			},
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), params, concretes, active)),
