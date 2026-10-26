@@ -81,7 +81,7 @@ const cyclic = "class N { id: int32 = 0; next: N | null = null; }\n";
 const cycle = "function run(): void {\n\tconst a = new N();\n\tconst b = new N();\n\ta.id = 1;\n\tb.id = 2;\n\ta.next = b;\n\tb.next = a;\n}\nrun();\nconsole.log(\"end\");\n";
 
 runsOrc("onTrace takes the tracer and runs under the cycle collector", "trace", one(
-	cyclic + "function onTrace(this x: N, env: Ptr<void>): void { console.log(\"trace \" + x.id.toString()); }\n" + cycle));
+	"import { collectCycles } from \"std/runtime\";\n" + cyclic + "function onTrace(this x: N, env: Ptr<void>): void { console.log(\"trace \" + x.id.toString()); }\n" + cycle + "collectCycles();\n"));
 
 refuse("onTrace without the tracer", "signature for 'onTrace' is wrong: it takes the receiver and the tracer ('env: Ptr<void>'), 1 parameter declared", one(
 	cyclic + "function onTrace(this x: N): void { console.log(\"trace\"); }\n" + cycle));
