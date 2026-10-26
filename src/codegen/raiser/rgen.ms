@@ -3,7 +3,7 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, SymbolKind, DeclKind, VariableDeclData, Type, TypeKind,
+	Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, Symbol, SymbolFlag, SymbolKind, DeclKind, VariableDeclData, Type, TypeKind,
 	ExportDeclData, DecoratedDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
@@ -516,16 +516,31 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 
 	// --- Pass 3: Compile init functions for each module ---
 	const initIndices: number[] = [];
+	const deinitIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
 		const pd = modules[mi].program.data as ProgramData;
 		setRaiserModulePath(modules[mi].modulePath);
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
 		s.globals = globals;
+		const deinit = createCompState();
+		deinit.funcMap = globalFuncMap;
+		deinit.globals = globals;
 
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			compileStmt(s, pd.programStmts[i]);
-			resetTemps(s);
+			const atExit = pd.programStmts[i].flags.has(NodeFlag.GlobalDestroys);
+			compileStmt(atExit ? deinit : s, pd.programStmts[i]);
+			resetTemps(atExit ? deinit : s);
+		}
+		if (deinit.code.length > 0) {
+			const deinitNil = allocDyn(deinit);
+			emitLoadConst(deinit, deinitNil, raiserNil());
+			emitRet(deinit, deinitNil);
+			const deinitFunc = createRaiserFunction("__deinit_" + mi, deinit.code, deinit.constants, 0, 0, deinit.regClasses.length, deinit.regClasses);
+			deinitFunc.copyPlans = deinit.copyPlans;
+			deinitFunc.classTypes = deinit.classTypes;
+			functions.push(deinitFunc);
+			deinitIndices.push(functions.length - 1);
 		}
 
 		// Post-process: convert Halt → Ret (init functions return to caller)
@@ -559,6 +574,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	}
 	if (initIndices.length == 0) {
 		emitLoadConst(entryS, allocRef(entryS), raiserNil());
+	}
+	for (let di = deinitIndices.length - 1; di >= 0; di -= 1) {
+		emitInst(entryS, raiserABC(RaiserOpcode.Call, allocDyn(entryS), deinitIndices[di], 0));
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
 	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses);
