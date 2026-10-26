@@ -66,6 +66,7 @@ import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
+import { forEachChild } from "../../ast/visitor";
 import { errorCount as checkErrorCount, addError } from "../../checker/context";
 import { modulePasses, modulePassExempt, setModulePassExempt, ModulePass } from "../../checker/prelude";
 
@@ -2239,4 +2240,63 @@ test "a macro first built inside another macro's run keeps the symbol its body b
 		const messages = checkMessages(db, "/h/use.ms");
 		assert messages == "", `check ${k}: ${messages}`;
 	}
+}
+
+function typedNodeCount(node: Node): int32 {
+	const counts: int32[] = [node.nodeType != null ? 1 : 0];
+	forEachChild(node, (child: Node): void => { counts[0] += typedNodeCount(child); });
+	return counts[0];
+}
+
+const DEP_LIB = "export function twice(n: int32): int32 { return n * 2; }\n";
+
+function oneShotDb(kept: boolean): TransAmDb {
+	const db = createTransAmDb(100, kept);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/o/dep.ms", DEP_LIB);
+	return db;
+}
+
+test "a db that is not kept checks its parse tree without cloning it" {
+	const db = oneShotDb(false);
+	const parsed = dbParse(db, "/o/dep.ms");
+	assert typedNodeCount(parsed) == 0;
+	assert checkMessages(db, "/o/dep.ms") == "";
+	assert dbGetCheckedProgram(db, "/o/dep.ms") == parsed;
+	assert typedNodeCount(parsed) > 0;
+}
+
+test "a kept db clones its parse tree and leaves it clean" {
+	const db = oneShotDb(true);
+	const parsed = dbParse(db, "/o/dep.ms");
+	assert checkMessages(db, "/o/dep.ms") == "";
+	assert dbGetCheckedProgram(db, "/o/dep.ms") != parsed;
+	assert typedNodeCount(parsed) == 0;
+	assert dbParse(db, "/o/dep.ms") == parsed;
+}
+
+test "a parse read after the check took the tree fails loud" {
+	const db = oneShotDb(false);
+	dbTypeCheck(db, "/o/dep.ms");
+	let message = "";
+	try { dbParse(db, "/o/dep.ms"); } catch (e) { message = (e as Error).message; }
+	assert message == "internal: the parse tree of /o/dep.ms was handed to its check";
+}
+
+function graphMessages(kept: boolean): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/dep.ms", entrySource: DEP_LIB });
+	entries.push({ entryPath: "/g/use.ms", entrySource: 'import { twice } from "./dep";\nconst r: string = twice(2);\n' });
+	const graph = loadModuleGraph("/g/use.ms", createMapProvider(entries));
+	const db = createTransAmDb(100, kept);
+	dbBindGraph(db, graph);
+	const messages: string[] = [];
+	for (const path of graph.loadOrder) messages.push(checkMessages(db, path));
+	return messages.join("|");
+}
+
+test "a dependent checked after its dependency gives the same diagnostics whether or not the db is kept" {
+	const once = graphMessages(false);
+	assert once.indexOf("string") >= 0;
+	assert once == graphMessages(true);
 }
