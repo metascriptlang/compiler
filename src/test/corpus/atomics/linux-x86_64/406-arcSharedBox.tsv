@@ -6,6 +6,7 @@
 1	msActorJobAbandon
 1	msActorJobTick
 1	msChannelDrain
+1	msGetDispatcher
 1	msPoolRunQueued
 1	msPoolSubmit
 1	msThreadChannel

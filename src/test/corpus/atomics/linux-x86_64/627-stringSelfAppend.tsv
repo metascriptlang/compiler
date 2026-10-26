@@ -1,6 +1,7 @@
 1	msActorJobAbandon
 1	msActorJobTick
 1	msChannelDrain
+1	msGetDispatcher
 1	msThreadChannel
 1	msWorkerLoopPump
 2	msActorJobFire

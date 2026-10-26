@@ -1,3 +1,4 @@
+1	_msGetDispatcher
 1	_msPoolInit
 1	_msThreadChannel
 1	_msWorkerLoopPump
