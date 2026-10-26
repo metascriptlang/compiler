@@ -1,5 +1,25 @@
 @include("runtime/crypto/hash.h");
 
+// This module calls into hash.c on its own, and an image can hold it without std/crypto/index.cms
+// (an HCR core image does), so it carries the hash objects itself; the @compile dedup makes the overlap a no-op.
+@passC("-Iruntime/crypto");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+@compile("runtime/crypto/hash.c");
+@compile("runtime/crypto/psaMdStubs.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ripemd160.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+
 import { encodeHex, encodeBase64 } from "./encoding";
 
 extern function msCryptoHashInto(
