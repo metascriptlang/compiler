@@ -1805,6 +1805,21 @@ function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
+	const sliceMark = s.argSlices.length;
+	const viewMark = s.argViews.length;
+	for (const a of d.arguments) {
+		let peeled = a;
+		while (peeled.kind == NodeKind.HiddenStdConv || peeled.kind == NodeKind.HiddenSubConv) peeled = (peeled.data as HiddenStdConvData).convExpr;
+		if (peeled.kind == NodeKind.ArrayAccess && (peeled.data as ArrayAccessData).index.kind == NodeKind.BinaryExpr && exprIsString(s, (peeled.data as ArrayAccessData).array)) s.argSlices.push(peeled);
+	}
+	const result = compileCallExprBody(s, node);
+	while (s.argViews.length > viewMark) emitInst(s, raiserABC(RaiserOpcode.RcDec, s.argViews.pop(), 0, 0));
+	s.argSlices.shrink(sliceMark);
+	return result;
+}
+
+function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
 	if (ownershipRow(d.callee.resolvedSym) == ROW_HELD) {
 		const held = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.RcHeld, compileExpr(s, d.arguments[0]), held, 0));
@@ -1826,7 +1841,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		compileNamespaceObject(s, d.callee);
 		const written = d.callee;
 		d.callee = nsCallee;
-		const result = compileCallExpr(s, node);
+		const result = compileCallExprBody(s, node);
 		d.callee = written;
 		return result;
 	}
@@ -2504,7 +2519,7 @@ function compileStringBytes(s: RaiserCompState, strReg: int32): int32 {
 	return dest;
 }
 
-function compileArraySlice(s: RaiserCompState, d: ArrayAccessData, bd: BinaryExprData): int32 {
+function compileArraySlice(s: RaiserCompState, node: Node, d: ArrayAccessData, bd: BinaryExprData): int32 {
 	let srcReg = compileExpr(s, d.array);
 	if (exprIsString(s, d.array)) srcReg = compileStringBytes(s, srcReg);
 	const startReg = compileExpr(s, bd.left);
@@ -2521,6 +2536,7 @@ function compileArraySlice(s: RaiserCompState, d: ArrayAccessData, bd: BinaryExp
 	}
 	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ArraySlice, dest, srcReg, slotStart));
+	if (s.argSlices.includes(node)) s.argViews.push(dest);
 	return dest;
 }
 
@@ -2538,7 +2554,7 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	}
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
-		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
+		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, node, d, bd);
 	}
 	const arrReg = compileExpr(s, d.array);
 	const idxReg = compileIndex(s, d.index);

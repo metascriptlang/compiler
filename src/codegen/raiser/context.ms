@@ -130,6 +130,8 @@ export interface RaiserCompState {
 	tries: RaiserTryInfo[];
 	cellNodes: Node[];
 	cellRegs: int32[];
+	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
+	argViews: int32[];
 }
 
 export interface RaiserTryInfo {
@@ -145,7 +147,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, tries: [], cellNodes: [], cellRegs: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
