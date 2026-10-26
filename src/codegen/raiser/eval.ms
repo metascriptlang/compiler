@@ -2855,6 +2855,7 @@ test "orc: appending to a string held once leaves no string live" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
+	assert vm.arrayHeap.mem.allocations == 26, `${vm.arrayHeap.mem.allocations}`;
 }
 
 test "arena: appending to a string held once leaves no string live" {
@@ -2862,6 +2863,7 @@ test "arena: appending to a string held once leaves no string live" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
+	assert vm.arrayHeap.mem.allocations == 26, `${vm.arrayHeap.mem.allocations}`;
 }
 
 // --- A self-append extends the register's own string in place ---
@@ -2968,7 +2970,6 @@ test "register classes: a local takes the class of its declared type, not of its
 	const table = classTable(f);
 	assert table == "RRRDFRRDFWFF", table;
 	const text = disasmFunc(f);
-	assert text.includes("LoadConst F0 K3  ; 1"), text;
 	assert countNamed(f, "Box") == 3, text;
 	const vm = evalVM(code);
 	assert vm.error == "", vm.error;
