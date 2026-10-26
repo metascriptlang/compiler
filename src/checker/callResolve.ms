@@ -5733,7 +5733,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
-		if (needsDeref && resolvedObjType.kind == TypeKind.Array) {
+		if (needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.String)) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
 			derefNode.nodeType = resolvedObjType;
@@ -5761,6 +5761,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);
 			propSym.state = SymbolState.Shaped;
 			node.resolvedSym = propSym;
+			if (needsDeref) {
+				const tok = createToken(TokenKind.Ident, "", node.location.line);
+				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+				derefNode.nodeType = resolvedObjType;
+				d.object = derefNode;
+			}
 			return int32Type();
 		}
 	}
@@ -5846,7 +5852,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
 		// unwrapped Array so T binds (mirrors the class-method deref path above).
-		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
+		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || resolvedObjType.kind == TypeKind.String)) {
 			const derefExt = findFirstMatchingExt(allByName, resolvedObjType);
 			if (derefExt != null) {
 				ext = derefExt;

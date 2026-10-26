@@ -5357,6 +5357,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.
+	if (isAtomicRef(t) && t.typeReturn != null) return "Arc<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.Ref && !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn)) {
 		return "Ref<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	}
