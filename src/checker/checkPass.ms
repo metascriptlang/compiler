@@ -3891,13 +3891,21 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
+	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt));
+}
+
+export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
+	return asPreludeBuild(backendExt, () => checkPreludeSource(stdPath, backendExt));
+}
+
+function asPreludeBuild(backendExt: string, check: () => CheckerContext): CheckerContext {
 	const defines = getParserDefines();
-	if (definedValue(defines, "backend") != "") return buildPreludeUnderDefines(stdPath, backendExt);
+	if (definedValue(defines, "backend") != "") return check();
 	// No build seeded the defines (an in-process check): parse the prelude as the host's debug build of
 	// the backend its extension names, so a `when` in std picks the branch that module set was written for.
 	setParserDefines(hostBuildDefines(backendExt));
 	try {
-		return buildPreludeUnderDefines(stdPath, backendExt);
+		return check();
 	} finally {
 		setParserDefines(defines);
 	}
@@ -3921,7 +3929,7 @@ function buildPreludeUnderDefines(stdPath: string, backendExt: string): CheckerC
 	const packStamp = preludePackStamp(stdPath);
 	const packed = tryLoadPreludePack(packKey, packStamp);
 	if (packed != null) return packed;
-	const ctx = checkPreludeFromSource(stdPath, backendExt);
+	const ctx = checkPreludeSource(stdPath, backendExt);
 	// Always write (best-effort): the pack captures whatever scope the fresh
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
@@ -3936,7 +3944,7 @@ export function createGraphPreludeContext(): CheckerContext {
 	return ctx;
 }
 
-export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
+function checkPreludeSource(stdPath: string, backendExt: string): CheckerContext {
 	const imps = defaultGlobalImports();
 	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache());
@@ -6470,9 +6478,10 @@ test "an in-process prelude is parsed as the build its extension names" {
 	const source = "when (c) { export const viaC = 1; }\nwhen (js) { export const viaJs = 1; }\nwhen (raiser) { export const viaRaiser = 1; }\n";
 	for (const build of [[".cms", "viaC"], [".jms", "viaJs"], [".rms", "viaRaiser"]]) {
 		writeFile(`${std}/core/date/index${build[0]}`, source);
-		const ctx = buildPreludeContext(std, build[0]);
-		for (const name of ["viaC", "viaJs", "viaRaiser"]) {
-			assert preludeExports(ctx, name) == (name == build[1]), `${build[0]} prelude: ${name}`;
+		for (const ctx of [buildPreludeContext(std, build[0]), checkPreludeFromSource(std, build[0])]) {
+			for (const name of ["viaC", "viaJs", "viaRaiser"]) {
+				assert preludeExports(ctx, name) == (name == build[1]), `${build[0]} prelude: ${name}`;
+			}
 		}
 	}
 	removeAll(preludeOrderRoot);
