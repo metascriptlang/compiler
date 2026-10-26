@@ -3,17 +3,19 @@
 // INVARIANT (ULTRALOCK T7): the actor hooks LANG.md lists as lifecycle hooks obey the hook law the
 //   memory hooks obey: no spawn, no await and no call through a function value, directly or through
 //   a callee. Each shape below is one axis: a direct await, a spawn, a callee that awaits, a
-//   function value, and an await inside the argument of a send to another actor.
+//   function value, and an await inside the argument of a send to another actor, and a method of the
+//   actor itself that awaits.
 //
 // RED MEANS: one of the hooks compiles again, or the refusal names another hook or actor.
 //
 // GUARD-JS
 // GUARD-CHECK-FAIL lifecycle hook 'onTerminate' of 'Waits' must not spawn, await or call a function value, but it awaits
 // GUARD-CHECK-FAIL lifecycle hook 'onExit' of 'Spawns' must not spawn, await or call a function value, but it calls 'kick'
-// GUARD-CHECK-FAIL which spawns at 22:
+// GUARD-CHECK-FAIL which spawns at 24:
 // GUARD-CHECK-FAIL lifecycle hook 'onIdle' of 'Delegates' must not spawn, await or call a function value, but it calls 'pause'
 // GUARD-CHECK-FAIL lifecycle hook 'onDown' of 'Calls' must not spawn, await or call a function value, but it calls a function value
 // GUARD-CHECK-FAIL lifecycle hook 'onTerminate' of 'Feeds' must not spawn, await or call a function value, but it awaits
+// GUARD-CHECK-FAIL lifecycle hook 'onTerminate' of 'Settles' must not spawn, await or call a function value, but it calls 'settle'
 
 import { ExitReason } from "std/actor";
 
@@ -52,6 +54,11 @@ actor Feeds {
 	peer: Sink = new Sink();
 	ping(): int32 { return 1; }
 	onTerminate(reason: ExitReason): void { this.peer.take(await this.peer.ping()); } // GUARD-REFUSED
+}
+
+actor Settles {
+	settle(): void { await sleepAsync(1); }
+	onTerminate(reason: ExitReason): void { this.settle(); } // GUARD-REFUSED
 }
 
 console.log("GUARD-OK");
