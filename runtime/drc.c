@@ -793,7 +793,7 @@ void msOrcCollect(void) {
 	 * ineffective → grow threshold */
 	if (!j.keepThreshold) {
 		if (j.freed * 2 >= j.touched) {
-			msRootsThreshold = msRootsThreshold * 2 / 3;
+			msRootsThreshold = msRootsThreshold / 3 * 2;
 			if (msRootsThreshold < 16) msRootsThreshold = 16;
 		} else if (msRootsThreshold < INT32_MAX / 4) {
 			if (msRootsThreshold <= 0) msRootsThreshold = 128;
