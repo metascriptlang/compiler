@@ -94,8 +94,10 @@ function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 		if (read != null) return read.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
 		if (n.kind == NodeKind.ExprStmt) {
 			const assign = (n.data as ExprStmtData).expr;
-			if (assign.kind == NodeKind.BinaryExpr && (assign.data as BinaryExprData).operator == "=" && flagOf((assign.data as BinaryExprData).left, ctx) != null) {
-				return guardedWriteStmt(n, assign, ctx);
+			if (assign.kind == NodeKind.BinaryExpr && flagOf((assign.data as BinaryExprData).left, ctx) != null) {
+				const op = (assign.data as BinaryExprData).operator;
+				if (op == "=") return guardedWriteStmt(n, assign, ctx);
+				if (isEagerAssignOp(op)) return guardedCompoundStmt(n, assign, ctx);
 			}
 		}
 		const target = writtenBinding(n);
@@ -161,6 +163,17 @@ function guarded(use: Node, binding: Node, ctx: TransformContext): Node {
 	const result = makeConditional(makeIdentResolved(flag, use.location), use, fail, use.location);
 	result.nodeType = use.nodeType;
 	return result;
+}
+
+// A compound write reads its binding first, so it throws before its right side runs; the statement stays
+// a statement because a string append lowers to a call that cannot sit inside a conditional expression.
+function guardedCompoundStmt(stmt: Node, assign: Node, ctx: TransformContext): Node {
+	const bd = assign.data as BinaryExprData;
+	bd.right = guardUses(bd.right, true, ctx);
+	const fail = failCall(bd.left, ctx);
+	if (fail == null) return stmt;
+	const loc = stmt.location;
+	return makeIf(makeIdentResolved(flagOf(bd.left, ctx)!, loc), makeBlock([stmt], loc), makeBlock([makeExprStmt(fail, loc)], loc), loc);
 }
 
 // A write to a module binding throws after its value is evaluated (ECMAScript PutValue).
