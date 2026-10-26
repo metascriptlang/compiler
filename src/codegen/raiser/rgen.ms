@@ -86,13 +86,17 @@ export function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: Wri
 	}
 }
 
-export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
+export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T): T {
 	const outer = swapLiftedOps(lifted);
 	try {
-		return analyzeForRaiser(transformForRaiser(program, ctx, true), ctx, createWriteSummaries(createRoutineDecls(), []));
+		return body();
 	} finally {
 		swapLiftedOps(outer);
 	}
+}
+
+export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
+	return underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true), ctx, createWriteSummaries(createRoutineDecls(), [])));
 }
 
 export function generateRaiser(program: Node): RaiserModule {
