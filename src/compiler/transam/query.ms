@@ -44,7 +44,7 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 
 // ===== Dependency Frame — pushed when a query starts executing =====
 
-export class TaDependencyFrame {
+class TaDependencyFrame {
 	queryKey: TaQueryKey;
 	deps: TaDependencyEntry[];
 	minDurability: TaDurability;
