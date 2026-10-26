@@ -1,11 +1,4 @@
-// Async/Await Desugaring — converts await to yield, lets generator handle state machine
-//
-// async function f() { const x = await p; return x; }
-// → function* f() { const x = yield p; return x; }
-// → (generatorLower then builds the state machine)
-//
-// Proven architectural insight: "await is just yield." This pass rewrites, generator does heavy lifting.
-// V1: No Promise wrapper (runtime/codegen concern, not AST transform).
+// Async/Await Desugaring — await becomes yield and async becomes generator, which generatorLower then lowers
 
 import {
 	Node, NodeKind, NodeFlag, createNode,
@@ -18,10 +11,6 @@ import { syntheticToken, makeReturn } from "../util";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
-// ===== Await → Yield Rewriting =====
-// Walk a function body, replacing AwaitExpr nodes with YieldExpr nodes.
-// Stops at nested function boundaries (each async function is independent).
-
 function rewriteAwaits(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.AwaitExpr) {
@@ -33,12 +22,12 @@ function rewriteAwaits(node: Node): Node {
 	return node;
 }
 
-// ===== Main Walk =====
-
 function isAsyncFlags(flags: string): boolean {
 	if (isGenericFn(flags)) return false;
-	const kind = routineKindFlag(flags);
-	return kind == "async" || kind == "async_generator";
+	return match (routineKindFlag(flags)) {
+		"async" | "async_generator" => true,
+		_ => false,
+	};
 }
 
 function desugarAsyncBody(fn: Node, body: Node, ctx: TransformContext): void {
@@ -49,54 +38,56 @@ function desugarAsyncBody(fn: Node, body: Node, ctx: TransformContext): void {
 
 function walkAsync(node: Node | null, ctx: TransformContext): void {
 	if (node == null) return;
-	const k = node.kind;
-	if (k == NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		if (isGenericFn(d.fnFlags)) return;
-		walkAsync(d.fnBody, ctx);
-		if (isAsyncFlags(d.fnFlags)) {
-			desugarAsyncBody(node, d.fnBody, ctx);
-			d.fnFlags = "generator";
-		}
-	} else if (k == NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		if (isGenericFn(d.methodFlags)) return;
-		walkAsync(d.methodBody, ctx);
-		if (isAsyncFlags(d.methodFlags)) {
-			desugarAsyncBody(node, d.methodBody, ctx);
-			d.methodFlags = "generator";
-		}
-	} else if (k == NodeKind.FunctionExpr) {
-		const d = node.data as FunctionExprData;
-		walkAsync(d.funcExprBody, ctx);
-		if (isAsyncFlags(d.funcExprFlags)) {
-			desugarAsyncBody(node, d.funcExprBody, ctx);
-			d.funcExprFlags = "generator";
-		}
-	} else if (k == NodeKind.ArrowFunction) {
-		const d = node.data as ArrowFunctionData;
-		if (isAsyncFlags(d.arrowFlags) && d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt) {
-			const ret = makeReturn(d.arrowBody, node.location);
-			d.arrowBody = createNode(NodeKind.BlockStmt, { statements: [ret] }, syntheticToken(node.location));
-		}
-		walkAsync(d.arrowBody, ctx);
-		if (isAsyncFlags(d.arrowFlags)) {
-			desugarAsyncBody(node, d.arrowBody, ctx);
-			d.arrowFlags = "generator";
-		}
-	} else {
-		forEachChild(node, (child: Node): void => { walkAsync(child, ctx); });
-	}
+	match (node.kind) {
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			if (isGenericFn(d.fnFlags)) return;
+			walkAsync(d.fnBody, ctx);
+			if (isAsyncFlags(d.fnFlags)) {
+				desugarAsyncBody(node, d.fnBody, ctx);
+				d.fnFlags = "generator";
+			}
+		},
+		NodeKind.MethodDecl => {
+			const d = node.data as MethodDeclData;
+			if (isGenericFn(d.methodFlags)) return;
+			walkAsync(d.methodBody, ctx);
+			if (isAsyncFlags(d.methodFlags)) {
+				desugarAsyncBody(node, d.methodBody, ctx);
+				d.methodFlags = "generator";
+			}
+		},
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			walkAsync(d.funcExprBody, ctx);
+			if (isAsyncFlags(d.funcExprFlags)) {
+				desugarAsyncBody(node, d.funcExprBody, ctx);
+				d.funcExprFlags = "generator";
+			}
+		},
+		NodeKind.ArrowFunction => {
+			const d = node.data as ArrowFunctionData;
+			if (isAsyncFlags(d.arrowFlags) && d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt) {
+				const ret = makeReturn(d.arrowBody, node.location);
+				d.arrowBody = createNode(NodeKind.BlockStmt, { statements: [ret] }, syntheticToken(node.location));
+			}
+			walkAsync(d.arrowBody, ctx);
+			if (isAsyncFlags(d.arrowFlags)) {
+				desugarAsyncBody(node, d.arrowBody, ctx);
+				d.arrowFlags = "generator";
+			}
+		},
+		_ => {
+			forEachChild(node, (child: Node): void => { walkAsync(child, ctx); });
+		},
+	};
 }
-
-// ===== Main Entry Point =====
 
 export function lowerAsync(program: Node, ctx: TransformContext): Node {
 	walkAsync(program, ctx);
 	return program;
 }
 
-// ===== Tests =====
 test "non-async passthrough" { assert firstStmtKindAfter("function f() { return 1; }", lowerAsync) == NodeKind.FunctionDecl; }
 
 test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerAsync) == 1; }
