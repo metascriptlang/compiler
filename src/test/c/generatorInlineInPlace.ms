@@ -110,18 +110,56 @@ export function total(it: Iterator<int32>): int32 {
 	for (const x of it) t += x;
 	return t;
 }
+
+export struct Steps { }
+
+function* stepsLazy(start: int32, end: int32): Iterator<int32> {
+	for (let i: int32 = start; i < end; i++) {
+		yield i;
+	}
+}
+
+export function upTo(this typeof Steps, start: int32, end: int32): Iterator<int32> {
+	if (end < start) throw new RangeError("backwards");
+	return stepsLazy(start, end);
+}
 `;
 
 function mainC(consumer: string): string {
 	const entries: MapEntry[] = [
 		{ entryPath: LIB_PATH, entrySource: LIB },
-		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled, firsts, total } from "./lib";\n` + consumer },
+		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled, firsts, total, Steps, upTo } from "./lib";\n` + consumer },
 	];
 	const units = compileProjectToC(entries, MAIN_PATH).split("#include <stdint.h>\n");
 	for (const unit of units) {
 		if (unit.contains("ZmainOms__Init000(void) {")) return unit;
 	}
 	return "";
+}
+
+test "E2E C: a for-of over a static extension from another module drives no iterator" {
+	const c = mainC(`
+		let s: int32 = 0;
+		for (const x of Steps.upTo(0, 10)) {
+			if (x == 8) break;
+			s += x;
+		}
+		console.log(s);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("upTo__");
+}
+
+test "E2E C: a static extension from another module feeding a chain and a consumer drives no iterator" {
+	const c = mainC(`
+		const s = total(Steps.upTo(0, 9).doubled((v: int32): int32 => v + 1));
+		console.log(s);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("upTo__");
+	assert !c.contains("total__");
 }
 
 test "E2E C: a chain of generators from another module consumed by for-of drives no iterator" {
