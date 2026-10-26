@@ -1,4 +1,4 @@
-// @xfail(raiser): bigint is not supported on the Raiser VM
+// @xfail(raiser): a uint64 interpolation or toString leaks a string and a module string global reads empty on the drc base (compiler inbox card pending)
 
 function main(): void {
 	const s: bigint[] = [9223372036854775807n, -9223372036854775808n, 127n, -128n, 2147483647n, -2147483648n];

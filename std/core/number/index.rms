@@ -49,6 +49,10 @@ export function Number(v: char): float64 {
 	return v as float64;
 }
 
+export function Number(v: bigint): float64 {
+	return v as float64;
+}
+
 export function toString(this n: float64, radix: int32 = 10): string {
 	return float64RadixText(n, radix);
 }
