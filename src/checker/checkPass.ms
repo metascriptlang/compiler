@@ -1832,6 +1832,19 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 	unfriend(scope, friends);
 }
 
+function settleInferredField(node: Node, pd: PropertyDeclData, classType: Type): void {
+	const init = pd.propInitializer;
+	if (init == null || init.nodeType == null || isUnresolvedType(init.nodeType) || (node.nodeType != null && !isUnresolvedType(node.nodeType))) return;
+	const held = closureStorageType(storedTypeOfNullRead(init, init.nodeType, init.nodeType));
+	node.nodeType = held;
+	if (node.resolvedSym != null) node.resolvedSym.symbolType = held;
+	if (pd.propIsStatic) return;
+	const owner = unwrapRef(classType);
+	const slot = owner.typeNames.indexOf(pd.propName);
+	if (slot < 0) throw new Error(`internal: inferred field '${pd.propName}' has no slot in its class`);
+	owner.typeChildren[slot] = held;
+}
+
 function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node.kind == NodeKind.DecoratedDecl) {
@@ -1862,6 +1875,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				}
 				if (pd.propIsStatic) closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
+				if (pd.propType == "") settleInferredField(node, pd, classType);
 			}
 		},
 		NodeKind.MethodDecl => {
