@@ -6,8 +6,10 @@ export const ROW_DECREF: int32 = 2;
 export const ROW_DECREF_CYCLIC: int32 = 3;
 export const ROW_CLEAR: int32 = 4;
 export const ROW_SINK: int32 = 5;
-export const ROW_NO_LOWERING: int32 = 6;
 export const ROW_SHARE: int32 = 7;
+export const ROW_HELD: int32 = 8;
+export const ROW_KEPT: int32 = 9;
+export const ROW_COPY_VALUE: int32 = 10;
 
 const rows = new HashMap<string, int32>();
 
@@ -23,13 +25,14 @@ define(ROW_DECREF, [
 ]);
 define(ROW_DECREF_CYCLIC, ["msDecrefCyclic"]);
 define(ROW_CLEAR, [
-	"msPtrWasMoved", "msClosureWasMoved", "msStringWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
+	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
 ]);
 define(ROW_SINK, ["msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink"]);
 define(ROW_SHARE, ["msStringCopy"]);
-define(ROW_NO_LOWERING, [
-	"msPlainWasMoved", "msHeldCount", "msDestroyLeftNoRef", "msDecrefCyclicEdge", "msDropDefer", "msOrcTraceRef",
+define(ROW_HELD, ["msHeldCount"]);
+define(ROW_KEPT, ["msDestroyLeftNoRef"]);
+define(ROW_COPY_VALUE, [
 	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayAtomicRefCopy",
 	"msArrayClosureCopy",
 ]);
