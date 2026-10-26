@@ -33,3 +33,12 @@ test "end-to-end function declaration parses" {
 	assert out.diagnostics.length == 0;
 	assert out.objs.length > 0;
 }
+
+test "a bit-field width is a constant expression" {
+	const out = parseHeader("enum { K = 5 };\nstruct S { int a : K; int b : (1 + 2); int c; } v;", "bits.h", defaultOptions());
+	assert out.diagnostics.length == 0;
+	const members = out.objs[1].type.members;
+	assert members[0].bitWidth == 5;
+	assert members[1].bitWidth == 3;
+	assert members[2].bitWidth == null;
+}

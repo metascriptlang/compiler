@@ -679,9 +679,14 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			// Bitfield: int x : 3;
 			let bitWidth: int32 | null = null;
 			if (consume(ctx, ":")) {
-				if (ctx.tok.kind == CTokenKind.Num) {
-					bitWidth = ctx.tok.intVal as int32;
-					advance(ctx);
+				const widthAt = ctx.tok;
+				const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+				if (evalResult.ok) {
+					bitWidth = evalResult.value as int32;
+					ctx.tok = evalResult.tok;
+				} else {
+					ctx.diags.push(makeDiag(DiagSeverity.Error, widthAt.file, widthAt.line, widthAt.col,
+						`bit-field width: ${evalResult.error}`));
 				}
 				skipAttributes(ctx);
 			}
