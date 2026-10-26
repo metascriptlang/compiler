@@ -1399,7 +1399,9 @@ function instanceStruct(structBase: Type, mangledClass: string, params: Type[], 
 		for (const n of substStruct.typeNames) newNames.push(n);
 		const newChildren: Type[] = [];
 		for (const c of substStruct.typeChildren) newChildren.push(c);
-		return createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
+		const copy = createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
+		if (substStruct.typeFlags.has(TypeFlag.HasInheritedFields)) copy.typeFlags = copy.typeFlags.incl(TypeFlag.HasInheritedFields);
+		return copy;
 	}
 	substStruct.typeName = mangledClass;
 	return substStruct;

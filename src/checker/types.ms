@@ -4564,6 +4564,7 @@ function substituteStructAll(t: Type, params: Type[], concretes: Type[], seen: C
 		result.sym = t.sym;
 	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
+	if (t.typeFlags.has(TypeFlag.HasInheritedFields)) result.typeFlags = result.typeFlags.incl(TypeFlag.HasInheritedFields);
 	return result;
 }
 
