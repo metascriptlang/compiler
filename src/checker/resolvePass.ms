@@ -419,8 +419,8 @@ function warnOncePerLine(ctx: CheckerContext, msg: string, line: int32, col: int
 	addWarning(ctx, msg, line, col);
 }
 
-export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
-	const t = resolveAnnotation(text, ctx, line, col);
+export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32, operand: Node | null = null): Type {
+	const t = annotatedType(text, operand, ctx, line, col);
 	if (t.kind == TypeKind.Span) {
 		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
@@ -1609,6 +1609,10 @@ export function annotatedType(text: string, operand: Node | null, ctx: CheckerCo
 	return bound != null ? bound : resolveAnnotation(text, ctx, line, col);
 }
 
+export function operandAt(operands: Node[] | null, index: int32): Node | null {
+	return operands != null && index < operands.length ? operands[index] : null;
+}
+
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
 // Walks a positioned TypeExpr AST tree and records USE for every type identifier.
 // Does NOT resolve types — resolveAnnotation still handles that via string path.
@@ -2120,7 +2124,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	let predicateSentinel: Type | null = null;
 	const boundReturn = boundAnnotationType(node.typeExpr);
 	if (boundReturn != null) {
-		returnType = boundReturn;
+		returnType = sym.builtinKind != "" ? boundReturn : resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column, node.typeExpr);
 	} else if (d.fnReturnType != "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct

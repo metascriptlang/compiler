@@ -20,7 +20,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
+import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
@@ -3556,10 +3556,10 @@ function bindFromLiteralAnnotations(ctx: CheckerContext, lit: Node, formal: Type
 	const returnType = arrow ? (lit.data as ArrowFunctionData).arrowReturnType : (lit.data as FunctionExprData).funcExprReturnType;
 	for (let i = 0; i < paramTypes.length && i < fn.typeChildren.length; i += 1) {
 		if (paramTypes[i] == "" || !hasGenericParams(fn.typeChildren[i])) continue;
-		unifyType(fn.typeChildren[i], resolveAnnotation(paramTypes[i], ctx, lit.location.line, lit.location.column), out);
+		unifyType(fn.typeChildren[i], annotatedType(paramTypes[i], operandAt(lit.typeExprs, i), ctx, lit.location.line, lit.location.column), out);
 	}
 	if (returnType != "" && hasGenericParams(fn.typeReturn)) {
-		unifyType(fn.typeReturn, resolveAnnotation(returnType, ctx, lit.location.line, lit.location.column), out);
+		unifyType(fn.typeReturn, annotatedType(returnType, lit.typeExpr, ctx, lit.location.line, lit.location.column), out);
 	}
 	return out;
 }

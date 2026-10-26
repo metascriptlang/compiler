@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { annotatedType, operandAt, boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -3883,7 +3883,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	let explicitReturnType: Type = null as unknown as Type;
 	// Source 1: semProcAux parity — annotation takes precedence.
 	if (returnTypeAnnotation != "" && returnTypeAnnotation != "void") {
-		explicitReturnType = resolveAnnotation(returnTypeAnnotation, ctx, 0, 0);
+		explicitReturnType = annotatedType(returnTypeAnnotation, fnNode.typeExpr, ctx, 0, 0);
 	}
 	// Source 2: Bug G — contextual return-type fallback. When the user writes
 	// neither an explicit annotation nor `: void`, and the call site
@@ -3947,7 +3947,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	for (const p of params) {
 		let pType = inferredType();
 		if (pi < paramTypes.length && paramTypes[pi] != "") {
-			pType = resolveAnnotation(paramTypes[pi], ctx, 0, 0);
+			pType = annotatedType(paramTypes[pi], operandAt(fnNode.typeExprs, pi), ctx, 0, 0);
 		} else if (ctxParamTypes != null && pi < ctxParamTypes.length && ctxParamTypes[pi] != null) {
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];
@@ -4019,7 +4019,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	for (const p of params) {
 		let pType = inferredType();
 		if (ti < paramTypes.length && paramTypes[ti] != "") {
-			pType = resolveAnnotation(paramTypes[ti], ctx, 0, 0);
+			pType = annotatedType(paramTypes[ti], operandAt(fnNode.typeExprs, ti), ctx, 0, 0);
 		} else if (ctxParamTypes != null && ti < ctxParamTypes.length && ctxParamTypes[ti] != null) {
 			pType = ctxParamTypes[ti];
 		}

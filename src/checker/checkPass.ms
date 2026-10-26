@@ -22,8 +22,9 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
+import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { CtorRow, startCtorCapture, endCtorCapture, replayCtorRoutines } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
@@ -191,6 +192,19 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 			pi = pi + 1;
 		}
 		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
+	}
+	if (bindsSignatureTypes(node)) {
+		fnExpr.typeExpr = node.typeExpr;
+		fnExpr.typeExprs = node.typeExprs;
+		node.typeExpr = null;
+		node.typeExprs = null;
+		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx, node.location) : null;
+		if (annotation != null) {
+			const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
+			operand.nodeType = annotation;
+			operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+			node.typeExpr = operand;
+		}
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -674,9 +688,9 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
 		if (paramTypeStrs[i] == "") return null;
-		paramTypes.push(resolveAnnotation(paramTypeStrs[i], ctx, loc.line, loc.column));
+		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
 	}
-	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column));
+	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
 }
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
@@ -2578,9 +2592,9 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
 	const fd = d.initializer.data as FunctionExprData;
 	const paramTypes: Type[] = [];
-	for (const pt of fd.funcExprParamTypes) {
-		if (pt == "") return;
-		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
+	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
+		if (fd.funcExprParamTypes[i] == "") return;
+		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, d.nameLocation.line, d.nameLocation.column));
 	}
 	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, d.nameLocation.line, d.nameLocation.column) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
