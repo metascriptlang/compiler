@@ -32,7 +32,7 @@ import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/met
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { generateRaiser, appendProgramToImage, lowerForRaiser } from "./rgen";
+import { generateRaiser, appendProgramToImage, lowerForRaiser, underLiftedOps } from "./rgen";
 import { LiftedOpsState, freshLiftedOps } from "../../transform/lowering/destructorLifting";
 import { hasHostCallback, unservedCallReason } from "./expressions";
 import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -85,7 +85,7 @@ let _pendingHelperErrors: CheckerError[] = [];
 // Check + lower over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
 // pass a Program whose real-module decls are CLONED (never the canonical nodes).
-function transformForEngine(program: Node): Node {
+function transformForEngine(program: Node, lifted: LiftedOpsState): Node {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
@@ -107,7 +107,7 @@ function transformForEngine(program: Node): Node {
 			: checkProgram(program);
 		_lastEngineCheckErrors = checkerCtx.errors;
 		keepEngineInstances(checkerCtx);
-		transformed = lowerForRaiser(program, checkerCtx, _engine != null ? _engine.lifted : null);
+		transformed = lowerForRaiser(program, checkerCtx, lifted);
 	} finally {
 		setEngineCheckMode(prevEngineMode);
 		if (saved != null) setComptimeOuterCtx(saved);
@@ -138,22 +138,24 @@ function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: strin
 	if (clone.kind == NodeKind.FunctionDecl) (clone.data as FunctionDeclData).fnName = engineName;
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(decl.location));
 	const transformed = transformCheckedForEngine(program, bodyCtx);
-	return appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym);
+	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym));
 }
 
 export function evalASTCompile(program: Node): RaiserModule {
-	return generateRaiser(transformForEngine(program));
+	const lifted = _engine != null ? _engine.lifted : freshLiftedOps();
+	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformForEngine(program, lifted)));
 }
 
 export function evalASTFull(program: Node): RaiserContext {
-	const transformed = transformForEngine(program);
+	const lifted = _engine != null ? _engine.lifted : freshLiftedOps();
+	const transformed = transformForEngine(program, lifted);
 	const ctx = createContext();
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		ctx.lastError = e.message;
 		return ctx;
 	}
-	load(ctx, generateRaiser(transformed));
+	load(ctx, underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformed)));
 	execute(ctx);
 	return ctx;
 }
@@ -329,14 +331,14 @@ function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: Ext
 	enterEngineCompile();
 	defer leaveEngineCompile();
 	registerSeedSymbols(withMetaSeeds(seeds), exts);
-	const transformed = transformForEngine(program);
+	const transformed = transformForEngine(program, _engine.lifted);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
 	// program's own check errors so the caller reads them, not the last helper's (bug053).
 	const ownErrors = _lastEngineCheckErrors;
 	for (const e of ownErrors) if (e.severity == Severity.Error) return -1;
-	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
+	const idx = underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym));
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
 }
@@ -529,7 +531,7 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 		return BUILD_LOWERING_BLOCKED;
 	}
 	_engineBuildLowered += 1;
-	return appendProgramToImage(_engine.image, _engine.funcMap, transformed, "$comptime:helper", sym);
+	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, "$comptime:helper", sym));
 }
 
 const _engineBodyNames: string[] = [];
@@ -655,17 +657,13 @@ function compileLowered(code: string): RaiserModule {
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
-	const transformed = lowerForRaiser(program, checkerCtx);
-	return generateRaiser(transformed);
+	const lifted = freshLiftedOps();
+	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(lowerForRaiser(program, checkerCtx, lifted)));
 }
 
 // Full pipeline — returns the VM so heap state is inspectable.
 function evalVM(code: string): RaiserVM {
 	return execModule(compileLowered(code), false);
-}
-
-function evalComptimeVM(code: string): RaiserVM {
-	return execModule(compileLowered(code), true);
 }
 
 test "engine: an extern routine read as a value calls its host bridge when stored, passed or held in an array" {
@@ -764,12 +762,31 @@ test "engine: exit inside a spawned strand ends the program with its code" {
 	assert ctx.exitValue.intVal == 3;
 }
 
+test "engine: for-of raises when its body changes the array length" {
+	const ctx = evalVM("function run(mode: int32): string { const arr: int32[] = [1, 2, 3]; let seen = ''; try { for (const x of arr) { seen = seen + String(x) + ','; if (seen.length > 20) break; if (mode == 0) arr.push(x); if (mode == 1 && x == 1) { arr.push(9); continue; } if (mode == 2) { arr.push(9); break; } } } catch (e) { return 'raised after ' + seen; } return 'finished ' + seen; }"
+		+ " console.log(run(0)); console.log(run(1)); console.log(run(2)); console.log(run(3));");
+	assert ctx.error == "";
+	assert ctx.output == "raised after 1,\nraised after 1,\nfinished 1,\nfinished 1,2,3,\n";
+}
+
 test "engine: a for-of over a string yields its bytes as chars" {
-	const ctx = evalComptimeVM("let n = 0; let sum = 0; for (const c of 'h\u00e9llo') { n += 1; sum += c as int32; } console.log(n, sum);"
+	const ctx = evalVM("let n = 0; let sum = 0; for (const c of 'h\u00e9llo') { n += 1; sum += c as int32; } console.log(n, sum);"
 		+ " let s = 'ab'; let seen = ''; for (const c of s) { seen = seen + c + '|'; console.log(c); if (c as int32 == 97) continue; seen = seen + '!'; }"
 		+ " console.log(seen); for (const c of 'xyz') { if (c as int32 == 121) break; console.log(`${c}`); }");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "6 795\na\nb\na|b|!\nx\n", ctx.output;
+}
+
+test "engine: a for-of over a generator runs it as a state machine" {
+	const ctx = evalVM("class Bag { items: int32[] = []; }"
+		+ " function* toItems(this b: Bag): Iterator<int32> { for (const x of b.items) yield x; }"
+		+ " function* toPairs(this b: Bag): Iterator<[string, int32]> { for (const x of b.items) { const p: [string, int32] = ['k' + x.toString(), x]; yield p; } }"
+		+ " const b = new Bag(); b.items.push(4); b.items.push(5); b.items.push(6);"
+		+ " for (const x of b) { if (x == 6) break; console.log(x); } for (const [k, v] of b) { if (v == 5) continue; console.log(k); }"
+		+ " function* upTo(n: int32): Iterator<int32> { let i: int32 = 0; try { while (i < n) { yield i; i = i + 1; } } finally { console.log('done'); } }"
+		+ " let sum: int32 = 0; for (const i of upTo(4)) { if (i == 1) continue; sum = sum + i; } console.log(sum);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "4\n5\nk4\nk6\ndone\n5\n", ctx.output;
 }
 
 test "engine: an object keeps its class, which instanceof and a checked conversion test" {
@@ -818,6 +835,31 @@ test "engine: a class's display holds the ids of its ancestors by depth, and a l
 	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1] && c!.display[2] != b!.display[1];
 }
 
+test "engine: a class appended to the live image after its ancestors keeps their ids" {
+	const outerPr = parseSource("class A { a: int32 = 1; } class B extends A { } class C extends B { } class D extends A { }");
+	assert outerPr.ok;
+	const outerCtx = checkProgram(outerPr.value);
+	const first = parseSource("export function __first(): number { const b: A = new B(); return (b instanceof A ? 1 : 0) + (b instanceof C ? 2 : 0); }");
+	assert first.ok;
+	const r1 = compileMacroIntoEngine(first.value, outerCtx, "__first", outerCtx);
+	assert r1.errors.length == 0, r1.errors.length > 0 ? r1.errors[0].message : "";
+	const later = parseSource("export function __later(): number { const c: A = new C(); const d: A = new D(); return (c instanceof A ? 1 : 0) + (c instanceof B ? 2 : 0) + (c instanceof D ? 4 : 0) + (d instanceof B ? 8 : 0) + (d instanceof A ? 16 : 0); }");
+	assert later.ok;
+	const r2 = compileMacroIntoEngine(later.value, outerCtx, "__later", outerCtx);
+	assert r2.errors.length == 0, r2.errors.length > 0 ? r2.errors[0].message : "";
+	const noArgs: RaiserValue[] = [];
+	assert callWithComptimeHostPolicy(r2.vm, r1.funcIdx, noArgs, "").intVal == 1;
+	assert callWithComptimeHostPolicy(r2.vm, r2.funcIdx, noArgs, "").intVal == 19;
+	let b: RaiserClassType | null = null;
+	let c: RaiserClassType | null = null;
+	for (const obj of r2.vm.objectHeap.objects) {
+		if (obj.classType.name == "B") b = obj.classType;
+		if (obj.classType.name == "C") c = obj.classType;
+	}
+	assert b != null && c != null;
+	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1];
+}
+
 test "engine: an as into a narrower literal union stops on a value outside it" {
 	const strings = evalVM("type Wide = 'a' | 'b' | 'c'; type Narrow = 'a' | 'b'; function r(x: Wide | null): Wide | null { return x; }"
 		+ " const n: Narrow | null = r(null) as Narrow | null; console.log(r('b') as Narrow | null, n); console.log(r('c') as Narrow | null);");
@@ -862,6 +904,12 @@ test "engine: a subclass with no constructor holds its parent's fields first, as
 	assert names.join(",") == "x,y", names.join(",");
 }
 
+test "engine: a for-of raises when the string it iterates changes length" {
+	const ctx = evalVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "raised after a\n", ctx.output;
+}
+
 test "engine: struct assignment preserves the source value" {
 	const r = evalFull("struct S { x: int32; } let a: S = { x: 1 };"
 		+ " let b = a; b.x = 2; return a.x * 10 + b.x;");
@@ -873,6 +921,30 @@ test "engine: shared arrays copy their value elements" {
 	const ctx = evalVM("struct Item { value: int32; } const item: Item = { value: 1 }; const items: Item[] = [item]; items[0].value = 2; console.log(item.value); console.log(items[0].value);");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "1\n2\n", ctx.output;
+}
+
+test "engine: recursive value copy plans preserve the source tree" {
+	const ctx = evalVM("struct Tree { value: int32; children: Vec<Tree>; } const tree: Tree = { value: 1, children: [{ value: 2, children: [] }] }; const copy = tree; copy.children[0].value = 3; console.log(tree.children[0].value); console.log(copy.children[0].value);");
+	assert ctx.error == "";
+	assert ctx.output == "2\n3\n";
+}
+
+test "engine: nested value copy retains reference identity under ORC" {
+	const vm = evalVM("interface R { x: int32; }"
+		+ " struct S { child: Vec<int32>; shared: R; }"
+		+ " let a: S = { child: [1], shared: { x: 1 } };"
+		+ " let b = a; b.child.push(2); b.shared.x = 3;"
+		+ " return a.child.length * 100 + b.child.length * 10 + a.shared.x;");
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 123;
+}
+
+test "engine: value copy preserves Span fields and Span bindings" {
+	const r = evalFull("struct S { view: Span<int32>; } function run(): int32 { let a: Vec<int32> = [1];"
+		+ " let view: Span<int32> = a; let box: S = { view: a }; let copy = box;"
+		+ " view[0] = 4; copy.view[0] = 7; return a[0]; } return run();");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 7;
 }
 
 test "engine: global initialization runs once and functions read its storage" {
@@ -889,6 +961,15 @@ test "engine: global updates retain prefix and postfix values" {
 		+ " return before * 10 + after; } return next() * 10 + calls;");
 	assert r.lastError == "";
 	assert r.lastResult.intVal == 133;
+}
+
+test "engine: object spread copies owned fields and applies overrides" {
+	const r = evalFull("struct S { x: int32; items: Vec<int32>; } let calls: int32 = 0;"
+		+ " function source(): S { calls += 1; return { x: 1, items: [2] }; }"
+		+ " const base = source(); let changed: S = { ...base, x: 3 };"
+		+ " changed.items.push(4); return calls * 100 + base.items.length * 10 + changed.x;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 113;
 }
 
 test "engine: object spread evaluates a call operand once" {
@@ -968,23 +1049,31 @@ test "engine: new Array(n) holds n distinct zero elements" {
 }
 
 test "engine: a BitSet with no initializer holds its representation's zero in every width band" {
-	const narrow = evalComptimeVM("enum Small { A, B, C, D } let s: BitSet<Small>; return s;");
+	const narrow = evalVM("enum Small { A, B, C, D } let s: BitSet<Small>; return s;");
 	assert narrow.error == "", narrow.error;
 	assert narrow.exitValue.kind == RaiserValueKind.Int;
 	assert narrow.exitValue.intVal == 0;
-	const wide = evalComptimeVM("enum Wide { A, B, C, D, E, F, G, H, I } class Holder { w: BitSet<Wide>; } return new Holder().w;");
+	const wide = evalVM("enum Wide { A, B, C, D, E, F, G, H, I } class Holder { w: BitSet<Wide>; } return new Holder().w;");
 	assert wide.error == "", wide.error;
 	assert wide.exitValue.kind == RaiserValueKind.Int;
 	assert wide.exitValue.intVal == 0;
 	let members = "";
 	for (let i = 0; i < 70; i++) members = `${members}M${i}, `;
-	const huge = evalComptimeVM(`enum Huge { ${members} } enum Small { A, B, C, D }`
+	const huge = evalVM(`enum Huge { ${members} } enum Small { A, B, C, D }`
 		+ " class Holder { s: BitSet<Small>; h: BitSet<Huge>; }"
 		+ " let h: BitSet<Huge>; h = h | Huge.M69;"
 		+ " const k = new Holder(); k.h = k.h | Huge.M3;"
 		+ " console.log(`${h.has(Huge.M69) ? 1 : 0}${h.has(Huge.M0) ? 1 : 0}${k.h.has(Huge.M3) ? 1 : 0}${k.h.has(Huge.M69) ? 1 : 0}${k.s.has(Small.A) ? 1 : 0}`);");
 	assert huge.error == "", huge.error;
 	assert huge.output == "10100\n", huge.output;
+}
+
+test "engine: a local and a global declared without an initializer hold their type's zero value" {
+	const vm = evalVM("struct P { x: int32; } let g: int32;"
+		+ " function f(): string { let n: int32; let t: string; let v: Vec<int32>; let p: P; return `${n} [${t}] ${v.length} ${p.x}`; }"
+		+ " console.log(`${g} ${f()}`);");
+	assert vm.error == "";
+	assert vm.output == "0 0 [] 0 0\n";
 }
 
 test "engine: a struct literal that omits a field stores the field's zero value" {
@@ -1019,6 +1108,40 @@ test "engine: a sleep armed at the end of a millisecond still waits its whole de
 		+ " console.log(`early ${early}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "early 0\n", vm.output;
+}
+
+test "engine: several sleepers armed together each wait their own delay" {
+	const vm = evalVM(RAISER_TIER_SLEEP
+		+ " extern function now(): number from \"msPerformanceNow\";"
+		+ " function sleeper(ms: int32): int32 {"
+		+ "   let t = now(); while (t - ((t as int64) as number) < 0.99) { t = now(); }"
+		+ "   const started = now(); await nap(ms); return now() - started >= ms ? 1 : 0;"
+		+ " }"
+		+ " let ok: int32 = 0; let round: int32 = 0;"
+		+ " while (round < 10) {"
+		+ "   const a = spawn(() => sleeper(3)); const b = spawn(() => sleeper(1)); const c = spawn(() => sleeper(2));"
+		+ "   ok += (await a) + (await b) + (await c); round += 1;"
+		+ " }"
+		+ " console.log(`on time ${ok}/30`);");
+	assert vm.error == "";
+	assert vm.output == "on time 30/30\n";
+}
+
+test "engine: two sleepers wake in deadline order, not spawn order" {
+	const vm = evalVM(RAISER_TIER_SLEEP
+		+ " const b = spawn(() => { await nap(200); console.log(\"b\"); return 1; });"
+		+ " const a = spawn(() => { await nap(1); console.log(\"a\"); return 1; });"
+		+ " const c = spawn(() => { let n: int32 = 0; while (n < 100000) { n += 1; } return 1; });"
+		+ " const r = (await b) + (await a) + (await c); console.log(`done ${r}`);");
+	assert vm.error == "";
+	assert vm.output == "a\nb\ndone 3\n";
+}
+
+test "engine: awaiting a strand that sleeps is not a deadlock" {
+	const vm = evalVM(RAISER_TIER_SLEEP
+		+ " const r = await spawn(() => { await nap(10); return 7; }); console.log(`${r}`);");
+	assert vm.error == "";
+	assert vm.output == "7\n";
 }
 
 test "engine: sleepAsync is refused in compile-time evaluation" {
@@ -1192,7 +1315,7 @@ test "engine: a float32 rounds after every operation that produces one" {
 }
 
 test "engine: a uint64 past int64 compares, divides and prints unsigned" {
-	const ctx = evalComptimeVM("function big(): uint64 { return 18446744073709551615; } function one(): uint64 { return 1; }"
+	const ctx = evalVM("function big(): uint64 { return 18446744073709551615; } function one(): uint64 { return 1; }"
 		+ " const a = big(); const b = one(); let s = 'u='; s += a; let q = a; q /= 3; let m = a; m %= 7;"
 		+ " console.log(`${b < a} ${a > b} ${a <= b} ${a >= b} ${a / 2} ${a % 10} ${a} ${a.toString()} ${a as number} ${a as float32} ${s} ${q} ${m}`);"
 		+ " console.log(a);");
@@ -1201,7 +1324,7 @@ test "engine: a uint64 past int64 compares, divides and prints unsigned" {
 }
 
 test "engine: unsigned sums and products past 64 bits wrap as on C" {
-	const ctx = evalComptimeVM("function mul(a: uint64, b: uint64): uint64 { return a * b; }"
+	const ctx = evalVM("function mul(a: uint64, b: uint64): uint64 { return a * b; }"
 		+ " function add(a: uint64, b: uint64): uint64 { return a + b; }"
 		+ " function sub(a: uint64, b: uint64): uint64 { return a - b; }"
 		+ " function mul32(a: uint32, b: uint32): uint32 { return a * b; }"
@@ -1288,7 +1411,7 @@ test "engine: a tuple != is the negated std equality call" {
 }
 
 test "engine: the hash builtins give the bits of the native 128-bit mix and float layout" {
-	const ctx = evalComptimeVM("@builtin(\"HiXorLo\") extern function hiXorLo(a: uint64, b: uint64): uint64;"
+	const ctx = evalVM("@builtin(\"HiXorLo\") extern function hiXorLo(a: uint64, b: uint64): uint64;"
 		+ " @builtin(\"Float64Bits\") extern function float64Bits(d: number): uint64;"
 		+ " console.log(`${hiXorLo(0x123456789abcdef0 as uint64, 0xfedcba9876543210 as uint64)}`"
 		+ " + ` ${hiXorLo(0xa0761d6478bd642f as uint64, 0xe7037ed1a0b428db as uint64)}`"
@@ -1300,7 +1423,7 @@ test "engine: the hash builtins give the bits of the native 128-bit mix and floa
 }
 
 test "engine: the little-endian load builtins read 8 and 4 bytes of a byte view at an offset" {
-	const ctx = evalComptimeVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
+	const ctx = evalVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
 		+ " @builtin(\"LoadLE32\") extern function load32(b: Readonly<Span<uint8>>, o: int64): uint64;"
 		+ " const b = 'abcdefghé'.asBytes();"
 		+ " console.log(`${load64(b, 0)} ${load64(b, 2)} ${load32(b, 0)} ${load32(b, 6)}`);");
@@ -1362,6 +1485,25 @@ test "orc: shared ref survives (stored in array)" {
 	assert unboxFloat(vm.exitValue) == 10;
 }
 
+test "untag: an object holds its scalar fields as raw words, a reference as its handle and a union as a value" {
+	const vm = evalVM("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
+		+ " const p = new P(); p.n = 7; p.f = 2.5; p.b = true; p.s = 'x' + p.n.toString(); p.u = 9;"
+		+ " console.log(`${p.n} ${p.f} ${p.b} ${p.s} ${p.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "7 2.5 true x7 9\n", vm.output;
+	let found = 0;
+	for (const obj of vm.objectHeap.objects) {
+		if (obj.classType.name != "P" || obj.slots.length != 5) continue;
+		found += 1;
+		const kinds = obj.classType.kinds;
+		assert kinds[0] == RaiserRegClass.Word && kinds[1] == RaiserRegClass.Float && kinds[2] == RaiserRegClass.Bool && kinds[3] == RaiserRegClass.Ref && kinds[4] == RaiserRegClass.Dyn;
+		assert obj.slots[0] == 7 && obj.slots[1] == 4612811918334230528 && obj.slots[2] == 1;
+		assert heapStringText(vm.arrayHeap, handleValue(obj.slots[3])) == "x7";
+		assert obj.values.length == 1 && obj.values[obj.slots[4]].kind == RaiserValueKind.Int && obj.values[obj.slots[4]].intVal == 9;
+	}
+	assert found == 1;
+}
+
 function classNamed(vm: RaiserVM, name: string): RaiserClassType {
 	for (const obj of vm.objectHeap.objects) {
 		if (obj.classType.name == name) return obj.classType;
@@ -1375,6 +1517,34 @@ test "template: an object of word fields starts from the class's zero slots and 
 	assert vm.output == "0 5 false 1.5\n", vm.output;
 	const t = classNamed(vm, "W");
 	assert t.zeroSlots.length == 4 && t.zeroWordSlots == 3 && t.zeroRefSlots == 0 && t.dynCount == 0;
+}
+
+test "template: a mixed object numbers its Dyn slots in order and masks its Word and Ref slots" {
+	const vm = evalVM("class M { n: int32 = 0; u: int32 | string | null = null; s: string = ''; v: int32 | null = null; f: float64 = 0.0; }"
+		+ " const m = new M(); m.u = 'a'; m.v = 3; m.n = 4; m.s = 'q'; console.log(`${m.n} ${m.u} ${m.s} ${m.v} ${m.f}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 a q 3 0\n", vm.output;
+	const t = classNamed(vm, "M");
+	assert t.zeroSlots.join(",") == "0,0,0,1,0", t.zeroSlots.join(",");
+	assert t.zeroWordSlots == 1 && t.zeroRefSlots == 4 && t.dynCount == 2, `${t.zeroWordSlots} ${t.zeroRefSlots} ${t.dynCount}`;
+}
+
+test "template: a subclass lays its parent's fields first, and a subclass of a parent with a union starts both from nil" {
+	const vm = evalVM("class A { x: int32 = 1; u: int32 | string | null = null; } class B extends A { y: string = ''; z: int32 | null = null; }"
+		+ " const b = new B(); console.log(`${b.x} ${b.u == null} [${b.y}] ${b.z == null}`); b.z = 8; b.u = 'k'; console.log(`${b.z} ${b.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 true [] true\n8 k\n", vm.output;
+	const t = classNamed(vm, "B");
+	assert t.fields.join(",") == "x,u,y,z" && t.zeroSlots.join(",") == "0,0,0,1" && t.zeroWordSlots == 1 && t.zeroRefSlots == 4, `${t.fields.join(",")} ${t.zeroSlots.join(",")}`;
+}
+
+test "template: an object reused from the free list holds no field of its last life" {
+	const vm = evalVM("class R { n: int32 = 0; s: string = ''; u: int32 | string | null = null; }"
+		+ " function churn(i: int32): int32 { const r = new R(); const seen = r.n + r.s.length + (r.u == null ? 0 : 1); r.n = i + 1; r.s = 'x' + i.toString(); r.u = i; return seen; }"
+		+ " let total = 0; for (let i = 0; i < 50; i++) total += churn(i); console.log(total);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "0\n", vm.output;
+	assert vm.objectHeap.objects.length < 10, `${vm.objectHeap.objects.length}`;
 }
 
 test "untag: a typed slot opcode reads a slot of another class by name" {
@@ -1414,13 +1584,88 @@ test "by-name field cache: a union receiver and an object with a field added aft
 	assert vm.output == "6 3\n", vm.output;
 }
 
+test "ledger: a reference field and a union field count what they hold through stores, overwrites and self-stores" {
+	const vm = evalVM("class N { s: string = ''; u: int32 | string | null = null; next: N | null = null; }"
+		+ " const a = new N(); for (let i = 0; i < 3; i++) { a.s = 'v' + i.toString(); a.u = 'w' + i.toString(); a.u = i; a.u = 'z' + i.toString(); }"
+		+ " a.s = a.s; a.u = a.u; const b = new N(); b.s = 'b'; b.next = a; a.next = b; a.next = a.next; b.next = null;"
+		+ " console.log(`${a.s} ${a.u} ${a.next!.s} ${b.next == null}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "v2 z2 b true\n", vm.output;
+}
+
+test "orc: a cycle through a reference field and one through a union field are collected" {
+	const vm = evalVM("class C { next: C | null = null; other: C | int32 | null = null; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.next = b; b.next = a; const c = new C(); const d = new C(); c.other = d; d.other = c; }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+}
+
+test "orc: a ring through one of two array fields frees each array once" {
+	const vm = evalVM("class C { kids: C[] = []; mixed: (C | int32 | null)[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a);"
+		+ " const c = new C(); const d = new C(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
+test "orc: a ring through three plain array fields frees each array once" {
+	const vm = evalVM("class C { kids: C[] = []; more: C[] = []; last: C[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.more.push(a); b.last.push(b); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
+test "untag: an array holds scalar elements as raw words, references as handles and a union as values" {
+	const vm = evalVM("const n: int32[] = [1, 2, 3]; const f: float64[] = [1.5, 2.5]; const b: boolean[] = [true, false]; const s: string[] = ['x' + n.length.toString()]; const u: (int32 | string | null)[] = [7, 'y', null];"
+		+ " n.push(4); f[1] = 3.5; const sl = n[1..3];"
+		+ " console.log(`${n[3]} ${f[1]} ${b[0]} ${s[0]} ${u[0]} ${u[1]} ${u[2]} ${sl.length} ${sl[0]} ${sl[1]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 3.5 true x3 7 y null 2 2 3\n", vm.output;
+	let words = 0;
+	let floats = 0;
+	let bools = 0;
+	let refs = 0;
+	let dyns = 0;
+	for (const a of vm.arrayHeap.arrays) {
+		if (a.rc == 0) continue;
+		if (a.viewOff >= 0) {
+			assert a.elemClass == RaiserRegClass.Dyn && a.items.length == 1 && a.words.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Word && a.words.length == 4) {
+			words += 1;
+			assert a.words[0] == 1 && a.words[3] == 4 && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Float && a.words.length == 2) {
+			floats += 1;
+			assert a.words[0] == 4609434218613702656 && a.words[1] == 4615063718147915776;
+		} else if (a.elemClass == RaiserRegClass.Bool && a.words.length == 2) {
+			bools += 1;
+			assert a.words[0] == 1 && a.words[1] == 0;
+		} else if (a.elemClass == RaiserRegClass.Ref && a.words.length == 1) {
+			refs += 1;
+			assert heapStringText(vm.arrayHeap, handleValue(a.words[0])) == "x3" && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Dyn && a.items.length == 3) {
+			dyns += 1;
+			assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil && a.words.length == 0;
+		}
+	}
+	assert words == 1 && floats == 1 && bools == 1 && refs == 1 && dyns == 1, `${words} ${floats} ${bools} ${refs} ${dyns}`;
+}
+
 test "untag: a store the element class cannot hold through a wider alias stops the run naming the class" {
 	const vm = evalVM("const n: int32[] = [1, 2]; const wide: (int32 | string)[] = n as (int32 | string)[]; wide.push('late'); console.log('unreachable');");
 	assert vm.error.indexOf("an array of W elements got a value of kind") >= 0, vm.error;
 }
 
 test "ledger: reference elements count what they hold through push, store, self-store, truncation, a view and a copy" {
-	const vm = evalComptimeVM("class N { s: string = ''; }"
+	const vm = evalVM("class N { s: string = ''; }"
 		+ " const a: string[] = []; for (let i = 0; i < 4; i++) a.push('v' + i.toString());"
 		+ " a[1] = 'w' + a.length.toString(); a[0] = a[0]; a[2] = a[3]; const v = a[1..3]; const vs = `${v[0]} ${v[1]}`; a.setLength(2);"
 		+ " const objs: N[] = []; for (let i = 0; i < 3; i++) { const n = new N(); n.s = 'o' + i.toString(); objs.push(n); }"
@@ -1428,6 +1673,22 @@ test "ledger: reference elements count what they hold through push, store, self-
 		+ " console.log(`${a.length} ${a[1]} ${vs} ${objs[0].s} ${keep.s} ${copy.length} ${copy[2]}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "2 w4 w4 v3 o2 o1 3 tail\n", vm.output;
+}
+
+test "orc: a cycle through a reference array and one through a union array are collected, and a word array is not traced" {
+	const vm = evalVM("class C { kids: C[] = []; mixed: (C | int32 | null)[] = []; }"
+		+ " const lookalike: int64[] = [3, 4, 11, 12, 19, 20, 27, 28];"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a); const c = new C(); const d = new C(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok 12\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	let live = 0;
+	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
+		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
+	}
+	assert live == 1, `${live}`;
 }
 
 test "untag: the indexed fast paths keep length, bounds, view and reference counts exact in every element class" {
@@ -1692,6 +1953,18 @@ test "engine: a call through a function-typed value takes the typed site for any
 	assert vm.output == "a11 1.5b11 2.5a4 1.5b4 2.5\n", vm.output;
 }
 
+test "a closure call passes its env or none, reads its callee before the arguments, and lets a throw through" {
+	const vm = evalVM("class Boom { n: int64 = 1; } function run(): string { let k: int64 = 3; k = k + 1; let f = (x: int64): int64 => x * k; const g = (x: int64): int64 => x + 100;"
+		+ " let out = `${f(2)} ${g(2)}`; out = out + ` ${f(((): int64 => { f = g; return 1; })())} ${f(1)}`;"
+		+ " const h = (s: string, y: float64): string => s + `${y}`; out = out + ` ${h('a', 1.5)}`;"
+		+ " const boom = (x: int64): int64 => { if (x > 0) { throw new Boom(); } return x; };"
+		+ " try { boom(1); } catch (e) { out = out + ' caught'; } return out; } console.log(run());");
+	assert vm.error == "", vm.error;
+	assert vm.output == "8 102 4 101 a1.5 caught\n", vm.output;
+	const deep = evalVM("let rec: (x: int64) => int64 = (x: int64): int64 => x; rec = (x: int64): int64 => rec(x + 1); console.log(`${rec(0)}`);");
+	assert deep.error.includes("call stack overflow"), deep.error;
+}
+
 // Regression: chained MemberExpr through nested ObjectLiteral.
 // Was broken because Raiser's resetTemps used locals.length, assuming locals
 // pack at R[0..length-1] — but chained `t.nodeType.kind` allocates an
@@ -1804,7 +2077,7 @@ test "engine: an empty slice passes at any start" {
 }
 
 test "engine: a string span views its bytes" {
-	const ctx = evalComptimeVM("function n(v: Readonly<Span<char>>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
+	const ctx = evalVM("function n(v: Readonly<Span<char>>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
 		+ " const s = 'hello'; console.log(`${n(s)} ${n(s[1..4])}`);");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "532 317\n", ctx.output;
@@ -1978,10 +2251,51 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	assert layoutOf(opaque.symbolType).length == 0;
 }
 
+test "engine: concat of two string operands uses the typed opcode and a mixed one the Dyn opcode" {
+	const code = "function both(a: string, b: string): string { return a + b; } function mixed(a: string, n: int64): string { return a + n; }"
+		+ " class O { n: int64 = 7; } const o = new O(); let s = 'ab'; for (let i = 0; i < 5; i++) { s = s + s; }"
+		+ " console.log(`${both('x', 'y')} ${mixed('a', 1)} ${'a' + 1} ${s.length} ${s.slice(0, 4)} t${o.n}u`);";
+	const both = compiledFunc(code, "both");
+	assert countNamed(both, "ConcatStrR") == 1 && countNamed(both, "ConcatStr") == 0, disasmFunc(both);
+	const mixed = compiledFunc(code, "mixed");
+	assert countNamed(mixed, "ConcatStr") == 1 && countNamed(mixed, "ConcatStrR") == 0, disasmFunc(mixed);
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "xy a1 a1 64 abab t7u\n", vm.output;
+}
+
 test "a slot read after the object table grew sees the new objects" {
 	const vm = evalVM("class P { x: int64 = 0; next: P | null = null; } function run(): int64 { let head = new P(); let t: int64 = 0; for (let i: int64 = 1; i <= 300; i++) { const p = new P(); p.x = i; p.next = head; head = p; t = t + head.x; } return t; } console.log(`${run()}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "45150\n", vm.output;
+}
+
+test "engine: a slot of a word or ref register is read and written by the typed slot opcodes" {
+	const code = "class N { v: int64 = 0; name: string = ''; next: N | null = null; f: float64 = 0.5; }"
+		+ " function step(a: N, b: N): string { a.v = a.v + b.v; a.name = b.name + '!'; a.next = b; b.next = null; a.f = a.f + 1.0; return `${a.v} ${a.name} ${a.f} ${a.next == null ? 0 : 1}`; }"
+		+ " const a = new N(); const b = new N(); b.v = 5; b.name = 'b'; let out = ''; for (let i = 0; i < 3; i++) { out = out + step(a, b) + ';'; } a.next = a; a.next = null; console.log(out);";
+	const step = compiledFunc(code, "step");
+	const text = disasmFunc(step);
+	assert countNamed(step, "LoadSlotW") == 3 && countNamed(step, "StoreSlotW") == 1 && countNamed(step, "LoadSlotR") == 3 && countNamed(step, "StoreSlotR") == 3, text;
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
+}
+
+test "engine: a struct is copied into a held struct and zeroed through typed slots, nested and inside an array" {
+	const decl = "struct V { x: int64; y: int64; z: int64; } struct B { a: V; n: int64; }";
+	const flat = decl + " function f(): string { let p: V = { x: 1, y: 2, z: 3 }; let q: V = { x: 0, y: 0, z: 0 }; q = p; p.x = 9; let zz: V; return `${q.x} ${q.y} ${q.z} ${p.x} ${zz.x}`; } console.log(f());";
+	const nested = decl + " function f(): string { let b: B = { a: { x: 1, y: 2, z: 3 }, n: 4 }; let c: B = { a: { x: 0, y: 0, z: 0 }, n: 0 }; c = b; b.a.x = 9; const arr: V[] = [{ x: 5, y: 6, z: 7 }]; let w: V = { x: 0, y: 0, z: 0 }; arr[0] = w; w.y = 1; let zb: B; return `${c.a.x} ${c.n} ${b.a.x} ${arr[0].x} ${arr[0].y} ${zb.a.z} ${zb.n}`; } console.log(f());";
+	const out = ["1 2 3 9 0\n", "1 4 9 0 0 0 0\n"];
+	const sources = [flat, nested];
+	for (let i = 0; i < sources.length; i += 1) {
+		const f = compiledFunc(sources[i], "f");
+		assert countNamed(f, "LoadField") == 0 && countNamed(f, "StoreField") == 0, disasmFunc(f);
+		assert countNamed(f, "StoreSlotW") + countNamed(f, "LoadSlotW") > 0, disasmFunc(f);
+		const vm = evalVM(sources[i]);
+		assert vm.error == "", vm.error;
+		assert vm.output == out[i], vm.output;
+	}
 }
 
 function backBranchSpan(f: RaiserFunction): number {
@@ -2224,6 +2538,22 @@ test "engine: every comparison drives every condition form on strings" {
 	}
 }
 
+test "engine: null comparisons, bool variables and calls drive conditions" {
+	const ctx = evalVM("function g(x: string | null, t: boolean): string { let r = '';"
+		+ " if (x === null) { r = r + 'a'; } else { r = r + 'b'; }"
+		+ " if (x !== null) { r = r + 'c'; } else { r = r + 'd'; }"
+		+ " r = r + ((x === null) ? 'e' : 'f');"
+		+ " if (x !== null && t) { r = r + 'g'; } else { r = r + 'h'; }"
+		+ " if (!(x === null) || !t) { r = r + 'i'; } else { r = r + 'j'; }"
+		+ " let n = 0; while (x === null && n < 1) { n = n + 1; } r = r + `${n}`; return r; }"
+		+ " function yes(): boolean { return true; } function no(): boolean { return false; }"
+		+ " let s: string | null = 's'; let z: string | null = null;"
+		+ " console.log(g(z, true)); console.log(g(s, true)); console.log(g(s, false));"
+		+ " let q = 0; if (yes() && !no()) { q = q + 1; } if (no() || yes()) { q = q + 1; } if (!yes()) { q = q + 10; } console.log(`${q}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "adehj1\nbcfgi0\nbcfhi0\n2\n", ctx.output;
+}
+
 test "engine: an if without an else leaves no jump to the next instruction" {
 	const g = compiledFunc("function g(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${g(1, 2)}`);", "g");
 	for (const inst of g.code) {
@@ -2452,7 +2782,7 @@ test "orc: non-ASCII strings keep their bytes through the string tier" {
 }
 
 test "orc: a string a spawned strand extends leaves the sender's copy unchanged" {
-	const vm = evalComptimeVM("const box = { text: \"abc\", tags: [\"é\", \"x\"] };"
+	const vm = evalVM("const box = { text: \"abc\", tags: [\"é\", \"x\"] };"
 		+ " const f = spawn(() => { let t = box.text; t = t + \"Z\"; let u = box.tags[0]; u = u + \"日\"; return t + u + box.tags[1]; });"
 		+ " const r = await f; console.log(box.text + \"|\" + box.tags[0] + \"|\" + r);"
 		+ " const word = \"né\"; const g = spawn(() => { let w = word; for (let i = 0; i < 3; i++) { w = w + word; } return w; });"
@@ -2475,7 +2805,7 @@ test "orc: string equality, ordering and switch are by text, not by handle" {
 // --- Run-time strings never enter the process-wide constant table ---
 
 test "arena: strings built and dropped in a loop leave the string heap bounded" {
-	const vm = evalComptimeVM("let s = \"\"; let n = 0; for (let i = 0; i < 100000; i++) { s = `k${i}` + \"x\"; n = n + s.length; } console.log(`${n}`);");
+	const vm = evalVM("let s = \"\"; let n = 0; for (let i = 0; i < 100000; i++) { s = `k${i}` + \"x\"; n = n + s.length; } console.log(`${n}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "688890\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) < 30, `${heapStringLive(vm.arrayHeap)}`;
@@ -2492,7 +2822,7 @@ test "orc: a string a container holds survives the register that read it being o
 }
 
 test "arena: a string a container holds survives the register that read it being overwritten" {
-	const vm = evalComptimeVM(heldByContainer);
+	const vm = evalVM(heldByContainer);
 	assert vm.error == "", vm.error;
 	assert vm.output == "f1g2xyzw\n", vm.output;
 }
@@ -2517,6 +2847,20 @@ test "a string a host function stores in the array it builds is held by that arr
 	}
 }
 
+test "orc: appending to a string held once keeps one heap item" {
+	const vm = evalVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+test "arena: appending to a string held once keeps one heap item" {
+	const vm = evalVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
 // --- A self-append extends the register's own string in place ---
 
 const selfAppend = "function grow(): number { let s = \"\"; for (let i = 0; i < 20000; i++) { s = s + \"ab\"; } return s.length; }"
@@ -2532,7 +2876,7 @@ test "orc: appending to a string another holder shares leaves the holder unchang
 }
 
 test "arena: appending to a string another holder shares leaves the holder unchanged" {
-	const vm = evalComptimeVM(sharedAppend);
+	const vm = evalVM(sharedAppend);
 	assert vm.error == "", vm.error;
 	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
 }
@@ -2549,6 +2893,12 @@ test "orc: a bare return in a constructor still yields the object" {
 	assert vm.output == "none y b0 t2 10 11\n", vm.output;
 }
 
+test "orc: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
+	const vm = evalVM(finallyInFlight);
+	assert vm.error == "", vm.error;
+	assert vm.output == finallyInFlightOut, vm.output;
+}
+
 
 const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } class Boom { n: number; constructor(n: number) { this.n = n; } } function boom(m: number): void { throw new Boom(m); }"
 	+ " function ownCatch(): void { try { boom(9); } catch (e) { note('own'); } }"
@@ -2563,7 +2913,7 @@ const finallyInFlight = "let log = ''; function note(s: string): void { log = lo
 const finallyInFlightOut = "f|2|own|3|own|3|own|own2|7|body|own|fin|own|f1|own|f2|4|3|\n";
 
 test "arena: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
-	const vm = evalComptimeVM(finallyInFlight);
+	const vm = evalVM(finallyInFlight);
 	assert vm.error == "", vm.error;
 	assert vm.output == finallyInFlightOut, vm.output;
 }
@@ -2575,6 +2925,13 @@ test "engine: == and != on a union compare the held member with EqVal and NeVal,
 	assert countNamed(ne, "NeVal") == 1 && countNamed(ne, "BneI64") == 0 && countNamed(ne, "BrEqI64") == 0, disasmFunc(ne);
 	const mixed = compiledFunc("function f(a: string | number): int64 { if (a == 3) { return 1; } return 2; } console.log(`${f(3)}`);", "f");
 	assert countNamed(mixed, "EqVal") == 1 && countNamed(mixed, "BrNeI64Imm") == 0 && countNamed(mixed, "BrEqI64Imm") == 0, disasmFunc(mixed);
+}
+
+test "engine: two equal strings in a union are equal and two different floats in a union are not" {
+	const ctx = evalVM("function t(s: string): string | number { return s + 'b'; } function r(n: number): string | number { return n * 1.5; }"
+		+ " console.log(`${t('a') == t('a')} ${t('a') == t('x')} ${r(2) == r(2)} ${r(2) == r(3)} ${t('a') == r(2)} ${r(2) == 3}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true false true false false true\n", ctx.output;
 }
 
 // --- Register classes: a slot's class is fixed by what its declared type holds ---
@@ -2598,6 +2955,16 @@ test "register classes: a parameter takes the class of its declared type" {
 	const f = compiledFunc("function p(a: number, s: string, o: { x: number } | null, n: number | null, u: number | string, b: boolean, c: () => number): number { return a; }"
 		+ " console.log(`${p(1, \"s\", null, null, 1, true, (): number => 1)}`);", "p");
 	assert classTable(f) == "FRRDDBR", classTable(f);
+}
+
+test "register classes: a local takes the class of its declared type, not of its initializer" {
+	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
+		+ " console.log(`${l()}`);";
+	const table = classTable(compiledFunc(code, "l"));
+	assert table.slice(0, 9) == "FRRRDFDWF", table;
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2\n", vm.output;
 }
 
 test "register classes: a number local never assigned on the path read reads as zero" {
@@ -2643,6 +3010,20 @@ test "register classes: a call through a closure whose environment is null passe
 	const ctx = evalFull("const f = (x: number): number => x * 2; return f(21);");
 	assert ctx.lastError == "", ctx.lastError;
 	assert unboxFloat(ctx.lastResult) == 42;
+}
+
+test "register classes: arithmetic assigned to a union local boxes the result" {
+	const vm = evalVM("let x: number | null = null; for (let i = 0; i < 3; i++) { x = (x == null ? 0 : x) + 1.5; } console.log(`${x}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4.5\n", vm.output;
+}
+
+test "register classes: a union equality compares the payload of both boxes" {
+	const code = "type NamedU = int32 | string; function g(a: NamedU, b: NamedU): boolean { return a == b; } function num(n: int32): NamedU { return n; } function str(s: string): NamedU { return s; }"
+		+ " console.log(`${g(num(3), num(3))} ${g(num(3), num(4))} ${g(str('a'), str('a'))} ${g(str('a'), num(3))}`);";
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "true false true false\n", vm.output;
 }
 
 test "register classes: a borrowed class reference parameter reads through its address" {
