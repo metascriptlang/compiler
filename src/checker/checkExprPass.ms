@@ -499,6 +499,8 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 	node.typeExpr!.resolvedSym = sym;
 	const loc = node.typeExpr!.location;
 	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
+	const fn = sym.symbolType;
+	if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
 }
 
 // TS resolves a lowercase tag as a property of `JSX.IntrinsicElements`, taking `JSX` from the
@@ -533,9 +535,14 @@ function recordIntrinsicJsx(ctx: CheckerContext, node: Node): void {
 	if (intrinsics == null) return;
 	ensureShaped(intrinsics, ctx);
 	const attrs = recordJsxProperty(ctx, intrinsics.symbolType, (node.typeExpr.data as IdentifierData).name, node.typeExpr.location);
-	if (attrs == null) return;
+	if (attrs != null) recordJsxAttrs(ctx, node, attrs);
+}
+
+// An element's attributes are the properties of its props type: an intrinsic tag's field type,
+// a function component's first parameter.
+function recordJsxAttrs(ctx: CheckerContext, node: Node, props: Type): void {
 	for (const attr of (node.data as JSXElementData).jsxAttrs) {
-		if (attr.kind == NodeKind.JSXAttribute) recordJsxProperty(ctx, attrs, (attr.data as JSXAttributeData).jsxAttrName, attr.location);
+		if (attr.kind == NodeKind.JSXAttribute) recordJsxProperty(ctx, props, (attr.data as JSXAttributeData).jsxAttrName, attr.location);
 	}
 }
 
