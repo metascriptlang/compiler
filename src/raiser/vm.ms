@@ -213,6 +213,8 @@ export interface RaiserSched {
 	nextStrandId: number;
 	modules: RaiserModuleEval;
 	thenRuns: RaiserThen[];
+	readyOrder: number[];
+	ticked: number[];
 }
 
 export interface RaiserVM {
@@ -345,7 +347,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const timerItems: RaiserTimer[] = [];
 	const timers: RaiserTimers = { items: timerItems };
 	const thenRuns: RaiserThen[] = [];
-	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns };
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], ticked: [] as number[] };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
 }
@@ -688,7 +690,7 @@ function suspendRun(vm: RaiserVM): void {
 	const strandItems: RaiserStrand[] = [];
 	const futureItems: RaiserFuture[] = [];
 	const timerItems: RaiserTimer[] = [];
-	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[] };
+	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[], readyOrder: [] as number[], ticked: [] as number[] };
 	vm.safePoints = [];
 	vm.currentException = raiserNil();
 }
@@ -784,7 +786,10 @@ function futureSettled(vm: RaiserVM, handle: int64): void {
 	const f = vm.sched.futures.items[handleIndex(handle)];
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
-		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
+		if (s.status == RaiserStrandStatus.Blocked) {
+			s.status = RaiserStrandStatus.Ready;
+			vm.sched.readyOrder.push(w);
+		}
 	}
 	f.waiters.length = 0;
 	const dependents = f.dependents;
@@ -862,6 +867,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	t.strand = vm.sched.strands.items.length - 1;
+	vm.sched.readyOrder.push(t.strand);
 	t.arg = arg;
 	vm.sched.thenRuns.push(t);
 }
@@ -1443,6 +1449,11 @@ function strandResume(vm: RaiserVM, idx: number): void {
 // Round-robin from the strand after the current one, so a yielding strand
 // hands the turn on rather than immediately reclaiming it.
 function schedulePick(vm: RaiserVM): number {
+	const order = vm.sched.readyOrder;
+	while (order.length > 0) {
+		const idx = order.shift()!;
+		if (vm.sched.strands.items[idx].status == RaiserStrandStatus.Ready) return idx;
+	}
 	const n = vm.sched.strands.items.length;
 	let k = 1;
 	while (k <= n) {
@@ -1595,6 +1606,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
 	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
+	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return id;
 }
 
@@ -1642,6 +1654,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const sp: number[] = [];
 	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
+	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return fut;
 }
 
@@ -1651,10 +1664,24 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 // §6.2 needs three await lowerings on C because its async frames are
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
+// An await of a settled future resumes behind the callbacks already queued (msCallSoon), so it yields once
+// and runs again; true means this run yielded.
+function awaitPaysTick(vm: RaiserVM): boolean {
+	const paid = vm.sched.ticked.indexOf(vm.current);
+	if (paid >= 0) {
+		vm.sched.ticked.splice(paid, 1);
+		return false;
+	}
+	vm.sched.ticked.push(vm.current);
+	vm.ip = vm.ip - 1;
+	vm.yielded = true;
+	return true;
+}
+
 function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const v = getDyn(vm, ib);
 	if (v.kind != RaiserValueKind.Future) {
-		// Awaiting a plain value is the identity — Promise.resolve semantics.
+		if (awaitPaysTick(vm)) return;
 		setRegConform(vm, ia, v);
 		return;
 	}
@@ -1664,6 +1691,7 @@ function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	const f = vm.sched.futures.items[handleIndex(v.intVal)];
 	if (f.finished) {
+		if (awaitPaysTick(vm)) return;
 		if (f.failed) {
 			raiseFromFuture(vm, f);
 			return;
@@ -1758,6 +1786,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	vm.sched.nextStrandId = id + 1;
 	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
+	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return vm.sched.strands.items.length - 1;
 }
 
@@ -2095,7 +2124,10 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (!vm.yielded) return;
 		vm.yielded = false;
 		const cur = vm.sched.strands.items[vm.current];
-		if (cur.status == RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
+		if (cur.status == RaiserStrandStatus.Running) {
+			cur.status = RaiserStrandStatus.Ready;
+			vm.sched.readyOrder.push(vm.current);
+		}
 		strandSave(vm);
 		vmFireDueTimer(vm);
 		let next = moduleHandoffPick(vm);
