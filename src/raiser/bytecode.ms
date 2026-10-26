@@ -215,9 +215,13 @@ export enum RaiserOpcode {
 	ConcatStrR,       // ABC: refs[A] = refs[B] ++ refs[C], both statically strings
 	StrByteAt,        // ABC: words[A] = byte R[C] of the string refs[B], -1 outside it
 	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
+	RcInc,            // ABC: count +1 on the handle in refs[A]; nil and constant handles stay as they are
+	RcDec,            // ABC: count -1 on refs[A]; the last reference destroys the cell by its dynamic type and nils refs[A]; B = 1 registers a surviving cell with the cycle collector
+	WasMoved,         // ABC: refs[A] = nil without touching any count
+	DestroyValue,     // ABC: RcDec every ref slot of the struct aggregate in refs[A] and nil the slot
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAt;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.DestroyValue;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -348,6 +352,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
+		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.WasMoved | RaiserOpcode.DestroyValue => "y--",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
@@ -764,8 +769,10 @@ test "the role table agrees with the role letters of every opcode" {
 	}
 }
 
-test "the last opcode has its roles in the table" {
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Int;
+test "the last opcodes have their roles in the table" {
+	assert opRole(RaiserOpcode.StrCharCodeAt, 0) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.StrCharCodeAt, 1) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.StrCharCodeAt, 2) == RaiserRole.Int;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
 }
