@@ -1,23 +1,11 @@
-// Definite Assignment Tracking — Reference Parity
-//
-// Clones the reference's init + intersection + BreakState model.
-// Tracks which variables have been initialized, with branch merging via
-// count tables and exhaustiveness checks.
-//
-// Uses name strings (not Symbol identity) for tracking. This avoids DRC
-// refcount issues with the save/restore pattern (truncating Symbol[] leaks refs).
-//
-// Set + branch-merge primitives live in branchSet.ms and are shared with
-// spawnAffinity.ms so both trackers stay in lockstep.
+// Name strings, not Symbol identity, key the tracking: truncating a Symbol[] on restore leaks refs under DRC.
 
 import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, BooleanLiteralData, TypeKind } from "../ast/node";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { BreakState, addName, hasName, collectSince, mergeBranches } from "./branchSet";
 
-// Re-export BreakState for existing importers (checkPass, checkExprPass, etc.)
 export { BreakState } from "./branchSet";
 
-// Reference parity: effects.init + currentBlock + leftPartOfAsgn + scopes
 export interface InitTracker {
 	initialized: string[];     // append-only list of initialized var names
 	currentBlock: number;      // scope depth counter
@@ -50,22 +38,18 @@ export function createInitTracker(): InitTracker {
 
 // ===== Core Operations =====
 
-// Reference parity: initVar — marks variable initialized
 export function markInitialized(t: InitTracker, name: string): void {
 	addName(t.initialized, name);
 }
 
-// Reference parity: check if variable is initialized
 export function isInitialized(t: InitTracker, name: string): boolean {
 	return hasName(t.initialized, name);
 }
 
-// Reference parity: save init.len for branch merging
 export function saveInitState(t: InitTracker): int32 {
 	return t.initialized.length;
 }
 
-// Reference parity: restore init state
 export function restoreInitState(t: InitTracker, state: int32): void {
 	t.initialized.length = state;
 }
@@ -84,15 +68,12 @@ export function isOutParamName(t: InitTracker, name: string): boolean {
 
 // ===== Scope Tracking (for nfFirstWrite) =====
 
-// Reference parity: varDecl — records the block where a variable was declared.
-// Used by initVar to set nfFirstWrite only when assignment is in the same block.
 export function varDecl(t: InitTracker, name: string): void {
 	t.declScopes.push(name);
 	t.declBlocks.push(t.currentBlock);
 }
 
-// Reference parity: lookup the block where a variable was declared.
-// Returns -1 if not found (import/global — never declared locally).
+// -1 when the name was never declared locally (import or global).
 export function getDeclBlock(t: InitTracker, name: string): number {
 	let i = t.declScopes.length - 1;
 	while (i >= 0) {
@@ -104,7 +85,6 @@ export function getDeclBlock(t: InitTracker, name: string): number {
 
 // ===== Break State Detection =====
 
-// Reference parity: breaksBlock — walks to last statement and determines exit state.
 export function breaksBlock(node: Node): BreakState {
 	if (node == null) return BreakState.BsNone;
 	let it = node;
@@ -119,8 +99,6 @@ export function breaksBlock(node: Node): BreakState {
 	if (it.kind == NodeKind.ThrowStmt || it.kind == NodeKind.UnreachableStmt) {
 		return BreakState.BsNoReturn;
 	}
-	// Ref parity: check for noreturn call (exit(), abort(), etc.)
-	// ExprStmt wrapping a CallExpr whose callee returns Never
 	if (it.kind == NodeKind.ExprStmt) {
 		const ed = it.data as ExprStmtData;
 		if (ed.expr != null && ed.expr.kind == NodeKind.CallExpr) {
@@ -140,7 +118,6 @@ export function breaksBlock(node: Node): BreakState {
 
 // ===== Branch Merging =====
 
-// Reference parity: branch merge for if/match. Delegates to shared branchSet.
 export function mergeInitBranches(
 	t: InitTracker,
 	oldState: int32,
@@ -151,14 +128,12 @@ export function mergeInitBranches(
 	mergeBranches(t.initialized, oldState, branchInits, branchBreaks, isExhaustive);
 }
 
-// Collect names initialized between oldState and current state
 export function collectNewInits(t: InitTracker, oldState: int32): string[] {
 	return collectSince(t.initialized, oldState);
 }
 
 // ===== Helpers =====
 
-// Reference parity: check for `while (true)` literal
 export function isAlwaysTrue(node: Node): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.BooleanLiteral) {
@@ -167,9 +142,6 @@ export function isAlwaysTrue(node: Node): boolean {
 	}
 	return false;
 }
-
-// Phase 4: `impliesNotNull` (fact-list null query) deleted. Replaced by
-// `isDefinitelyNonNullAt` in src/checker/flow.ms which walks the CFG.
 
 // ===== Tests =====
 
