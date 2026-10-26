@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser cannot read a static class field (inbox card 2026-10-09-raiser-cannot-read-a-static-class-field.md)
 // @stdout: lib before
 // @stdout: static K
 // @stdout: lib after
