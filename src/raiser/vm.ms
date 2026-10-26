@@ -391,7 +391,7 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 function isScalarBox(vm: RaiserVM, h: int64): boolean {
 	if (handleHeapKind(h) != RaiserHeapKind.Box) return false;
 	const inner = vm.arrayHeap.boxes.items[handleIndex(h)].value.kind;
-	return inner != RaiserValueKind.Nil && inner < RaiserValueKind.String;
+	return inner != RaiserValueKind.Nil && (inner <= RaiserValueKind.GlobalAddr || inner == RaiserValueKind.ElemAddr || inner == RaiserValueKind.FieldAddr);
 }
 
 function holdScalarBox(vm: RaiserVM, h: int64): void {
@@ -399,7 +399,10 @@ function holdScalarBox(vm: RaiserVM, h: int64): void {
 }
 
 function releaseScalarBox(vm: RaiserVM, h: int64): void {
-	if (h != 0 && isScalarBox(vm, h)) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
+	if (h == 0 || !isScalarBox(vm, h)) return;
+	const data = vm.arrayHeap.boxes.items[handleIndex(h)];
+	if (data.rc <= 1) data.value = raiserNil();
+	rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 function vmHold(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
