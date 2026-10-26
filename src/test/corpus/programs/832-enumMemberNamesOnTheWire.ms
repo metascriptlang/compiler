@@ -1,4 +1,3 @@
-// @xfail(raiser): the file crashes `msc check` on every backend at this tree, inbox 2026-10-26-832-enum-wire-check-crashes-on-the-raiser-speed-drc-tip
 // @stdout: {"name":"x","n":3,"c":"Blue","s":"Inactive","cs":["Green","Red"]}
 // note: every lane shares the codec macros, so each check also grades itself into the exit code.
 import { exit } from "std/process";
