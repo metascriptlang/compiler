@@ -147,7 +147,7 @@ and whole programs under `msc run --target=raiser`. It consumes the **post-trans
 (`transformForRaiser`) and skips Phase 4 and Phase 5.
 
 **Core architecture:**
-- **Register-based** instruction set; the word file and the ref file each start at 256 slots and grow.
+- **Register-based** instruction set; the slot file starts at 256 slots and grows; a register number is its slot in the frame.
 - **One `switch` dispatch** in `src/raiser/vm.ms`, one arm per opcode.
 - **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
   refcount + cycle collector under `gcMode = "orc"`.
