@@ -5254,6 +5254,22 @@ function isDisplaying(open: Readonly<Cursor<Readonly<Type>>[]>, t: Readonly<Type
 	return false;
 }
 
+// Display string literal unions as "north" | "south".
+// Children are rendered for display, so use typeDisplayName so a
+// `null` member shows as "null" instead of an empty segment that
+// would produce "string |  | int32".
+function unionDisplayName(t2: Readonly<Type>, open: Cursor<Readonly<Type>>[], shapes: int32): string {
+	if (t2.typeChildren.length == 0 || (t2.typeName != "" && isDisplaying(open, t2))) return t2.typeName;
+	open.push(t2);
+	let display = "";
+	for (const child of t2.typeChildren) {
+		if (display != "") display = display + " | ";
+		display = display + typeDisplayNameInner(child, 0 as BitSet<TypeFlag>, open, shapes);
+	}
+	open.pop();
+	return display;
+}
+
 function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[], shapes: int32): string {
 	if (t == null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming.
@@ -5315,24 +5331,7 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 		TypeKind.Enum => t2.typeName,
 		TypeKind.TypeReference => t2.typeName,
 		TypeKind.Distinct => t2.typeName,
-		TypeKind.Union => {
-			// Display string literal unions as "north" | "south".
-			// Children are rendered for display, so use typeDisplayName so a
-			// `null` member shows as "null" instead of an empty segment that
-			// would produce "string |  | int32".
-			if (t2.typeChildren.length > 0 && !(t2.typeName != "" && isDisplaying(open, t2))) {
-				open.push(t2);
-				let display = "";
-				for (const child of t2.typeChildren) {
-					if (display != "") display = display + " | ";
-					display = display + typeDisplayNameInner(child, 0 as BitSet<TypeFlag>, open, shapes);
-				}
-				open.pop();
-				display
-			} else {
-				t2.typeName
-			}
-		},
+		TypeKind.Union => unionDisplayName(t2, open, shapes),
 		_ => "",
 	};
 }
