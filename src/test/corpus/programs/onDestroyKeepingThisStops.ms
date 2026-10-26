@@ -2,7 +2,6 @@
 // @stdout: kept for the call 0
 // @stdout: before 2
 // @stdout: Error: onDestroy kept a reference to the Keeper it destroys
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
 // @skip-js: onDestroy does not run on JS
 // note: an onDestroy that stores `this` where it outlives the object stops the program when the object is freed, before that reference can dangle; a hook that holds `this` only for its own duration frees normally. Sibling: onDestroyKeepingThisInCycleStops (the collector's free path).
 

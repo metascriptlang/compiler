@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before center
-// @xfail(raiser): the Raiser VM does not test union conversions
 // @xfail(danger): --danger drops the membership test, so the string outside the set passes through
 
 type Align = "auto" | "center" | "stretch";

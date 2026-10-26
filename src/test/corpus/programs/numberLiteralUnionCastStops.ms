@@ -3,7 +3,6 @@
 // @stdout: half 1.5
 // @stdout: invalid union conversion: 4 is not Narrow
 // @xfail(danger): --danger drops the conversion check, so the value outside Narrow is kept instead of stopping
-// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid union conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output; src/codegen/raiser/eval.ms pins it
 // note: `as` into a number-literal union is checked at run time from a plain number, from a wider literal union and from a nullable one; a binding without an annotation keeps the check. A source that is already a subset is not checked.
 
 type Wide = 1 | 2 | 3 | 4;

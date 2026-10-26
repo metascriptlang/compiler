@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: before native
 // @xfail(danger): --danger drops the forced conversion check, so the wrong downcast reads the other class's memory instead of stopping
-// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 
 type HostNode = unknown;
 
