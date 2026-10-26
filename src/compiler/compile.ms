@@ -18,7 +18,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteLoweredUnit, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -3102,6 +3102,8 @@ resetLiftedOps();
 		} else {
 			nativeLowered = lowerModuleA2(program, ctx, job);
 		}
+		noteLoweredUnit(writeTables, modPath);
+		noteLoweredUnit(liftTables, modPath);
 		const modT1 = performance.now();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
@@ -3794,6 +3796,8 @@ resetLiftedOps();
 			exit(1);
 		}
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
+		noteLoweredUnit(writeTables, modPath);
+		noteLoweredUnit(liftTables, modPath);
 
 		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);

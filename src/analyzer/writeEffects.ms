@@ -72,6 +72,7 @@ export function createRoutineDecls(): RoutineDecls {
 export interface WriteSummaries {
 	routineDecls: RoutineDecls;
 	reloadableUnits: string[];
+	loweredUnits: HashSet<string>;
 	routineSummaries: HashMap<Symbol, WriteSummary>;
 	closureSummaries: HashMap<Node, WriteSummary>;
 	retainedParams: HashMap<Symbol, int32>;
@@ -96,7 +97,7 @@ export interface WriteSummaries {
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
 	return {
-		routineDecls, reloadableUnits,
+		routineDecls, reloadableUnits, loweredUnits: new HashSet<string>(),
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
@@ -138,6 +139,27 @@ export function noteRoutineDecls(w: WriteEffects, program: Node): void {
 function unitOf(w: WriteEffects, s: WriteSummary): string {
 	if (s.kind == SummaryKind.Hooks) return "";
 	return s.sym != null ? (w.tables.routineDecls.routineUnits.get(s.sym!) ?? w.unit) : w.unit;
+}
+
+export function noteLoweredUnit(tables: WriteSummaries, unit: string): void {
+	tables.loweredUnits.add(unit);
+}
+
+// A routine of another module still has its checked body until that module is lowered, and
+// that body lacks the writes the lowerings make explicit: method-call receivers, operator
+// overloads, `this ref` receivers. Its summary is unknown until the module is registered.
+function awaitsLowering(w: WriteEffects, callee: WriteSummary): boolean {
+	return callee.sym != null && symAwaitsLowering(w, callee.sym!);
+}
+
+function symAwaitsLowering(w: WriteEffects, sym: Symbol): boolean {
+	const decls = w.tables.routineDecls;
+	const unit = decls.routineUnits.get(sym) ?? sym.modulePath;
+	return unit != "" && unit != w.unit && !w.tables.loweredUnits.has(unit) && !decls.unitRoutines.has(unit);
+}
+
+function unsettled(w: WriteEffects, caller: WriteSummary, callee: WriteSummary): boolean {
+	return reloadsApart(w, caller, callee) || awaitsLowering(w, callee);
 }
 
 function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummary): boolean {
@@ -810,7 +832,7 @@ function returnsNewObject(w: WriteEffects, s: WriteSummary, call: Node): boolean
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym) || runsNativeOnC(w, sym!) || dispatchEntryFor(sym!) != null) return false;
 	const callee = w.tables.routineSummaries.get(sym!);
-	return callee != null && callee.done && callee.returnsFresh && !reloadsApart(w, s, callee);
+	return callee != null && callee.done && callee.returnsFresh && !unsettled(w, s, callee);
 }
 
 function isFreshExpr(w: WriteEffects, s: WriteSummary, e: Node | null, fresh: HashSet<Symbol>): boolean {
@@ -912,7 +934,7 @@ export function isAssign(op: string): boolean {
 }
 
 function link(w: WriteEffects, s: WriteSummary, call: Node | null, callee: WriteSummary): void {
-	if (reloadsApart(w, s, callee)) {
+	if (unsettled(w, s, callee)) {
 		markUnknown(s);
 		return;
 	}
@@ -1049,7 +1071,7 @@ function callWriteParts(w: WriteEffects, call: Node, defs: LocalDefs | null): Wr
 		if (a != null && mayBeFunctionValue(a.nodeType) && !isLentCallback(w, a) && !routinesOf(w, a, null, null, null, 0, callees)) markUnknown(s);
 	}
 	for (const c of callees) {
-		if (reloadsApart(w, s, c)) markUnknown(s);
+		if (unsettled(w, s, c)) markUnknown(s);
 		else parts.push(settled(w, c));
 	}
 	return parts;
@@ -1076,7 +1098,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 }
 
 export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
-	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym)) return true;
+	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym) || symAwaitsLowering(w, sym)) return true;
 	const known = w.tables.retainedParams.get(sym);
 	if (known != null) return (known & (1 << i)) != 0;
 	w.tables.retainedParams.set(sym, -1);
@@ -1132,7 +1154,7 @@ function retainedParams(w: WriteEffects, body: Node, params: Symbol[]): int32 {
 // is unknown, so the caller keeps treating the result as reachable from any heap slot.
 export function viewReturnSlots(w: WriteEffects, call: Node): string[] | null {
 	const sym = calledRoutine(call);
-	if (sym == null || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null) return null;
+	if (sym == null || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || symAwaitsLowering(w, sym)) return null;
 	return routineReturnSlots(w, sym);
 }
 
@@ -1501,7 +1523,7 @@ export function bindingKeepsContract(w: WriteEffects, fn: Symbol, binding: Node 
 	if (!routinesOf(w, binding, null, null, defs, 0, callees)) return false;
 	const writes = newSummary(SummaryKind.Routine, null, []);
 	for (const c of callees) {
-		if (reloadsApart(w, writes, c)) return false;
+		if (unsettled(w, writes, c)) return false;
 		absorb(w, writes, { call: null, callee: settled(w, c) });
 	}
 	return !mayWriteAny(w, writes, contract.reads.slots);
@@ -1652,4 +1674,29 @@ test "a callback forwarded through a sync wrapper into a suspending routine is r
 	const loc = makeLoc(0, 0);
 	const wrap = callbackRoutine("wrap", "", callbackRoutine("later", "async", null, loc), loc);
 	assert retainsParam(w, wrap, 0);
+}
+
+test "a callee of a module not yet lowered is unknown until its module is lowered" {
+	const w = writeProbe();
+	w.unit = "/current.ms";
+	const loc = makeLoc(0, 0);
+	const plain = callbackRoutine("plain", "", null, loc);
+	plain.modulePath = "/other.ms";
+	assert retainsParam(w, plain, 0);
+	noteLoweredUnit(w.tables, "/other.ms");
+	assert !retainsParam(w, plain, 0);
+	const sameUnit = callbackRoutine("sameUnit", "", null, loc);
+	sameUnit.modulePath = "/current.ms";
+	assert !retainsParam(w, sameUnit, 0);
+}
+
+test "a view call into a module not yet lowered keeps its result reachable from any slot" {
+	const w = writeProbe();
+	w.unit = "/current.ms";
+	const arrType = createArray(createArray(int32Type()));
+	const call = loweredViewCall((xs: Node, at: SourceLocation): Node => makeCall(generatedRef("msRefArrayAccess", at), [xs, makeNumber(0, at)], at), arrType, makeLoc(0, 0));
+	call.resolvedSym!.modulePath = "/other.ms";
+	assert viewReturnSlots(w, call) == null;
+	noteLoweredUnit(w.tables, "/other.ms");
+	assert viewReturnSlots(w, call) != null;
 }
