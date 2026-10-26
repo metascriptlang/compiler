@@ -11,11 +11,9 @@ import { TaDurability } from "./revision";
 
 // ===== File Entry =====
 
-export class TaFileEntry {
+class TaFileEntry {
 	filePath: string;
 	source: string;
-	// A content hash, not an index: it carries taHashString's full 64-bit range
-	// and must NOT be narrowed with the fileId/index fields around it.
 	sourceHash: number;
 	fileId: int32;
 	durability: TaDurability;
@@ -45,12 +43,7 @@ function findByPath(store: TaFileInputStore, filePath: string): int32 {
 }
 
 function findByFileId(store: TaFileInputStore, fileId: int32): int32 {
-	// fileId === array index for sequentially assigned IDs
-	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId == fileId) return fileId;
-	// Fallback linear scan for non-sequential IDs
-	for (let i = 0; i < store.files.length; i = i + 1) {
-		if (store.files[i].fileId == fileId) return i;
-	}
+	if (fileId >= 0 && fileId < store.files.length) return fileId;
 	return -1;
 }
 
