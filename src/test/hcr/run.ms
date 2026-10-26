@@ -1119,6 +1119,9 @@ function stdFirstUse(): void {
 		console.log(both(ran));
 		failWith(tag, "a first use of a standard-library method, class or module did not reload into the running app");
 	}
+	for (const untouched of ["std/core/boolean/index", "std/hcr/index"]) {
+		need(tag, !both(ran).contains(`implementation changed (${untouched})`), `a first use of a native standard-library module relinked and reloaded the untouched image '${untouched}'`);
+	}
 	if (platform == "darwin") {
 		const providers = ["_crypto_blake2b_init", "_mz_deflateInit", "_tdefl_compress_buffer", "_tinfl_decompress", "_msGetIoEngine", "_msGetIoEngineIfExists", "_msIoEngineCreate", "_msIoEngineDestroy", "_msIoEnginePoll", "_msIoEngineWake", "_msIoEngineAddWakeFd", "_msIoEngineCancelFd"];
 		const images = `${dir}/out/hcr`;
@@ -1215,7 +1218,16 @@ function unchangedObjectKeepsImage(): void {
 		if (f.endsWith(".cfp")) remove(`${cache}/${f}`);
 	}
 	const rebuilt = mustBuild(tag, lost, ["build", "app.ms", "--hcr"], "the rebuild without object records failed");
+	const native = freshDir(`${TMP}/unchangedNativeFirstUse`);
+	put(`${native}/app.ms`, "import { label } from \"./logic\";\nconsole.log(label());\n");
+	copy(`${FIXTURES}/stdFirstUse/hash.txt`, `${native}/logic.ms`);
+	mustBuild(tag, native, ["build", "app.ms", "--hcr"], "the build before the first native use failed");
+	copy(`${FIXTURES}/stdFirstUse/blake.txt`, `${native}/logic.ms`);
+	const widened = mustBuild(tag, native, ["build", "app.ms", "--hcr"], "the build that first uses a native standard-library module failed");
 	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	for (const untouched of ["std/core/system/index", "std/core/boolean/index"]) {
+		need(tag, !widened.contains(`implementation changed (${untouched})`), `the compile flags a first native use adds relinked and reloaded the untouched image '${untouched}'`);
+	}
 	if (reloadLines(rebuilt).length != 0) {
 		console.log(rebuilt);
 		failWith(tag, "recompiling unchanged sources after their object records were lost reported a module as changed");
