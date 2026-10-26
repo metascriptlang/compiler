@@ -54,12 +54,12 @@ export function restoreInitState(t: InitTracker, state: int32): void {
 	t.initialized.length = state;
 }
 
-// First out parameter of the current routine that is not written on the path being checked, or "".
-export function unwrittenOutParam(t: InitTracker): string {
+// First out parameter of the current routine that is not written on the path being checked, or null.
+export function unwrittenOutParam(t: InitTracker): string | null {
 	for (const name of t.outParams) {
 		if (!hasName(t.initialized, name)) return name;
 	}
-	return "";
+	return null;
 }
 
 export function isOutParamName(t: InitTracker, name: string): boolean {
@@ -73,14 +73,14 @@ export function varDecl(t: InitTracker, name: string): void {
 	t.declBlocks.push(t.currentBlock);
 }
 
-// -1 when the name was never declared locally (import or global).
-export function getDeclBlock(t: InitTracker, name: string): number {
+// null when the name was never declared locally (import or global).
+export function getDeclBlock(t: InitTracker, name: string): number | null {
 	let i = t.declScopes.length - 1;
 	while (i >= 0) {
 		if (t.declScopes[i] == name) return t.declBlocks[i];
 		i = i - 1;
 	}
-	return -1;
+	return null;
 }
 
 // ===== Break State Detection =====
@@ -238,9 +238,9 @@ test "varDecl records block" {
 	assert getDeclBlock(t, "x") == 0;
 }
 
-test "getDeclBlock returns -1 for unknown" {
+test "getDeclBlock returns null for unknown" {
 	const t = createInitTracker();
-	assert getDeclBlock(t, "nonexistent") == -1;
+	assert getDeclBlock(t, "nonexistent") == null;
 }
 
 test "varDecl same block as currentBlock enables firstWrite" {

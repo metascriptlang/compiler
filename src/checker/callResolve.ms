@@ -1620,7 +1620,7 @@ function checkPropagatedError(ctx: CheckerContext, node: Node, argType: Type | n
 
 export function refuseUnwrittenOut(ctx: CheckerContext, at: SourceLocation, exit: string): void {
 	const name = unwrittenOutParam(ctx.initTracker);
-	if (name != "") addError(ctx, "'" + name + "' is not assigned on every path: it is an out parameter and must be written before " + exit, at.line, at.column);
+	if (name != null) addError(ctx, "'" + name + "' is not assigned on every path: it is an out parameter and must be written before " + exit, at.line, at.column);
 }
 
 export function checkPropagatedErrorAgainst(ctx: CheckerContext, node: Node, retType: Type | null, fnName: string): void {

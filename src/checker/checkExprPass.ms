@@ -3281,9 +3281,9 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		if (ctx.initTracker.leftPartOfAsgn > 0) reviveConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
 		else addError(ctx, "'" + d.name + "' was moved into a spawn thunk and cannot be used afterwards — spawn(fn, { move: [" + d.name + "] }) transferred it (PARALOCK E24)", node.location.line, node.location.column);
 	}
-	// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
+	// Ref parity: useVar — only check vars declared in current scope (getDeclBlock != null).
 	// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
-	if ((sym.symbolKind == SymbolKind.Variable || (sym.symbolKind == SymbolKind.Parameter && isOutParam(sym.symbolType))) && getDeclBlock(ctx.initTracker, d.name) >= 0
+	if ((sym.symbolKind == SymbolKind.Variable || (sym.symbolKind == SymbolKind.Parameter && isOutParam(sym.symbolType))) && getDeclBlock(ctx.initTracker, d.name) != null
 		&& node != ctx.initTracker.assignTarget && ctx.currentFunction != null
 		&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)
 		&& !admitsNull(sym.symbolType)) {
