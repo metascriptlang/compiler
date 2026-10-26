@@ -317,6 +317,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 		return lowered;
 	});
 	if (call) argDepth -= 1;
+	const callee = kids.length > 0 ? kids[0] : null;
 	let i = kids.length - 2;
 	while (i >= 0) {
 		if (ends[i] < hoisted.length && kids[i] != null) {
@@ -335,6 +336,12 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 		}
 		i -= 1;
 	}
+	if (expr.kind == NodeKind.CallExpr && !ctx.jsBackend && kids.length > 1 && kids[0] != null && kids[0] === callee && readsBeforeHoist(kids[0])
+		&& calleeReadMovesPastArgs(kids, ends[0] < hoisted.length)) {
+		const pre: Node[] = [];
+		kids[0] = bindOrdered(kids[0], pre, ctx);
+		hoisted.splice(ends[0], 0, pre[0]);
+	}
 	let k = 0;
 	mapExprChildren(expr, (child: Node): Node => {
 		const next = kids[k];
@@ -343,12 +350,40 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	});
 }
 
+// TS reads the callee of a call before its arguments; C reads a closure value where the call is
+// emitted, after them, so an argument that runs code or writes the callee's storage must not
+// get to change which function the call reaches.
+function calleeReadMovesPastArgs(kids: Node[], laterHoisted: boolean): boolean {
+	if (laterHoisted) return true;
+	const writes: Symbol[] = [];
+	let i = 1;
+	while (i < kids.length) {
+		const arg = kids[i];
+		if (arg != null) {
+			if (holdsCall(arg)) return true;
+			collectWrites(arg, writes);
+		}
+		i += 1;
+	}
+	return readsAnyOf(kids[0], writes);
+}
+
+function bindOrdered(child: Node, pre: Node[], ctx: TransformContext): Node {
+	const loc = child.location;
+	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
+	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
+	pre.push(decl);
+	return makeIdentResolved(sym, loc);
+}
+
 function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
-	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOperand(child, pre, ctx);
+	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOrdered(child, pre, ctx);
 	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess && !movePathAccesses.has(parent) ? arrayHandleRead(child) : null;
 	if (handle != null && (calls || readsAnyOf(child, writes))) {
-		const bound = bindOperand(handle, pre, ctx);
+		const bound = bindOrdered(handle, pre, ctx);
 		if (handle === child) return bound;
 		(child.data as HiddenDerefData).expr = bound;
 		return child;
@@ -368,17 +403,7 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
 	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
 	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
-	return bindOperand(child, pre, ctx);
-}
-
-function bindOperand(child: Node, pre: Node[], ctx: TransformContext): Node {
-	const loc = child.location;
-	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
-	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
-	decl.resolvedSym = sym;
-	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
-	pre.push(decl);
-	return makeIdentResolved(sym, loc);
+	return bindOrdered(child, pre, ctx);
 }
 
 function callVerdict(n: Node): Visit {
