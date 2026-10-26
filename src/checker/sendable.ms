@@ -224,8 +224,9 @@ function routineParts(sym: Symbol | null): Node | null {
 	return dn != null && (dn.kind == NodeKind.MethodDecl || dn.kind == NodeKind.FunctionDecl) ? dn : null;
 }
 
-function firstArgParam(dn: Node): int32 {
-	return dn.paramSyms!.length > 0 && dn.paramSyms![0].name == "this" ? 1 : 0;
+function firstArgParam(dn: Node, call: Node): int32 {
+	if (dn.paramSyms!.length > 0 && dn.paramSyms![0].name == "this") return 1;
+	return call.flags.has(NodeFlag.ExtCall) && !call.flags.has(NodeFlag.ExtStatic) ? 1 : 0;
 }
 
 function routineBody(dn: Node): Node | null {
@@ -307,7 +308,7 @@ function callReturnsLent(call: Node, lent: Symbol[]): boolean {
 	if (routine == null || routine.paramSyms == null) return true;
 	if (returnWalk.includes(routine)) return false;
 	const inner: Symbol[] = [];
-	const first = firstArgParam(routine);
+	const first = firstArgParam(routine, call);
 	for (let i = 0; i < reached.length && first + i < routine.paramSyms!.length; i += 1) {
 		if (reached[i]) inner.push(routine.paramSyms![first + i]);
 	}
@@ -346,7 +347,7 @@ function findKeptSite(node: Node | null, w: KeptWalk): Node | null {
 		const recv = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).object : null;
 		if (recv == null) {
 			const routine = routineParts(node.resolvedSym != null ? node.resolvedSym : (callee != null ? callee.resolvedSym : null));
-			if (routine != null && keptThrough(routine, d.arguments, w)) return node;
+			if (routine != null && keptThrough(routine, node, w)) return node;
 		} else if (!isThisIdent(recv) && outlivesCall(recv, w)) {
 			for (const a of d.arguments) { if (reachesLent(a, w.lent)) return node; }
 		}
@@ -356,10 +357,11 @@ function findKeptSite(node: Node | null, w: KeptWalk): Node | null {
 	return hit[0];
 }
 
-function keptThrough(routine: Node, args: Node[], w: KeptWalk): boolean {
+function keptThrough(routine: Node, call: Node, w: KeptWalk): boolean {
 	if (routine.paramSyms == null || w.seen.includes(routine)) return false;
+	const args = (call.data as CallExprData).arguments;
 	const inner: Symbol[] = [];
-	const first = firstArgParam(routine);
+	const first = firstArgParam(routine, call);
 	for (let i = 0; i < args.length && first + i < routine.paramSyms!.length; i += 1) {
 		if (reachesLent(args[i], w.lent)) inner.push(routine.paramSyms![first + i]);
 	}
@@ -374,8 +376,8 @@ function refuseKeptBorrow(call: Node, argNode: Node, pi: number): void {
 	const method = routineParts(call.resolvedSym);
 	if (method == null || method.kind != NodeKind.MethodDecl) return;
 	deferEffectCheck(argNode, "keptBorrow", (ctx: CheckerContext): void => {
-		if (method.paramSyms == null || firstArgParam(method) + pi >= method.paramSyms!.length) return;
-		const param = method.paramSyms![firstArgParam(method) + pi];
+		if (method.paramSyms == null || firstArgParam(method, call) + pi >= method.paramSyms!.length) return;
+		const param = method.paramSyms![firstArgParam(method, call) + pi];
 		const site = findKeptSite(routineBody(method), { lent: [param], held: [], seen: [method] });
 		if (site == null) return;
 		const what = site.kind == NodeKind.BinaryExpr
@@ -860,13 +862,13 @@ function lendRefusal(f: HandleFrame, call: Node, i: int32): string | null {
 	if (routines.length == 0) return "";
 	for (let k = 0; k < routines.length; k += 1) {
 		const r = routines[k];
-		if (firstArgParam(r) + i >= r.paramSyms!.length) return "";
-		const formal = r.paramSyms![firstArgParam(r) + i];
+		if (firstArgParam(r, call) + i >= r.paramSyms!.length) return "";
+		const formal = r.paramSyms![firstArgParam(r, call) + i];
 		if (!isReadonlyView(formal.symbolType)) return `, whose parameter '${formal.name}' is not Readonly<...>: declare it Readonly<...> to lend the handle for the call,`;
 		if (external[k]) return ", which has no body to check,";
 		if (isAsyncFunctionNode(r) && !f.awaited.includes(call)) return ", an async function whose call is not awaited in place,";
 	}
-	for (const r of routines) checkLentBody(f, call, r, r.paramSyms![firstArgParam(r) + i]);
+	for (const r of routines) checkLentBody(f, call, r, r.paramSyms![firstArgParam(r, call) + i]);
 	return null;
 }
 
@@ -1183,6 +1185,14 @@ export function peelHidden(n: Node): Node {
 		break;
 	}
 	return cur;
+}
+
+export function isCurrentActorRef(n: Node): boolean {
+	const p = peelHidden(n);
+	if (p == null || p.kind != NodeKind.Identifier) return false;
+	if (isThisIdent(p)) return true;
+	const init = constBindingInitializer(p.resolvedSym);
+	return init != null && isCurrentActorRef(init);
 }
 
 function isThisIdent(n: Node): boolean {

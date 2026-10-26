@@ -3,7 +3,7 @@
 // every element family: number[], string[], boolean[] (uint8 representation)
 // and a ref interface array. Value elements compile through the typed
 // msNumberArray/msStringArray/msUint8Array Splice3 helpers; the ref element
-// keeps the msRefArraySplice3 void* path. Includes a string churn loop so the
+// goes through the generic splice body. Includes a string churn loop so the
 // SAN lane exercises the stored-copy ownership of the string variant.
 
 interface Box { id: number }

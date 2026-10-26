@@ -530,7 +530,6 @@ void msRootsAdopt(msCellSeq* orphan) {
 }
 
 static msCellSeq msOrphanRoots;
-static int32_t msOrphanRootsPending;
 
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 #include <pthread.h>
@@ -549,11 +548,10 @@ static void msOrphanRootsAcquire(void) {}
 static void msOrphanRootsRelease(void) {}
 #endif
 
-static __attribute__((noinline)) void msAdoptOrphanRoots(void) {
+void msRootsAdoptOrphans(void) {
 	msOrphanRootsAcquire();
 	msCellSeq spilled = msOrphanRoots;
 	msCellSeqInit(&msOrphanRoots);
-	__atomic_store_n(&msOrphanRootsPending, 0, __ATOMIC_RELAXED);
 	msOrphanRootsRelease();
 	msRootsAdopt(&spilled);
 }
@@ -562,7 +560,6 @@ void msRootsThreadTeardown(void) {
 	if (msRoots.len > 0) {
 		msOrphanRootsAcquire();
 		for (int32_t i = 0; i < msRoots.len; i++) msCellSeqPush(&msOrphanRoots, msRoots.data[i]);
-		__atomic_store_n(&msOrphanRootsPending, 1, __ATOMIC_RELAXED);
 		msOrphanRootsRelease();
 	}
 	msCellSeqFree(&msRoots);
@@ -767,7 +764,6 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 /* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
-	if (__atomic_load_n(&msOrphanRootsPending, __ATOMIC_RELAXED) != 0) msAdoptOrphanRoots();
 	if (msRoots.len == 0) return;
 
 	msGcEnv j;

@@ -21,6 +21,7 @@
 // GUARD-CHECK-FAIL cannot take a cstring from 'moved'
 // GUARD-CHECK-FAIL cannot take a cstring from 'kept'
 // GUARD-CHECK-FAIL cannot take a cstring from 'returned'
+// GUARD-CHECK-FAIL cannot take a cstring from 'shifted'
 // GUARD-CHECK-FAIL cannot take a cstring from this expression
 
 @include("string.h")
@@ -52,6 +53,12 @@ function fromAssignedLocalArgument(n: int32): int64 {
 	return strlen(moved); // GUARD-REFUSED
 }
 
+function fromAssignedLocalBehindCast(n: int32): int64 {
+	let shifted: string | null = "value-" + n.toString();
+	shifted = "other";
+	return strlen(shifted as string); // GUARD-REFUSED
+}
+
 function fromParameterKeptInLocal(kept: string): int64 {
 	const c: cstring = kept; // GUARD-REFUSED
 	return strlen(c);
@@ -66,4 +73,4 @@ function fromTemporary(n: int32): int64 {
 	return strlen(c);
 }
 
-console.log(fromReassignedLocal(1) + fromReassignedLocalCapturedBySpawn(4) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));
+console.log(fromReassignedLocal(1) + fromReassignedLocalCapturedBySpawn(4) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromAssignedLocalBehindCast(5) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));

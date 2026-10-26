@@ -604,7 +604,7 @@ export function isNullableShape(members: Type[]): boolean {
 	return false;
 }
 
-function hasNullMember(t: Readonly<Type>): boolean {
+export function hasNullMember(t: Readonly<Type>): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	for (const c of t.typeChildren) {
 		if (c != null && c.kind == TypeKind.Null) return true;
@@ -3998,6 +3998,7 @@ export function unwrapRefNullUnion(t: Readonly<Type>): Readonly<Type | null> {
 
 function isNullablePointer(t: Readonly<Type>): boolean {
 	if (t.kind == TypeKind.Cursor) return t.typeReturn != null && isNullablePointer(t.typeReturn);
+	if (isAwaitable(t)) return true;
 	const k = (peelToRepr(t) ?? t).kind;
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
 }
@@ -4563,6 +4564,7 @@ function substituteStructAll(t: Type, params: Type[], concretes: Type[], seen: C
 		result.sym = t.sym;
 	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
+	if (t.typeFlags.has(TypeFlag.HasInheritedFields)) result.typeFlags = result.typeFlags.incl(TypeFlag.HasInheritedFields);
 	return result;
 }
 

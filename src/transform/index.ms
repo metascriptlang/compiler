@@ -15,7 +15,7 @@
 //     matchLower            — sees simplest AST
 // 16. tailCallLower         — tail recursion → while + loop-carried shadow locals (both targets)
 //     paramReassignLower    — assigned params → owned shadow locals (C only: DRC sink/destroy)
-//     awaitSpill            — an await inside an expression → its own declaration, operands in order (C only)
+//     awaitSpill            — an await inside an expression → its own declaration, operands in order (C); on JS only the arguments of a deferred-splice extern pattern
 // 17. asyncDesugar          — await → yield, async → generator (before generatorLower)
 // 18. generatorLower        — function* → state machine returning iterator object
 // 19. varHoist              — hoist var declarations to function scope top (JS semantics)
@@ -197,7 +197,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowLap("pass.lowerTailCall");
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); flowLap("pass.lowerParamReassign"); }
 	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); flowLap("pass.lowerAsyncModuleBody"); }
-	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); flowLap("pass.lowerAwaitSpill"); }
+	result = lowerAwaitSpill(result, ctx);
+	flowLap("pass.lowerAwaitSpill");
 	if (!jsBackend) { result = lowerNamespaceValues(result); flowLap("pass.lowerNamespaceValues"); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); flowLap("pass.lowerActorPre"); }
 	if (!jsBackend) {

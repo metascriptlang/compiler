@@ -31,7 +31,7 @@ static void* worker(void* unused) {
 	return NULL;
 }
 
-int32_t msTestFreeRootOfExitedWorker(int32_t ownRoots) {
+static int32_t freeRootOfExitedWorker(int32_t ownRoots, bool collectFirst) {
 	cyclic.isCyclic = true;
 	for (int32_t i = 0; i < ownRoots; i++) {
 		void* own = msAllocTyped(32, &cyclic);
@@ -42,6 +42,7 @@ int32_t msTestFreeRootOfExitedWorker(int32_t ownRoots) {
 	pthread_t t;
 	pthread_create(&t, NULL, worker, NULL);
 	pthread_join(t, NULL);
+	if (collectFirst) msOrcCollect();
 	signal(SIGABRT, onAbort);
 	realStderr = dup(2);
 	captured = fileno(tmpfile());
@@ -49,4 +50,12 @@ int32_t msTestFreeRootOfExitedWorker(int32_t ownRoots) {
 	msDestroyAndDispose(shared);
 	signal(SIGABRT, SIG_DFL);
 	return msRoots.len;
+}
+
+int32_t msTestFreeRootOfExitedWorker(int32_t ownRoots) {
+	return freeRootOfExitedWorker(ownRoots, false);
+}
+
+int32_t msTestCollectThenFreeRootOfExitedWorker(int32_t ownRoots) {
+	return freeRootOfExitedWorker(ownRoots, true);
 }

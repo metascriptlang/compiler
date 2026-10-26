@@ -2,19 +2,25 @@ import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
 	OutExprData, HiddenDerefData, ReturnStmtData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
+	ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
 	DeclKind, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef, makeBlock, makeReturn } from "../util";
+import { isRoutineNode } from "../../ast/shape";
 import { indexedType } from "../coercion/accessJS";
+
+interface Prologue {
+	routine: Node;
+	syms: Symbol[];
+}
 
 interface VarParamRun {
 	ctx: TransformContext;
 	boxedSyms: Symbol[];
-	fnStack: Node[];
-	prologueFns: Node[];
-	prologueSyms: Symbol[][];
+	routineStack: Node[];
+	prologues: Prologue[];
 }
 
 function isBoxed(s: Symbol, run: VarParamRun): boolean {
@@ -65,32 +71,35 @@ function unwrapAddr(n: Node): Node {
 	return n;
 }
 
+function innermostOwner(s: Symbol, run: VarParamRun): Node | null {
+	for (let i = run.routineStack.length - 1; i >= 0; i -= 1) {
+		const routine = run.routineStack[i];
+		if (routine.paramSyms != null && routine.paramSyms!.includes(s)) return routine;
+	}
+	return null;
+}
+
 function recordParamPrologue(s: Symbol, run: VarParamRun): void {
-	for (let i = run.fnStack.length - 1; i >= 0; i -= 1) {
-		const fd = run.fnStack[i].data as FunctionDeclData;
-		let found = false;
-		for (const pn of fd.params) { if (pn == s.name) { found = true; break; } }
-		if (!found) continue;
-		for (let j = 0; j < run.prologueFns.length; j += 1) {
-			if (run.prologueFns[j] == run.fnStack[i]) {
-				for (const ps of run.prologueSyms[j]) { if (ps == s) return; }
-				run.prologueSyms[j].push(s);
-				return;
-			}
-		}
-		run.prologueFns.push(run.fnStack[i]);
-		run.prologueSyms.push([s]);
+	const owner = innermostOwner(s, run);
+	if (owner == null) {
+		reportTransformError(run.ctx, `internal: no enclosing routine declares the boxed parameter '${s.name}'`, s.location);
 		return;
+	}
+	const prologue = run.prologues.find((p: Prologue): boolean => p.routine == owner);
+	if (prologue == null) {
+		run.prologues.push({ routine: owner, syms: [s] });
+	} else if (!prologue.syms.includes(s)) {
+		prologue.syms.push(s);
 	}
 }
 
 function sc(node: Node, run: VarParamRun): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.HiddenAddr) noteBoxedArg(node, run);
-	if (node.kind == NodeKind.FunctionDecl) {
-		run.fnStack.push(node);
+	if (isRoutineNode(node)) {
+		run.routineStack.push(node);
 		mapChildren(node, (child: Node): Node => sc(child, run));
-		run.fnStack.pop();
+		run.routineStack.pop();
 		return node;
 	}
 	if (node.kind == NodeKind.CallExpr) {
@@ -276,17 +285,36 @@ function rw(node: Node, run: VarParamRun): Node {
 	return node;
 }
 
+function arrowBodyBlock(d: ArrowFunctionData): Node {
+	if (d.arrowBody.kind != NodeKind.BlockStmt) {
+		const at = d.arrowBody.location;
+		d.arrowBody = makeBlock([makeReturn(d.arrowBody, at)], at);
+	}
+	return d.arrowBody;
+}
+
+function routineBodyBlock(routine: Node): Node | null {
+	return match (routine.kind) {
+		NodeKind.FunctionDecl => (routine.data as FunctionDeclData).fnBody,
+		NodeKind.FunctionExpr => (routine.data as FunctionExprData).funcExprBody,
+		NodeKind.ArrowFunction => arrowBodyBlock(routine.data as ArrowFunctionData),
+		NodeKind.MethodDecl => (routine.data as MethodDeclData).methodBody,
+		NodeKind.ConstructorDecl => (routine.data as ConstructorDeclData).ctorBody,
+		_ => null,
+	};
+}
+
 export function lowerJsVarParam(program: Node, ctx: TransformContext): Node {
-	const run: VarParamRun = { ctx, boxedSyms: [], fnStack: [], prologueFns: [], prologueSyms: [] };
+	const run: VarParamRun = { ctx, boxedSyms: [], routineStack: [], prologues: [] };
 	sc(program, run);
 	rw(program, run);
-	for (let i = 0; i < run.prologueFns.length; i += 1) {
-		const fd = run.prologueFns[i].data as FunctionDeclData;
-		if (fd.fnBody == null) continue;
-		const bs = fd.fnBody.data as BlockStmtData;
-		const at = run.prologueFns[i];
+	for (const prologue of run.prologues) {
+		const body = routineBodyBlock(prologue.routine);
+		if (body == null) continue;
+		const bs = body.data as BlockStmtData;
+		const at = prologue.routine;
 		const pro: Node[] = [];
-		for (const s of run.prologueSyms[i]) {
+		for (const s of prologue.syms) {
 			pro.push(makeExprStmt(makeAssign(makeIdentResolved(s, at.location), cellLit(makeIdentResolved(s, at.location), at), at.location), at.location));
 		}
 		for (const st of bs.statements) { pro.push(st); }

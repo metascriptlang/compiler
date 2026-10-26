@@ -28,7 +28,7 @@ LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
 PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "tsan" "solana")
 KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san tsan guard solana"
 RC_SCAN_PATHS='^(src|std|runtime)/'
-RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$'
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
 
@@ -70,6 +70,14 @@ itself and compares the two link response files (objects and link flags, output 
 ignored); equal means a fixed point, otherwise the newer one becomes the candidate and
 is rebuilt once more. Still unequal after three generations is the red
 "self-host: no fixed point after 3 generations".
+
+For src/test-only changes, gen1 still runs the native build and its input checks.
+If its output is byte-identical to the unchanged builder, gen1 already proves the
+fixed point; otherwise the full bootstrap runs. --release and --record always
+run the full bootstrap. The identity shortcut requires the same physical support
+root; installed or symlinked builders use the full bootstrap. Response-based
+verification still regenerates gen1's link evidence. Current emit-RC scans and
+all selected test lanes still run.
 
 A GREEN run whose build lane produced the candidate for the clean src and std tree
 of HEAD makes that candidate the worktree builder ./msc (the old one stays as
@@ -122,6 +130,7 @@ env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
       MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
+      GATE_ADOPT=0 skips caching a whole run's candidate emits for the next narrowed gate; for a host whose cache does not outlive the gate
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
@@ -130,6 +139,7 @@ USAGE
 }
 
 say() { printf '%s\n' "$*"; }
+fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 die() { printf 'gate: %s\n' "$*" >&2; exit 2; }
 cap_jobs() {
   local jobs=$1 cap
@@ -309,6 +319,16 @@ adopt_builder() {
 }
 
 file_digest() { if [ -f "$1" ]; then digest <"$1"; else echo none; fi; }
+
+same_bootstrap_root() (
+  local root out
+  [ "$BUILDER" = "$TOP/msc" ] && [ ! -L "$BUILDER" ] && [ ! -L "$CAND" ] \
+    && [ -f "$TOP/std/core/system/index.ms" ] \
+    && [ ! -e "$TOP/out/std/core/system/index.ms" ] \
+    && [ ! -e "$OUT/std/core/system/index.ms" ] || return 1
+  root=$(cd "$TOP" && pwd -P) && out=$(cd "$OUT" && pwd -P) || return 1
+  [ "$out" = "$root/out/gate" ]
+)
 
 resume_key() {
   local head base_sha
@@ -907,6 +927,33 @@ FAKE
   return $bad
 }
 
+adopt_cache_self_test() (
+  local d bad=0 got CTL_CACHE EMIT CAND EXE_SUFFIX="" GATE_ADOPT
+  d=$(mktemp -d) || return 1
+  CTL_CACHE="$d/cache" EMIT="$d/emit" CAND="$d/cand"
+  mkdir -p "$EMIT"; : >"$EMIT/cand.sig"; : >"$EMIT/ctl.keys"; printf '#!/bin/sh\n' >"$CAND"; chmod +x "$CAND"
+  cand_proven() { true; }
+  control_key() { printf 'k1'; }
+  control_snapshot() { mkdir -p "$2/std/core/system" && printf 'x\n' >"$2/std/core/system/index.ms"; }
+  adopt_candidate || { printf 'FAIL adopt cache: a cache without an entries directory refused the candidate\n'; bad=1; }
+  control_ready "$(control_dir k1)" k1 || { printf 'FAIL adopt cache: the candidate was not published on a cold cache\n'; bad=1; }
+  got=$(GATE_ADOPT=0 adopt_whole)
+  [ "$got" = "gate: adopt skipped · GATE_ADOPT=0" ] || { printf 'FAIL adopt cache: GATE_ADOPT=0 did not skip: "%s"\n' "$got"; bad=1; }
+  prepare_emit_workspace() { true; }
+  control_support() { printf 's'; }
+  control_key() { printf 'k2'; }
+  stage_emit_compiler() { printf '%s' "$1"; }
+  stable_programs() { :; }
+  reusable_programs() { :; }
+  emit_side() { :; }
+  adopt_candidate() { return 1; }
+  got=$(adopt_whole); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == "gate: adopt failed after "*" · publishing the candidate's emits" ]]; } \
+    || { printf 'FAIL adopt cache: a failed publication was not reported: rc=%s "%s"\n' "$rc" "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 adopt_self_test() {
   local bad=0 d got saveTOP=$TOP saveCAND=$CAND savekey=${cand_key-} g="git -c user.name=t -c user.email=t@t"
   d=$(mktemp -d) || return 1
@@ -1109,6 +1156,7 @@ adopt_candidate() {
   dir=$(control_dir "$key")
   if ! control_ready "$dir" "$key"; then
     rm -rf "$dir"
+    mkdir -p "$CTL_CACHE/entries" || return 1
     tmp=$(mktemp -d "$CTL_CACHE/entries/.adopt.XXXXXX") || return 1
     control_snapshot HEAD "$tmp" && cp "$CAND" "$(control_binary "$tmp")" \
       && publish_control "$tmp" "$dir" "$key" || { rm -rf "$tmp"; return 1; }
@@ -1184,15 +1232,17 @@ emit_sides() {
 
 adopt_whole() {
   local key cand t0=$SECONDS
-  cand_proven && prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
-    && key=$(control_key HEAD) || return 0
+  [ "${GATE_ADOPT:-1}" != 0 ] || { say "gate: adopt skipped · GATE_ADOPT=0"; return 0; }
+  cand_proven || return 0
+  prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
+    && key=$(control_key HEAD) || { say "gate: adopt failed · emit workspace"; return 0; }
   ! control_ready "$(control_dir "$key")" "$key" || return 0
-  cand=$(stage_emit_compiler "$CAND" cand) || return 0
-  rm -rf "$EMIT" && mkdir -p "$EMIT" || return 0
+  cand=$(stage_emit_compiler "$CAND" cand) || { say "gate: adopt failed · staging the candidate"; return 0; }
+  rm -rf "$EMIT" && mkdir -p "$EMIT" || { say "gate: adopt failed · $EMIT"; return 0; }
   stable_programs >"$EMIT/programs"
-  reusable_programs >"$EMIT/ctl.keys" || return 0
+  reusable_programs >"$EMIT/ctl.keys" || { say "gate: adopt failed · program keys"; return 0; }
   emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
-  adopt_candidate || return 0
+  adopt_candidate || { say "gate: adopt failed after $(fmt_secs $((SECONDS - t0))) · publishing the candidate's emits"; return 0; }
   say "gate: adopt $(fmt_secs $((SECONDS - t0))) · this tree's emits are cached for the next narrowed gate"
   select_ledger adopt "$((SECONDS - t0))" "" "$(grep -c . "$EMIT/programs" | tr -d ' ')" "" "" ""
 }
@@ -1697,6 +1747,7 @@ src/transform/raiserLowering.ms|raiser
 std/core/date/index.rms|raiser
 src/test/corpus/run.ms|raiser
 src/compiler/meta/hostTable.ms|raiser
+src/test/corpus/programs/1054-comptimeCallFolds.ms|raiser
 src/checker/checkPass.ms|
 src/codegen/c/expressions.ms|
 std/core/date/index.cms|
@@ -1867,7 +1918,10 @@ CASES
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
   adopt_self_test || bad=1
+  adopt_cache_self_test || bad=1
   boot_self_test || bad=1
+  bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
+  bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -2166,7 +2220,7 @@ run_test_lane() {
 
 split_flaky() {
   awk -v want="$1" '
-    NR == FNR { f[$0] = 1; next }
+    FILENAME == ARGV[1] { f[$0] = 1; next }
     { id = $0; sub(/ \[[^]]*\]$/, "", id)
       hit = (id in f) || ($0 in f)
       if ((want == "keep") == (hit != 0)) print }' "$OUT/flaky.ids" -
@@ -2249,7 +2303,6 @@ need_cand() {
   [ -x "$CAND" ] || die "lane '$1' tests the candidate compiler; include the build lane"
 }
 
-fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
 if [ "$select_only" -eq 1 ]; then
   need_cand select
@@ -2329,15 +2382,36 @@ run_sharded_lane() {
 }
 
 build_lane() {
-  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
-  if [ ! -f "${CAND}_link.rsp" ]; then
-    say "gate: gen1's link was cached and wrote no link response file, linking it again"
-    rm -f "$CAND" "${CAND%.exe}.pdb"
-    env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  local producer="" current="" candidate="" checked=""
+  if [ "$release" -eq 0 ] && [ "$record" -eq 0 ] \
+    && [ -n "$(printf '%s\n' "$paths" | grep -Ev "$INERT")" ] \
+    && ! printf '%s\n' "$paths" | grep -Ev "$INERT|^src/test/" | grep -q . \
+    && same_bootstrap_root; then
+    producer=$(file_digest "$BUILDER") || producer=""
   fi
-  self_host_boot "$CAND" "$CC_FLAG" || return $?
+  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  if [ -n "$producer" ] && [ "$producer" != none ]; then
+    current=$(file_digest "$BUILDER") || return 1
+    [ "$current" = "$producer" ] || { say "FAIL self-host: builder changed during gen1"; return 1; }
+    if [ -x "$CAND" ] && same_bootstrap_root; then
+      candidate=$(file_digest "$CAND") || candidate=""
+    fi
+  fi
+  if [ -n "$candidate" ] && [ "$candidate" = "$producer" ]; then
+    say "gate: self-host gen1 = builder (byte-identical fixed point; native inputs checked)"
+  else
+    if [ ! -f "${CAND}_link.rsp" ]; then
+      say "gate: gen1's link was cached and wrote no link response file, linking it again"
+      rm -f "$CAND" "${CAND%.exe}.pdb"
+      env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+    fi
+    self_host_boot "$CAND" "$CC_FLAG" || return $?
+  fi
   [ "$rcscan_on" -eq 1 ] || return 0
-  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG
+  checked=$(file_digest "$CAND") || return 1
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG || return $?
+  current=$(file_digest "$CAND") || return 1
+  [ "$current" = "$checked" ] || { say "FAIL self-host: candidate changed during the emit rc scan"; return 1; }
 }
 
 lane_body() {

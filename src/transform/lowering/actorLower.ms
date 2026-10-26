@@ -3,7 +3,7 @@
 // After this pass, zero ActorDecl nodes remain. DRC and codegen see:
 // - ClassDecl (state struct with pid field)
 // - FunctionDecl _impl handlers (original method bodies, called by dispatch)
-// - FunctionDecl proxies (enqueue message via msActorSend — what callers invoke)
+// - FunctionDecl proxies (enqueue message via msActorSendOrDrop — what callers invoke)
 // - FunctionDecl dispatch (switches on msg kind, calls _impl handlers)
 // - @include("runtime/actor/actor.h") injected for C compilation
 
@@ -29,6 +29,7 @@ import {
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
+import { peelHidden } from "../../checker/sendable";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
@@ -195,7 +196,7 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: Symbol[], paramT
 	}
 }
 
-function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
+function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], dropSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
 	const msgSym = freshTempSym(ctx, "amsg", VOID_PTR);
 	const slotCount = totalSlotCount(params, paramTypes);
 	const msgAlloc = makeCall(runtimeRef("msMsgAllocSized", loc), [
@@ -213,14 +214,14 @@ function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], ctx:
 	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
-	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
+	const sendCall = makeCall(runtimeRef("msActorSendOrDrop", loc), [actorPtr, makeIdentResolved(msgSym, loc), makeIdentResolved(dropSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	return makeBlock(stmts, loc);
 }
 
 // ===== Build proxy body for a T-returning method (call semantics) =====
 
-function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
+function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retType: Type, dropSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
 	const futSym = freshTempSym(ctx, "afut", VOID_PTR);
 	const msgSym = freshTempSym(ctx, "amsg", VOID_PTR);
 	// Only String needs typed-sized future (msMsgCompleteString writes the
@@ -253,7 +254,7 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	const stmts: Node[] = [futDecl, msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr2 = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
-	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
+	const sendCall = makeCall(runtimeRef("msActorSendOrDrop", loc), [actorPtr2, makeIdentResolved(msgSym, loc), makeIdentResolved(dropSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
 	stmts.push(retFut);
@@ -282,6 +283,43 @@ function actorImplOf(ctx: TransformContext, method: Node): Symbol {
 	return implSym;
 }
 
+function messageArgs(m: Node, msgParamSym: Symbol, loc: SourceLocation): Node[] {
+	const md = m.data as MethodDeclData;
+	const mParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
+	const args: Node[] = [];
+	let dSlot = 0;
+	for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
+		const mk = paramMsgKind(mParamTypes, ai);
+		if (mk == "array" || mk == "struct") {
+			// "struct" needs explicit HiddenAddr (ccgIntroducedPtr=false for small structs);
+			// "array" gets & via shimCallArg (ccgIntroducedPtr=true unconditionally).
+			const getPtrCall = makeCall(runtimeRef("msMsgGetPtr", loc), [
+				makeTypedIdentResolved(msgParamSym, null, loc),
+				makeNumber(dSlot, loc),
+			], loc);
+			const unboxCall = makeCall(runtimeRef("msUnboxStruct", loc), [getPtrCall], loc);
+			unboxCall.nodeType = mParamTypes[ai];
+			if (mk == "struct") {
+				args.push(makeHiddenAddr(unboxCall, loc));
+			} else {
+				args.push(unboxCall);
+			}
+		} else {
+			const getter = msgGetterName(mk);
+			const getCall = makeCall(runtimeRef(getter, loc), [
+				makeTypedIdentResolved(msgParamSym, null, loc),
+				makeNumber(dSlot, loc),
+			], loc);
+			if (mk == "ptr") {
+				getCall.nodeType = VOID_PTR;
+			}
+			args.push(getCall);
+		}
+		dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
+	}
+	return args;
+}
+
 function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol, msgParamSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	// Cast void* this to actor's Ref type via HiddenStdConv (no C cast emitted — just type annotation).
@@ -308,39 +346,8 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
 		const selfRef = makeIdentResolved(selfSym, loc);
 		selfRef.nodeType = actorRefType;
-		// Build handler call args: _self + unpacked args from msg (slot-aware)
-		const mParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
 		const handlerArgs: Node[] = [selfRef];
-		let dSlot = 0;
-		for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
-			const mk = paramMsgKind(mParamTypes, ai);
-			if (mk == "array" || mk == "struct") {
-				// "struct" needs explicit HiddenAddr (ccgIntroducedPtr=false for small structs);
-				// "array" gets & via shimCallArg (ccgIntroducedPtr=true unconditionally).
-				const getPtrCall = makeCall(runtimeRef("msMsgGetPtr", loc), [
-					makeTypedIdentResolved(msgParamSym, null, loc),
-					makeNumber(dSlot, loc),
-				], loc);
-				const unboxCall = makeCall(runtimeRef("msUnboxStruct", loc), [getPtrCall], loc);
-				unboxCall.nodeType = mParamTypes[ai];
-				if (mk == "struct") {
-					handlerArgs.push(makeHiddenAddr(unboxCall, loc));
-				} else {
-					handlerArgs.push(unboxCall);
-				}
-			} else {
-				const getter = msgGetterName(mk);
-				const getCall = makeCall(runtimeRef(getter, loc), [
-					makeTypedIdentResolved(msgParamSym, null, loc),
-					makeNumber(dSlot, loc),
-				], loc);
-				if (mk == "ptr") {
-					getCall.nodeType = VOID_PTR;
-				}
-				handlerArgs.push(getCall);
-			}
-			dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
-		}
+		for (const arg of messageArgs(m, msgParamSym, loc)) handlerArgs.push(arg);
 		// Callee resolved (forward-decl correctness) but CallExpr.resolvedSym=null
 		// to avoid emitNativeCall path which skips ccgIntroducedPtr promotion.
 		const handlerCall = makeCall(makeIdentResolved(actorImplOf(ctx, m), loc), handlerArgs, loc);
@@ -507,7 +514,17 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 // message-dispatched methods only — lifecycle hooks never cross the boundary.
 function wrapImplBodyWithShareRelease(body: Node, method: Node, paramTypes: Type[] | null, isVoid: boolean, ctx: TransformContext, loc: SourceLocation): Node {
 	if (paramTypes == null) return body;
-	const params = (method.data as MethodDeclData).methodParams;
+	const methodName = (method.data as MethodDeclData).methodName;
+	const releases = boundaryReleases(methodName, (method.data as MethodDeclData).methodParams, method.paramSyms, paramTypes, isVoid, ctx, loc);
+	if (releases.length == 0) return body;
+	// Wrap the try in a Block: asyncBridge's rewriteAsyncFnBody requires the
+	// async impl's body to be a BlockStmt (a bare TryCatchStmt body threw
+	// "un-normalized"). Block-wrapping is semantically inert for the sync path.
+	const boundaryRelease = makeTryFinally(body, makeBlock(releases, loc), loc);
+	return makeBlock([boundaryRelease], loc);
+}
+
+function boundaryReleases(methodName: string, params: string[], paramSyms: Symbol[] | null, paramTypes: Type[], isVoid: boolean, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const releases: Node[] = [];
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
 		const t = ai < paramTypes.length ? paramTypes[ai] : null;
@@ -527,16 +544,11 @@ function wrapImplBodyWithShareRelease(body: Node, method: Node, paramTypes: Type
 		} else {
 			continue;
 		}
-		if (method.paramSyms == null || ai >= method.paramSyms.length) throw new Error(`internal: actor method '${(method.data as MethodDeclData).methodName}' reached its boundary release without the symbol of parameter '${params[ai]}'`);
-		const argIdent = makeTypedIdentResolved(method.paramSyms[ai], t, loc);
+		if (paramSyms == null || ai >= paramSyms.length) throw new Error(`internal: actor method '${methodName}' reached its boundary release without the symbol of parameter '${params[ai]}'`);
+		const argIdent = makeTypedIdentResolved(paramSyms[ai], t, loc);
 		releases.push(makeExprStmt(makeCall(runtimeRef(releaseFn, loc), [argIdent], loc), loc));
 	}
-	if (releases.length == 0) return body;
-	// Wrap the try in a Block: asyncBridge's rewriteAsyncFnBody requires the
-	// async impl's body to be a BlockStmt (a bare TryCatchStmt body threw
-	// "un-normalized"). Block-wrapping is semantically inert for the sync path.
-	const boundaryRelease = makeTryFinally(body, makeBlock(releases, loc), loc);
-	return makeBlock([boundaryRelease], loc);
+	return releases;
 }
 
 function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
@@ -552,7 +564,7 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 		if (m.kind == NodeKind.MethodDecl) {
 			const md = m.data as MethodDeclData;
 			// Lifecycle hooks — NOT message-dispatched. Emit as standalone _impl.
-			if (md.methodName == "onTerminate" || md.methodName == "onExit" || md.methodName == "onDown" || md.methodName == "onIdle") {
+			if (isLifecycleHook(md.methodName)) {
 				const implName = name + "_" + md.methodName + "_impl";
 				const implNode = createNode(NodeKind.FunctionDecl, {
 					fnName: implName,
@@ -619,8 +631,8 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 			const methodRetType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : voidType();
 			const proxySyms = actorParamSyms(ctx, md.methodParams, methodParamTypes);
 			const proxyBody = isVoid
-				? buildSendProxy(msgKind, proxySyms, methodParamTypes, ctx, loc)
-				: buildCallProxy(msgKind, proxySyms, methodParamTypes, methodRetType, ctx, loc);
+				? buildSendProxy(msgKind, proxySyms, methodParamTypes, lowered.drop, ctx, loc)
+				: buildCallProxy(msgKind, proxySyms, methodParamTypes, methodRetType, lowered.drop, ctx, loc);
 			const proxyParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
 			// Proxy returns the reply Promise<T>, not T directly. The user-visible
 			// type at the call site MUST be Promise<T> so:
@@ -741,6 +753,80 @@ function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, meth
 	return fnNode;
 }
 
+function isLifecycleHook(methodName: string): boolean {
+	return match (methodName) {
+		"onTerminate" | "onExit" | "onDown" | "onIdle" => true,
+		_ => false,
+	};
+}
+
+function dropFnType(): Type {
+	return createFunction([createPtr(voidType())], ["_dmsg"], voidType());
+}
+
+// A message the runtime drops undelivered (dead or reaped actor, mailbox drained at stop)
+// releases what its _impl would have: the boundary releases, plus the string and boxed
+// value args that dispatch's temporaries own.
+function emitActorDrop(name: string, methods: Node[], dropSym: Symbol, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
+	const dropParamSyms = actorParamSyms(ctx, ["_dmsg"], [createPtr(voidType())]);
+	const stmts: Node[] = [];
+	let msgKind = 0;
+	for (const m of methods) {
+		const md = m.data as MethodDeclData;
+		if (isLifecycleHook(md.methodName)) continue;
+		const kind = msgKind;
+		msgKind = msgKind + 1;
+		if (md.methodParams.length <= 1) continue;
+		const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
+		const types = m.nodeType != null ? m.nodeType.typeChildren : [];
+		const syms = actorParamSyms(ctx, md.methodParams, types);
+		const handlerName = name + "_" + md.methodName + "_drop";
+		const handlerType = createFunction(types.slice(1), md.methodParams.slice(1), voidType());
+		const handler = createNode(NodeKind.FunctionDecl, {
+			fnName: handlerName,
+			params: md.methodParams.slice(1),
+			fnParamTypes: md.methodParamTypes.slice(1),
+			fnBody: makeBlock(boundaryReleases(md.methodName, md.methodParams, syms, types, isVoid, ctx, loc), loc),
+			fnFlags: "",
+			fnReturnType: "void",
+			fnDefaults: [],
+			nativeName: "",
+			nameLocation: md.nameLocation,
+		}, syntheticToken(loc));
+		handler.nodeType = handlerType;
+		handler.paramSyms = syms.slice(1);
+		const handlerSym = mintSym(ctx, SymbolKind.Function, handlerName, handlerType);
+		setFlag(handlerSym, SymbolFlag.NeverRaises);
+		markValueLayoutParamsAsMutated(handlerSym, types.slice(1));
+		handler.resolvedSym = handlerSym;
+		result.push(handler);
+		const call = makeCall(makeIdentResolved(handlerSym, loc), messageArgs(m, dropParamSyms[0], loc), loc);
+		call.resolvedSym = null;
+		const kindCall = makeCall(runtimeRef("msMsgKind", loc), [makeTypedIdentResolved(dropParamSyms[0], null, loc)], loc);
+		stmts.push(createNode(NodeKind.IfStmt, {
+			condition: makeBinary(kindCall, "===", makeNumber(kind, loc), loc),
+			consequent: makeBlock([makeExprStmt(call, loc)], loc),
+			alternate: makeBlock([], loc),
+		}, syntheticToken(loc)));
+	}
+	const fnNode = createNode(NodeKind.FunctionDecl, {
+		fnName: dropSym.name,
+		params: ["_dmsg"],
+		fnParamTypes: ["void"],
+		fnBody: makeBlock(stmts, loc),
+		fnFlags: "",
+		fnReturnType: "void",
+		fnDefaults: [],
+		nativeName: "",
+		nameLocation: loc,
+	}, syntheticToken(loc));
+	fnNode.nodeType = dropSym.symbolType;
+	fnNode.paramSyms = dropParamSyms;
+	fnNode.resolvedSym = dropSym;
+	setFlag(dropSym, SymbolFlag.NeverRaises);
+	result.push(fnNode);
+}
+
 // ===== Collect methods from actor body (unwrapping decorators) =====
 
 function collectActorMethods(d: ActorDeclData): Node[] {
@@ -770,6 +856,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const lowered: ActorLowered = {
 		actorSym: node.resolvedSym,
 		dispatch: null,
+		drop: mintSym(ctx, SymbolKind.Function, name + "_dropMsg", dropFnType()),
 		onTerminate: null,
 		onExit: null,
 		onDown: null,
@@ -871,6 +958,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
 	result.push(dispatchNode);
 	lowered.dispatch = dispatchNode.resolvedSym;
+	emitActorDrop(name, methods, lowered.drop, ctx, loc, result);
 	wireActorConstructor(stateClass, lowered, actorType, loc, ctx);
 
 	return result;
@@ -920,6 +1008,7 @@ function includeActorRuntime(ctx: TransformContext): void {
 interface ActorLowered {
 	actorSym: Symbol;
 	dispatch: Symbol | null;
+	drop: Symbol;
 	onTerminate: Symbol | null;
 	onExit: Symbol | null;
 	onDown: Symbol | null;
@@ -942,6 +1031,7 @@ function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLo
 	const createCall = makeCall(runtimeRef("msActorCreatePid", loc), [
 		makeIdentResolved(thisSym, loc),
 		makeIdentResolved(dSym, loc),
+		makeIdentResolved(actor.drop, loc),
 	], loc);
 	result.push(makeExprStmt(makeBinary(actorPidMember(thisSym, loc), "=", createCall, loc), loc));
 	const registerCall = makeCall(runtimeRef("msActorRegister", loc), [
@@ -1098,11 +1188,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			if (m.kind != NodeKind.MethodDecl) continue;
 			const md = m.data as MethodDeclData;
 			// Skip lifecycle hooks — not message-dispatched
-			const isLifecycle = match (md.methodName) {
-				"onTerminate" | "onExit" | "onDown" | "onIdle" => true,
-				_ => false,
-			};
-			if (isLifecycle) continue;
+			if (isLifecycleHook(md.methodName)) continue;
 			// Detect: method is explicitly async OR its body contains await
 			const isAsync = routineFlagSet(md.methodFlags).has(RoutineFlag.Async) || bodyContainsAwait(md.methodBody);
 			if (!isAsync) continue;
@@ -1241,6 +1327,22 @@ function bindReceivers(h: ActorHandles, actor: Symbol, members: Node[]): void {
 	}
 }
 
+function bindReceiverAlias(h: ActorHandles, decl: Node): boolean {
+	const d = decl.data as VariableDeclData;
+	const sym = decl.resolvedSym;
+	if (d.declKind != DeclKind.Const || sym == null || d.initializer == null) return false;
+	const init = peelHidden(d.initializer);
+	const actor = init.kind == NodeKind.Identifier && init.resolvedSym != null ? h.receivers.get(init.resolvedSym) : null;
+	if (actor == null) return false;
+	const state = stateOf(h, actor);
+	init.nodeType = state;
+	d.initializer = init;
+	sym.symbolType = state;
+	decl.nodeType = state;
+	h.receivers.set(sym, actor);
+	return true;
+}
+
 function isStateField(actor: Symbol, property: string): boolean {
 	const state = actor.symbolType.typeReturn;
 	return state != null && state.typeNames.indexOf(property) >= 0;
@@ -1350,6 +1452,7 @@ function lowerHandleNode(h: ActorHandles, node: Node): Node {
 		read.nodeType = node.nodeType;
 		return read;
 	}
+	if (node.kind == NodeKind.VariableDecl && bindReceiverAlias(h, node)) return node;
 	if (node.kind == NodeKind.ActorDecl) {
 		const actor = node.resolvedSym;
 		if (actor == null) throw new Error(`internal: actor '${(node.data as ActorDeclData).actorName}' reached handle lowering without a symbol`);

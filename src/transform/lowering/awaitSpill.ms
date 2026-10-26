@@ -5,10 +5,11 @@ import {
 	FunctionDeclData, BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData,
 	ConditionalExprData, TypeAssertionData,
 	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
-	AwaitExprData, CallExprData,
+	AwaitExprData, CallExprData, Symbol,
 } from "../../ast/node";
 import { booleanType } from "../../checker/types";
 import { TransformContext } from "../context";
+import { isNativePattern } from "../../checker/context";
 import {
 	makeExprStmt, makeAssign,
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts, isActorCall,
@@ -40,17 +41,73 @@ function isRoutine(node: Node): boolean {
 // A null comparison that folds to a constant keeps its operand's evaluation only if the
 // operand runs first, so an operand with effects is spilled like an await.
 function dropsOperandEffects(node: Node): boolean {
+	if (_sp.ctx.jsBackend) return false;
 	const operand = foldedNullOperand(_sp.ctx, node);
 	return operand != null && cloneIfPure(operand) == null;
 }
 
 function dropsNamespaceObject(node: Node): boolean {
+	if (_sp.ctx.jsBackend) return false;
 	if (node.kind != NodeKind.MemberExpr) return false;
 	const object = (node.data as MemberExprData).object;
 	return isNamespaceTyped(object.nodeType) && object.kind != NodeKind.Identifier;
 }
 
+// A JS extern pattern splices its arguments' source where its `#` sits, so a `#` after an
+// arrow or `function` in the pattern runs the argument inside that body: an `await` there is a
+// syntax error and an effect there runs after the call. Worked out once per extern symbol.
+let _deferredPatterns = new HashMap<Symbol, boolean>();
+
+function hasDeferredSplice(pattern: string): boolean {
+	let body = pattern.indexOf("=>");
+	const fn = pattern.indexOf("function");
+	if (body < 0 || (fn >= 0 && fn < body)) body = fn;
+	if (body < 0) return false;
+	const rest = pattern.slice(body, pattern.length);
+	return rest.indexOf("#") >= 0 || rest.indexOf("@") >= 0;
+}
+
+function patternCalleeSym(node: Node): Symbol | null {
+	if (node.kind != NodeKind.CallExpr) return null;
+	const sym = (node.data as CallExprData).callee.resolvedSym;
+	return sym != null && sym.nativeName != "" && isNativePattern(sym.nativeName) ? sym : null;
+}
+
+function isDeferredPatternCall(node: Node): boolean {
+	const sym = patternCalleeSym(node);
+	if (sym == null) return false;
+	if (!_deferredPatterns.has(sym)) _deferredPatterns.set(sym, hasDeferredSplice(sym.nativeName));
+	return _deferredPatterns.get(sym) == true;
+}
+
+function runsEarly(node: Node): Visit {
+	if (node.kind == NodeKind.AwaitExpr || node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) return Visit.Hit;
+	return isRoutine(node) ? Visit.Skip : Visit.Descend;
+}
+
+function isSpilledPatternArg(a: Node): boolean {
+	const k = a.kind;
+	if (k == NodeKind.OutExpr || k == NodeKind.HiddenAddr || k == NodeKind.MoveExpr || k == NodeKind.SpreadExpr) return false;
+	return anyDescendant(a, runsEarly);
+}
+
+function lowerDeferredPatternCall(e: Node, pre: Node[]): void {
+	const d = e.data as CallExprData;
+	const viaMember = d.callee.kind == NodeKind.MemberExpr;
+	const ops: Node[] = [viaMember ? (d.callee.data as MemberExprData).object : null as unknown as Node];
+	for (const a of d.arguments) ops.push(a);
+	for (let i = viaMember ? 0 : 1; i < ops.length; i += 1) {
+		const lowered = lowerAwaitExpr(ops[i], pre);
+		ops[i] = isSpilledPatternArg(lowered)
+			? tempRef(bindTemp(_sp, lowered, DeclKind.Const, lowered.nodeType, pre, lowered.location), lowered.location)
+			: lowered;
+	}
+	if (viaMember) (d.callee.data as MemberExprData).object = ops[0];
+	for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = ops[i + 1];
+}
+
 function isSpillPoint(node: Node): boolean {
+	if (_sp.ctx.jsBackend) return isDeferredPatternCall(node);
 	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node) || dropsNamespaceObject(node);
 }
 
@@ -129,6 +186,15 @@ function lowerAwaitedArgKeepingLentArgsInFrame(d: AwaitExprData, pre: Node[]): v
 function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	if (e == null || !needsSpill(e)) return e;
 	const k = e.kind;
+	if (_sp.ctx.jsBackend && isDeferredPatternCall(e)) {
+		lowerDeferredPatternCall(e, pre);
+		return e;
+	}
+	if (_sp.ctx.jsBackend && k == NodeKind.AwaitExpr) {
+		const d = e.data as AwaitExprData;
+		d.awaitArg = lowerAwaitExpr(d.awaitArg, pre);
+		return e;
+	}
 	if (k == NodeKind.AwaitExpr) {
 		const d = e.data as AwaitExprData;
 		lowerAwaitedArgKeepingLentArgsInFrame(d, pre);
@@ -183,7 +249,9 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as HiddenDerefData;
 		d.expr = lowerAwaitExpr(d.expr, pre);
 	} else {
-		_sp.ctx.errors.push(`await inside a ${k.toString()} expression is not supported on the C backend yet`);
+		_sp.ctx.errors.push(_sp.ctx.jsBackend
+			? `an extern pattern call inside a ${k.toString()} expression is not supported on the JS backend yet`
+			: `await inside a ${k.toString()} expression is not supported on the C backend yet`);
 	}
 	return e;
 }
@@ -354,6 +422,7 @@ export function blockifyAwaitingArrows(program: Node): void {
 
 export function lowerAwaitSpill(program: Node, ctx: TransformContext): Node {
 	useCtx(ctx);
+	_deferredPatterns = new HashMap<Symbol, boolean>();
 	blockifyAwaitingArrows(program);
 	walkExpandBlocks(program, spillAwaitStmt, ctx);
 	return program;
@@ -409,6 +478,26 @@ test "a top-level await operand spills before its statement" { assert stmtCountA
 test "an assert operand await spills before the assert" { assert stmtCountAfter("assert (await g()) == 1;", lowerAwaitSpill) == 2; }
 
 test "an exported initializer await spills before the export" { assert stmtCountAfter("export const v = (await g()) + 1;", lowerAwaitSpill) == 2; }
+
+function jsBodyKinds(src: string): string {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return "PARSE_ERROR";
+	const ctx = makeCtx();
+	ctx.jsBackend = true;
+	const fn = getStmts(lowerAwaitSpill(parsed.value, ctx))[0];
+	let out = "";
+	for (const s of ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements) out = out + s.kind.toString() + ";";
+	return out;
+}
+
+test "a deferred splice pattern is found per extern" {
+	assert hasDeferredSplice("Promise.resolve(0).then(() => #)");
+	assert hasDeferredSplice("run(function () { return @; })");
+	assert !hasDeferredSplice("Math.floor(#)");
+	assert !hasDeferredSplice("f(#, () => 1)");
+}
+
+test "JS leaves an await alone when no pattern defers it" { assert jsBodyKinds("async function f() { g(await p); }") == "ExprStmt;"; }
 
 test "a statement without await is unchanged" { assert stmtCountAfter("const v = a() + b();", lowerAwaitSpill) == 1; }
 

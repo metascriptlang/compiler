@@ -24,6 +24,23 @@ function stripQuery(id) {
 // serves a module as an immutable dependency.
 const INSTANCE_RE = /[?&]instance=([^&]+)/;
 
+function relativeSpecifiers(program) {
+	const found = [];
+	const visit = (node) => {
+		if (!node || typeof node.type !== "string") return;
+		const spec = node.source;
+		const takesSpecifier = node.type === "ImportExpression" || node.type.endsWith("Declaration");
+		if (takesSpecifier && spec?.type === "Literal" && typeof spec.value === "string" && spec.value.startsWith(".")) found.push(spec);
+		for (const key in node) {
+			const child = node[key];
+			if (Array.isArray(child)) child.forEach(visit);
+			else if (child && typeof child === "object") visit(child);
+		}
+	};
+	visit(program);
+	return found;
+}
+
 function instanceOf(id) {
 	const m = INSTANCE_RE.exec(id);
 	return m ? m[1] : "";
@@ -165,9 +182,7 @@ export default function metascript(options = {}) {
 			const output = outputOf(id);
 			if (!output) return null;
 			let rewritten = null;
-			for (const statement of this.parse(code).body) {
-				const specifier = statement.source;
-				if (!specifier || !specifier.value.startsWith(".")) continue;
+			for (const specifier of relativeSpecifiers(this.parse(code))) {
 				const target = emitted.byOutput.get(canon(resolve(dirname(output), specifier.value)));
 				if (!target) continue;
 				let path = relative(dirname(source), target.source).replace(/\\/g, "/");

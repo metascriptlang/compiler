@@ -791,6 +791,23 @@ function destroyHelper(text: string, typeInfoLine: string): string {
 	return text.slice(call, text.indexOf("(", call));
 }
 
+function calledRoutine(caller: string, prefix: string): string {
+	const at = caller.indexOf(prefix, 0);
+	return at < 0 ? "" : caller.slice(at, caller.indexOf("(", at));
+}
+
+function calledBody(text: string, caller: string, prefix: string): string {
+	const name = calledRoutine(caller, prefix);
+	const bodies = name == "" ? [] : instanceBodies(text, name, "");
+	return bodies.length == 1 ? bodies[0] : "";
+}
+
+function evictionReach(text: string, caller: string): string {
+	const splice = calledBody(text, caller, "TXX_splice_");
+	const shrink = splice == "" ? "" : calledBody(text, splice, "TXX_shrink_");
+	return shrink == "" ? "" : splice + shrink;
+}
+
 function refArrayAcyclicEmitsPlainRelease(): void {
 	const tag = "refArrayAcyclicEmitsPlainRelease";
 	const dir = freshDir("refarrayfamily");
@@ -803,6 +820,7 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 	}
 	let leafOps = "";
 	let linkOps = "";
+	let all = "";
 	let acyclicCell = false;
 	let cyclicCell = false;
 	for (const f of readDir(`${dir}/out/debug`)) {
@@ -810,6 +828,7 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
 		if (leafOps == "") leafOps = routineBody(text, "leafOps");
 		if (linkOps == "") linkOps = routineBody(text, "linkOps");
+		all = all + text;
 		for (const line of lines(text)) {
 			if (!line.contains("RefCellTypeInfo = {")) continue;
 			const helper = destroyHelper(text, line);
@@ -827,22 +846,76 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 		fail(tag, `array cells: acyclic helper ${acyclicCell}, cyclic helper ${cyclicCell}; both expected`);
 		return;
 	}
+	const leafReach = evictionReach(all, leafOps);
+	const linkReach = evictionReach(all, linkOps);
+	if (leafReach == "" || linkReach == "") {
+		fail(tag, `splice with an item reaches no single splice and shrink instance: leafOps ${leafReach != ""}, linkOps ${linkReach != ""}`);
+		return;
+	}
 	for (const banned of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
-		if (leafOps.contains(banned)) {
-			fail(tag, `leafOps, over an acyclic class, calls ${banned}`);
+		if (leafOps.contains(banned) || leafReach.contains(banned)) {
+			fail(tag, `leafOps or the splice it calls, over an acyclic class, calls ${banned}`);
 			return;
 		}
 	}
-	for (const want of ["msAcyclicRefArraySetLen(", "msAcyclicRefArraySplice3("]) {
-		if (!leafOps.contains(want)) {
-			fail(tag, `leafOps, over an acyclic class, never calls ${want}`);
-			return;
-		}
+	if (!leafOps.contains("msAcyclicRefArraySetLen(") || !leafReach.contains("msDecref(")) {
+		fail(tag, "leafOps, over an acyclic class, never releases through msAcyclicRefArraySetLen( and the splice's msDecref(");
+		return;
 	}
-	for (const want of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
+	for (const want of ["msDecrefCyclic(", "msRefArraySetLen("]) {
 		if (!linkOps.contains(want)) {
 			fail(tag, `linkOps, over a cyclic class, never calls ${want}`);
 			return;
+		}
+	}
+	if (!linkReach.contains("msDecrefCyclic(")) {
+		fail(tag, "the splice linkOps calls, over a cyclic class, never releases through msDecrefCyclic(");
+		return;
+	}
+	ok(tag);
+}
+
+function instanceBodies(text: string, prefix: string, elem: string): string[] {
+	const bodies: string[] = [];
+	for (const line of lines(text)) {
+		if (!line.endsWith(") {") || line.startsWith(" ") || line.startsWith("\t")) continue;
+		const open = line.indexOf("(", 0);
+		const name = line.slice(line.lastIndexOf(" ", open) + 1, open);
+		if (!name.startsWith(prefix) || !name.contains(elem)) continue;
+		const at = text.indexOf(line, 0);
+		bodies.push(text.slice(at, text.indexOf("\n}\n", at)));
+	}
+	return bodies;
+}
+
+function arrayRelocatesByMove(): void {
+	const tag = "arrayRelocatesByMove";
+	const dir = freshDir("relocate");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/arrayRelocateByMove.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	let text = "";
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (f.endsWith(".c")) text = text + (try readFile(`${dir}/out/debug/${f}`) catch "");
+	}
+	const cases = [["_ref_Node_", "msIncref"], ["__Cell_", "Copy("]];
+	for (const c of cases) {
+		for (const prefix of ["TXX_splice_", "TXX_reverse_", "TXX_shift_", "mergeRuns_", "TXX_sortBy_"]) {
+			const bodies = instanceBodies(text, prefix, c[0]);
+			if (bodies.length == 0) {
+				fail(tag, `no ${prefix} instance over ${c[0]} emitted`);
+				return;
+			}
+			for (const body of bodies) {
+				if (body.contains(c[1])) {
+					fail(tag, `${prefix} over ${c[0]} relocates by copy (${c[1]})`);
+					return;
+				}
+			}
 		}
 	}
 	ok(tag);
@@ -862,7 +935,7 @@ function publishCountsBeforeVisible(): void {
 		fail(tag, "emit error");
 		return;
 	}
-	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSend("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
+	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSendOrDrop("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
 	const seen: int32[] = [0, 0];
 	for (const f of readDir(`${dir}/out/debug`)) {
 		if (!f.endsWith(".c")) continue;
@@ -1054,6 +1127,7 @@ function main(): void {
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
 	refArrayAcyclicEmitsPlainRelease();
+	arrayRelocatesByMove();
 	publishCountsBeforeVisible();
 	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",

@@ -462,6 +462,7 @@ void msUnregisterCycle(void* p);
 void msRootsSwap(msCellSeq* other);
 void msRootsAdopt(msCellSeq* orphan);
 void msRootsThreadTeardown(void);
+void msRootsAdoptOrphans(void);
 
 /* rememberCycle — register/unregister cycle candidate */
 static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* desc) {

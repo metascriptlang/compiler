@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -1055,8 +1055,19 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 // boundary conversion (msStringToCString on C; none on JS, cstring ≡ string)
 // is inserted — mirrors an explicit `as cstring` cast, for implicit call args.
 export function refuseDanglingCString(ctx: CheckerContext, expr: Node, livesForTheCall: boolean): void {
-	if (outlivesItsCString(expr)) return;
-	if (!livesForTheCall || !livesThroughCall(ctx, expr)) reportDanglingCString(ctx, expr);
+	const source = stringBehindAssertions(expr);
+	if (outlivesItsCString(source)) return;
+	if (!livesForTheCall || !livesThroughCall(ctx, source)) reportDanglingCString(ctx, expr, source);
+}
+
+function stringBehindAssertions(expr: Node): Node {
+	let at = expr;
+	while (at.kind == NodeKind.TypeAssertion) {
+		const inner = (at.data as TypeAssertionData).asExpr;
+		if (inner.nodeType == null || !isStringLike(withoutNullMember(inner.nodeType))) return at;
+		at = inner;
+	}
+	return at;
 }
 
 function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
@@ -1106,8 +1117,8 @@ function writesItsLeft(op: string): boolean {
 	return op.endsWith("=") && op != "==" && op != "===" && op != "!=" && op != "!==" && op != "<=" && op != ">=";
 }
 
-function reportDanglingCString(ctx: CheckerContext, expr: Node): void {
-	const what = expr.kind == NodeKind.Identifier ? "'" + (expr.data as IdentifierData).name + "'" : "this expression";
+function reportDanglingCString(ctx: CheckerContext, expr: Node, source: Node): void {
+	const what = source.kind == NodeKind.Identifier ? "'" + (source.data as IdentifierData).name + "'" : "this expression";
 	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or a call argument, which the call keeps alive unless it is a parameter or local the function assigns; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
 		expr.location.line, expr.location.column);
 }

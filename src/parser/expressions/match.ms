@@ -39,6 +39,7 @@ export function parseMatchExpr(
 	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' to start match body at line ${current(state).line}`);
 	}
+	const openBrace = current(state);
 	advance(state);
 
 	const cases: Node[] = [];
@@ -63,9 +64,10 @@ export function parseMatchExpr(
 		for (const c of rest) cases[cases.length - 1].comments.push(c);
 	}
 
-	if (current(state).kind == TokenKind.RBrace) {
-		advance(state);
+	if (current(state).kind != TokenKind.RBrace) {
+		return Result.err(`Expected '}' to close the match body opened at line ${openBrace.line}, column ${openBrace.column}`);
 	}
+	advance(state);
 
 	return Result.ok(createNode(NodeKind.MatchExpr, {
 		matchDisc: disc,
@@ -176,11 +178,12 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		let node = createNode(NodeKind.StringLiteral, { value: token.value }, token);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 			advance(state);
-			if (!isAtEnd(state) && isIdentOrKeyword(current(state).kind)) {
-				const prop = current(state);
-				advance(state);
-				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
+			if (isAtEnd(state) || !isIdentOrKeyword(current(state).kind)) {
+				return Result.err(`Expected a property name after '.' at line ${current(state).line}`);
 			}
+			const prop = current(state);
+			advance(state);
+			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
 		}
 		return Result.ok(node);
 	}
@@ -227,6 +230,13 @@ test "single case" { assert parseOk("match (x) { _ => 0 }"); }
 test "wildcard only" { assert parseOk("match (x) { _ => x }"); }
 
 test "string.code pattern" { assert parseOk("match (ch) { \"n\".code => 1, _ => 0 }"); }
+
+test "a match body without its closing brace or a pattern dot without a name is refused" {
+	assert !parseOk("match (x) { _ => 1,");
+	assert !parseOk("match (x) { 1 => 2, _ => 3");
+	assert !parseOk("match (s) { \"a\". => 1, _ => 2 }");
+	assert !parseOk("match (s) { \"a\".1 => 1, _ => 2 }");
+}
 
 test "call in arm" { assert parseOk("match (x) { 1 => foo(), _ => bar() }"); }
 

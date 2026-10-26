@@ -15,7 +15,8 @@ import { checkLossless } from "../../fmt/lossless";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource, lspDocumentUri } from "./shared";
-import { getFormatOptions, splitLines, detectLineIndent } from "./diagnostics";
+import { getFormatOptions } from "./diagnostics";
+import { splitLines, detectLineIndent, indentFault } from "./formatLint";
 
 
 // ===== Formatting =====
@@ -48,9 +49,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 
 	// Check if this line has a format violation
 	const options = getFormatOptions(db, path);
-	const isCommentCont = info.indentEnd > 0 && info.indentEnd < line.length && line.byteAt(info.indentEnd) == "*".code;
-	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length && !isCommentCont
-		&& (info.isMixed || (options.useTabs && info.hasSpace && !info.hasTab) || (!options.useTabs && info.hasTab && !info.hasSpace));
+	const hasIndentIssue = indentFault(line, info, options.useTabs) !== null;
 	const hasTrailingWs = info.trailStart < line.length && info.trailStart > 0;
 
 	if (hasIndentIssue || hasTrailingWs) {

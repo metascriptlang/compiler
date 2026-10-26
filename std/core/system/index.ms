@@ -1139,7 +1139,7 @@ when (mscDeclaresRuntime) {
 	extern function msSpawnHeldSettle(hp: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>): int64;
+	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>, drop: Ptr<void>): int64;
 
 	@compilerFunc
 	extern function msActorFromPid(pid: int64): Ptr<void>;
@@ -1172,7 +1172,7 @@ when (mscDeclaresRuntime) {
 	extern function msActorCtorLeave(pid: int64): void;
 
 	@compilerFunc
-	extern function msActorSend(a: Ptr<void>, msg: Ptr<void>): void;
+	extern function msActorSendOrDrop(a: Ptr<void>, msg: Ptr<void>, drop: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msActorSuspend(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;

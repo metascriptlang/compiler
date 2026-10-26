@@ -91,10 +91,10 @@ if (text != "") {
 			continue;
 		}
 		const counted = body.indexOf("msMsgSetPtrShared(");
-		const send = body.indexOf("msActorSend(");
-		if (send < 0) report(`${prefix}*: no msActorSend`);
+		const send = body.indexOf("msActorSendOrDrop(");
+		if (send < 0) report(`${prefix}*: no msActorSendOrDrop`);
 		else if (counted < 0) report(`${prefix}*: the Arc goes into the message without a counting setter`);
-		else if (counted > send) report(`${prefix}*: the counting setter runs after msActorSend`);
+		else if (counted > send) report(`${prefix}*: the counting setter runs after msActorSendOrDrop`);
 	}
 }
 

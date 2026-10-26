@@ -54,3 +54,16 @@ export function find<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T |
 	const i = arr.findIndex(fn);
 	return i >= 0 ? arr[i] : null;
 }
+
+export function spliceStart(start: number, n: int64): int64 {
+	if (start != start || start <= -(n as number)) return 0;
+	if (start >= (n as number)) return n;
+	const s = start as int64;
+	return s < 0 ? s + n : s;
+}
+
+export function spliceCount(deleteCount: number, room: int64): int64 {
+	if (deleteCount != deleteCount || deleteCount <= 0) return 0;
+	if (deleteCount >= (room as number)) return room;
+	return deleteCount as int64;
+}

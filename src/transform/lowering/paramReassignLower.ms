@@ -23,6 +23,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren } from "../walker";
+import { isAssignOp } from "../../ast/operators";
 import { makeBlock, makeVarDecl, makeIdentResolved } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
@@ -143,15 +144,6 @@ function recordAddressArgs(d: CallExprData, params: string[], out: Symbol[]): vo
 		if (formal == null || formal.kind != TypeKind.Var || arg == null) continue;
 		recordTarget(arg.kind == NodeKind.OutExpr ? (arg.data as OutExprData).outArg : arg, params, out);
 	}
-}
-
-function isAssignOp(op: string): boolean {
-	if (op == "=") return true;
-	if (op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=") return true;
-	if (op == "**=" || op == "&=" || op == "|=" || op == "^=") return true;
-	if (op == "<<=" || op == ">>=" || op == ">>>=") return true;
-	if (op == "&&=" || op == "||=" || op == "??=") return true;
-	return false;
 }
 
 function rewriteRefs(body: Node, fromSym: Symbol, toSym: Symbol): void {

@@ -200,6 +200,13 @@ function parseDefaultValue(state: ParserState): Result<Node, string> {
 	return value;
 }
 
+function pushParsedDefault(state: ParserState, paramIdx: int32): void {
+	while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
+	const parsed = parseDefaultValue(state);
+	if (!parsed.ok) addError(state, parsed.error);
+	_lastDefaults.push(parsed.ok ? parsed.value : null as unknown as Node);
+}
+
 // `x?: T` is `x: T | null = null`: the type text is optionalized exactly as an optional
 // field's is, and the default is a null literal pushed at the parameter's index.
 function pushOptionalDefault(paramIdx: int32, markToken: Token): void {
@@ -343,9 +350,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				if (patMark != null) addError(state, `Parameter cannot have question mark and initializer (line ${patMark.line})`);
 				advance(state);
-				while (_lastDefaults.length < patIdx) { _lastDefaults.push(null as unknown as Node); }
-				const dResult = parseDefaultValue(state);
-				_lastDefaults.push(dResult.ok ? dResult.value : null as unknown as Node);
+				pushParsedDefault(state, patIdx);
 			} else if (patMark != null) {
 				pushOptionalDefault(patIdx, patMark);
 				seenOptional = true;
@@ -369,9 +374,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 			if (optMark != null) addError(state, `Parameter cannot have question mark and initializer ('${param.value}' at line ${optMark.line})`);
 			advance(state);
-			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
-			const defResult = parseDefaultValue(state);
-			_lastDefaults.push(defResult.ok ? defResult.value : null as unknown as Node);
+			pushParsedDefault(state, paramIdx);
 		} else if (optMark != null) {
 			pushOptionalDefault(paramIdx, optMark);
 			seenOptional = true;
@@ -459,6 +462,12 @@ function paramErrors(input: string): string[] {
 	const state = createState(lr.value);
 	parseParamList(state, "f");
 	return state.errors;
+}
+
+test "a parameter default that does not parse is a parse error" {
+	assert paramErrors("(x: int32 = )").length == 1;
+	assert paramErrors("(a: int32, { b }: P = , c: int32)").length == 1;
+	assert paramErrors("(x: int32 = 1)").length == 0;
 }
 
 test "an optional parameter is its type or null with a null default" {

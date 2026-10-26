@@ -83,6 +83,7 @@ function declIndexBuild(programs: Node[], paths: string[]): void {
 
 let _visitedSet: HashSet<string> = new HashSet<string>();
 let _visitedSyms: HashSet<Symbol> = new HashSet<Symbol>();
+let _markedUnions: HashSet<Type> = new HashSet<Type>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -265,6 +266,8 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
 function markUnionHookEdges(t: Type): void {
 	if (_sourceDependenciesOnly) return;
+	if (_markedUnions.has(t)) return;
+	_markedUnions.add(t);
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
 		let vbase = vt;
@@ -659,6 +662,7 @@ export function computeAliveSet(
 	}
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
@@ -770,6 +774,7 @@ function takeReachability(): AliveSet {
 	_sourceDependenciesOnly = false;
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
@@ -787,6 +792,7 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	_singleModule = modulePath;
 	declIndexBuild([program], [modulePath]);
 	for (const stmt of (program.data as ProgramData).programStmts) {
@@ -803,18 +809,13 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 
 // Check if a statement is a side-effecting top-level statement (not a declaration)
 function isTopLevelStatement(node: Node): boolean {
-	const k = node.kind;
-	if (k == NodeKind.ExprStmt) return true;
-	if (k == NodeKind.IfStmt) return true;
-	if (k == NodeKind.WhileStmt) return true;
-	if (k == NodeKind.ForStmt) return true;
-	if (k == NodeKind.ForOfStmt) return true;
-	if (k == NodeKind.TryCatchStmt) return true;
-	if (k == NodeKind.ThrowStmt) return true;
-	if (k == NodeKind.BlockStmt) return true;
-	if (k == NodeKind.AssertStmt) return true;
-	if (k == NodeKind.VariableDecl) return varDeclNeedsRuntimeInit(node);
-	return false;
+	return match (node.kind) {
+		NodeKind.ExprStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt
+			| NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.SwitchStmt | NodeKind.MatchStmt | NodeKind.TryCatchStmt
+			| NodeKind.ThrowStmt | NodeKind.BlockStmt | NodeKind.AssertStmt | NodeKind.DeferStmt => true,
+		NodeKind.VariableDecl => varDeclNeedsRuntimeInit(node),
+		_ => false,
+	};
 }
 
 function isBuiltinDirectiveStmt(node: Node): boolean {

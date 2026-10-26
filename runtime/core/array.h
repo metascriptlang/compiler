@@ -94,6 +94,8 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 /* Raw pointer compare */
 bool msArraySamePayload(void* a, void* b);
 
+void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t elemSize);
+
 /* ===== Number Array ===== */
 
 msNumberArray msNumberArrayNew(int64_t cap);
@@ -261,5 +263,32 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 /* Capacity query. */
 #define msGenericArrayCapacity(arr_ptr) \
 	((arr_ptr)->p != NULL ? (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap : (int64_t)0)
+
+#define msGenericArrayRotate(arr_ptr, lo, mid, hi) do { \
+	int64_t _rlo = (lo), _rmid = (mid), _rhi = (hi); \
+	if (_rlo < 0 || _rmid < _rlo || _rhi < _rmid || _rhi > (arr_ptr)->len) msRaiseIndexError(_rhi, (arr_ptr)->len); \
+	if (_rlo < _rmid && _rmid < _rhi) \
+		msArrayRotateBytes((char*)(arr_ptr)->p->data, _rlo, _rmid, _rhi, sizeof((arr_ptr)->p->data[0])); \
+} while(0)
+
+#define msGenericArraySwap(arr_ptr, i, j) do { \
+	int64_t _si = (i), _sj = (j); \
+	if ((uint64_t)_si >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_si, (arr_ptr)->len); \
+	if ((uint64_t)_sj >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_sj, (arr_ptr)->len); \
+	__typeof__((arr_ptr)->p->data[0]) _st = (arr_ptr)->p->data[_si]; \
+	(arr_ptr)->p->data[_si] = (arr_ptr)->p->data[_sj]; \
+	(arr_ptr)->p->data[_sj] = _st; \
+} while(0)
+
+#define msGenericArraySwapWith(arr_ptr, i, other, j) do { \
+	int64_t _si = (i), _sj = (j); \
+	__typeof__(arr_ptr) _so = __builtin_choose_expr( \
+		__builtin_types_compatible_p(__typeof__(other), __typeof__(arr_ptr)), (other), &(other)); \
+	if ((uint64_t)_si >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_si, (arr_ptr)->len); \
+	if ((uint64_t)_sj >= (uint64_t)_so->len) msRaiseIndexError(_sj, _so->len); \
+	__typeof__((arr_ptr)->p->data[0]) _st = (arr_ptr)->p->data[_si]; \
+	(arr_ptr)->p->data[_si] = _so->p->data[_sj]; \
+	_so->p->data[_sj] = _st; \
+} while(0)
 
 #endif /* MS_ARRAY_H */

@@ -39,6 +39,7 @@ import "./voidValue";
 import "./promiseThenTyped";
 import "./buildIsolation";
 import "./aggregateLifecycle";
+import "./inheritedTrace";
 import "./referenceTransfer";
 import "./sliceBounds";
 import "./sameNameGenericInstances";

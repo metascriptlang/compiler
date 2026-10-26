@@ -7,7 +7,7 @@ import {
 	ExportDeclData, DecoratedDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC } from "../../raiser/bytecode";
 import {
@@ -21,7 +21,6 @@ import {
 } from "../../raiser/module";
 import { DynamicModulePlan } from "../../module/graph";
 import { mangleModuleName, buildModuleNameRoots } from "../c/names";
-import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserGlobalMap, createFuncMap,
@@ -358,15 +357,17 @@ function collectRaiserGlobals(node: Node, globals: RaiserGlobalMap, nextSlot: in
 	return nextSlot;
 }
 
+function topLevelAwaitVerdict(n: Node): Visit {
+	return match (n.kind) {
+		NodeKind.AwaitExpr => Visit.Hit,
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => Visit.Skip,
+		NodeKind.MethodDecl | NodeKind.ClassDecl => Visit.Skip,
+		_ => Visit.Descend,
+	};
+}
+
 function hasTopLevelAwait(node: Node): boolean {
-	if (node.kind == NodeKind.AwaitExpr) return true;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction
-			|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ClassDecl) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found) found = hasTopLevelAwait(child);
-	});
-	return found;
+	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
 export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exportsOf: string = ""): RaiserModule {
@@ -553,17 +554,6 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		compiled.records.push({ name: mangleModuleName(buildModuleNameRoots(), path), init, requested: plan.requested[ri], hasTLA });
 	}
 	return compiled;
-}
-
-// --- Public API ---
-// Parse source code → check it → compile to Raiser bytecode → execute → return context.
-// The context holds lastResult (exit value) and lastOutput (console.log captures).
-
-export function evalSource(code: string): RaiserContext {
-	const parseResult = parseSource(code);
-	if (!parseResult.ok) return createContext();
-	checkProgram(parseResult.value);
-	return runProgram(parseResult.value);
 }
 
 function runProgram(program: Node): RaiserContext {

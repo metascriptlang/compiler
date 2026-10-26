@@ -588,8 +588,9 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // materialization must incref it like any borrow. Ptr to non-Ref pointees
 // (Ptr<void>, Ptr<struct> from malloc/FFI) stays unmanaged — no header to count.
 function sinkClassify(t: Type | null, dctx: DrcContext): RcInfo {
-	if (t != null && (t.kind == TypeKind.Ptr || t.kind == TypeKind.Cursor) && t.typeReturn != null) {
-		const inner = classifyRc(t.typeReturn, dctx);
+	const link = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (link != null && (link.kind == TypeKind.Ptr || link.kind == TypeKind.Cursor) && link.typeReturn != null) {
+		const inner = classifyRc(link.typeReturn, dctx);
 		if (inner.needsCleanup && inner.rcKind == RcKind.Ref) return inner;
 	}
 	return classifyRc(t, dctx);

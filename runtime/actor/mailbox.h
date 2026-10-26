@@ -183,11 +183,7 @@ static inline bool msMsgGetBool(msMessage* m, int idx) {
  *
  * Heap strings: deep-copy on send so the msg owns its payload independently
  * of the caller's local (which DRC frees at scope exit — bitwise alias would
- * dangle). Literals (MS_STRLIT_FLAG) share pointer with static program data.
- *
- * Known gap: msMsgFree without dispatch (dead-letter, mailbox drain on actor
- * destroy) leaks ref-typed slots — same for arrays/ptrs. Needs per-actor-
- * method trace fn (Pony parity, not yet implemented). */
+ * dangle). Literals (MS_STRLIT_FLAG) share pointer with static program data. */
 #define msMsgSetString(m, idx, s) do { \
     msString __mscp; \
     if ((s).p == NULL || msIsLiteral(s)) { \

@@ -20,6 +20,7 @@ import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG 
 import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
+import { splitLines, detectLineIndent, indentFault, IndentFault } from "./formatLint";
 
 
 // ===== Format Options from build.ms =====
@@ -79,89 +80,6 @@ export function resetLspTargetCache(): void {
 
 // ===== Format Violation Check =====
 
-// Split a string into lines (preserving empty trailing line if present).
-export function splitLines(s: string): string[] {
-	const lines: string[] = [];
-	let start = 0;
-	for (let i = 0; i < s.byteLength; i = i + 1) {
-		if (s[i] == "\n") {
-			const end = i > start && s[i - 1] == "\r" ? i - 1 : i;
-			lines.push(s.slice(start, end));
-			start = i + 1;
-		}
-	}
-	if (start <= s.byteLength) {
-		lines.push(s.slice(start, s.byteLength));
-	}
-	return lines;
-}
-
-// Describe the formatting difference between an original and formatted line.
-export function describeFmtDiff(orig: string, fmt: string): string {
-	// Both empty — no difference worth reporting
-	if (orig.byteLength == 0 && fmt.byteLength == 0) return "";
-	// Blank original, non-blank formatted — missing content
-	if (orig.byteLength == 0) return "Unexpected blank line";
-	// Deleted line (formatted version removed it entirely)
-	if (fmt.byteLength == 0) return "Delete this line";
-	// Check indentation difference
-	let origIndent = 0;
-	while (origIndent < orig.byteLength && (orig[origIndent] == " " || orig[origIndent] == "\t")) {
-		origIndent = origIndent + 1;
-	}
-	let fmtIndent = 0;
-	while (fmtIndent < fmt.byteLength && (fmt[fmtIndent] == " " || fmt[fmtIndent] == "\t")) {
-		fmtIndent = fmtIndent + 1;
-	}
-	if (origIndent != fmtIndent) {
-		if (fmtIndent > origIndent) return "Indent this line";
-		return "Unindent this line";
-	}
-	// Check trailing whitespace
-	let origEnd = orig.byteLength;
-	while (origEnd > 0 && (orig[origEnd - 1] == " " || orig[origEnd - 1] == "\t")) {
-		origEnd = origEnd - 1;
-	}
-	if (origEnd < orig.byteLength) return "Remove trailing whitespace";
-	// Generic
-	return "Reformat this line";
-}
-
-// Shared indent/trailing-whitespace detection — used by both diagnostics and code actions.
-// Uses the "tabs for indentation, spaces for alignment" model (EditorConfig/Go convention):
-//   - Tabs-mode: tabs first, then optional trailing spaces for alignment -> valid.
-//     Only flag when a space appears *before* a tab (interleaved).
-//   - Spaces-mode: any tab in leading whitespace -> wrong.
-export interface LineIndent {
-	indentEnd: int32;
-	hasSpace: boolean;
-	hasTab: boolean;
-	isMixed: boolean;
-	trailStart: int32;
-}
-
-export function detectLineIndent(line: string): LineIndent {
-	let indentEnd = 0;
-	let hasSpace = false;
-	let hasTab = false;
-	let isMixed = false;
-	let seenSpace = false;
-	while (indentEnd < line.length) {
-		if (line[indentEnd] == " ") { hasSpace = true; seenSpace = true; }
-		else if (line[indentEnd] == "\t") {
-			hasTab = true;
-			if (seenSpace) { isMixed = true; }
-		}
-		else { break; }
-		indentEnd = indentEnd + 1;
-	}
-	let trailStart = line.length;
-	while (trailStart > 0 && (line[trailStart - 1] == " " || line[trailStart - 1] == "\t")) {
-		trailStart = trailStart - 1;
-	}
-	return { indentEnd, hasSpace, hasTab, isMixed, trailStart };
-}
-
 // Lint-style per-line format checks. Runs independently of the full formatter —
 // detects specific issues (wrong indent char, trailing whitespace) on each line.
 function checkFormatViolations(db: TransAmDb, path: string): string[] {
@@ -184,22 +102,15 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 		if (line.length == 0) continue;
 
 		const info = detectLineIndent(line);
-		if (info.indentEnd > 0 && info.indentEnd < line.length) {
-			// Skip block comment continuation lines ( * text) — spaces before * are alignment
-			const afterIndent = line.byteAt(info.indentEnd);
-			if (afterIndent == "*".code) continue;
-			if (info.isMixed) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0, 0));
-				continue;
-			}
-			if (useTabs && info.hasSpace && !info.hasTab) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0, 0));
-				continue;
-			}
-			if (!useTabs && info.hasTab && !info.hasSpace) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0, 0));
-				continue;
-			}
+		const fault = indentFault(line, info, useTabs);
+		if (fault !== null) {
+			const message = match (fault) {
+				IndentFault.Mixed => "Mixed tabs and spaces",
+				IndentFault.UseTabs => "Use tabs for indentation",
+				IndentFault.UseSpaces => "Use spaces for indentation",
+			};
+			result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, message, "metascript-fmt", 0, 0));
+			continue;
 		}
 		if (info.trailStart < line.length && info.trailStart > 0) {
 			result.push(lspFmtDiagnostic(i, info.trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0, 0));
@@ -485,28 +396,27 @@ function assertTrailingWhitespaceDiagnostic(eol: string): void {
 	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 27 || lspGetNumberField(end, "line") != 0 || lspGetNumberField(end, "character") != 30) throw new Error("Wrong whitespace UTF-16 range: " + item);
 }
 
-test "LF line content preserves spaces and trailing blank lines" {
-	const lines = splitLines("é😀   \n日\n\n");
-	assert lines.length == 4;
-	assert lines[0] == "é😀   ";
-	assert lines[1] == "日";
-	assert lines[2] == "";
-	assert lines[3] == "";
-}
-
-test "CRLF line content excludes terminators but preserves spaces and blank lines" {
-	const lines = splitLines("é😀   \r\n日\r\n\r\n");
-	assert lines.length == 4;
-	assert lines[0] == "é😀   ";
-	assert lines[1] == "日";
-	assert lines[2] == "";
-	assert lines[3] == "";
-}
-
 test "LF trailing whitespace diagnostic excludes the line terminator" {
 	assertTrailingWhitespaceDiagnostic("\n");
 }
 
 test "CRLF trailing whitespace diagnostic excludes the line terminator" {
 	assertTrailingWhitespaceDiagnostic("\r\n");
+}
+
+function assertCommentContinuationTrailingWhitespace(eol: string): void {
+	const path = "/fmt/comment.ms";
+	const db = createTransAmDb(8);
+	dbSetFileText(db, path, "/**" + eol + " * note   " + eol + " */" + eol + "export const value = 1;" + eol);
+	const response = buildDiagnosticsJson("file:///fmt/comment.ms", db, path);
+	const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+	if (items.length != 1) throw new Error("Expected one trailing-whitespace diagnostic: " + response);
+	if (lspGetField(items[0], "message") != "Remove trailing whitespace") throw new Error("Wrong formatting diagnostic: " + items[0]);
+	const start = lspGetObjectField(lspGetObjectField(items[0], "range"), "start");
+	if (lspGetNumberField(start, "line") != 1 || lspGetNumberField(start, "character") != 7) throw new Error("Wrong whitespace range: " + items[0]);
+}
+
+test "a block comment continuation line still reports its trailing whitespace" {
+	assertCommentContinuationTrailingWhitespace("\n");
+	assertCommentContinuationTrailingWhitespace("\r\n");
 }

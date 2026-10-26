@@ -18,7 +18,7 @@
 // the surface would only duplicate diagnostics.
 
 import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { makeSymbol, hasFlag, setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
@@ -178,14 +178,16 @@ function runsOnlyAtCompileTime(node: Node): boolean {
 	};
 }
 
+function callVerdict(n: Node): Visit {
+	return match (n.kind) {
+		NodeKind.CallExpr | NodeKind.NewExpr => Visit.Hit,
+		NodeKind.ClassDecl => Visit.Skip,
+		_ => isFunctionLike(n) ? Visit.Skip : Visit.Descend,
+	};
+}
+
 function callsOutsideRoutines(node: Node): boolean {
-	if (node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) return true;
-	if (isFunctionLike(node) || node.kind == NodeKind.ClassDecl) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && callsOutsideRoutines(child)) found = true;
-	});
-	return found;
+	return anyDescendant(node, callVerdict);
 }
 
 export function topLevelCallsAnything(program: Node): boolean {

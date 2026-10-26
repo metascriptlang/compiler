@@ -640,6 +640,7 @@ static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set,
 	for (int i = 0; i < n; i++) {
 		const void* a = set[i];
 		if (task->fut == a || (const void*)task->group == a || task->slotGroup == a) return true;
+		if (task->group != NULL && atomic_load_explicit(&task->group->doneFut, memory_order_acquire) == a) return true;
 		if (!descend) continue;
 		const msTaskFrame* f = task->parent;
 		for (int d = 0; f != NULL && d < MS_FRAME_WALK_MAX; d++, f = f->parent) {
@@ -648,6 +649,14 @@ static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set,
 	}
 	return false;
 }
+
+#ifdef MSPOOL_STATS
+static _Atomic(int32_t) msPoolEdgeRunCount = 0;
+
+int32_t msPoolEdgeRuns(void) {
+	return atomic_load_explicit(&msPoolEdgeRunCount, memory_order_relaxed);
+}
+#endif
 
 bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	if (msPoolPendingPeek() == 0) return false;
@@ -676,6 +685,9 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	MS_UNLOCK(pool);
 	if (walk) msTicketLockRelease(&gEdgeLock);
 	if (!found) return false;
+#ifdef MSPOOL_STATS
+	atomic_fetch_add_explicit(&msPoolEdgeRunCount, 1, memory_order_relaxed);
+#endif
 	msPoolRunQueued(&task);
 	return true;
 }
@@ -830,6 +842,7 @@ void msPoolShutdown(void) {
 	}
 	pthread_cond_destroy(&gPool->space);
 #endif
+	msRootsAdoptOrphans();
 
 	/* Amendment H: after workers have exited (each flushed its TLS on the way
 	 * out above), flush the dispatcher/main thread's TLS and run a final drain

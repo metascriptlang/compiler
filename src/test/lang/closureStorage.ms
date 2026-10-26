@@ -216,3 +216,25 @@ test "closureStorage: a static closure passed again in a later test still calls"
 	assert staticComponentMount(StaticComponents.View, { child: staticComponentLeaf() }) == 3;
 	assert StaticComponents.View({ child: staticComponentLeaf() }) == 3;
 }
+
+function storedRoutines(base: int32, kept: ((n: int32) => int32)[]): int32 {
+	const walk = (n: int32): int32 => n <= 0 ? base : walk(n - 1) + 1;
+	kept.push(walk);
+	const bound = walk;
+	return walk(1) + bound(2);
+}
+
+function returnedRoutine(base: int32): (n: int32) => int32 {
+	function walk(n: int32): int32 { return n <= 0 ? base : walk(n - 1) + 1; }
+	const first = walk(0);
+	return first < 0 ? (n: int32): int32 => n : walk;
+}
+
+test "closureStorage: a nested routine stored, bound or returned keeps its frame after the frame returns" {
+	const kept: ((n: int32) => int32)[] = [];
+	assert storedRoutines(10, kept) == 23;
+	assert storedRoutines(20, kept) == 43;
+	const r = returnedRoutine(5);
+	assert kept[0](3) == 13 && kept[1](0) == 20;
+	assert r(2) == 7;
+}
