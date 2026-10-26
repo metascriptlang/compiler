@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @stdout: outer 2
 
 function queue(): void {

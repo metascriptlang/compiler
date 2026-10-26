@@ -34,7 +34,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
+	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
@@ -720,7 +720,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const hd = node.data as HiddenStdConvData;
 			const refused = refuseByteView(s, node, hd.convExpr.nodeType, hd.convType);
 			if (refused >= 0) return refused;
-			const reg = compileExpr(s, hd.convExpr);
+			const reg = compileConvOperand(s, hd);
 			if (node.variantSlot > 0 && node.flags.has(NodeFlag.ConvCheck)) emitUnionConv(s, reg, hd.convExpr.nodeType, hd.convType);
 			if (isSpanType(hd.convType) && exprIsString(s, hd.convExpr)) return compileStringBytes(s, reg);
 			return emitNumericConv(s, reg, hd.convExpr.nodeType, hd.convType);
@@ -757,6 +757,16 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			return emitTrapValue(s, msg, node.nodeType);
 		},
 	};
+}
+
+function compileConvOperand(s: RaiserCompState, hd: HiddenStdConvData): int32 {
+	const operand = hd.convExpr;
+	const into = skipModifier(hd.convType);
+	if (operand.kind == NodeKind.Identifier && into != null && into.kind == TypeKind.Union) {
+		const funcIdx = resolveRoutine(s, operand.resolvedSym);
+		if (funcIdx >= 0) return emitClosurePair(s, funcIdx, -1);
+	}
+	return compileExpr(s, operand);
 }
 
 // --- Binary ---
@@ -1400,7 +1410,7 @@ function typeofValueKinds(variant: Type, tag: string): int32[] {
 		"number" => [RaiserValueKind.Int as int32, RaiserValueKind.Float as int32],
 		"string" => [RaiserValueKind.String as int32],
 		"boolean" => [RaiserValueKind.Bool as int32],
-		"function" => [RaiserValueKind.Int as int32, RAISER_KIND_CLOSURE],
+		"function" => [RAISER_KIND_CLOSURE],
 		"object" => [RAISER_KIND_PLAIN_OBJECT, RaiserValueKind.Array as int32, RaiserValueKind.Future as int32],
 		_ => [],
 	};
@@ -1870,6 +1880,10 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
 		return dest;
 	}
+	if (asyncKind == "PromiseThen") {
+		const handlers = d.arguments.length - (d.callee.kind == NodeKind.MemberExpr ? 0 : 1);
+		if (handlers == 1 || handlers == 2) return compileFutureThen(s, node);
+	}
 	if (asyncKind == "SleepAsync" && d.arguments.length == 1) {
 		const delayReg = compileExpr(s, d.arguments[0]);
 		const dest = allocRef(s);
@@ -2103,6 +2117,22 @@ function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, override
 		patchJumpTo(s, next, codeLen(s));
 	}
 	return ends;
+}
+
+function compileFutureThen(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const all: Node[] = d.callee.kind == NodeKind.MemberExpr ? [(d.callee.data as MemberExprData).object] : [];
+	for (const a of d.arguments) all.push(a);
+	const closures = reserveClosureArgs(s, all);
+	const dest = callBlock(s, node.nodeType, all, null);
+	for (let i = 0; i < all.length; i = i + 1) {
+		const funcIdx = all[i].kind == NodeKind.Identifier ? resolveRoutine(s, all[i].resolvedSym) : -1;
+		if (funcIdx >= 0) emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, emitClosurePair(s, funcIdx, -1), 0));
+		else compileClosureArg(s, all[i], dest + 1 + i, closures[i]);
+	}
+	emitInst(s, raiserABC(RaiserOpcode.FutureThen, dest, 0, all.length));
+	releaseClosureArgs(s, closures);
+	return dest;
 }
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
