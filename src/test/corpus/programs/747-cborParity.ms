@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: cbor parity ok
 
 // Pins the CBOR encode/decode surface as it behaves on the C backend,

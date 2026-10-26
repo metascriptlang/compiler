@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: buffer surface ok
 
 // Pins the Buffer byte-container surface, the same on C and JS.

@@ -1,1 +1,693 @@
+// Buffer on the raiser target is a uint8[]; every operation is portable
+// MetaScript over the array, with the bounds and clamping rules of
+// std/core/buffer/index.cms.
+
+import { Math } from "std/core/math";
+
 export type Buffer = uint8[];
+
+const MAX_LEN: int64 = 2147483647;
+const HEX_DIGITS: string = "0123456789abcdef";
+const B64_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+extern function raiseRange(value: int64, lo: int64, hi: int64): never from "msRaiseRangeError";
+
+function newBuffer(size: int64): Buffer {
+	const out: Buffer = [];
+	if (size > MAX_LEN) raiseRange(size, 0, MAX_LEN);
+	if (size > 0) out.setLength(size as number);
+	return out;
+}
+
+function bufCopyInto(dst: Buffer, src: Buffer, at: int64): void {
+	for (let i: int64 = 0; i < src.length; i += 1) dst[(at + i) as number] = src[i as number];
+}
+
+function sbyte(s: string, i: int64): int64 {
+	return s.byteAt(i as int32) as int64;
+}
+
+function put(b: Buffer, i: int64, v: int64): void {
+	b[i as number] = (v & 255) as uint8;
+}
+
+function at8(b: Buffer, i: int64): int64 {
+	return b[i as number] as int64;
+}
+
+function hexVal(c: int64): int64 {
+	if (c >= 48 && c <= 57) return c - 48;
+	if (c >= 97 && c <= 102) return c - 87;
+	if (c >= 65 && c <= 70) return c - 55;
+	return -1;
+}
+
+function b64Val(c: int64): int64 {
+	if (c >= 65 && c <= 90) return c - 65;
+	if (c >= 97 && c <= 122) return c - 71;
+	if (c >= 48 && c <= 57) return c + 4;
+	if (c == 43) return 62;
+	if (c == 47) return 63;
+	return -1;
+}
+
+function lowerByte(c: int64): int64 {
+	return c >= 65 && c <= 90 ? c + 32 : c;
+}
+
+// A prefix match, ignoring ASCII case: the contract of the C runtime's encoding test.
+function encIs(enc: string, target: string): boolean {
+	const n = target.byteLength;
+	if (enc.byteLength < n) return false;
+	for (let i = 0; i < n; i += 1) {
+		if (lowerByte(sbyte(enc, i)) != sbyte(target, i)) return false;
+	}
+	return true;
+}
+
+function isUtf8Name(enc: string): boolean {
+	return enc.byteLength == 0 || encIs(enc, "utf8") || encIs(enc, "utf-8");
+}
+
+// Decodes `value` as the C runtime's hex and base64 constructors do; null-free by returning the bytes.
+function decodeHex(value: string): Buffer {
+	const n = value.byteLength / 2;
+	const out = newBuffer(n);
+	for (let i = 0; i < n; i += 1) {
+		const hi = hexVal(sbyte(value, i * 2));
+		const lo = hexVal(sbyte(value, i * 2 + 1));
+		put(out, i, hi < 0 || lo < 0 ? 0 : (hi << 4) | lo);
+	}
+	return out;
+}
+
+function base64Size(value: string): int64 {
+	const len = value.byteLength as int64;
+	let padding: int64 = 0;
+	if (len > 0 && sbyte(value, len - 1) == 61) padding += 1;
+	if (len > 1 && sbyte(value, len - 2) == 61) padding += 1;
+	return (len * 3) / 4 - padding;
+}
+
+function base64Quad(value: string, i: int64, k: int64): int64 {
+	if (i + k >= value.byteLength) return 0;
+	const v = b64Val(sbyte(value, i + k));
+	return v < 0 ? 0 : v;
+}
+
+function decodeBase64Into(out: Buffer, at: int64, count: int64, value: string): int64 {
+	let j: int64 = 0;
+	for (let i: int64 = 0; i < value.byteLength && j < count; i += 4) {
+		const a = base64Quad(value, i, 0);
+		const b = base64Quad(value, i, 1);
+		const c = base64Quad(value, i, 2);
+		const d = base64Quad(value, i, 3);
+		if (j < count) { put(out, at + j, (a << 2) | (b >> 4)); j += 1; }
+		if (j < count) { put(out, at + j, ((b & 15) << 4) | (c >> 2)); j += 1; }
+		if (j < count) { put(out, at + j, ((c & 3) << 6) | d); j += 1; }
+	}
+	return j;
+}
+
+function decodeBase64(value: string): Buffer {
+	const out = newBuffer(base64Size(value));
+	decodeBase64Into(out, 0, out.length, value);
+	return out;
+}
+
+function textBytes(value: string): Buffer {
+	const out: Buffer = [];
+	const raw = value.asBytes();
+	if (raw.length > 0) out.setLength(raw.length);
+	for (let i = 0; i < raw.length; i += 1) out[i] = raw[i];
+	return out;
+}
+
+function hexOf(b: Buffer, start: int64, end: int64): string {
+	let out = "";
+	for (let i = start; i < end; i += 1) {
+		const v = at8(b, i);
+		out = out + HEX_DIGITS.charAt((v >> 4) as int32) + HEX_DIGITS.charAt((v & 15) as int32);
+	}
+	return out;
+}
+
+function base64Of(b: Buffer, start: int64, end: int64): string {
+	let out = "";
+	for (let i = start; i < end; i += 3) {
+		const b0 = at8(b, i);
+		const b1 = i + 1 < end ? at8(b, i + 1) : 0;
+		const b2 = i + 2 < end ? at8(b, i + 2) : 0;
+		out = out + B64_ALPHABET.charAt((b0 >> 2) as int32) + B64_ALPHABET.charAt((((b0 & 3) << 4) | (b1 >> 4)) as int32);
+		out = out + (i + 1 < end ? B64_ALPHABET.charAt((((b1 & 15) << 2) | (b2 >> 6)) as int32) : "=");
+		out = out + (i + 2 < end ? B64_ALPHABET.charAt((b2 & 63) as int32) : "=");
+	}
+	return out;
+}
+
+// One step of a well-formed UTF-8 scan: the length of the sequence at i, or minus the bytes
+// to skip when it is ill-formed, replaced by one U+FFFD.
+function utf8Step(b: Buffer, i: int64, n: int64): int64 {
+	const lead = at8(b, i);
+	if (lead < 128) return 1;
+	let need: int64 = 0;
+	let lo: int64 = 128;
+	let hi: int64 = 191;
+	if (lead >= 194 && lead <= 223) {
+		need = 1;
+	} else if (lead >= 224 && lead <= 239) {
+		need = 2;
+		if (lead == 224) lo = 160;
+		else if (lead == 237) hi = 159;
+	} else if (lead >= 240 && lead <= 244) {
+		need = 3;
+		if (lead == 240) lo = 144;
+		else if (lead == 244) hi = 143;
+	} else {
+		return -1;
+	}
+	let j = i + 1;
+	for (let k: int64 = 0; k < need; k += 1) {
+		if (j >= n) return -(j - i);
+		const c = at8(b, j);
+		if (c < lo || c > hi) return -(j - i);
+		lo = 128;
+		hi = 191;
+		j += 1;
+	}
+	return j - i;
+}
+
+function utf8Lossy(b: Buffer, start: int64, end: int64): string {
+	const out: Buffer = [];
+	let i = start;
+	while (i < end) {
+		const k = utf8Step(b, i, end);
+		if (k > 0) {
+			for (let t: int64 = 0; t < k; t += 1) out.push(b[(i + t) as number]);
+			i += k;
+		} else {
+			out.push(239);
+			out.push(191);
+			out.push(189);
+			i -= k;
+		}
+	}
+	return out.asString();
+}
+
+function codeUnitText(b: Buffer, start: int64, end: int64, mask: int64): string {
+	let out = "";
+	for (let i = start; i < end; i += 1) out = out + String.fromCharCode((at8(b, i) & mask) as int32);
+	return out;
+}
+
+// ===== Free Functions (constructors / static-like) =====
+
+export function alloc(this typeof Buffer, size: number): Buffer {
+	return newBuffer(size as int64);
+}
+
+export function allocUnsafe(this typeof Buffer, size: number): Buffer {
+	return newBuffer(size as int64);
+}
+
+export function fromArray(this typeof Buffer, arr: number[]): Buffer {
+	const out = newBuffer(arr.length);
+	for (let i = 0; i < arr.length; i += 1) put(out, i, arr[i] as int64);
+	return out;
+}
+
+export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
+	if (encoding == "hex") return decodeHex(value);
+	if (encoding == "base64") return decodeBase64(value);
+	return textBytes(value);
+}
+
+export function copy(this typeof Buffer, value: Buffer): Buffer {
+	const out = newBuffer(value.length);
+	bufCopyInto(out, value, 0);
+	return out;
+}
+
+export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
+	const n = a.length < b.length ? a.length : b.length;
+	for (let i = 0; i < n; i += 1) {
+		if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+	}
+	if (a.length == b.length) return 0;
+	return a.length < b.length ? -1 : 1;
+}
+
+export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
+	const out = newBuffer(a.length + b.length);
+	bufCopyInto(out, a, 0);
+	bufCopyInto(out, b, a.length);
+	return out;
+}
+
+export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
+	let total: int64 = 0;
+	for (const b of buffers) total += b.length;
+	const out = newBuffer(total);
+	let off: int64 = 0;
+	for (const b of buffers) {
+		bufCopyInto(out, b, off);
+		off += b.length;
+	}
+	return out;
+}
+
+export function isAscii(this typeof Buffer, value: Buffer): boolean {
+	for (let i = 0; i < value.length; i += 1) {
+		if (value[i] > 127) return false;
+	}
+	return true;
+}
+
+export function isUtf8(this typeof Buffer, value: Buffer): boolean {
+	let i: int64 = 0;
+	const n = value.length;
+	while (i < n) {
+		const c = at8(value, i);
+		if (c <= 127) {
+			i += 1;
+		} else if ((c & 224) == 192) {
+			if (i + 1 >= n || (at8(value, i + 1) & 192) != 128) return false;
+			if (c < 194) return false;
+			i += 2;
+		} else if ((c & 240) == 224) {
+			if (i + 2 >= n) return false;
+			if ((at8(value, i + 1) & 192) != 128 || (at8(value, i + 2) & 192) != 128) return false;
+			const cp = ((c & 15) << 12) | ((at8(value, i + 1) & 63) << 6) | (at8(value, i + 2) & 63);
+			if (cp < 2048 || (cp >= 55296 && cp <= 57343)) return false;
+			i += 3;
+		} else if ((c & 248) == 240) {
+			if (i + 3 >= n) return false;
+			if ((at8(value, i + 1) & 192) != 128 || (at8(value, i + 2) & 192) != 128 || (at8(value, i + 3) & 192) != 128) return false;
+			const cp = ((c & 7) << 18) | ((at8(value, i + 1) & 63) << 12) | ((at8(value, i + 2) & 63) << 6) | (at8(value, i + 3) & 63);
+			if (cp < 65536 || cp > 1114111) return false;
+			i += 4;
+		} else {
+			return false;
+		}
+	}
+	return true;
+}
+
+export function byteLength(this typeof Buffer, str: string, encoding: string = "utf-8"): number {
+	if (encoding == "ascii" || encoding == "latin1" || encoding == "binary") return str.length;
+	if (encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") return str.length * 2;
+	const n = str.byteLength;
+	if (encoding == "hex") return n / 2;
+	if (encoding == "base64" || encoding == "base64url") {
+		let m = n;
+		if (m > 0 && sbyte(str, m - 1) == "=".code) m -= 1;
+		if (m > 1 && sbyte(str, m - 1) == "=".code) m -= 1;
+		return (m * 3) / 4;
+	}
+	return n;
+}
+
+export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
+	if (encoding == "utf8" || encoding == "utf-8" ||
+			encoding == "hex" || encoding == "ascii" ||
+			encoding == "latin1" || encoding == "binary" ||
+			encoding == "base64" || encoding == "base64url" ||
+			encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") {
+		return true;
+	}
+	return false;
+}
+
+// ===== Extension Methods =====
+
+export function byteAt(this b: Buffer, i: number): int32 {
+	if (i < 0 || i >= b.length) return -1;
+	return b[i];
+}
+
+export function byteLength(this b: Buffer): number {
+	return b.length;
+}
+
+export function set(this b: Buffer, i: number, v: number): void {
+	if (i < 0 || i >= b.length) return;
+	put(b, i as int64, v as int64);
+}
+
+export function toHex(this b: Buffer): string {
+	return hexOf(b, 0, b.length);
+}
+
+export function toBase64(this b: Buffer): string {
+	return base64Of(b, 0, b.length);
+}
+
+export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
+	if (b.length == 0) return "";
+	let s = start as int64;
+	let e = end as int64;
+	if (s < 0) s = 0;
+	if (e < 0 || e > b.length) e = b.length;
+	if (s >= e) return "";
+	if (isUtf8Name(encoding)) return utf8Lossy(b, s, e);
+	if (encIs(encoding, "latin1") || encIs(encoding, "binary")) return codeUnitText(b, s, e, 255);
+	if (encIs(encoding, "ascii")) return codeUnitText(b, s, e, 127);
+	if (encIs(encoding, "hex")) return hexOf(b, s, e);
+	if (encIs(encoding, "base64") || encIs(encoding, "base64url")) return base64Of(b, s, e);
+	return utf8Lossy(b, s, e);
+}
+
+export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
+	let s = sourceStart as int64;
+	let e = sourceEnd as int64;
+	let at = targetStart as int64;
+	if (s < 0) s = 0;
+	if (e > b.length) e = b.length;
+	if (at < 0) at = 0;
+	if (s >= e) return 0;
+	let len = e - s;
+	if (at + len > target.length) len = target.length - at;
+	if (len <= 0) return 0;
+	if (at <= s) {
+		for (let i: int64 = 0; i < len; i += 1) target[(at + i) as number] = b[(s + i) as number];
+	} else {
+		for (let i = len - 1; i >= 0; i -= 1) target[(at + i) as number] = b[(s + i) as number];
+	}
+	return len as number;
+}
+
+export function fill(this b: Buffer, value: number, start: number, end: number): void {
+	let s = start as int64;
+	let e = end as int64;
+	if (s < 0) s = 0;
+	if (e > b.length) e = b.length;
+	for (let i = s; i < e; i += 1) put(b, i, value as int64);
+}
+
+export function indexOf(this b: Buffer, value: number, byteOffset: number): number {
+	if (b.length == 0) return -1;
+	const from = byteOffset < 0 ? 0 : byteOffset as int64;
+	const needle = (value as int64) & 255;
+	for (let i = from; i < b.length; i += 1) {
+		if (at8(b, i) == needle) return i as number;
+	}
+	return -1;
+}
+
+export function lastIndexOf(this b: Buffer, value: number, byteOffset: number): number {
+	if (b.length == 0) return -1;
+	const from = byteOffset < 0 || byteOffset >= b.length ? b.length - 1 : byteOffset as int64;
+	const needle = (value as int64) & 255;
+	for (let i = from; i >= 0; i -= 1) {
+		if (at8(b, i) == needle) return i as number;
+	}
+	return -1;
+}
+
+export function includes(this b: Buffer, value: number, byteOffset: number): boolean {
+	return indexOf(b, value, byteOffset) != -1;
+}
+
+function matchesAt(hay: Buffer, needle: Buffer, i: int64): boolean {
+	for (let k = 0; k < needle.length; k += 1) {
+		if (hay[(i + k) as number] != needle[k]) return false;
+	}
+	return true;
+}
+
+export function indexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
+	if (b.length == 0) return -1;
+	if (needle.length == 0) return byteOffset < 0 ? 0 : byteOffset;
+	const start = byteOffset < 0 ? 0 : byteOffset as int64;
+	if (start >= b.length) return -1;
+	if (needle.length > b.length - start) return -1;
+	for (let i = start; i <= b.length - needle.length; i += 1) {
+		if (matchesAt(b, needle, i)) return i as number;
+	}
+	return -1;
+}
+
+export function lastIndexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
+	if (b.length == 0) return -1;
+	if (needle.length == 0) return byteOffset < 0 || byteOffset >= b.length ? b.length : byteOffset;
+	if (needle.length > b.length) return -1;
+	const maxStart = b.length - needle.length;
+	const start = byteOffset < 0 || byteOffset > maxStart ? maxStart : byteOffset as int64;
+	for (let i = start; i >= 0; i -= 1) {
+		if (matchesAt(b, needle, i)) return i as number;
+	}
+	return -1;
+}
+
+export function includesBuffer(this b: Buffer, needle: Buffer, byteOffset: number): boolean {
+	return indexOfBuffer(b, needle, byteOffset) != -1;
+}
+
+export function write(this b: Buffer, str: string, offset: number, length: number, encoding: string): number {
+	if (str.byteLength == 0) return 0;
+	if (offset < 0 || offset >= b.length) return 0;
+	const at = offset as int64;
+	let maxLen: int64 = length < 0 ? b.length - at : length as int64;
+	if (at + maxLen > b.length) maxLen = b.length - at;
+	if (encIs(encoding, "hex")) {
+		const pairs = str.byteLength / 2;
+		const count = pairs < maxLen ? pairs : maxLen;
+		for (let i = 0; i < count; i += 1) {
+			const hi = hexVal(sbyte(str, i * 2));
+			const lo = hexVal(sbyte(str, i * 2 + 1));
+			put(b, at + i, hi < 0 || lo < 0 ? 0 : (hi << 4) | lo);
+		}
+		return count as number;
+	}
+	if (encIs(encoding, "base64") || encIs(encoding, "base64url")) {
+		const size = base64Size(str);
+		return decodeBase64Into(b, at, size < maxLen ? size : maxLen, str) as number;
+	}
+	const ascii = encIs(encoding, "ascii");
+	const raw = str.asBytes();
+	const count = raw.length < maxLen ? raw.length : maxLen;
+	for (let i = 0; i < count; i += 1) put(b, at + i, ascii ? raw[i] & 127 : raw[i]);
+	return count as number;
+}
+
+function fillPattern(b: Buffer, pattern: Buffer, start: number, end: number): void {
+	let s = start as int64;
+	let e = end as int64;
+	if (s < 0) s = 0;
+	if (e > b.length) e = b.length;
+	if (s >= e || pattern.length == 0) return;
+	for (let i = s; i < e; i += 1) b[i as number] = pattern[((i - s) % pattern.length) as number];
+}
+
+export function fillString(this b: Buffer, value: string, start: number, end: number, encoding: string): void {
+	if (value.byteLength == 0) return;
+	let pattern = textBytes(value);
+	if (encIs(encoding, "hex")) {
+		const decoded = decodeHex(value);
+		if (decoded.length > 0) pattern = decoded;
+	} else if (encIs(encoding, "base64") || encIs(encoding, "base64url")) {
+		const decoded = decodeBase64(value);
+		if (decoded.length > 0) pattern = decoded;
+	}
+	fillPattern(b, pattern, start, end);
+}
+
+export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: number): void {
+	fillPattern(b, value, start, end);
+}
+
+// ===== Fixed-width integers =====
+
+function readLE(b: Buffer, o: int64, width: int64): int64 {
+	if (o < 0 || o + width > b.length) return 0;
+	let v: int64 = 0;
+	for (let k: int64 = width - 1; k >= 0; k -= 1) v = (v << 8) | at8(b, o + k);
+	return v;
+}
+
+function readBE(b: Buffer, o: int64, width: int64): int64 {
+	if (o < 0 || o + width > b.length) return 0;
+	let v: int64 = 0;
+	for (let k: int64 = 0; k < width; k += 1) v = (v << 8) | at8(b, o + k);
+	return v;
+}
+
+function signed(v: int64, bits: int64): int64 {
+	const sign: int64 = 1 << (bits - 1);
+	return (v & sign) != 0 ? v - (sign << 1) : v;
+}
+
+function writeLE(b: Buffer, value: int64, o: int64, width: int64): int64 {
+	if (o < 0 || o + width > b.length) return o;
+	for (let k: int64 = 0; k < width; k += 1) put(b, o + k, value >> (k * 8));
+	return o + width;
+}
+
+function writeBE(b: Buffer, value: int64, o: int64, width: int64): int64 {
+	if (o < 0 || o + width > b.length) return o;
+	for (let k: int64 = 0; k < width; k += 1) put(b, o + k, value >> ((width - 1 - k) * 8));
+	return o + width;
+}
+
+export function readUInt8(this b: Buffer, o: number): number { return readLE(b, o as int64, 1) as number; }
+export function readUInt16LE(this b: Buffer, o: number): number { return readLE(b, o as int64, 2) as number; }
+export function readUInt16BE(this b: Buffer, o: number): number { return readBE(b, o as int64, 2) as number; }
+export function readUInt32LE(this b: Buffer, o: number): number { return readLE(b, o as int64, 4) as number; }
+export function readUInt32BE(this b: Buffer, o: number): number { return readBE(b, o as int64, 4) as number; }
+export function readInt8(this b: Buffer, o: number): number { return signed(readLE(b, o as int64, 1), 8) as number; }
+export function readInt16LE(this b: Buffer, o: number): number { return signed(readLE(b, o as int64, 2), 16) as number; }
+export function readInt16BE(this b: Buffer, o: number): number { return signed(readBE(b, o as int64, 2), 16) as number; }
+export function readInt32LE(this b: Buffer, o: number): number { return signed(readLE(b, o as int64, 4), 32) as number; }
+export function readInt32BE(this b: Buffer, o: number): number { return signed(readBE(b, o as int64, 4), 32) as number; }
+
+export function writeUInt8(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 1) as number; }
+export function writeUInt16LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 2) as number; }
+export function writeUInt16BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 2) as number; }
+export function writeUInt32LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 4) as number; }
+export function writeUInt32BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 4) as number; }
+export function writeInt8(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 1) as number; }
+export function writeInt16LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 2) as number; }
+export function writeInt16BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 2) as number; }
+export function writeInt32LE(this b: Buffer, v: number, o: number): number { return writeLE(b, v as int64, o as int64, 4) as number; }
+export function writeInt32BE(this b: Buffer, v: number, o: number): number { return writeBE(b, v as int64, o as int64, 4) as number; }
+
+// ===== Float and double =====
+
+const TWO_52: number = 4503599627370496.0;
+
+function pow2(e: int64): number {
+	return Math.pow(2.0, e as number);
+}
+
+function doubleFromBits(bits: uint64): number {
+	const sign = (bits >> (63 as uint64)) != (0 as uint64) ? -1.0 : 1.0;
+	const exp = ((bits >> (52 as uint64)) & (2047 as uint64)) as int64;
+	const mant = (bits & (4503599627370495 as uint64)) as int64;
+	if (exp == 2047) return mant == 0 ? sign * Infinity : NaN;
+	if (exp == 0) return sign * ((mant as number) / TWO_52) * pow2(-1022);
+	return sign * (1.0 + (mant as number) / TWO_52) * pow2(exp - 1023);
+}
+
+function singleFromBits(bits: int64): number {
+	const sign = (bits >> 31) != 0 ? -1.0 : 1.0;
+	const exp = (bits >> 23) & 255;
+	const mant = bits & 8388607;
+	if (exp == 255) return mant == 0 ? sign * Infinity : NaN;
+	if (exp == 0) return sign * ((mant as number) / 8388608.0) * pow2(-126);
+	return sign * (1.0 + (mant as number) / 8388608.0) * pow2(exp - 127);
+}
+
+@builtin("Float64Bits")
+extern function msFloat64Bits(d: number): uint64;
+
+function wordOfBits(u: uint64): int64 {
+	return u > (9223372036854775807 as uint64) ? -((~u) as int64) - 1 : u as int64;
+}
+
+function singleBits(value: number): int64 {
+	const f = (value as float32) as number;
+	if (f != f) return 2143289344;
+	const bits = msFloat64Bits(f);
+	const sign = ((bits >> (63 as uint64)) as int64) << 31;
+	const exp = ((bits >> (52 as uint64)) & (2047 as uint64)) as int64;
+	const mant = (bits & (4503599627370495 as uint64)) as int64;
+	if (exp == 2047) return sign | 2139095040;
+	if (exp == 0 && mant == 0) return sign;
+	const unbiased = exp - 1023;
+	if (unbiased >= -126) return sign | ((unbiased + 127) << 23) | (mant >> 29);
+	const shift = 29 + (-126 - unbiased);
+	return sign | ((mant | 4503599627370496) >> shift);
+}
+
+export function readFloatLE(this b: Buffer, o: number): number {
+	return o < 0 || o + 4 > b.length ? 0.0 : singleFromBits(readLE(b, o as int64, 4));
+}
+export function readFloatBE(this b: Buffer, o: number): number {
+	return o < 0 || o + 4 > b.length ? 0.0 : singleFromBits(readBE(b, o as int64, 4));
+}
+export function readDoubleLE(this b: Buffer, o: number): number {
+	return o < 0 || o + 8 > b.length ? 0.0 : doubleFromBits(readLE(b, o as int64, 8) as uint64);
+}
+export function readDoubleBE(this b: Buffer, o: number): number {
+	return o < 0 || o + 8 > b.length ? 0.0 : doubleFromBits(readBE(b, o as int64, 8) as uint64);
+}
+export function writeFloatLE(this b: Buffer, v: number, o: number): number { return writeLE(b, singleBits(v), o as int64, 4) as number; }
+export function writeFloatBE(this b: Buffer, v: number, o: number): number { return writeBE(b, singleBits(v), o as int64, 4) as number; }
+export function writeDoubleLE(this b: Buffer, v: number, o: number): number { return writeLE(b, wordOfBits(msFloat64Bits(v)), o as int64, 8) as number; }
+export function writeDoubleBE(this b: Buffer, v: number, o: number): number { return writeBE(b, wordOfBits(msFloat64Bits(v)), o as int64, 8) as number; }
+
+// ===== 64-bit through bigint =====
+
+function bigFromWord(word: int64, isSigned: boolean): bigint {
+	const high = BigInt((word >> 32) & 4294967295);
+	const low = BigInt(word & 4294967295);
+	const whole = (high << 32n) | low;
+	return isSigned ? BigInt.asIntN(64, whole) : whole;
+}
+
+function wordFromBig(value: bigint, isSigned: boolean): int64 {
+	const bits = isSigned ? BigInt.asIntN(64, value) : BigInt.asUintN(64, value);
+	const high = ((bits >> 32n) & 4294967295n) as int64;
+	const low = (bits & 4294967295n) as int64;
+	return (high << 32) | low;
+}
+
+export function readBigUInt64LE(this b: Buffer, o: number): bigint { return bigFromWord(readLE(b, o as int64, 8), false); }
+export function readBigUInt64BE(this b: Buffer, o: number): bigint { return bigFromWord(readBE(b, o as int64, 8), false); }
+export function readBigInt64LE(this b: Buffer, o: number): bigint { return bigFromWord(readLE(b, o as int64, 8), true); }
+export function readBigInt64BE(this b: Buffer, o: number): bigint { return bigFromWord(readBE(b, o as int64, 8), true); }
+export function writeBigUInt64LE(this b: Buffer, v: bigint, o: number): number { return writeLE(b, wordFromBig(v, false), o as int64, 8) as number; }
+export function writeBigUInt64BE(this b: Buffer, v: bigint, o: number): number { return writeBE(b, wordFromBig(v, false), o as int64, 8) as number; }
+export function writeBigInt64LE(this b: Buffer, v: bigint, o: number): number { return writeLE(b, wordFromBig(v, true), o as int64, 8) as number; }
+export function writeBigInt64BE(this b: Buffer, v: bigint, o: number): number { return writeBE(b, wordFromBig(v, true), o as int64, 8) as number; }
+
+// ===== Swap and reverse =====
+
+function swapGroups(b: Buffer, width: int64): void {
+	if (b.length % width != 0) return;
+	for (let at: int64 = 0; at < b.length; at += width) {
+		for (let k: int64 = 0; k < width / 2; k += 1) {
+			const x = b[(at + k) as number];
+			b[(at + k) as number] = b[(at + width - 1 - k) as number];
+			b[(at + width - 1 - k) as number] = x;
+		}
+	}
+}
+
+export function swap16(this b: Buffer): void { swapGroups(b, 2); }
+export function swap32(this b: Buffer): void { swapGroups(b, 4); }
+export function swap64(this b: Buffer): void { swapGroups(b, 8); }
+export function bufReverse(this b: Buffer): void { swapGroups(b, b.length); }
+
+// ===== Variable-width integers (1-6 bytes) =====
+
+function validWidth(b: Buffer, o: number, width: number): boolean {
+	return o >= 0 && width > 0 && width <= 6 && o + width <= b.length;
+}
+
+export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? readLE(b, o as int64, byteLength as int64) as number : 0;
+}
+export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? readBE(b, o as int64, byteLength as int64) as number : 0;
+}
+export function readIntLE(this b: Buffer, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? signed(readLE(b, o as int64, byteLength as int64), (byteLength as int64) * 8) as number : 0;
+}
+export function readIntBE(this b: Buffer, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? signed(readBE(b, o as int64, byteLength as int64), (byteLength as int64) * 8) as number : 0;
+}
+export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? writeLE(b, v as int64, o as int64, byteLength as int64) as number : o;
+}
+export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	return validWidth(b, o, byteLength) ? writeBE(b, v as int64, o as int64, byteLength as int64) as number : o;
+}
+export function writeIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	return writeUIntLE(b, v, o, byteLength);
+}
+export function writeIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	return writeUIntBE(b, v, o, byteLength);
+}
