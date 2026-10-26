@@ -2,22 +2,23 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
-	raiserABC, raiserABx, raiserAx, RaiserCombine, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass
+	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, arrayClassSlot
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectData, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
+	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
+	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
+import { orcRegisterCandidate } from "./orcCandidate";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
@@ -219,6 +220,10 @@ export interface RaiserVM {
 	unsettled: boolean;   // stopped with a strand parked on a future nothing can complete (exit 13)
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	orc: boolean;     // gcMode == "orc", decided once in createVM
+	placed: boolean;  // the module carries its own counts (RaiserModule.drcPlaced): the helpers below count nothing and no collection runs on its own
+	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
+	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
+	dropNest: int32;      // generic destroy walks in flight on the host stack
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
@@ -326,7 +331,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", placed: mod.drcPlaced, disposing: [], dropped: [], dropNest: 0, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
@@ -377,10 +382,12 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 // its last holder keeps a long-running loop's memory bounded ---
 
 function vmHold(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
+	if (vm.placed) return;
 	if (vm.orc || kind == RaiserValueKind.String) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
 function vmRelease(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
+	if (vm.placed) return;
 	if (vm.orc || kind == RaiserValueKind.String) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
@@ -402,7 +409,7 @@ function vmLiveCount(vm: RaiserVM): number {
 }
 
 function vmMaybeCollect(vm: RaiserVM): void {
-	if (!vm.orc) return;
+	if (!vm.orc || vm.placed) return;
 	if (vmLiveCount(vm) <= vm.gcThreshold) return;
 	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
 	let next = vmLiveCount(vm) * 2;
@@ -417,12 +424,12 @@ function isStringHandle(h: int64): boolean {
 
 @inline
 function holdHandle(vm: RaiserVM, h: int64): void {
-	if (h != 0 && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
+	if (h != 0 && !vm.placed && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 @inline
 function releaseHandle(vm: RaiserVM, h: int64): void {
-	if (h != 0 && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
+	if (h != 0 && !vm.placed && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 // The counted store of a handle into the ref file: storing the handle a register already holds
@@ -982,6 +989,7 @@ function popSafePoint(vm: RaiserVM): number {
 // abandoned by an exception.
 function unwindFrame(vm: RaiserVM): void {
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	if (vm.callStack.items[vm.callStack.depth - 1].returnDest == DISPOSE_DEST) vm.disposing.pop();
 	releaseFrameRefs(vm, vm.refBase + func.paramRefs, func.refRegs - func.paramRefs);
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
@@ -2864,7 +2872,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: {
 				slow = true;
 				break;
 			}
@@ -3162,6 +3170,19 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => {
 			vmHandleCallClosure(vm, ia, ib, ic);
 		},
+		RaiserOpcode.RcInc => {
+			const handle = vm.regs.refs[vm.refBase + ia];
+			if (handle != 0) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, handle);
+		},
+		RaiserOpcode.RcDec => {
+			vmRcDec(vm, ia, ib == 1);
+		},
+		RaiserOpcode.WasMoved => {
+			vm.regs.refs[vm.refBase + ia] = 0;
+		},
+		RaiserOpcode.DestroyValue => {
+			vmDestroyValue(vm, ia);
+		},
 		RaiserOpcode.Ret => {
 			vmHandleRet(vm, ia, ib, ic);
 		},
@@ -3328,6 +3349,10 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		if (vmRetSpecial(vm, ia)) return;
 	}
 
+	if (vm.callStack.items[depth - 1].returnDest == DISPOSE_DEST) {
+		vmFinishDestroy(vm, depth);
+		return;
+	}
 	vm.callStack.depth = depth - 1;
 	if (vm.safePoints.length != vm.callStack.items[depth - 1].spBase) {
 		vm.safePoints.length = vm.callStack.items[depth - 1].spBase;
@@ -3345,6 +3370,183 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	vm.ip = frame.returnIp;
 	setRegConform(vm, frame.returnDest, returned);
 	releaseFrameRefs(vm, calleeOwnBase, calleeOwn);
+}
+
+// --- Destroying a cell whose last reference went ---
+// The destroy routine of a class runs in a frame of its own whose return slot is DISPOSE_DEST, so its Ret
+// takes the slow path to vmFinishDestroy, which frees the cell without walking it. A class without a routine,
+// an array, a box and a string are walked here, each reference released through the same decrement.
+// A destroy reached from inside a destroy defers once DROP_NEST_LIMIT are in flight and runs when they have returned,
+// so a chain of any length never grows the frame stack or the host stack past that bound.
+
+const DISPOSE_DEST: int32 = 7;
+const DROP_NEST_LIMIT: int32 = 32;
+
+function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
+	const abs = vm.refBase + ia;
+	const handle = vm.regs.refs[abs];
+	if (handle == 0) return;
+	if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) {
+		vm.regs.refs[abs] = 0;
+		vmDestroyTop(vm, handle);
+		vmDrain(vm);
+	} else if (cyclic) {
+		orcRegisterCandidate(vm.arrayHeap, vm.objectHeap, handle);
+	}
+}
+
+function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
+	if (handleHeapKind(handle) != RaiserHeapKind.Object) return -1;
+	return vm.objectHeap.objects[handleIndex(handle)].classType.destroyFn;
+}
+
+function vmDestroyTop(vm: RaiserVM, handle: int64): void {
+	const inFlight = vm.disposing.length + vm.dropNest;
+	if (inFlight > 0 && (inFlight >= DROP_NEST_LIMIT || vm.callStack.depth + 2 >= MAX_CALL_DEPTH)) {
+		vm.dropped.push(handle);
+		return;
+	}
+	const fn = vmDestroyFn(vm, handle);
+	if (fn >= 0) vmEnterDestroy(vm, handle, fn);
+	else vmDestroyWalk(vm, handle);
+}
+
+function vmDestroyChild(vm: RaiserVM, handle: int64): void {
+	if (vmDestroyFn(vm, handle) >= 0 || vm.dropNest >= DROP_NEST_LIMIT) vm.dropped.push(handle);
+	else vmDestroyWalk(vm, handle);
+}
+
+function vmReleaseChild(vm: RaiserVM, handle: int64): void {
+	if (handle != 0 && rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) vmDestroyChild(vm, handle);
+}
+
+function vmDestroyWalk(vm: RaiserVM, handle: int64): void {
+	vm.dropNest += 1;
+	vmReleaseContents(vm, handle);
+	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
+	vm.dropNest -= 1;
+}
+
+function vmReleaseContents(vm: RaiserVM, handle: int64): void {
+	const index = handleIndex(handle);
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Object => {
+			const data: Cursor<RaiserObjectData> = vm.objectHeap.objects[index];
+			const kinds = data.classType.kinds;
+			for (let i = 0; i < data.slots.length; i += 1) {
+				if (kinds[i] == RaiserRegClass.Ref) {
+					const child = data.slots[i];
+					data.slots[i] = 0;
+					vmReleaseChild(vm, child);
+				}
+			}
+			for (let i = 0; i < data.values.length; i += 1) {
+				const held = data.values[i];
+				if (held.kind >= RaiserValueKind.String) {
+					data.values[i] = raiserNil();
+					vmReleaseChild(vm, held.intVal);
+				}
+			}
+		},
+		RaiserHeapKind.Array => {
+			const data = vm.arrayHeap.arrays[index];
+			if (data.elemClass == RaiserRegClass.Ref) {
+				for (let i = 0; i < data.words.length; i += 1) {
+					const child = data.words[i];
+					data.words[i] = 0;
+					vmReleaseChild(vm, child);
+				}
+			}
+			for (let i = 0; i < data.items.length; i += 1) {
+				const held = data.items[i];
+				if (held.kind >= RaiserValueKind.String) {
+					data.items[i] = raiserNil();
+					vmReleaseChild(vm, held.intVal);
+				}
+			}
+		},
+		RaiserHeapKind.Box => {
+			const held = vm.arrayHeap.boxes.items[index].value;
+			if (held.kind >= RaiserValueKind.String) vmReleaseChild(vm, held.intVal);
+		},
+		RaiserHeapKind.String => {},
+		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => { throw new Error(`internal: handle ${handle} names no cell to destroy`); },
+	}
+}
+
+// Runs the deferred destroys once none is in flight, stopping at the first that enters a routine's frame,
+// whose return comes back here.
+function vmDrain(vm: RaiserVM): void {
+	while (vm.dropped.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) {
+		const handle = vm.dropped.pop();
+		vmDestroyTop(vm, handle);
+	}
+}
+
+function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
+	const callee = vm.mod.functions[fn];
+	if (callee.arity < 1 || callee.regClasses.length == 0 || !inRefFile(callee.regClasses[0])) {
+		throw new Error(`internal: destroy routine ${callee.name} does not take the cell as its first ref parameter`);
+	}
+	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`);
+		return;
+	}
+	const caller = getModuleFunc(vm.mod, vm.funcIdx);
+	const newWordBase = vm.wordBase + caller.wordRegs;
+	const newRefBase = vm.refBase + caller.refRegs;
+	ensureWords(vm.regs, newWordBase + callee.wordRegs);
+	ensureRefs(vm.regs, newRefBase + callee.refRegs);
+	const depth = vm.callStack.depth;
+	if (depth == vm.callStack.items.length) {
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+	}
+	const frame = vm.callStack.items[depth];
+	frame.funcIdx = vm.funcIdx;
+	frame.returnIp = vm.ip;
+	frame.returnDest = DISPOSE_DEST;
+	frame.wordBase = vm.wordBase;
+	frame.refBase = vm.refBase;
+	frame.spBase = vm.safePoints.length as int32;
+	vm.callStack.depth = depth + 1;
+	vm.wordBase = newWordBase;
+	vm.refBase = newRefBase;
+	vm.funcIdx = fn;
+	vm.ip = 0;
+	vm.regs.refs[newRefBase] = handle;
+	vm.objectHeap.objects[handleIndex(handle)].rc = 1;
+	vm.disposing.push(handle);
+}
+
+function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
+	const frame = vm.callStack.items[depth - 1];
+	const callee = getModuleFunc(vm.mod, vm.funcIdx);
+	const ownBase = vm.refBase + callee.paramRefs;
+	const ownCount = callee.refRegs - callee.paramRefs;
+	vm.regs.refs[vm.refBase] = 0;
+	vm.callStack.depth = depth - 1;
+	vm.safePoints.length = frame.spBase;
+	vm.funcIdx = frame.funcIdx;
+	vm.wordBase = frame.wordBase;
+	vm.refBase = frame.refBase;
+	vm.ip = frame.returnIp;
+	releaseFrameRefs(vm, ownBase, ownCount);
+	const handle = vm.disposing.pop();
+	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
+	vmDrain(vm);
+}
+
+function vmDestroyValue(vm: RaiserVM, ia: int32): void {
+	const handle = vm.regs.refs[vm.refBase + ia];
+	if (handle == 0) return;
+	if (handleHeapKind(handle) != RaiserHeapKind.Object) {
+		vmError(vm, `internal: DestroyValue on a value that is no struct aggregate (handle ${handle})`);
+		return;
+	}
+	vm.dropNest += 1;
+	vmReleaseContents(vm, handle);
+	vm.dropNest -= 1;
+	vmDrain(vm);
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -6899,4 +7101,169 @@ test "a spawned strand keeps its word and ref registers apart in every order" {
 			assert vm.exitValue.intVal == expected, `argc ${argc} pattern ${pattern}: ${vm.exitValue.intVal}`;
 		}
 	}
+}
+
+// --- Placed mode: the bytecode carries every count ---
+
+function slotted(inst: RaiserInstruction, slot: number): RaiserInstruction {
+	inst.slot = slot;
+	return inst;
+}
+
+function placedModule(funcs: RaiserFunction[], placed: boolean): RaiserModule {
+	const mod = createRaiserModule("placed", funcs, 0);
+	mod.drcPlaced = placed;
+	return mod;
+}
+
+function fieldNames(names: string[]): RaiserValue[] {
+	const out: RaiserValue[] = [];
+	for (const name of names) out.push(raiserConstString(name));
+	return out;
+}
+
+function mainWithClasses(code: RaiserInstruction[], classes: RaiserRegClass[], types: RaiserClassType[], names: string[]): RaiserFunction {
+	const main = createRaiserFunction("main", code, fieldNames(names), 0, 0, classes.length, classes);
+	main.classTypes = types;
+	return main;
+}
+
+const nodeClass: RaiserRegClass[] = [RaiserRegClass.Ref];
+
+test "placed: RcInc and RcDec that balance free a nested object chain and leave nothing live" {
+	const node = createClassType("Node", -1, [], ["next"], nodeClass);
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 1), 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [node], ["next"]);
+	const vm = execModule(placedModule([main], true));
+	assert vm.error == "", vm.error;
+	assert vm.objectHeap.objects.length == 2 && vmLiveCount(vm) == 0, `${vm.objectHeap.objects.length} ${vmLiveCount(vm)}`;
+	assert ledgerAudit(vm.arrayHeap, vm.objectHeap, [], "program") == "";
+}
+
+test "placed: the last RcDec of an array releases its elements and frees the array and the element" {
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
+	const vm = execModule(placedModule([main], true));
+	assert vm.error == "", vm.error;
+	assert vm.arrayHeap.arrays.length == 1 && vm.objectHeap.objects.length == 1 && vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
+}
+
+test "placed: a class's destroy routine runs once on the last RcDec, sees the cell's fields, and the VM frees the cell after it returns" {
+	const cell = createClassType("Cell", -1, [], ["n", "child"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const leaf = createClassType("Leaf", -1, [], [], []);
+	cell.destroyFn = 1;
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 2, 0),
+		raiserABC(RaiserOpcode.LoadInt, 2, immField(7), 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 2), 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 1, 1), 1),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word], [cell, leaf], ["n", "child"]);
+	const destroy = createRaiserFunction("destroy", [
+		slotted(raiserABC(RaiserOpcode.LoadSlot, 1, 0, 0), 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.LoadSlot, 2, 0, 1), 1),
+		raiserABC(RaiserOpcode.RcDec, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], fieldNames(["n", "child"]), 1, 1, 3, [RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const vm = execModule(placedModule([main, destroy], true));
+	assert vm.error == "", vm.error;
+	assert vm.output == "7\n", vm.output;
+	assert vmLiveCount(vm) == 0 && vm.disposing.length == 0 && vm.dropped.length == 0, `${vmLiveCount(vm)}`;
+}
+
+function chainMain(node: RaiserClassType): RaiserFunction {
+	return mainWithClasses([
+		raiserABC(RaiserOpcode.LoadInt, 2, immField(0), 0),
+		raiserABC(RaiserOpcode.LoadInt, 3, immField(3000), 0),
+		raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+		raiserABC(RaiserOpcode.RcInc, 1, 0, 0),
+		slotted(raiserABC(RaiserOpcode.StoreSlot, 1, 0, 0), 0),
+		raiserABC(RaiserOpcode.Move, 0, 1, 0),
+		raiserABC(RaiserOpcode.AddI64Imm, 2, 2, immField(1)),
+		raiserABC(RaiserOpcode.BrLtI64, 2, 3, branchField(-6)),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word], [node], ["next"]);
+}
+
+test "placed: a chain longer than the frame stack destroys through routine frames without overflowing it" {
+	const node = createClassType("Node", -1, [], ["next"], nodeClass);
+	node.destroyFn = 1;
+	const destroy = createRaiserFunction("destroy", [
+		slotted(raiserABC(RaiserOpcode.LoadSlot, 1, 0, 0), 0),
+		raiserABC(RaiserOpcode.RcDec, 1, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], fieldNames(["next"]), 1, 1, 2, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+	const vm = execModule(placedModule([chainMain(node), destroy], true));
+	assert vm.error == "", vm.error;
+	assert vm.objectHeap.objects.length == 3000 && vmLiveCount(vm) == 0, `${vm.objectHeap.objects.length} ${vmLiveCount(vm)}`;
+}
+
+test "placed: a chain of classes without a routine is walked past the host-stack bound and freed" {
+	const node = createClassType("Node", -1, [], ["next"], nodeClass);
+	const vm = execModule(placedModule([chainMain(node)], true));
+	assert vm.error == "", vm.error;
+	assert vmLiveCount(vm) == 0 && vm.dropped.length == 0, `${vmLiveCount(vm)}`;
+}
+
+function storeSequence(placed: boolean, viaArray: boolean): RaiserVM {
+	const pair = createClassType("Pair", -1, [], ["a"], nodeClass);
+	const code = viaArray
+		? [
+			raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+			slotted(raiserABC(RaiserOpcode.NewArray, 0, 0, 0), arrayClassSlot(RaiserRegClass.Ref)),
+			raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		]
+		: [
+			raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+			raiserABC(RaiserOpcode.NewObject, 1, 1, 0),
+			slotted(raiserABC(RaiserOpcode.StoreSlot, 0, 0, 1), 0),
+			raiserABC(RaiserOpcode.Move, 2, 1, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		];
+	const main = mainWithClasses(code, [RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref], [pair], ["a"]);
+	const vm = createVM(placedModule([main], placed), "orc");
+	execLoop(vm);
+	return vm;
+}
+
+test "placed: stores and moves leave every count where it was, and the same sequence counts when not placed" {
+	const placed = storeSequence(true, false);
+	assert placed.objectHeap.objects[0].rc == 0 && placed.objectHeap.objects[1].rc == 0, `${placed.objectHeap.objects[1].rc}`;
+	const counted = storeSequence(false, false);
+	assert counted.objectHeap.objects[1].rc == 3, `${counted.objectHeap.objects[1].rc}`;
+}
+
+test "placed: an array push counts nothing and the same push counts when not placed" {
+	const placed = storeSequence(true, true);
+	assert placed.objectHeap.objects[0].rc == 0 && placed.arrayHeap.arrays[0].rc == 0;
+	const counted = storeSequence(false, true);
+	assert counted.objectHeap.objects[0].rc == 2 && counted.arrayHeap.arrays[0].rc == 1, `${counted.objectHeap.objects[0].rc}`;
 }
