@@ -43,7 +43,7 @@ function convertVarsInStmts(stmts: Node[], loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) convertVarInNode(stmts, i, loc);
 }
 
-function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void {
+function convertVarInNode(stmts: Node[], idx: int32, loc: SourceLocation): void {
 	const stmt = stmts[idx];
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {

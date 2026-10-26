@@ -11,7 +11,7 @@ import { lowerForStmt } from "./forLoopLower";
 function byteType(): Type { return createPrimitive(TypeKind.Uint8); }
 function int32Type(): Type { return createPrimitive(TypeKind.Int32); }
 
-function typedNumber(val: number, t: Type, loc: SourceLocation): Node {
+function typedNumber(val: float64, t: Type, loc: SourceLocation): Node {
 	const n = makeNumber(val, loc);
 	n.nodeType = t;
 	return n;

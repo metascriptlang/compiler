@@ -470,7 +470,7 @@ function getBindingName(patterns: Node[]): string {
 	return id.name;
 }
 
-function patternKey(pat: Node, caseIdx: number): string {
+function patternKey(pat: Node, caseIdx: int32): string {
 	return match (pat.kind) {
 		NodeKind.NumberLiteral => `n:${(pat.data as NumberLiteralData).value}`,
 		NodeKind.Identifier => "id:" + (pat.data as IdentifierData).name,
@@ -483,7 +483,7 @@ function patternKey(pat: Node, caseIdx: number): string {
 	};
 }
 
-function patternSetKey(patterns: Node[], caseIdx: number): string {
+function patternSetKey(patterns: Node[], caseIdx: int32): string {
 	const keys: string[] = [];
 	for (const pat of patterns) {
 		keys.push(patternKey(pat, caseIdx));
