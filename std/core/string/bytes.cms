@@ -28,7 +28,30 @@ export function byteSlice(this s: string, start: int32, end: int32): string {
 	return byteSliceKernel(s, from, to);
 }
 
-export extern function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 from "msStringByteIndexOf";
+extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
+extern function msMemEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly<Span<uint8>>): boolean;
+
+@exportName("msStringByteIndexOf")
+export function stringByteIndexOf(s: string, sub: string, byteStart: int64): int64 {
+	const hb = s.asBytes();
+	const nb = sub.asBytes();
+	if (nb.length == 0) return byteStart;
+	let at = byteStart < 0 ? 0 : byteStart;
+	const limit = hb.length - nb.length;
+	if (limit < 0 || at > limit) return -1;
+	const first = nb[0];
+	while (at <= limit) {
+		const hit = msMemChr(hb, at, limit + 1, first);
+		if (hit < 0) return -1;
+		if (nb.length == 1 || msMemEqAt(hb, hit, nb)) return hit;
+		at = hit + 1;
+	}
+	return -1;
+}
+
+export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	return stringByteIndexOf(s, sub, start) as int32;
+}
 
 export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
 	const sb = s.asBytes();

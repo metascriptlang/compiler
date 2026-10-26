@@ -232,17 +232,19 @@ static inline bool msStringCompareLe(msString a, msString b) { return msStringCo
 
 /* ===== Search ===== */
 
-/* Find first occurrence, starting from `start`. Returns -1 if not found. */
-int64_t msStringIndexOf(msString s, msString sub, int64_t start);
-
 /* Byte offsets in and out; an empty `sub` answers `start`. */
 int64_t msStringByteIndexOf(msString s, msString sub, int64_t start);
 
-/* Find last occurrence. startIdx=-1 means search from end (JS parity). */
-int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx);
+static inline int64_t msMemChr(const uint8_t* hay, int64_t hayLen, int64_t from, int64_t end, uint8_t byte) {
+	(void)hayLen;
+	const uint8_t* hit = (const uint8_t*)memchr(hay + from, byte, (size_t)(end - from));
+	return hit ? (int64_t)(hit - hay) : -1;
+}
 
-/* Count non-overlapping occurrences */
-int64_t msStringCount(msString s, msString sub);
+static inline bool msMemEqAt(const uint8_t* hay, int64_t hayLen, int64_t at, const uint8_t* needle, int64_t needleLen) {
+	(void)hayLen;
+	return memcmp(hay + at, needle, (size_t)needleLen) == 0;
+}
 
 /* ===== Extraction ===== */
 
