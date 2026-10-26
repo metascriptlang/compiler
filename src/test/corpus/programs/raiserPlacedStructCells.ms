@@ -1,3 +1,4 @@
+// @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 struct Cell { id: int32; }
 struct Pair { left: Cell; right: Cell; }
 struct Held { id: int32; }
