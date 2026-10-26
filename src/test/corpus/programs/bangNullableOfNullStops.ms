@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before 5 2
-// @xfail(raiser): fatal VM errors use a different stderr report from C and JS
 // note: postfix `!` on a value-carried `T | null` holding null stops; it used to read 0 (C, Raiser) or carry null on (JS).
 
 struct Point { x: int32 }

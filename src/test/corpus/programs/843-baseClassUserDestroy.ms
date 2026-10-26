@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM runs no user lifecycle hooks, as JS has no destructors
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 class Animal {
 	h: int32;

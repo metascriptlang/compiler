@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser reports the index error in its own words, after adding the length ("array index out of bounds: -1 (length 2)")
 // @exit: 1
 // @stdout: index -3 out of bounds (length 2)
 class Cell { v: int32 = 0; }

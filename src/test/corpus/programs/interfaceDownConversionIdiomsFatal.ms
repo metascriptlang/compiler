@@ -4,7 +4,6 @@
 // @stdout: before
 // @stdout: Error: invalid object conversion: Sq is not Ci
 // @xfail(danger): --danger drops the conversion check, so the wrong downcast reads the other class's memory instead of stopping
-// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 
 interface Shape { name: string; }
 interface Circle extends Shape { radius: number; }

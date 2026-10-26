@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser reports the index error in its own words ("array index out of bounds: 3 (length 3)")
 // @exit: 1
 // @stdout: index 3 out of bounds (length 3)
 function run(): void {
