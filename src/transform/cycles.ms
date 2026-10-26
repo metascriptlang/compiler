@@ -21,7 +21,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -107,7 +107,29 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			return false;
 		},
 		TypeKind.Distinct | TypeKind.Alias | TypeKind.Var | TypeKind.Sink | TypeKind.Lent | TypeKind.Result => cfaAux(t.typeReturn, origKey, withRef, marker),
-		_ => false,
+		_ => holdsNoCell(t),
+	};
+}
+
+function holdsNoCell(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.String | TypeKind.Boolean | TypeKind.Void | TypeKind.Char | TypeKind.Null | TypeKind.Never
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Float32 | TypeKind.Float64 | TypeKind.BigInt | TypeKind.CString
+			| TypeKind.Enum | TypeKind.StringLiteral | TypeKind.EnumLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
+			| TypeKind.Set | TypeKind.None | TypeKind.NonPrimitive
+			| TypeKind.Ptr | TypeKind.Borrow | TypeKind.Cursor => false,
+		TypeKind.Ref | TypeKind.Varargs | TypeKind.Span | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Result => false,
+		TypeKind.Pending | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Error | TypeKind.Conditional
+			| TypeKind.Inferred | TypeKind.IndexedAccess | TypeKind.KeyOf | TypeKind.Mapped | TypeKind.Module
+			| TypeKind.Struct | TypeKind.Union | TypeKind.Tuple | TypeKind.GenericInstance | TypeKind.Array | TypeKind.SizedArray
+			| TypeKind.Function | TypeKind.Unknown | TypeKind.Distinct | TypeKind.Alias => {
+			throw new Error(`internal: cycle classification reached ${t.kind.toString()} (type "${t.typeName}")`);
+		},
+		_ => {
+			throw new Error(`internal: cycle classification reached an unlisted type kind ${t.kind.toString()}`);
+		},
 	};
 }
 
@@ -247,7 +269,7 @@ function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acycli
 		},
 		TypeKind.Array | TypeKind.SizedArray => traceEdgeAux(t.typeReturn, false, cyclicCache, acyclicCache, marker),
 		TypeKind.Distinct | TypeKind.Alias => traceEdgeAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
-		_ => false,
+		_ => holdsNoCell(t),
 	};
 }
 
@@ -306,7 +328,7 @@ function custodyEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyc
 		},
 		TypeKind.Array | TypeKind.SizedArray => custodyEdgeAux(t.typeReturn, false, cyclicCache, acyclicCache, marker),
 		TypeKind.Distinct | TypeKind.Alias => custodyEdgeAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
-		_ => false,
+		_ => holdsNoCell(t),
 	};
 }
 
@@ -379,7 +401,8 @@ function addsAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCach
 			return addsAux(elem, false, cyclicCache, acyclicCache, marker);
 		},
 		TypeKind.Distinct | TypeKind.Alias => addsAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
-		_ => false,
+		TypeKind.Function | TypeKind.Unknown => false,
+		_ => holdsNoCell(t),
 	};
 }
 
@@ -390,4 +413,28 @@ function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker
 		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
+}
+
+function refusal(t: Type): string {
+	try {
+		canFormAcycle(t, createNameSet(), createNameSet());
+	} catch (e) {
+		return e.message;
+	}
+	return "";
+}
+
+test "a kind that holds no cell is acyclic by name" {
+	for (const kind of [TypeKind.Number, TypeKind.Uint8, TypeKind.Enum, TypeKind.Cursor, TypeKind.Ptr]) {
+		assert refusal(createPrimitive(kind)) == "", kind.toString();
+		assert !canFormAcycle(createPrimitive(kind), createNameSet(), createNameSet());
+	}
+	assert !canFormAcycle(createArray(numberType()), createNameSet(), createNameSet());
+}
+
+test "an unresolved kind reaching cycle classification is an internal error naming it" {
+	assert refusal(createTypeRef("T")).contains("internal: cycle classification reached TypeReference");
+	assert refusal(createPrimitive(TypeKind.GenericParam)).contains("GenericParam");
+	assert refusal(createPrimitive(TypeKind.Error)).contains("Error");
+	assert refusal(createArray(createPrimitive(TypeKind.Pending))).contains("Pending");
 }
