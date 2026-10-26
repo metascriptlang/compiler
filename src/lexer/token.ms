@@ -309,8 +309,8 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Int64 => "INT64",
 		TokenKind.Uint8 => "UINT8",
 		TokenKind.Uint16 => "UINT16",
-		TokenKind.Uint32 => "Uint32",
-		TokenKind.Uint64 => "Uint64",
+		TokenKind.Uint32 => "UINT32",
+		TokenKind.Uint64 => "UINT64",
 		TokenKind.Float32 => "FLOAT32",
 		TokenKind.Float64 => "FLOAT64",
 		TokenKind.Int => "INT",
@@ -319,7 +319,9 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.CString => "CSTRING",
 		TokenKind.Comment => "COMMENT",
 		TokenKind.Eof => "EOF",
-		_ => "UNKNOWN_TOKEN",
+		TokenKind.JsxTagStart => "JSX_TAG_START",
+		TokenKind.JsxClose => "JSX_CLOSE",
+		TokenKind.JsxText => "JSX_TEXT",
 	};
 }
 
@@ -347,4 +349,16 @@ test "isIdentLikeKind takes contextual keywords and refuses reserved ones, comme
 	assert !isIdentLikeKind(TokenKind.Eof);
 	assert !isIdentLikeKind(TokenKind.JsxTagStart);
 	assert isIdentOrKeyword(TokenKind.Const);
+}
+
+test "tokenKindToString names every sized integer and JSX kind in the same upper-case form" {
+	assert tokenKindToString(TokenKind.Uint32) == "UINT32";
+	assert tokenKindToString(TokenKind.Uint64) == "UINT64";
+	assert tokenKindToString(TokenKind.JsxTagStart) == "JSX_TAG_START";
+	assert tokenKindToString(TokenKind.JsxClose) == "JSX_CLOSE";
+	assert tokenKindToString(TokenKind.JsxText) == "JSX_TEXT";
+}
+
+test "formatToken prints the kind name of a JSX token" {
+	assert formatToken(createToken(TokenKind.JsxText, "hi", 3)) == "[JSX_TEXT: 'hi' at line 3]";
 }
