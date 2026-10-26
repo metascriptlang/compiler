@@ -158,7 +158,12 @@ function typeShape(session: BuildSession, t: Type | null): string {
 
 function peelToDeclaration(t: Type): Type {
 	let body = t;
-	for (let hops = 0; hops < 8 && (body.kind == TypeKind.Alias || body.kind == TypeKind.Ref) && body.typeReturn != null; hops += 1) body = body.typeReturn;
+	const passed = new HashSet<Type>();
+	while ((body.kind == TypeKind.Alias || body.kind == TypeKind.Ref) && body.typeReturn != null) {
+		if (passed.has(body)) throw new Error("internal: alias cycle while peeling " + monoTypeKey(t));
+		passed.add(body);
+		body = body.typeReturn;
+	}
 	return body;
 }
 
@@ -190,7 +195,6 @@ function isWrapperKind(kind: TypeKind): boolean {
 		|| kind == TypeKind.Array || kind == TypeKind.Span || kind == TypeKind.Set || kind == TypeKind.Sink || kind == TypeKind.Lent;
 }
 
-// An argument's own class and every by-value member reachable from it; a class-typed field is identity only.
 function collectLayouts(session: BuildSession, t: Type | null, direct: boolean, visited: HashSet<Type>, out: string[]): void {
 	if (t == null) return;
 	const kind = t.kind;
