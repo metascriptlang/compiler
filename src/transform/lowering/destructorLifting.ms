@@ -35,7 +35,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName, raiserRefUnion } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserRefUnion, raiserFlatCellUnion } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -1165,6 +1165,7 @@ function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocatio
 }
 
 function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	if (lctx.raiserBackend && raiserFlatCellUnion(objType)) return;
 	const isUnary = hook == "destroy" || hook == "wasMoved" || walksCells(hook);
 
 	if (hook == "sink") {

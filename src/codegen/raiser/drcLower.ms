@@ -160,7 +160,7 @@ function emitCopyValue(s: RaiserCompState, name: string, dest: Node, src: Node):
 
 function isCellType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
-	return isStructType(t) || (t != null && t.kind == TypeKind.Union && isUnionCell(t));
+	return isStructType(t) || (t != null && isUnionCell(t));
 }
 
 function isSizedArrayType(type: Type | null): boolean {

@@ -324,13 +324,14 @@ const MAX_TYPE_DEPTH = 32;
 function isStructSlotUnion(t: Type): boolean {
 	if (!isSlotUnion(t)) return false;
 	for (const child of t.typeChildren) {
-		if (!isStructType(child)) return false;
+		if (child.kind != TypeKind.Struct) return false;
 	}
 	return true;
 }
 
 export function isUnionCell(t: Type): boolean {
-	return t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || isStructSlotUnion(t));
+	const body = t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
+	return body.kind == TypeKind.Union && (body.typeFlags.has(TypeFlag.ValueUnion) || isStructSlotUnion(body));
 }
 
 export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
