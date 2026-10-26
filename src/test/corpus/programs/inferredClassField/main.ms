@@ -32,3 +32,10 @@ console.log(g.size, g.item);
 const q = new Q();
 const view: Readonly<Q> = q;
 console.log(q.id, q.label, view.id);
+
+class Z { z = new W().tag; }
+class W { tag = 11; }
+class Base { v = 3; static s = 5; }
+class Kid extends Base { w = 1; }
+function readKid(k: Kid): int32 { return k.v + k.w + Kid.s; }
+console.log(new Z().z, readKid(new Kid()));
