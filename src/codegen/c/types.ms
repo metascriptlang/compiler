@@ -86,6 +86,20 @@ export function sealHookSyms(sealed: boolean): void {
 	_hookSymsSealed = sealed;
 }
 
+export class HookSymsState {
+	syms: HashMap<string, Symbol>;
+	keyOfSym: HashMap<Symbol, string>;
+	order: KeyedOp[];
+}
+
+export function swapHookSyms(next: HookSymsState | null): HookSymsState {
+	const prev: HookSymsState = { syms: _opSyms, keyOfSym: _opKeyOfSym, order: _opOrder };
+	_opSyms = next != null ? next.syms : new HashMap<string, Symbol>();
+	_opKeyOfSym = next != null ? next.keyOfSym : new HashMap<Symbol, string>();
+	_opOrder = next != null ? next.order : [];
+	return prev;
+}
+
 export function resetHookSyms(): void {
 	_opShared = new OpTable();
 	_opTables = new HashMap<string, OpTable>();

@@ -25,7 +25,8 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
 import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
+import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, swapHeldBeyond, HeldBeyondState, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
@@ -44,6 +45,22 @@ let _jsProgramScope = false;
 // one image; a split file sees only its own top level and keeps its own copy.
 export function setJsProgramScope(on: boolean): void {
 	_jsProgramScope = on;
+}
+
+export class LiftedOpsState {
+	hooks: HookSymsState;
+	held: HeldBeyondState;
+}
+
+export function swapLiftedOps(next: LiftedOpsState | null): LiftedOpsState {
+	const hooks = swapHookSyms(next != null ? next.hooks : null);
+	const held = swapHeldBeyond(next != null ? next.held : null);
+	return { hooks, held };
+}
+
+export function freshLiftedOps(): LiftedOpsState {
+	const outer = swapLiftedOps(null);
+	return swapLiftedOps(outer);
 }
 
 export function resetLiftedOps(): void {
