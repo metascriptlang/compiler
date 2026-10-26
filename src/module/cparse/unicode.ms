@@ -67,22 +67,22 @@ export function isIdent2(cp: int32): boolean {
 	return isIdent1(cp) || inRange(IDENT2_EXTRA, cp);
 }
 
-// Hex digit value (0-15). Returns -1 for non-hex.
-export function fromHex(ch: int32): int32 {
+// Hex digit value (0-15), null for a non-hex byte.
+export function fromHex(ch: int32): int32 | null {
 	if (ch >= "0".code && ch <= "9".code) return ch - "0".code;
 	if (ch >= "a".code && ch <= "f".code) return ch - "a".code + 10;
 	if (ch >= "A".code && ch <= "F".code) return ch - "A".code + 10;
-	return -1;
+	return null;
 }
 
-// Read a universal character: 4 hex digits for \u, 8 for \U. Returns -1 if invalid.
-export function readUniversalChar(source: string, pos: int32, len: int32): int32 {
+// Read a universal character: 4 hex digits for \u, 8 for \U. Null if invalid.
+export function readUniversalChar(source: string, pos: int32, len: int32): int32 | null {
 	let cp: int32 = 0;
 	let i = 0;
 	while (i < len) {
 		const h = fromHex(source.byteAt(pos + i));
-		if (h < 0) return -1;
-		cp = (cp << 4) | (h as int32);
+		if (h == null) return null;
+		cp = (cp << 4) | h;
 		i = i + 1;
 	}
 	return cp;
@@ -177,7 +177,7 @@ export function convertUniversalChars(source: string): string {
 			const next = source.byteAt(i + 1);
 			if (next == "u".code) {
 				const cp = readUniversalChar(source, i + 2, 4);
-				if (cp >= 0) {
+				if (cp != null) {
 					parts.push(source.byteSlice(start, i));
 					parts.push(fromCodePoint(cp));
 					i = i + 6;
@@ -186,7 +186,7 @@ export function convertUniversalChars(source: string): string {
 				}
 			} else if (next == "U".code) {
 				const cp = readUniversalChar(source, i + 2, 8);
-				if (cp >= 0) {
+				if (cp != null) {
 					parts.push(source.byteSlice(start, i));
 					if (cp <= 0xFFFF) {
 						parts.push(fromCodePoint(cp));
@@ -242,7 +242,7 @@ test "fromHex valid" {
 }
 
 test "fromHex invalid" {
-	assert fromHex("g".code) == -1;
+	assert fromHex("g".code) == null;
 }
 
 test "canonicalizeNewline" {

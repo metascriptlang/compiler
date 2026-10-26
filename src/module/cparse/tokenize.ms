@@ -191,14 +191,14 @@ function readEscapedChar(s: ScanState): int32 {
 	// Hex
 	if (ch == "x".code) {
 		advance(s);
-		if (fromHex(peek(s)) < 0) {
+		let h = fromHex(peek(s));
+		if (h == null) {
 			s.diags.push(makeDiag(DiagSeverity.Error, s.file, s.line, s.col, "invalid hex escape sequence"));
 			return 0;
 		}
 		let c: int32 = 0;
-		let h = fromHex(peek(s));
-		while (h >= 0) {
-			c = (c << 4) + (h as int32);
+		while (h != null) {
+			c = (c << 4) + h;
 			advance(s);
 			h = fromHex(peek(s));
 		}
@@ -359,7 +359,7 @@ function convertPPInt(tok: CToken): boolean {
 	let base = 10;
 	if (len >= 2 && s.byteAt(0) == "0".code) {
 		const c1 = toLower(s.byteAt(1));
-		if (c1 == "x".code && len >= 3 && fromHex(s.byteAt(2)) >= 0) {
+		if (c1 == "x".code && len >= 3 && fromHex(s.byteAt(2)) != null) {
 			p = 2; base = 16;
 		} else if (c1 == "b".code && len >= 3 && (s.byteAt(2) == "0".code || s.byteAt(2) == "1".code)) {
 			p = 2; base = 2;
@@ -373,7 +373,7 @@ function convertPPInt(tok: CToken): boolean {
 	while (p < len) {
 		const ch = s.byteAt(p);
 		let digit = -1;
-		if (base == 16) { digit = fromHex(ch); }
+		if (base == 16) { digit = fromHex(ch) ?? -1; }
 		else if (base == 2) {
 			if (ch == "0".code) digit = 0;
 			else if (ch == "1".code) digit = 1;
