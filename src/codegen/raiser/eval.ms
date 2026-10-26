@@ -4,7 +4,6 @@
 
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
@@ -490,16 +489,6 @@ function blockedForm(node: Node, afterTransform: boolean): string {
 	return found;
 }
 
-function holdsBigInt(node: Node): boolean {
-	if (node == null) return false;
-	if (carriesBigInt(node.nodeType)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found) found = holdsBigInt(child);
-	});
-	return found;
-}
-
 function buildBodyCtx(sym: Symbol): CheckerContext | null {
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.preludeCtx == null) return null;
@@ -525,14 +514,6 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	if (blocked != "") {
 		_buildLoweringBlockedBy = blocked;
 		return BUILD_LOWERING_BLOCKED;
-	}
-	if (holdsBigInt(sym.declNode)) {
-		_pendingHelperErrors.push({
-			message: `helper '${sym.name}': ${RAISER_NO_BIGINT_MSG}`,
-			line: sym.declNode.location.line, column: sym.declNode.location.column, endLine: sym.declNode.location.line, endColumn: sym.declNode.location.column,
-			fatal: false, severity: Severity.Error, tags: 0,
-		});
-		return -1;
 	}
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
@@ -735,17 +716,10 @@ test "engine: a uint64 past int64 converted into an enum stops with its unsigned
 	assert ok.output == "1 1\n", ok.output;
 }
 
-test "engine: a bigint is refused on the vm instead of carrying the number through" {
-	const NO_BIGINT = "bigint is not supported on the Raiser VM";
-	const cast = evalVM("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; console.log(`${b}`);");
-	assert cast.error.includes(NO_BIGINT), cast.error;
-	assert cast.output == "", cast.output;
-	const fromFloat = evalVM("function f(v: float64): float64 { return v; } console.log(`${f(1.5) as bigint}`);");
-	assert fromFloat.error.includes(NO_BIGINT), fromFloat.error;
-	const literal = evalVM("console.log(`${5n + 3n}`);");
-	assert literal.error.includes(NO_BIGINT), literal.error;
-	const comptime = evalSourceFull("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; return 1;");
-	assert comptime.lastError.includes(NO_BIGINT), comptime.lastError;
+test "engine: a bigint keeps every digit through arithmetic and a cast back" {
+	const ok = evalVM("const a = 18446744073709551615n; console.log(`${a * a + 1n} ${(a - 1n) as float64 > 1.0} ${a as float64}`);");
+	assert ok.error == "", ok.error;
+	assert ok.output == "340282366920938463426481119284349108226 true 18446744073709552000\n", ok.output;
 }
 
 test "engine: a conversion into char stops outside 0 .. 255 and truncates a float, as on C and JS" {
@@ -1464,7 +1438,7 @@ test "untag: the indexed fast paths keep length, bounds, view and reference coun
 		+ " console.log(`${w.length} ${sum} ${fsum} ${t} ${s[0]} ${s[3]} ${v.length} ${v[2]} ${s.length}`);"
 		+ " console.log(w[5]);");
 	assert vm.output == "5 35 25 2 s4! s3! 3 10 5\n", vm.output;
-	assert vm.error.indexOf("array index out of bounds: 5 (length 5)") >= 0, vm.error;
+	assert vm.error.indexOf("index 5 out of bounds (length 5)") >= 0, vm.error;
 }
 
 // --- Phase 3 Integration Tests ---

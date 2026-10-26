@@ -2,7 +2,6 @@
 // @stdout: inf true false false true | true true
 // @stdout: frac true true true true false false | true true true true false
 // @stdout: neg true true true true true | huge true true true | f32 true true
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: a bigint compared with a fractional or non-finite number orders mathematically on C and JS (NaN unordered, Infinity beyond every bigint); C used to abort with exit 134.
 
 function big(v: bigint): bigint { return v; }

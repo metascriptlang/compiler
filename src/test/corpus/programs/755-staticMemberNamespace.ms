@@ -1,4 +1,3 @@
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // @stdout: static member namespace ok
 
 // A static member (`this typeof T`) belongs to its receiver type, never to the
