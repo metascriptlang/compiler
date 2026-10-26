@@ -30,19 +30,14 @@ function expandSwitchStmt(stmt: Node, ctx: TransformContext): Node[] {
 	if (d.switchLowered) return [stmt];
 	d.switchLowered = true;
 	const loc = stmt.location;
-	let ownedBreaks: Node[] = [];
+	const ownedBreaks: Node[] = [];
 	for (const caseNode of d.switchCases) {
 		const cd = caseNode.data as SwitchCaseData;
 		dropTerminalBreak(cd.caseStmts);
 		collectOwnedBreaks(cd.caseStmts, ownedBreaks);
 	}
 
-	let lowered: Node[];
-	if (isCSwitchableType(d.switchDisc.nodeType)) {
-		lowered = [stmt];
-	} else {
-		lowered = eraseToMatch(d, loc, ctx);
-	}
+	const lowered = isCSwitchableType(d.switchDisc.nodeType) ? [stmt] : eraseToMatch(d, loc, ctx);
 	if (ownedBreaks.length == 0) return lowered;
 	ctx.tempCounter += 1;
 	const swLabel = `__sw${ctx.tempCounter}`;
