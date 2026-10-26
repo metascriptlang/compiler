@@ -87,10 +87,9 @@ export function getFileText(store: TaFileInputStore, fileId: int32): string {
 	return store.files[idx].source;
 }
 
-// Returns the content hash — see TaFileEntry.sourceHash, deliberately not int32.
-export function getFileHash(store: TaFileInputStore, fileId: int32): number {
+export function getFileHash(store: TaFileInputStore, fileId: int32): number | null {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return 0;
+	if (idx < 0) return null;
 	return store.files[idx].sourceHash;
 }
 
@@ -200,6 +199,14 @@ test "getFilePath reverse lookup" {
 	const id = getFileId(store, "/a/b.ms");
 	assert getFilePath(store, id) == "/a/b.ms";
 	assert getFilePath(store, 999) == "";
+}
+
+test "getFileHash of an unknown id is null, not the hash of an empty file" {
+	const store = createFileInputStore();
+	setFileText(store, "empty.ms", "");
+	assert getFileHash(store, 0) != null;
+	assert getFileHash(store, 1) == null;
+	assert getFileHash(store, -1) == null;
 }
 
 test "getFileHash nonzero" {

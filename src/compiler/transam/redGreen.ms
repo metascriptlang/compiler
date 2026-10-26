@@ -71,7 +71,7 @@ function markGreen(
 		if (dep.depKey.queryKind == TaQueryKind.FileText) {
 			// Input query: check if file content hash changed
 			const currentHash = getFileHash(fileInput, dep.depKey.fileId);
-			if (currentHash != dep.expectedHash) {
+			if (currentHash == null || currentHash != dep.expectedHash) {
 				entry.state = TaQueryState.Red;
 				return false;
 			}
@@ -241,7 +241,7 @@ test "file dependency hash match -> true" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
 	setFileText(fileInput, "a.ms", "source");
-	const actualHash = getFileHash(fileInput, 0);
+	const actualHash = getFileHash(fileInput, 0)!;
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(parseKey);
 	entry.state = TaQueryState.Red;

@@ -453,6 +453,7 @@ function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProv
 		// Record FileText dep so tryMarkGreen catches content changes
 		const ftKey = createQueryKey(TaQueryKind.FileText, headerId);
 		const ftHash = getFileHash(db.fileInput, headerId);
+		if (ftHash == null) throw new Error("internal: header file id " + headerId + " has no recorded hash");
 		recordDependency(db.depStack, ftKey, ftHash);
 		// Also record module edge (eager invalidation — getTransitiveDependents)
 		if (currentFileId >= 0) recordModuleImport(db.moduleDeps, currentFileId, headerId);
@@ -473,6 +474,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	// Self file_text dep: preprocess output depends on the raw source
 	const selfFtKey = createQueryKey(TaQueryKind.FileText, fileId);
 	const selfHash = getFileHash(db.fileInput, fileId);
+	if (selfHash == null) throw new Error("internal: file id " + fileId + " has no recorded hash");
 	recordDependency(db.depStack, selfFtKey, selfHash);
 	// G2: propagate durability (std/ stays High)
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
