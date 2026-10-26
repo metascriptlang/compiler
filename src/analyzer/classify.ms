@@ -269,12 +269,11 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 		},
 		TypeKind.GenericInstance => {
 			// Awaitables (`Promise<T>`, plain or affine) are Ref-shaped heap allocs
-			// via msAllocTyped — track like any other Ref, same destroyFn. msDecref
-			// detects futures via the MS_TYPE_FLAG_FUTURE flag on msFutureTypeInfo
-			// (set at allocation by msFutureCreateT) and routes to msFutureDeferredRelease
-			// (Amendment H — deferred decref to dispatcher, serializing with the drain
-			// decref to eliminate the concurrent-decref race without atomic rc).
-			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			// via msAllocTyped — track like any other Ref. msDecrefFuture routes to
+			// msFutureDeferredRelease (Amendment H — deferred decref to dispatcher,
+			// serializing with the drain decref to eliminate the concurrent-decref
+			// race without atomic rc).
+			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msDecrefFuture", "msIncref", "msPtrWasMoved", "", false);
 			const distinctInner = distinctBody(t);
 			if (distinctInner != null) return classifyType(distinctInner, ctx, requireOps);
 			const transparentInner = peelTransparentInstance(t);
@@ -330,7 +329,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
 					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 				}
-				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+				return makeRcInfo(RcKind.Ref, "", isAwaitable(refInner) ? "msDecrefFuture" : "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
 			// Pure string-literal union — msString at runtime (genUnionType), so the
 			// String ops apply; the Named path would fabricate <Alias>{Destroy,Copy}
@@ -607,6 +606,14 @@ test "array of Promise → Ref hooks" {
 	const info = classifyType(createArray(createPromise(numberType())), ctx);
 	assert (info.destroyFn as Symbol).name == "msArrayRefDestroy";
 	assert (info.copyFn as Symbol).name == "msArrayRefCopy";
+}
+
+test "a Promise releases through msDecrefFuture" {
+	const ctx = createTransformContext();
+	const plain = classifyType(createPromise(numberType()), ctx);
+	assert plain.rcKind == RcKind.Ref;
+	assert (plain.destroyFn as Symbol).name == "msDecrefFuture";
+	assert (plain.copyFn as Symbol).name == "msIncref";
 }
 
 test "isCountedRef agrees with classifyType's Ref arms" {

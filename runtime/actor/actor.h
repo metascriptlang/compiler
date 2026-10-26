@@ -939,7 +939,7 @@ static inline bool msActorLendBusy(msActorJobs* j) {
     for (int32_t i = 0; i < j->lentLen; i++) {
         msActorLend l = j->lent[i];
         if ((l.chain == NULL || l.joined)
-                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecref(l.fut);
+                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecrefAny(l.fut);
         else j->lent[k++] = l;
     }
     j->lentLen = k;
@@ -1037,7 +1037,7 @@ static inline void msActorJobsTeardown(msActorJobs* j) {
         msActorJobDropEnv(j, r);
     }
     msActorJobsDrain(j);
-    for (int32_t i = 0; i < j->lentLen; i++) msDecref(j->lent[i].fut);
+    for (int32_t i = 0; i < j->lentLen; i++) msDecrefAny(j->lent[i].fut);
     j->lentLen = 0;
 }
 

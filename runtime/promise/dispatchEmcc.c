@@ -129,12 +129,12 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
             msTimerHeapPush(&d->timers, next);
         }
         if (t.cancelled || t.cb.fn == NULL) {
-            if (t.cb.env != NULL) msDecref(t.cb.env);
+            if (t.cb.env != NULL) msDecrefAny(t.cb.env);
             continue;
         }
         if (t.cb.env != NULL) ((void(*)(void*))t.cb.fn)(t.cb.env);
         else ((void(*)(void))t.cb.fn)();
-        if (t.periodMs == 0 && t.cb.env != NULL) msDecref(t.cb.env);
+        if (t.periodMs == 0 && t.cb.env != NULL) msDecrefAny(t.cb.env);
     }
     return d->timers.len > 0 ? (int)(d->timers.data[0].finishAtMs - now) : -1;
 }

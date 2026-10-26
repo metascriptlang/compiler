@@ -504,6 +504,8 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 
 #define msIncref(p)           ((void)0)
 #define msDecref(p)           ((void)0)
+#define msDecrefAny(p)        ((void)0)
+#define msDecrefFuture(p)     ((void)0)
 #define msPtrWasMoved(p)      do { (p) = (void*)0; } while(0)
 #define msIncrefCyclic(p)     ((void)0)
 #define msDecrefCyclic(p)     ((void)0)

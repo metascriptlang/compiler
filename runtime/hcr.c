@@ -768,12 +768,12 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "an uncaught exception: %.*s",
 		         (int)(message.len < 400 ? message.len : 400), message.p != NULL ? message.p->data : "");
 	}
-	if (msCurrException != NULL) msDecref((void*)msCurrException);
+	if (msCurrException != NULL) msDecrefAny((void*)msCurrException);
 	msCurrException = NULL;
 	msErr = false;
 	msError* error = msPoolRunningPeek() > running ? msMakeError(msStringFromCStr(msHcrGuardReason)) : NULL;
 	msPoolUnwound(running, spares, error);
-	if (error != NULL) msDecref(error);
+	if (error != NULL) msDecrefAny(error);
 	return kind;
 }
 

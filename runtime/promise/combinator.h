@@ -183,7 +183,7 @@ static inline void msFutureThenRejected(msFutureThenEnv* e) {
  * collector reaching a pending future can see through its callback list. */
 static inline void msFutureThenEnvDestroy(void* raw) {
     msFutureThenEnv* e = (msFutureThenEnv*)raw;
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected);
+    msDecrefAny(e->output); msDecrefAny(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected);
 }
 
 static inline void msFutureThenEnvTrace(void* raw, void* visit) {
@@ -194,7 +194,7 @@ static inline void msFutureThenEnvTrace(void* raw, void* visit) {
 
 static inline void msFutureCatchEnvDestroy(void* raw) {
     msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected);
+    msDecrefAny(e->output); msDecrefAny(e->input); msClosureDestroy(e->onRejected);
 }
 
 static inline void msFutureCatchEnvTrace(void* raw, void* visit) {
@@ -205,7 +205,7 @@ static inline void msFutureCatchEnvTrace(void* raw, void* visit) {
 
 static inline void msFutureFinallyEnvDestroy(void* raw) {
     msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
+    msDecrefAny(e->output); msDecrefAny(e->input); msClosureDestroy(e->onSettled);
 }
 
 static inline void msFutureFinallyEnvTrace(void* raw, void* visit) {
@@ -257,7 +257,7 @@ static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, m
  * Passing a boxed-storage input (spawn legacy path) reinterprets the heap pointer
  * as T — undefined behavior. A Session-3 assert will catch this at runtime. */
 #define MS_NO_DROP(value) ((void)(value))
-#define MS_DROP_REF_SLOT(slot) do { void* dropped_ = *(slot); *(slot) = NULL; msDecref(dropped_); } while (0)
+#define MS_DROP_REF_SLOT(slot) do { void* dropped_ = *(slot); *(slot) = NULL; msDecrefAny(dropped_); } while (0)
 #define MS_DROP_STRING_SLOT(slot) do { msString dropped_ = *(slot); *(slot) = MS_EMPTY_STRING; msStringDestroy(dropped_); } while (0)
 #define MS_DEFINE_FUTURE_THEN(name, fut_type, T, arg_type, drop) \
 static inline void name##_cb(void* raw) { \
@@ -411,7 +411,7 @@ MS_DEFINE_FUTURE_THEN(msFutureThen_ref,    msFuture_ptr,    void*,   void*, MS_D
  * The consumer reads it via msFutureRead + (arrType*)cast and owns the cell — its DRC
  * decref runs arrDestroyFn then frees the cell. An unread result is released by the
  * future's valueDestructor. */
-static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
+static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
 
 #define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn) \
     static void elemFutType##_allArrRttiDestroy(void* dest) { arrDestroyFn(dest); } \
@@ -461,7 +461,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
          * refs the moment the combinator returns; without our own share the
          * callback reads a freed future. */ \
         msFutureEdgeSettle(s->result, idx); \
-        msDecref(f); \
+        msDecrefAny(f); \
         /* Decrement remaining and let the final decrementer (rem == 1 before sub) run cleanup.
          * acq_rel: acquire the copy-writes from peer threads; release our own writes. */ \
         int32_t rem = atomic_fetch_sub_explicit(&s->remaining, 1, memory_order_acq_rel); \
@@ -469,9 +469,9 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             if (!atomic_load_explicit(&s->failed, memory_order_acquire)) { \
                 msFutureComplete(s->result, s->arr); \
             } else { \
-                msDecref(s->arr); \
+                msDecrefAny(s->arr); \
             } \
-            msDecref(s->result); \
+            msDecrefAny(s->result); \
             free(s->inputs); \
             free(s); \
         } \

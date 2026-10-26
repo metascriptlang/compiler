@@ -91,7 +91,7 @@ void msNoteOrphanError(void* err) {
 		msOrphanErrors[msOrphanErrorCount++] = err;
 	} else {
 		msOrphanOverflow++;
-		msDecref(err);
+		msDecrefAny(err);
 	}
 	MS_ORPHAN_UNLOCK();
 }
@@ -114,7 +114,7 @@ void msClearOrphanFailure(void* fut) {
 	for (int i = 0; i < msOrphanCount; i++) {
 		if (msOrphanFails[i] == fut) {
 			msOrphanFails[i] = NULL;
-			msDecref(fut);
+			msDecrefAny(fut);
 		}
 	}
 	MS_ORPHAN_UNLOCK();
@@ -131,12 +131,12 @@ int msReportOrphanFailures(void) {
 			msReportRejection(f->error);
 			reported++;
 		}
-		msDecref(f);
+		msDecrefAny(f);
 	}
 	msOrphanCount = 0;
 	for (int i = 0; i < msOrphanErrorCount; i++) {
 		msReportRejection(msOrphanErrors[i]);
-		msDecref(msOrphanErrors[i]);
+		msDecrefAny(msOrphanErrors[i]);
 		msOrphanErrors[i] = NULL;
 		reported++;
 	}

@@ -383,18 +383,37 @@ static inline void msStringCopy(msString* dest, msString src) {
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
-#define msDecref(p)           do { \
-	void* __msDecrefP = (void*)(p); \
-	if (__msDecrefP != NULL) { \
-		const msTypeInfo* __t = msHeader(__msDecrefP)->type; \
+/* A runtime caller holding a bare void* of unknown type takes msDecrefAny: it may be a future. */
+#define msDecrefAny(p)        do { \
+	void* __msDecrefAnyP = (void*)(p); \
+	if (__msDecrefAnyP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msDecrefAnyP)->type; \
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(__msDecrefP); \
-		} else if (msDecRefIsLast(__msDecrefP)) { \
-			MS_DESTROY_DISPATCH(__t, __msDecrefP); \
-			msDestroyAndDispose(__msDecrefP); \
+			msFutureDeferredRelease(__msDecrefAnyP); \
+		} else if (msDecRefIsLast(__msDecrefAnyP)) { \
+			MS_DESTROY_DISPATCH(__t, __msDecrefAnyP); \
+			msDestroyAndDispose(__msDecrefAnyP); \
 		} \
 	} \
 } while(0)
+#define msDecrefFuture(p)     do { \
+	void* __msDecrefFutureP = (void*)(p); \
+	if (__msDecrefFutureP != NULL) msFutureDeferredRelease(__msDecrefFutureP); \
+} while(0)
+/* The compiler routes a future to msDecrefFuture, so msDecref carries no future test. A compiler
+ * that predates msDecrefFuture still emits msDecref for a future, so the fast form waits for the
+ * symbol that declares the split. */
+#ifdef MS_DECREF_FUTURE_ROUTED
+#define msDecref(p)           do { \
+	void* __msDecrefP = (void*)(p); \
+	if (__msDecrefP != NULL && msDecRefIsLast(__msDecrefP)) { \
+		MS_DESTROY_DISPATCH(msHeader(__msDecrefP)->type, __msDecrefP); \
+		msDestroyAndDispose(__msDecrefP); \
+	} \
+} while(0)
+#else
+#define msDecref(p)           msDecrefAny(p)
+#endif
 #define msPtrWasMoved(p)      msWasMoved(p)
 
 /* --- Arc<T> atomic ref lifecycle (cross-thread shared; decref tail == msDecref) --- */

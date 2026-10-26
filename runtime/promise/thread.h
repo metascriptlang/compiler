@@ -148,7 +148,7 @@ static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 		 * the release runs on the dispatcher drain, exactly like POSIX. */
 		msPostEnvRelease(ctx->env);
 #else
-		msDecref(ctx->env);
+		msDecrefAny(ctx->env);
 #endif
 	}
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
@@ -322,7 +322,7 @@ static inline void msSpawnHeldKeep(void* hp, void* fut) {
 		int64_t live = 0;
 		for (int64_t i = 0; i < h->len; i += 1) {
 			void* f = h->futs[i];
-			if (atomic_load_explicit(&((msFutureBase*)f)->finished, memory_order_acquire)) msDecref(f);
+			if (atomic_load_explicit(&((msFutureBase*)f)->finished, memory_order_acquire)) msDecrefAny(f);
 			else h->futs[live++] = f;
 		}
 		h->len = live;
@@ -369,7 +369,7 @@ static inline void msSpawnHeldSettle(void* hp) {
 	atomic_store_explicit(&h->cancelled, true, memory_order_release);
 	for (int64_t i = 0; i < h->len; i += 1) {
 		msWaitForReady(h->futs[i]);
-		msDecref(h->futs[i]);
+		msDecrefAny(h->futs[i]);
 	}
 	free(h->futs);
 	free(h);

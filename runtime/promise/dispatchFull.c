@@ -1204,7 +1204,7 @@ void msPostEnvRelease(void* env) {
 	if (iocp == NULL) {
 		/* No loop exists yet — the process is effectively single-threaded at
 		 * this point, so an inline decref is race-free. */
-		msDecref(env);
+		msDecrefAny(env);
 		return;
 	}
 	msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
@@ -1357,7 +1357,7 @@ void* msAsyncCurrentChain(void) { return gAsyncChain; }
 
 static void msAsyncCbEnvDrop(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
-	if (e->stepper.env != NULL) msDecref(e->stepper.env);
+	if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
 	free(e);
 }
 
@@ -1416,7 +1416,7 @@ static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e,
 		 * +1 (this decref here). After this msDecref, msDecRefIsLast sees rc=0
 		 * → destroyFn fires → memory freed. The raw msAsyncCbEnv* pointer that
 		 * carried env through the callback chain is then released via free(e). */
-		if (e->stepper.env != NULL) msDecref(e->stepper.env);
+		if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
 		free(e);
 		return;
 	}
@@ -1483,7 +1483,7 @@ void msDestroyDispatcher(void) {
 			msFutureCancel(t.fut);
 			msFutureDrcDestroy(t.fut);
 		} else if (t.actorJob) msActorJobAbandon(t.cb.env);
-		else if (t.cb.env != NULL) msDecref(t.cb.env);
+		else if (t.cb.env != NULL) msDecrefAny(t.cb.env);
 	}
 	free(gTimers.data);
 	gTimers.data = NULL;

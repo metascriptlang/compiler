@@ -4,6 +4,9 @@
 when (mscKeepsRootsWithOwner) {
 	@passC("-DMS_ROOT_OWNER_AT_FREE");
 }
+when (mscEmitsDecrefFuture) {
+	@passC("-DMS_DECREF_FUTURE_ROUTED");
+}
 
 export class console {
 	/**
@@ -327,6 +330,12 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msDecref(p: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msDecrefAny(p: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msDecrefFuture(p: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msIncRef(p: Ptr<void>): void;
