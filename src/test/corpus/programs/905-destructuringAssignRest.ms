@@ -1,5 +1,4 @@
 // @stdout: rest=3,2 4,5|nested=1,2 3|empty=9,0
-// @xfail(raiser): the Raiser VM cannot evaluate msGenericArrayPush, the rest accumulator; `const [a, ...r] = src` fails the same way
 function run(): void {
 	let a: int32 = 0;
 	let r: int32[] = [0];

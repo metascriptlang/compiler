@@ -1876,6 +1876,12 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (builtinKind == "SetSize" && d.arguments.length == 1) {
 		return compileSetSizeCall(s, node);
 	}
+	if (isLoweredArrayPush(d.callee)) {
+		const pushArgs = hostValues(d.arguments);
+		const arrReg = compileExpr(s, pushArgs[0]);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, compileExpr(s, pushArgs[1]), 0));
+		return arrReg;
+	}
 	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
 	}
@@ -2670,12 +2676,16 @@ function isStrIndexReadCall(node: Node): boolean {
 
 function isInterceptedCall(s: RaiserCompState, node: Node): boolean {
 	const d = node.data as CallExprData;
-	return isArrayPush(d.callee)
+	return isArrayPush(d.callee) || isLoweredArrayPush(d.callee)
 		|| (isArraySetLengthCall(s, d.callee) && d.arguments.length == 1)
 		|| (isToStringCall(d.callee) && d.arguments.length == 0)
 		|| (isStringMethod(s, d.callee, "charAt") && d.arguments.length == 1)
 		|| (isStringMethod(s, d.callee, "slice") && d.arguments.length == 2)
 		|| isStrIndexReadCall(node);
+}
+
+function isLoweredArrayPush(callee: Node): boolean {
+	return callee.kind == NodeKind.Identifier && callee.resolvedSym != null && callee.resolvedSym.nativeName == "msGenericArrayPush";
 }
 
 export function unservedCallReason(s: RaiserCompState, node: Node): string {
