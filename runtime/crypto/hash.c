@@ -47,72 +47,6 @@
 
 static int ms_crypto_initialized = 0;
 
-/* ===== Encoding Helpers ===== */
-
-static const char hex_chars[] = "0123456789abcdef";
-
-static msString encode_to_hex(const uint8_t* data, size_t len) {
-	if (len == 0) return MS_EMPTY_STRING;
-
-	int64_t hexLen = (int64_t)(len * 2);
-	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + hexLen + 1);
-
-	p->cap = hexLen;
-	for (size_t i = 0; i < len; i++) {
-		p->data[i * 2] = hex_chars[(data[i] >> 4) & 0x0f];
-		p->data[i * 2 + 1] = hex_chars[data[i] & 0x0f];
-	}
-	p->data[hexLen] = '\0';
-
-	msString result;
-	result.len = hexLen;
-	result.p = p;
-	return result;
-}
-
-static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static msString encode_to_base64(const uint8_t* data, size_t len) {
-	if (len == 0) return MS_EMPTY_STRING;
-
-	size_t outLen = ((len + 2) / 3) * 4;
-	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + outLen + 1);
-
-	p->cap = (int64_t)outLen;
-	size_t i = 0, j = 0;
-	while (i < len) {
-		size_t groupStart = i;
-		uint32_t a = i < len ? data[i++] : 0;
-		uint32_t b = i < len ? data[i++] : 0;
-		uint32_t c = i < len ? data[i++] : 0;
-		size_t nread = i - groupStart;  /* 1, 2, or 3 bytes actually read */
-		uint32_t triple = (a << 16) | (b << 8) | c;
-
-		p->data[j++] = b64_table[(triple >> 18) & 0x3f];
-		p->data[j++] = b64_table[(triple >> 12) & 0x3f];
-		p->data[j++] = (nread < 2) ? '=' : b64_table[(triple >> 6) & 0x3f];
-		p->data[j++] = (nread < 3) ? '=' : b64_table[triple & 0x3f];
-	}
-	p->data[outLen] = '\0';
-
-	msString result;
-	result.len = (int64_t)outLen;
-	result.p = p;
-	return result;
-}
-
-static msString encode_hash(const uint8_t* data, size_t len, msString encoding) {
-	const char* enc = msStringToCString(encoding);
-	if (encoding.len == 3 && memcmp(enc, "hex", 3) == 0) {
-		return encode_to_hex(data, len);
-	}
-	if (encoding.len == 6 && memcmp(enc, "base64", 6) == 0) {
-		return encode_to_base64(data, len);
-	}
-	/* Default: hex */
-	return encode_to_hex(data, len);
-}
-
 /* Wrap raw hash bytes into an msString (binary buffer) */
 static msString raw_to_buffer(const uint8_t* data, size_t len) {
 	if (len == 0) return MS_EMPTY_STRING;
@@ -167,66 +101,42 @@ void msCryptoCleanup(void) {
 
 /* ===== Hashing ===== */
 
-msString msCryptoHashString(msString algorithm, msString data, msString encoding) {
+int64_t msCryptoHashInto(msString algorithm, msString data, void* output, int64_t capacity) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
-	if (!md_info) return MS_EMPTY_STRING;
+	if (!md_info || !output || capacity < 0) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
-	uint8_t hash[64]; /* max hash size is 64 bytes (SHA-512) */
-
+	if (hashLen > 64 || hashLen > (uint64_t)capacity) return 0;
 	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	int ret = mbedtls_md(md_info, input, (size_t)data.len, hash);
-	if (ret != 0) return MS_EMPTY_STRING;
-
-	return encode_hash(hash, hashLen, encoding);
+	int ret = mbedtls_md(md_info, input, (size_t)data.len, output);
+	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
 msString msCryptoHashBuffer(msString algorithm, msString data) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
-	if (!md_info) return MS_EMPTY_STRING;
-
-	size_t hashLen = mbedtls_md_get_size(md_info);
 	uint8_t hash[64];
-
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	int ret = mbedtls_md(md_info, input, (size_t)data.len, hash);
-	if (ret != 0) return MS_EMPTY_STRING;
-
-	return raw_to_buffer(hash, hashLen);
+	int64_t length = msCryptoHashInto(algorithm, data, hash, sizeof(hash));
+	return length > 0 ? raw_to_buffer(hash, (size_t)length) : MS_EMPTY_STRING;
 }
 
 /* ===== HMAC ===== */
 
-msString msCryptoHmacString(msString algorithm, msString key, msString data, msString encoding) {
+int64_t msCryptoHmacInto(msString algorithm, msString key, msString data,
+                       void* output, int64_t capacity) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
-	if (!md_info) return MS_EMPTY_STRING;
+	if (!md_info || !output || capacity < 0) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
-	uint8_t hash[64];
-
+	if (hashLen > 64 || hashLen > (uint64_t)capacity) return 0;
 	const unsigned char* keyData = (const unsigned char*)(key.p ? key.p->data : "");
 	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-
-	int ret = mbedtls_md_hmac(md_info, keyData, (size_t)key.len, input, (size_t)data.len, hash);
-	if (ret != 0) return MS_EMPTY_STRING;
-
-	return encode_hash(hash, hashLen, encoding);
+	int ret = mbedtls_md_hmac(md_info, keyData, (size_t)key.len, input, (size_t)data.len, output);
+	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
 msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
-	if (!md_info) return MS_EMPTY_STRING;
-
-	size_t hashLen = mbedtls_md_get_size(md_info);
 	uint8_t hash[64];
-
-	const unsigned char* keyData = (const unsigned char*)(key.p ? key.p->data : "");
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-
-	int ret = mbedtls_md_hmac(md_info, keyData, (size_t)key.len, input, (size_t)data.len, hash);
-	if (ret != 0) return MS_EMPTY_STRING;
-
-	return raw_to_buffer(hash, hashLen);
+	int64_t length = msCryptoHmacInto(algorithm, key, data, hash, sizeof(hash));
+	return length > 0 ? raw_to_buffer(hash, (size_t)length) : MS_EMPTY_STRING;
 }
 
 /* ===== Random ===== */
@@ -363,36 +273,24 @@ void msCryptoHashUpdate(msCryptoHashCtx* ctx, msString data) {
 	mbedtls_md_update(&ctx->ctx, input, (size_t)data.len);
 }
 
-msString msCryptoHashFinal(msCryptoHashCtx* ctx, msString encoding) {
-	if (!ctx || !ctx->valid) return MS_EMPTY_STRING;
+int64_t msCryptoHashFinalInto(msCryptoHashCtx* ctx, void* output, int64_t capacity) {
+	if (!ctx || !ctx->valid) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(ctx->md_info);
-	uint8_t hash[64];
-
-	int ret = mbedtls_md_finish(&ctx->ctx, hash);
+	int ret = -1;
+	if (output && capacity >= 0 && hashLen <= 64 && hashLen <= (uint64_t)capacity) {
+		ret = mbedtls_md_finish(&ctx->ctx, output);
+	}
 	mbedtls_md_free(&ctx->ctx);
 	ctx->valid = 0;
-
-	msString result = (ret == 0) ? encode_hash(hash, hashLen, encoding) : MS_EMPTY_STRING;
-
 	free(ctx);
-	return result;
+	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
 msString msCryptoHashFinalBuffer(msCryptoHashCtx* ctx) {
-	if (!ctx || !ctx->valid) return MS_EMPTY_STRING;
-
-	size_t hashLen = mbedtls_md_get_size(ctx->md_info);
 	uint8_t hash[64];
-
-	int ret = mbedtls_md_finish(&ctx->ctx, hash);
-	mbedtls_md_free(&ctx->ctx);
-	ctx->valid = 0;
-
-	msString result = (ret == 0) ? raw_to_buffer(hash, hashLen) : MS_EMPTY_STRING;
-
-	free(ctx);
-	return result;
+	int64_t length = msCryptoHashFinalInto(ctx, hash, sizeof(hash));
+	return length > 0 ? raw_to_buffer(hash, (size_t)length) : MS_EMPTY_STRING;
 }
 
 void msCryptoHashFree(msCryptoHashCtx* ctx) {
@@ -442,36 +340,24 @@ void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, msString data) {
 	mbedtls_md_hmac_update(&ctx->ctx, input, (size_t)data.len);
 }
 
-msString msCryptoHmacFinal(msCryptoHmacCtx* ctx, msString encoding) {
-	if (!ctx || !ctx->valid) return MS_EMPTY_STRING;
+int64_t msCryptoHmacFinalInto(msCryptoHmacCtx* ctx, void* output, int64_t capacity) {
+	if (!ctx || !ctx->valid) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(ctx->md_info);
-	uint8_t hash[64];
-
-	int ret = mbedtls_md_hmac_finish(&ctx->ctx, hash);
+	int ret = -1;
+	if (output && capacity >= 0 && hashLen <= 64 && hashLen <= (uint64_t)capacity) {
+		ret = mbedtls_md_hmac_finish(&ctx->ctx, output);
+	}
 	mbedtls_md_free(&ctx->ctx);
 	ctx->valid = 0;
-
-	msString result = (ret == 0) ? encode_hash(hash, hashLen, encoding) : MS_EMPTY_STRING;
-
 	free(ctx);
-	return result;
+	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
 msString msCryptoHmacFinalBuffer(msCryptoHmacCtx* ctx) {
-	if (!ctx || !ctx->valid) return MS_EMPTY_STRING;
-
-	size_t hashLen = mbedtls_md_get_size(ctx->md_info);
 	uint8_t hash[64];
-
-	int ret = mbedtls_md_hmac_finish(&ctx->ctx, hash);
-	mbedtls_md_free(&ctx->ctx);
-	ctx->valid = 0;
-
-	msString result = (ret == 0) ? raw_to_buffer(hash, hashLen) : MS_EMPTY_STRING;
-
-	free(ctx);
-	return result;
+	int64_t length = msCryptoHmacFinalInto(ctx, hash, sizeof(hash));
+	return length > 0 ? raw_to_buffer(hash, (size_t)length) : MS_EMPTY_STRING;
 }
 
 void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
@@ -488,80 +374,6 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
 double msCryptoIsHashSupported(msString algorithm) {
 	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	return info ? 1.0 : 0.0;
-}
-
-/* ===== Decode Helpers ===== */
-
-static int hex_digit(char c) {
-	if (c >= '0' && c <= '9') return c - '0';
-	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-	return -1;
-}
-
-static msString decode_from_hex(const char* hex, int64_t len) {
-	if (len == 0 || (len % 2) != 0) return MS_EMPTY_STRING;
-	int64_t out_len = len / 2;
-	char* buf = (char*)msMemAlloc((size_t)out_len);
-	for (int64_t i = 0; i < out_len; i++) {
-		int hi = hex_digit(hex[i * 2]);
-		int lo = hex_digit(hex[i * 2 + 1]);
-		if (hi < 0 || lo < 0) { free(buf); return MS_EMPTY_STRING; }
-		buf[i] = (char)((hi << 4) | lo);
-	}
-	msString result = msStringNew(buf, out_len);
-	free(buf);
-	return result;
-}
-
-static int base64_val(char c) {
-	if (c >= 'A' && c <= 'Z') return c - 'A';
-	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-	if (c >= '0' && c <= '9') return c - '0' + 52;
-	if (c == '+') return 62;
-	if (c == '/') return 63;
-	return -1;
-}
-
-static msString decode_from_base64(const char* b64, int64_t len) {
-	if (len == 0 || (len % 4) != 0) return MS_EMPTY_STRING;
-	int64_t out_len = (len / 4) * 3;
-	if (len >= 1 && b64[len - 1] == '=') out_len--;
-	if (len >= 2 && b64[len - 2] == '=') out_len--;
-	char* buf = (char*)msMemAlloc((size_t)out_len);
-	int64_t j = 0;
-	for (int64_t i = 0; i < len; i += 4) {
-		int a = base64_val(b64[i]);
-		int b = base64_val(b64[i + 1]);
-		int c = b64[i + 2] == '=' ? 0 : base64_val(b64[i + 2]);
-		int d = b64[i + 3] == '=' ? 0 : base64_val(b64[i + 3]);
-		if (a < 0 || b < 0 || c < 0 || d < 0) { free(buf); return MS_EMPTY_STRING; }
-		uint32_t triple = ((uint32_t)a << 18) | ((uint32_t)b << 12) | ((uint32_t)c << 6) | (uint32_t)d;
-		if (j < out_len) buf[j++] = (char)((triple >> 16) & 0xff);
-		if (j < out_len) buf[j++] = (char)((triple >> 8) & 0xff);
-		if (j < out_len) buf[j++] = (char)(triple & 0xff);
-	}
-	msString result = msStringNew(buf, out_len);
-	free(buf);
-	return result;
-}
-
-/* ===== Encoding Public API ===== */
-
-msString msCryptoToHex(msString data) {
-	return encode_to_hex((const uint8_t*)msStringToCString(data), (size_t)data.len);
-}
-
-msString msCryptoFromHex(msString hex) {
-	return decode_from_hex(msStringToCString(hex), hex.len);
-}
-
-msString msCryptoToBase64(msString data) {
-	return encode_to_base64((const uint8_t*)msStringToCString(data), (size_t)data.len);
-}
-
-msString msCryptoFromBase64(msString b64) {
-	return decode_from_base64(msStringToCString(b64), b64.len);
 }
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */

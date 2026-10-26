@@ -1,7 +1,134 @@
 // Crypto — Comprehensive Test Suite
 
 import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, randomUUID,
-	timingSafeEqual, createHash, createHmac, isHashSupported, init } from "std/crypto";
+	timingSafeEqual, createHash, createHmac, isHashSupported, init,
+	toHex, fromHex, toBase64, fromBase64, hashBuffer, hmacBuffer } from "std/crypto";
+
+@include("runtime/crypto/hash.h");
+extern function hashInto(
+	algorithm: string, data: string, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHashInto";
+extern function hmacInto(
+	algorithm: string, key: string, data: string, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHmacInto";
+extern function hashInit(algorithm: string): int64 from "msCryptoHashInitHandle";
+extern function hashFinalInto(
+	ctx: int64, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHashFinalIntoHandle";
+extern function hmacFinalInto(
+	ctx: int64, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHmacFinalIntoHandle";
+
+test "digest scratch rejects undersized outputs without writes" {
+	let bytes: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	for (const capacity of [-1, 0, 63]) {
+		assert hashInto("sha512", "abc", bytes, capacity) == 0;
+		assert hmacInto("sha512", "key", "abc", bytes, capacity) == 0;
+		for (const byte of bytes) assert byte == 0;
+	}
+	assert hashInto("bogus", "abc", bytes, 64) == 0;
+	assert hmacInto("bogus", "key", "abc", bytes, 64) == 0;
+	const ctx = hashInit("sha512");
+	assert ctx != 0;
+	assert hashFinalInto(ctx, bytes, 63) == 0;
+	assert hashFinalInto(0, bytes, 64) == 0;
+	assert hmacFinalInto(0, bytes, 64) == 0;
+	for (const byte of bytes) assert byte == 0;
+}
+
+test "digest scratch accepts exact small and maximum capacities" {
+	let bytes: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	assert hashInto("md5", "abc", bytes, 16) == 16;
+	assert hmacInto("md5", "key", "abc", bytes, 16) == 16;
+	assert hashInto("sha512", "abc", bytes, 64) == 64;
+	assert hmacInto("sha512", "key", "abc", bytes, 64) == 64;
+}
+
+test "crypto codecs preserve raw binary strings" {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
+	const binary = bytes.asString();
+	assert fromHex(toHex(binary)) == binary;
+	assert fromBase64(toBase64(binary)) == binary;
+	assert toHex(fromBase64("/w==")) == "ff";
+	assert toHex(fromHex("AaFf00")) == "aaff00";
+}
+
+test "crypto base64 encodes all tail lengths and UTF-8" {
+	const plain = ["", "f", "fo", "foo", "foob", "fooba", "foobar", "hé😀"];
+	const encoded = [
+		"", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy", "aMOp8J+YgA==",
+	];
+	for (let i = 0; i < plain.length; i++) {
+		assert toBase64(plain[i]) == encoded[i];
+		assert fromBase64(encoded[i]) == plain[i];
+	}
+}
+
+test "crypto hash and hmac digest encoding uses the shared codecs" {
+	for (const algorithm of ["sha256", "sha512", "sha1", "md5"]) {
+		const rawHash = hashBuffer(algorithm, "\0hé😀");
+		const rawHmac = hmacBuffer(algorithm, "key\0é", "\0hé😀");
+		assert rawHash.ok;
+		assert rawHmac.ok;
+		for (const encoding of ["hex", "base64", "", "unknown"]) {
+			const digest = hash(algorithm, "\0hé😀", encoding);
+			const mac = hmac(algorithm, "key\0é", "\0hé😀", encoding);
+			assert digest.ok;
+			assert mac.ok;
+			if (rawHash.ok && digest.ok) {
+				const expected = encoding == "base64"
+					? toBase64(rawHash.value) : toHex(rawHash.value);
+				assert digest.value == expected;
+			}
+			if (rawHmac.ok && mac.ok) {
+				const expected = encoding == "base64"
+					? toBase64(rawHmac.value) : toHex(rawHmac.value);
+				assert mac.value == expected;
+			}
+		}
+	}
+}
+
+test "streaming hash digest encoding consumes its context once" {
+	for (const algorithm of ["sha256", "sha512", "sha1", "md5"]) {
+		for (const encoding of ["hex", "base64", "", "unknown"]) {
+			const hasher = createHash(algorithm);
+			hasher.update("\0h");
+			hasher.update("é😀");
+			const expected = hash(algorithm, "\0hé😀", encoding);
+			assert expected.ok;
+			if (expected.ok) assert hasher.digest(encoding) == expected.value;
+			assert hasher.digest(encoding) == "";
+			assert hasher.digestBuffer() == "";
+		}
+	}
+	assert createHash("bogus").digest() == "";
+	assert createHmac("bogus", "").digest() == "";
+}
+
+test "crypto codecs retain malformed input results" {
+	for (const text of ["", "0", "000", "gg", "00gg", "00 0", "\0f", "é"]) {
+		assert fromHex(text) == "";
+	}
+	for (const text of ["", "Zg", " Zg==", "Zg==\n", "====", "_w==", "AAA?", "AA\0A"]) {
+		assert fromBase64(text) == "";
+	}
+	assert toHex(fromBase64("AB==")) == "00";
+	for (const text of ["AA=A", "AA==AAAA", "AAA=AAAA", "AB=C", "A=AA", "AAAA=AAA", "AA=AAAAA"]) {
+		assert fromBase64(text) == "";
+	}
+}
 
 // ===== Known Test Vectors =====
 

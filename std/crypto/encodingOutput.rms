@@ -1,0 +1,19 @@
+export type EncodingIndex = int64;
+export const emptyEncoding = "";
+
+export function newEncodingOutput(length: int64): uint8[] {
+	if (length < 0) throw new RangeError("encoding output length is negative");
+	return new Array<uint8>(length);
+}
+
+export function newDecodingOutput(length: int64): uint8[] {
+	return newEncodingOutput(length);
+}
+
+export function freshEncodingOutputBytes(value: uint8[]): uint8[] {
+	return value;
+}
+
+export function encodingOutputBytes(value: uint8[]): uint8[] {
+	return value;
+}

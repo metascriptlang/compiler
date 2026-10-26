@@ -18,6 +18,8 @@
 @include("runtime/crypto/hash.h");
 @include("runtime/net/socket.h");
 
+import "../../crypto/encodingNative";
+
 // mbedTLS include + compile chain — mirrors std/crypto/index.cms. We pull the
 // C sources in here directly instead of `import { ... } from "std/crypto"`
 // because importing the prelude module surfaces the Hasher/Hmac classes,

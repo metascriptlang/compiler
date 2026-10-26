@@ -1,0 +1,37 @@
+@include("runtime/core/string.h");
+@include("stdint.h");
+
+extern function newString(length: int64): string from "msStringNewLen";
+extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
+extern const stringLengthMax: uint64 from "MS_LEN_MAX";
+
+export type EncodingIndex = int64;
+export extern const emptyEncoding: string from "MS_EMPTY_STRING";
+
+@noinline
+function rejectEncodingLength(): void {
+	throw new RangeError("encoding output length exceeds native string capacity");
+}
+
+@inline
+export function newEncodingOutput(length: int64): string {
+	if ((length as uint64) > stringLengthMax) rejectEncodingLength();
+	return newString(length);
+}
+
+@inline
+export function newDecodingOutput(length: int64): uint8[] {
+	if (length < 0) throw new RangeError("decoding output length is negative");
+	return new Array<uint8>(length);
+}
+
+@inline
+export function freshEncodingOutputBytes(value: string): Ptr<uint8> {
+	return (value as cstring) as Ptr<uint8>;
+}
+
+@inline
+export function encodingOutputBytes(ref value: string): Ptr<uint8> {
+	prepareStore(value);
+	return (value as cstring) as Ptr<uint8>;
+}

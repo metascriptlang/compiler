@@ -47,6 +47,18 @@ export function backendExtension(backend: Backend): string {
 	};
 }
 
+export function backendName(backend: Backend): string {
+	const name = match (backend) {
+		Backend.C => "c",
+		Backend.JS => "js",
+		Backend.Raiser => "raiser",
+		Backend.Wasm => "c",
+		_ => "",
+	};
+	if (name == "") throw new Error(`internal: no build defines for the backend '${backendExtension(backend)}'`);
+	return name;
+}
+
 export function backendOfExtension(ext: string): Backend {
 	return match (ext) {
 		".jms" => Backend.JS,
