@@ -107,6 +107,13 @@ function declaredParents(sym: Symbol): Symbol[] {
 		if (p != null) parents.push(p);
 		return parents;
 	}
+	if (sym.symbolKind == SymbolKind.TypeAlias) {
+		const t = sym.symbolType;
+		const own = t != null && (t.kind == TypeKind.Alias || t.sym == sym) && t.typeReturn != null;
+		const target = declaringSymOf(own ? t.typeReturn : t);
+		if (target != null && target != sym) parents.push(target);
+		return parents;
+	}
 	const decl = unwrapDecl(sym.declNode);
 	if (decl == null || decl.baseExprs == null) return parents;
 	for (const base of decl.baseExprs) {
