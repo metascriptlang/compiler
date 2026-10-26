@@ -5,7 +5,7 @@ import { RaiserClassType, createClassType } from "./value";
 // An object with a layout is a cell: the reference header, then one 8 byte slot per laid field in layout order.
 // The header's type word indexes the table below, so a cell knows its class and its destroy routine without a handle
 // heap. A Dyn slot holds the handle of its box, as a Dyn register does; every other slot holds the word its class holds.
-export const OBJECT_SLOT_SIZE: int64 = 8;
+export const OBJECT_CELL_SLOT_BYTES: int64 = 8;
 
 const classTypes: RaiserClassType[] = [];
 const registered: Map<string, int32> = new Map<string, int32>();
@@ -26,7 +26,8 @@ export function classTypeAt(index: int64): RaiserClassType {
 }
 
 export function objectCellNew(mem: VmMemory, t: RaiserClassType, rc: int64): int64 {
-	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_SLOT_SIZE, 8, classTypeIndex(t) as int64, true);
+	when (mode != "danger") { if (t.kinds.length != t.fields.length) throw new Error(`internal: class ${t.name} has ${t.fields.length} fields and ${t.kinds.length} slot classes`); }
+	const cell = newCell(mem, (t.fields.length as int64) * OBJECT_CELL_SLOT_BYTES, 8, classTypeIndex(t) as int64, true);
 	setCellRc(cell, rc);
 	setCellRootIdx(cell, 0);
 	return cell;
@@ -38,12 +39,12 @@ export function objectCellType(cell: int64): RaiserClassType {
 
 @inline
 export function objectCellSlot(cell: int64, i: number): int64 {
-	return ld64(cell + (i as int64) * OBJECT_SLOT_SIZE);
+	return ld64(cell + (i as int64) * OBJECT_CELL_SLOT_BYTES);
 }
 
 @inline
 export function objectCellSetSlot(cell: int64, i: number, v: int64): void {
-	st64(cell + (i as int64) * OBJECT_SLOT_SIZE, v);
+	st64(cell + (i as int64) * OBJECT_CELL_SLOT_BYTES, v);
 }
 
 export function objectCellSlotCount(cell: int64): number {
