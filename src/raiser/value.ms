@@ -4,7 +4,7 @@ import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqLen, seqClass, seqWidth
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex } from "./memory";
+import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex } from "./memory";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -18,7 +18,7 @@ export enum RaiserValueKind {
 	Bool,
 	Int,        // i64 integer
 	Float,      // f64 float
-	RegAddr,    // address of a register slot: intVal = absolute slot index
+	RegAddr,    // address of a register slot: intVal = the slot's address | its register class
 	GlobalAddr, // address of a global: intVal = global index
 	String,     // string value
 	Array,      // handle into RaiserArrayHeap
@@ -1544,7 +1544,6 @@ export interface RaiserCopyMap {
 	globalSlots: Map<int64, int64>;
 	jobs: RaiserCopyJob[];
 	viewFixups: int64[];
-	sourceSlots: int64[] | null;
 	sourceGlobals: RaiserValue[] | null;
 	destGlobals: RaiserValue[] | null;
 }
@@ -1557,7 +1556,6 @@ export function createCopyMap(): RaiserCopyMap {
 		globalSlots: new Map<int64, int64>(),
 		jobs: [],
 		viewFixups: [],
-		sourceSlots: null,
 		sourceGlobals: null,
 		destGlobals: null,
 	};
@@ -1568,16 +1566,14 @@ export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dst
 	return copyGraphWith(srcArr, srcObj, dstArr, dstObj, val, map);
 }
 
-// The value in the register a RegAddr names: its intVal is (absolute rank << 3) | register class.
-function copiedRegisterValue(map: RaiserCopyMap, address: int64): RaiserValue {
+// The value in the register a RegAddr names: its intVal is the slot's address | register class.
+function copiedRegisterValue(address: int64): RaiserValue {
 	const cls = (address & 7) as RaiserRegClass;
-	const abs = address >> 3;
-	const slots = map.sourceSlots;
-	if (slots == null || abs >= slots.length) throw new Error("internal: a copied slot address must have its source storage");
-	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) return handleValue(slots[abs]);
-	if (cls == RaiserRegClass.Word) return raiserInt(slots[abs]);
-	if (cls == RaiserRegClass.Bool) return raiserBool(slots[abs] != 0);
-	return raiserFloat(bitsToFloat(slots[abs]));
+	const w = ld64(address - (address & 7));
+	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) return handleValue(w);
+	if (cls == RaiserRegClass.Word) return raiserInt(w);
+	if (cls == RaiserRegClass.Bool) return raiserBool(w != 0);
+	return raiserFloat(bitsToFloat(w));
 }
 
 function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: int64): void {
@@ -1605,7 +1601,7 @@ function copySlotShell(dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCop
 	const handle = heapAllocArray(dstArr);
 	dstArr.arrays[handleIndex(handle)].rc = 0;
 	slots.set(val.intVal, handle);
-	const held = isRegister ? copiedRegisterValue(map, val.intVal) : source![val.intVal];
+	const held = isRegister ? copiedRegisterValue(val.intVal) : source![val.intVal];
 	map.jobs.push({ kind: RaiserCopyKind.Slot, source: held, dst: handle });
 	return raiserElemAddr(handle, 0);
 }
@@ -1761,19 +1757,19 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
-	const refs: int64[] = [heapAllocString(sArr, "source").intVal];
+	const slot = reserveSlots(sArr.mem, 1);
+	st64(slot, heapAllocString(sArr, "source").intVal);
 	const owner = heapAllocArray(sArr);
-	heapArrayPush(sArr, owner, raiserRegAddr(1));
-	heapArrayPush(sArr, owner, raiserRegAddr(1));
+	heapArrayPush(sArr, owner, raiserRegAddr(slot | 1));
+	heapArrayPush(sArr, owner, raiserRegAddr(slot | 1));
 	const map = createCopyMap();
-	map.sourceSlots = refs;
 	const copied = copyGraphWith(sArr, sObj, dArr, dObj, raiserArray(owner), map);
 	const first = heapArrayGet(dArr, copied.intVal, 0);
 	const second = heapArrayGet(dArr, copied.intVal, 1);
 	assert heapStringText(dArr, heapArrayGet(dArr, first.intVal, first.floatVal as int64)) == "source";
 	heapArraySet(dArr, first.intVal, first.floatVal as int64, heapAllocString(dArr, "destination"));
 	assert heapStringText(dArr, heapArrayGet(dArr, second.intVal, second.floatVal as int64)) == "destination";
-	assert heapStringText(sArr, handleValue(refs[0])) == "source";
+	assert heapStringText(sArr, handleValue(ld64(slot))) == "source";
 }
 
 // --- Cross-heap copy tests ---
