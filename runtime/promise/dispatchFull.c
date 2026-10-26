@@ -390,14 +390,39 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 	}
 }
 
+/* A failed future noted off its owner thread rides the IOCP as kind=-4; the loop
+ * thread adopts it behind the mailbox release the same poster queues next. */
+void msCompletionQueuePushOrphanNote(void* fut) {
+	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp == NULL) iocp = msFirstLoopIocp();
+	if (iocp == NULL) {
+		fputs("internal: orphan note posted with no loop to adopt it\n", stderr);
+		abort();
+	}
+	msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
+	msg->fut = NULL;
+	msg->value = fut;
+	msg->isFail = false;
+	msg->error = NULL;
+	msg->kind = -4;
+	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+}
+
 static void msIocpDispatchMsg(msCompletionMsg* msg) {
-	if (msg->kind == -3) {
+	if (msg->kind == -4) {
+		msAdoptOrphanFailure(msg->value);
+	} else if (msg->kind == -3) {
 		msReleaseEnvOnLoop(msg->value);
 	} else if (msg->kind == -2) {
 		if (msg->value != NULL) msFutureDrcDestroy(msg->value);
-	} else if (msg->fut != NULL) {
-		msFutureFireCallbacks((msFutureBase*)msg->fut);
-		msFutureDrcDestroy(msg->fut);
+	} else if (msg->kind == -1 || msg->kind == 0) {
+		if (msg->fut != NULL) {
+			msFutureFireCallbacks((msFutureBase*)msg->fut);
+			msFutureDrcDestroy(msg->fut);
+		}
+	} else {
+		fprintf(stderr, "internal: unknown completion kind %d\n", (int)msg->kind);
+		abort();
 	}
 	free(msg);
 }
@@ -570,6 +595,16 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
     }
 }
 
+/* A failed future noted off its owner thread: the owner adopts it (kind=-4) before the
+ * release the poster queues behind it, so the in-flight ref still holds the future. */
+void msCompletionQueuePushOrphanNote(void* fut) {
+    msLoopChannel* c = msChannelOf(((msFutureBase*)fut)->completionQueue);
+    msMessage* msg = msMsgAlloc(/*kind=*/-4, /*replyFut=*/fut);
+    msChannelCount(c, 1);
+    msMpscPush(&c->queue, msg);
+    msChannelWake(c);
+}
+
 void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
     if (env == NULL) return;
     msLoopChannel* c = msChannelOf(ownerQueue);
@@ -622,6 +657,11 @@ static bool msChannelDrain(msLoopChannel* c) {
             /* Amendment H: deferred release — decref only, no callback.
              * Both this and the drain decref run on the dispatcher thread. */
             if (fut != NULL) msFutureDrcDestroy(fut);
+        } else if (msg->kind == -4) {
+            msAdoptOrphanFailure(fut);
+        } else if (msg->kind != -1 && msg->kind != 0) {
+            fprintf(stderr, "internal: unknown completion kind %d\n", (int)msg->kind);
+            abort();
         } else if (fut != NULL) {
             /* Fire callbacks for BOTH success and failure — the worker pre-set
              * value/error/failed/finished (Step 1), mirroring the Windows IOCP path.

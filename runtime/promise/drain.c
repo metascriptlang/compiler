@@ -10,6 +10,7 @@
 #include "runtime/core/system.h"
 #include "dispatch.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 #include <pthread.h>
@@ -28,13 +29,9 @@ static int msOrphanOverflow = 0;
 static void* msOrphanErrors[MS_ORPHAN_MAX];
 static int msOrphanErrorCount = 0;
 
-/* Called from msFutureFireCallbacks when a future completes FAILED with no
- * callback attached. Cross-thread safe: the Windows completion post's no-loop
- * fallback runs msFutureFail on pool threads. The incref keeps the entry
- * valid until the exit report; it is deliberately never released (the
- * process is exiting). */
-void msNoteOrphanFailure(void* fut) {
-	if (fut == NULL) return;
+/* Registers the failed future on the thread that owns its count: the entry's
+ * incref is a plain rc op, so it runs where the owner's own rc ops run. */
+void msAdoptOrphanFailure(void* fut) {
 	MS_ORPHAN_LOCK();
 	if (atomic_load_explicit(&((msFutureBase*)fut)->errorObserved, memory_order_relaxed)) {
 		MS_ORPHAN_UNLOCK();
@@ -54,6 +51,38 @@ void msNoteOrphanFailure(void* fut) {
 		msOrphanOverflow++;
 	}
 	MS_ORPHAN_UNLOCK();
+}
+
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+/* A published future's count belongs to the thread whose channel it names
+ * (NULL is the main loop). */
+static bool msFailureNotedOffOwner(msFutureBase* f) {
+	if (!f->crossThreadPublished) return false;
+	void* q = f->completionQueue;
+	return q != msLoopCompletionQueue() || (msIsPoolWorker && q == NULL);
+}
+#endif
+
+/* Called from msFutureFireCallbacks when a future completes FAILED with no
+ * callback attached. A non-owner thread (an actor reply failed on the thread
+ * that reaps the actor) never touches the count: it posts the note to the
+ * owner's completion queue, behind which the mailbox's in-flight release is
+ * ordered, so the future is alive when the owner adopts it. The entry is
+ * deliberately never released (the process is exiting). */
+void msNoteOrphanFailure(void* fut) {
+	if (fut == NULL) return;
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+	if (msFailureNotedOffOwner((msFutureBase*)fut)) {
+#if !MS_FUTURE_SUBMIT_REF
+		fputs("internal: orphan failure noted off the owner thread without a submit ref\n", stderr);
+		abort();
+#endif
+		if (atomic_load_explicit(&((msFutureBase*)fut)->errorObserved, memory_order_relaxed)) return;
+		msCompletionQueuePushOrphanNote(fut);
+		return;
+	}
+#endif
+	msAdoptOrphanFailure(fut);
 }
 
 void msNoteOrphanError(void* err) {
