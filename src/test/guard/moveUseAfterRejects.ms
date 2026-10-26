@@ -35,36 +35,36 @@ actor Io {
 async function actorCall(io: Io): Promise<int32> {
 	const afterCall = new T();
 	await io.bump(move afterCall);
-	return afterCall.n;
+	return afterCall.n; // GUARD-REFUSED
 }
 
 async function actorSend(io: Io): Promise<int32> {
 	const afterSend = new T();
 	io.add(move afterSend);
-	return afterSend.n;
+	return afterSend.n; // GUARD-REFUSED
 }
 
 async function actorWrite(io: Io): Promise<void> {
 	const afterWrite = new T();
 	await io.bump(move afterWrite);
-	afterWrite.n = 100;
+	afterWrite.n = 100; // GUARD-REFUSED
 }
 
 async function actorIf(io: Io, flag: boolean): Promise<int32> {
 	const afterIf = new T();
 	if (flag) { await io.bump(move afterIf); }
-	return afterIf.n;
+	return afterIf.n; // GUARD-REFUSED
 }
 
 async function actorLoop(io: Io): Promise<void> {
 	const inLoop = new T();
-	for (let i = 0; i < 2; i = i + 1) { await io.bump(move inLoop); }
+	for (let i = 0; i < 2; i = i + 1) { await io.bump(move inLoop); } // GUARD-REFUSED
 }
 
 async function actorAlias(io: Io): Promise<void> {
 	const held = new T();
 	let viaAlias = held;
-	await io.bump(move viaAlias);
+	await io.bump(move viaAlias); // GUARD-REFUSED
 	held.n = 100;
 }
 
@@ -74,12 +74,12 @@ async function spawnIf(flag: boolean): Promise<int32> {
 		const h = spawn(() => { spawnIf.n = spawnIf.n + 1; return spawnIf.n; }, { move: [spawnIf] });
 		await h;
 	}
-	return spawnIf.n;
+	return spawnIf.n; // GUARD-REFUSED
 }
 
 async function spawnForLoop(): Promise<void> {
 	const spawnFor: Counter = { n: 7 };
-	for (let i = 0; i < 2; i = i + 1) {
+	for (let i = 0; i < 2; i = i + 1) { // GUARD-REFUSED
 		const h = spawn(() => { spawnFor.n = spawnFor.n + 1; return spawnFor.n; }, { move: [spawnFor] });
 		await h;
 	}
@@ -88,7 +88,7 @@ async function spawnForLoop(): Promise<void> {
 async function spawnWhileLoop(): Promise<void> {
 	const spawnWhile: Counter = { n: 7 };
 	let i = 0;
-	while (i < 2) {
+	while (i < 2) { // GUARD-REFUSED
 		i = i + 1;
 		const h = spawn(() => { spawnWhile.n = spawnWhile.n + 1; return spawnWhile.n; }, { move: [spawnWhile] });
 		await h;
@@ -106,10 +106,10 @@ await spawnWhileLoop();
 for (let r = 0; r < 2; r = r + 1) {
 	const topHeld = new T();
 	let topAlias = topHeld;
-	await io.bump(move topAlias);
+	await io.bump(move topAlias); // GUARD-REFUSED
 	topHeld.n = 100;
 }
 for (let r = 0; r < 2; r = r + 1) {
 	const fromSpawn = await spawn(() => new T());
-	await io.bump(move fromSpawn);
+	await io.bump(move fromSpawn); // GUARD-REFUSED
 }
