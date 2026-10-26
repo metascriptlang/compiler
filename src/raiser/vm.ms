@@ -1560,7 +1560,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
 	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
-		vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand");
+		vmLedger(vm, [vm.sched.strands.items[vm.current]], [value], "strand");
 	}
 	return vm.current != 0;
 }
@@ -1595,7 +1595,7 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 	roots.push(vm.currentException);
 	const running = vm.sched.strands.items[vm.current];
 	for (const s of held) {
-		frameRefRoots(vm, s, s == running, roots);
+		if (where != "strand" || s.status != RaiserStrandStatus.Done) frameRefRoots(vm, s, s == running, roots);
 		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
 		if (s != running) roots.push(s.currentException);
 	}
