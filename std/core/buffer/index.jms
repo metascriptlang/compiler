@@ -20,6 +20,18 @@ export type Buffer = uint8[];
 
 // ===== private native bindings =====
 
+// A read or write outside the buffer, an integer outside its width, or a byteLength outside 1..6 throws
+// the RangeError the Node Buffer throws; the other backends say the same words.
+function need(b: Buffer, o: number, width: number): void {
+	const max = b.length - width;
+	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
+	if (!(o >= 0 && o <= max && o % 1 == 0)) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${o}`);
+}
+
+function inRange(v: number, lo: number, hi: number): void {
+	if (!(v >= lo && v <= hi)) throw new RangeError(`The value of "value" is out of range. It must be >= ${lo} and <= ${hi}. Received ${v}`);
+}
+
 function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 	let i = 0;
 	while (i < src.length) {
@@ -346,24 +358,95 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 	}
 }
 
-export extern function readUInt8(this b: Buffer, o: number): int32 from "#[#]";
-export extern function readUInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, false)";
-export extern function readUInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, true)";
-export extern function readUInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, false)";
-export extern function readUInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, true)";
-export extern function readInt8(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt8(#)";
-export extern function readInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, false)";
-export extern function readInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, true)";
-export extern function readInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, false)";
-export extern function readInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, true)";
-export extern function readFloatBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, false)";
-export extern function readFloatLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, true)";
-export extern function readDoubleBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, false)";
-export extern function readDoubleLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, true)";
-export extern function readBigUInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, true)";
-export extern function readBigUInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, false)";
-export extern function readBigInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, true)";
-export extern function readBigInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, false)";
+export function readUInt8(this b: Buffer, o: number): int32 {
+	need(b, o, 1);
+	return b.byteAt(o);
+}
+extern function dvReadUInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, false)";
+export function readUInt16BE(this b: Buffer, o: number): number {
+	need(b, o, 2);
+	return dvReadUInt16BE(b, o);
+}
+extern function dvReadUInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, true)";
+export function readUInt16LE(this b: Buffer, o: number): number {
+	need(b, o, 2);
+	return dvReadUInt16LE(b, o);
+}
+extern function dvReadUInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, false)";
+export function readUInt32BE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadUInt32BE(b, o);
+}
+extern function dvReadUInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, true)";
+export function readUInt32LE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadUInt32LE(b, o);
+}
+extern function dvReadInt8(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt8(#)";
+export function readInt8(this b: Buffer, o: number): number {
+	need(b, o, 1);
+	return dvReadInt8(b, o);
+}
+extern function dvReadInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, false)";
+export function readInt16BE(this b: Buffer, o: number): number {
+	need(b, o, 2);
+	return dvReadInt16BE(b, o);
+}
+extern function dvReadInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, true)";
+export function readInt16LE(this b: Buffer, o: number): number {
+	need(b, o, 2);
+	return dvReadInt16LE(b, o);
+}
+extern function dvReadInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, false)";
+export function readInt32BE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadInt32BE(b, o);
+}
+extern function dvReadInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, true)";
+export function readInt32LE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadInt32LE(b, o);
+}
+extern function dvReadFloatBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, false)";
+export function readFloatBE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadFloatBE(b, o);
+}
+extern function dvReadFloatLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, true)";
+export function readFloatLE(this b: Buffer, o: number): number {
+	need(b, o, 4);
+	return dvReadFloatLE(b, o);
+}
+extern function dvReadDoubleBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, false)";
+export function readDoubleBE(this b: Buffer, o: number): number {
+	need(b, o, 8);
+	return dvReadDoubleBE(b, o);
+}
+extern function dvReadDoubleLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, true)";
+export function readDoubleLE(this b: Buffer, o: number): number {
+	need(b, o, 8);
+	return dvReadDoubleLE(b, o);
+}
+extern function dvReadBigUInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, true)";
+export function readBigUInt64LE(this b: Buffer, o: number): bigint {
+	need(b, o, 8);
+	return dvReadBigUInt64LE(b, o);
+}
+extern function dvReadBigUInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, false)";
+export function readBigUInt64BE(this b: Buffer, o: number): bigint {
+	need(b, o, 8);
+	return dvReadBigUInt64BE(b, o);
+}
+extern function dvReadBigInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, true)";
+export function readBigInt64LE(this b: Buffer, o: number): bigint {
+	need(b, o, 8);
+	return dvReadBigInt64LE(b, o);
+}
+extern function dvReadBigInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, false)";
+export function readBigInt64BE(this b: Buffer, o: number): bigint {
+	need(b, o, 8);
+	return dvReadBigInt64BE(b, o);
+}
 
 extern function dvSetBigU64LE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, true)";
 extern function dvSetBigU64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, false)";
@@ -371,21 +454,25 @@ extern function dvSetBigI64LE(this b: Buffer, o: number, v: bigint): void from "
 extern function dvSetBigI64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigInt64(#, #, false)";
 
 export function writeBigUInt64LE(this b: Buffer, value: bigint, o: number): number {
+	need(b, o, 8);
 	dvSetBigU64LE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigUInt64BE(this b: Buffer, value: bigint, o: number): number {
+	need(b, o, 8);
 	dvSetBigU64BE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigInt64LE(this b: Buffer, value: bigint, o: number): number {
+	need(b, o, 8);
 	dvSetBigI64LE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigInt64BE(this b: Buffer, value: bigint, o: number): number {
+	need(b, o, 8);
 	dvSetBigI64BE(b, o, value);
 	return o + 8;
 }
@@ -400,58 +487,82 @@ extern function dvSetF64LE(this b: Buffer, o: number, v: number): void from "new
 extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat64(#, #, false)";
 
 export function writeUInt8(this b: Buffer, v: number, o: number): number {
-	b.set(o, (v as int32) & 255);
+	inRange(v, 0, 255);
+	need(b, o, 1);
+	b.set(o, v as int32);
 	return o + 1;
 }
 export function writeUInt16BE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 2);
+	inRange(v, 0, 65535);
 	dvSetU16BE(b, o, v);
 	return o + 2;
 }
 export function writeUInt16LE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 2);
+	inRange(v, 0, 65535);
 	dvSetU16LE(b, o, v);
 	return o + 2;
 }
 export function writeUInt32BE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
+	inRange(v, 0, 4294967295);
 	dvSetU32BE(b, o, v);
 	return o + 4;
 }
 export function writeUInt32LE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
+	inRange(v, 0, 4294967295);
 	dvSetU32LE(b, o, v);
 	return o + 4;
 }
 export function writeInt8(this b: Buffer, v: number, o: number): number {
+	inRange(v, -128, 127);
+	need(b, o, 1);
 	b.set(o, (v as int32) & 255);
 	return o + 1;
 }
 export function writeInt16BE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 2);
+	inRange(v, -32768, 32767);
 	dvSetU16BE(b, o, (v as int32) & 65535);
 	return o + 2;
 }
 export function writeInt16LE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 2);
+	inRange(v, -32768, 32767);
 	dvSetU16LE(b, o, (v as int32) & 65535);
 	return o + 2;
 }
 export function writeInt32BE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
+	inRange(v, -2147483648, 2147483647);
 	dvSetU32BE(b, o, v);
 	return o + 4;
 }
 export function writeInt32LE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
+	inRange(v, -2147483648, 2147483647);
 	dvSetU32LE(b, o, v);
 	return o + 4;
 }
 export function writeFloatLE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
 	dvSetF32LE(b, o, v);
 	return o + 4;
 }
 export function writeFloatBE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 4);
 	dvSetF32BE(b, o, v);
 	return o + 4;
 }
 export function writeDoubleLE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 8);
 	dvSetF64LE(b, o, v);
 	return o + 8;
 }
 export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
+	need(b, o, 8);
 	dvSetF64BE(b, o, v);
 	return o + 8;
 }
@@ -469,6 +580,7 @@ function checkByteLength(byteLength: number): void {
 
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
 	checkByteLength(byteLength);
+	need(b, o, byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -479,6 +591,7 @@ export function readUIntLE(this b: Buffer, o: number, byteLength: number): numbe
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
 	checkByteLength(byteLength);
+	need(b, o, byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -499,6 +612,8 @@ export function readIntBE(this b: Buffer, o: number, byteLength: number): number
 }
 export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
 	checkByteLength(byteLength);
+	inRange(v, 0, Math.pow(2, byteLength * 8) - 1);
+	need(b, o, byteLength);
 	let x = v;
 	let k = 0;
 	while (k < byteLength) {
@@ -510,6 +625,8 @@ export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: nu
 }
 export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
 	checkByteLength(byteLength);
+	inRange(v, 0, Math.pow(2, byteLength * 8) - 1);
+	need(b, o, byteLength);
 	let x = v;
 	let k = byteLength - 1;
 	while (k >= 0) {
@@ -520,10 +637,14 @@ export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: nu
 	return o + byteLength;
 }
 export function writeIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
+	inRange(v, -Math.pow(2, byteLength * 8 - 1), Math.pow(2, byteLength * 8 - 1) - 1);
 	const bound = Math.pow(2, byteLength * 8);
 	return writeUIntLE(b, v >= 0 ? v : v + bound, o, byteLength);
 }
 export function writeIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
+	checkByteLength(byteLength);
+	inRange(v, -Math.pow(2, byteLength * 8 - 1), Math.pow(2, byteLength * 8 - 1) - 1);
 	const bound = Math.pow(2, byteLength * 8);
 	return writeUIntBE(b, v >= 0 ? v : v + bound, o, byteLength);
 }
