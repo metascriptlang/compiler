@@ -1132,7 +1132,7 @@ function exprContainsAwait(expr: Node): boolean {
 }
 
 // Check if a node tree contains any AwaitExpr (recursive, stops at function boundaries).
-function bodyContainsAwait(node: Node): boolean {
+export function bodyContainsAwait(node: Node): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.AwaitExpr) return true;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr

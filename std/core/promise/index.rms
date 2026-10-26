@@ -3,6 +3,8 @@
 // any other extern here reaches CallHost and needs a bridge in
 // src/compiler/meta/hostTable.ms.
 
+import { Map } from "../struct";
+
 @builtin("Promise")
 export class Promise<T> {
 
@@ -39,6 +41,13 @@ extern function msPromisePending<T>(): Promise<T> from "msFutureCreate";
 extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "msFutureCompleteT";
 @builtin("PromiseFail")
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
+
+@compilerFunc
+@builtin("PromisePending")
+export extern function msActorReplyNew<T>(): Promise<T> from "msActorReplyNew";
+@compilerFunc
+@builtin("PromiseSettle")
+export extern function msActorReplySettle<T>(promise: Promise<T>, value: T): void from "msActorReplySettle";
 
 @compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: string | Error) => void) => void): Promise<T> {
@@ -106,4 +115,120 @@ export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
 	msLockedAcquire(cell);
 	defer msLockedRelease(cell);
 	return fn(msLockedLoad(cell));
+}
+
+export enum ExitReason {
+	Normal,
+	Shutdown,
+	Killed,
+	Abnormal,
+}
+
+interface ActorJob {
+	run: (() => void) | null;
+	runAsync: (() => Promise<void>) | null;
+	reply: Promise<void> | null;
+}
+
+class ActorCell {
+	live: boolean = true;
+	busy: boolean = false;
+	head: int32 = 0;
+	jobs: ActorJob[] = [];
+	terminate: ((reason: ExitReason) => void) | null = null;
+}
+
+const actorCells: Map<int64, ActorCell> = new Map<int64, ActorCell>();
+let actorNext: int64 = 1;
+
+@compilerFunc
+export function msActorOpen(): int64 {
+	const pid = actorNext;
+	actorNext = actorNext + 1;
+	actorCells.set(pid, new ActorCell());
+	return pid;
+}
+
+@compilerFunc
+export function msActorOnTerminate(pid: int64, hook: (reason: ExitReason) => void): void {
+	const cell = actorCells.get(pid);
+	if (cell != null) cell.terminate = hook;
+}
+
+function actorRefuse(job: ActorJob): void {
+	const reply = job.reply;
+	if (reply != null) msPromiseFail(reply, new Error("noproc"));
+}
+
+function actorKick(cell: ActorCell): void {
+	Promise.resolve(0).then((turn: int32): void => { actorPump(cell); });
+}
+
+async function actorPump(cell: ActorCell): Promise<void> {
+	while (cell.head < cell.jobs.length) {
+		const job = cell.jobs[cell.head];
+		cell.head = cell.head + 1;
+		if (!cell.live) {
+			actorRefuse(job);
+			continue;
+		}
+		try {
+			const sync = job.run;
+			const suspending = job.runAsync;
+			if (suspending != null) await suspending();
+			else if (sync != null) sync();
+		} catch (e) {
+			const reply = job.reply;
+			if (reply == null) {
+				actorKick(cell);
+				throw e;
+			}
+			msPromiseFail(reply, e);
+		}
+	}
+	cell.jobs = [];
+	cell.head = 0;
+	cell.busy = false;
+}
+
+function actorEnqueue(pid: int64, job: ActorJob): void {
+	const cell = actorCells.get(pid);
+	if (cell == null || !cell.live) {
+		actorRefuse(job);
+		return;
+	}
+	cell.jobs.push(job);
+	if (!cell.busy) {
+		cell.busy = true;
+		actorKick(cell);
+	}
+}
+
+@compilerFunc
+export function msActorPost(pid: int64, job: () => void): void {
+	actorEnqueue(pid, { run: job, runAsync: null, reply: null });
+}
+
+@compilerFunc
+export function msActorPostAsync(pid: int64, job: () => Promise<void>): void {
+	actorEnqueue(pid, { run: null, runAsync: job, reply: null });
+}
+
+@compilerFunc
+export function msActorPostCall(pid: int64, job: () => void, reply: Promise<void>): void {
+	actorEnqueue(pid, { run: job, runAsync: null, reply: reply });
+}
+
+@compilerFunc
+export function msActorPostCallAsync(pid: int64, job: () => Promise<void>, reply: Promise<void>): void {
+	actorEnqueue(pid, { run: null, runAsync: job, reply: reply });
+}
+
+export function msActorStop(pid: int64, reason: ExitReason): void {
+	const cell = actorCells.get(pid);
+	if (cell == null || !cell.live) return;
+	cell.live = false;
+	actorCells.delete(pid);
+	const hook = cell.terminate;
+	if (hook != null && reason != ExitReason.Killed) hook(reason);
 }
