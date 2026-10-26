@@ -755,9 +755,9 @@ console.log(modes.has(Mode.Write));
 ```
 
 Cover enum members; guarded arms need an unguarded fallback. Use `_` for wildcard, `|` for
-alternatives and `when` for a guard on an existing scrutinee variable. Expression block arms
-need explicit `return`; parenthesize a struct-literal arm (`=> ({ ...value, x: 1 })`). Do not
-assume object/tuple destructuring patterns or pattern bindings from another language are supported.
+alternatives and `when` for a guard on an existing scrutinee variable. An expression block arm
+ends in its value (`{ const n = f(); n + 1 }`), and `return` there leaves the function;
+parenthesize a struct-literal arm (`=> ({ ...value, x: 1 })`). Do not assume object/tuple destructuring patterns or pattern bindings from another language are supported.
 
 At an application boundary, handle both success and failure deliberately. Do not turn expected
 failures into `-1`, a boolean-plus-out protocol or a log followed by silent success. Keep exceptions

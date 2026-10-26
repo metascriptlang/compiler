@@ -2044,17 +2044,24 @@ return match (escChar) {
     _ => escChar,
 };
 
-// Expression match — block arms require explicit `return`
-return match (node.kind) {
+// Expression match — a block arm's value is its last expression
+const label = match (node.kind) {
     NodeKind.Identifier => getName(node),
     NodeKind.BinaryExpr => {
         const d = node.data as BinaryExprData;
-        return d.left.toString() + d.op + d.right.toString();
+        d.left.toString() + d.op + d.right.toString()
+    },
+    NodeKind.Call => {
+        if (isBuiltin(node)) { "builtin" } else { "call" }
     },
     _ => "unknown",
 };
-// Rule: `arm => expr` = implicit return; `arm => { return expr; }` = explicit return
-// Applies to both `return match` and `const x = match` forms
+// Rule: an arm's value is its expression, or the last expression of its block, through a
+// trailing if/else or a nested match. `return` always leaves the function: inside a match
+// that is returned (`return match`, an arrow body) `return x` returns x from the function;
+// inside a bound or passed match `return x` is an error and a bare `return;` exits early.
+// A path ending in throw, break or continue gives no value; any other ending (a loop, a
+// declaration, an `if` without `else`, an empty block) is an error.
 
 // Statement match with side effects (generates native C switch)
 match (ch) {
