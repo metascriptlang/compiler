@@ -18,6 +18,7 @@ import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "st
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 import { registryRequest, registryErrorText } from "./registry";
+import { parseVersion, versionErrorMessage } from "./version";
 
 // Server hard limits — mirror these client-side so the user gets a clear
 // error before we try to upload.
@@ -31,6 +32,15 @@ function stripVPrefix(v: string): string {
 		return v.slice(1, v.length);
 	}
 	return v;
+}
+
+test "publishing accepts a plain or v-prefixed semver and refuses anything else" {
+	assert parseVersion(stripVPrefix("1.2.3")).ok;
+	assert parseVersion(stripVPrefix("v1.2.3")).ok;
+	assert parseVersion(stripVPrefix("1.0.0-rc.1")).ok;
+	assert !parseVersion(stripVPrefix("1.2")).ok;
+	assert !parseVersion(stripVPrefix("^1.2.3")).ok;
+	assert !parseVersion(stripVPrefix("latest")).ok;
 }
 
 // Human-readable size (bytes → "42.1 MB" style).
@@ -140,6 +150,11 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	}
 
 	const version = stripVPrefix(cfg.package.version);
+	const versionProblem = parseVersion(version);
+	if (!versionProblem.ok) {
+		console.log(`${errStyle("error")}: ${cyan("package.version")} '${cfg.package.version}': ${versionErrorMessage(versionProblem.error)}`);
+		return false;
+	}
 	const name = cfg.package.name;
 
 	// --- Check token (unless --dry-run) ---
