@@ -2282,14 +2282,26 @@ function isClosurePair(classType: RaiserClassType): boolean {
 }
 
 function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
-	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
-	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
-	const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
-	when (mode != "danger") { if (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref) return -1; }
-	when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
-	const target = obj.slots[0];
+	let target: int64 = 0;
+	let env: int64 = 0;
+	if (handleTag(handle) == (RaiserHeapKind.Seq as int64)) {
+		const cell = seqCellOf(handle);
+		when (mode != "danger") {
+			const t = objectCellClass(handle);
+			if (t.kinds.length != 2 || t.kinds[0] != RaiserRegClass.Word || t.kinds[1] != RaiserRegClass.Ref || t.fields[0] != "fn" || t.fields[1] != "env") return -1;
+		}
+		target = objectCellSlot(cell, 0);
+		env = objectCellSlot(cell, 1);
+	} else {
+		if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
+		when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
+		const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+		when (mode != "danger") { if (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref) return -1; }
+		when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
+		target = obj.slots[0];
+		env = obj.slots[1];
+	}
 	when (mode != "danger") { if (target < 0 || target >= vm.mod.functions.length) return -1; }
-	const env = obj.slots[1];
 	let argc = func.blocks[site + 1];
 	let sig = func.blocks[site + 2];
 	if (env == 0) {
