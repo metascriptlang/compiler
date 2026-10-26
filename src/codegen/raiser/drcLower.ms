@@ -218,6 +218,13 @@ function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {
 	return type != null && isCellType(type) && !runsDistinctHook(call, type) && getOpByKey(type, op) == sym;
 }
 
+function isSizedArrayCopy(call: CallExprData): boolean {
+	const sym = call.callee.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
+	const type = placeOf(call.arguments[0]).nodeType;
+	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedAsgn) == sym;
+}
+
 function isLiftedCellSink(call: CallExprData): boolean {
 	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookOf(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
 }
@@ -268,7 +275,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		emitCopyValue(s, d.callee.resolvedSym!.name, d.arguments[0], d.arguments[1]);
 		return true;
 	}
-	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);
+	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink) || isSizedArrayCopy(d)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);
 	if (isLiftedCellOp(d, AttachedOp.AttachedSink)) {
 		compileExpr(s, call);
 		const source = localOfPlace(s, placeOf(d.arguments[1]));
