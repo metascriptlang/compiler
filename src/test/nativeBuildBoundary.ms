@@ -1106,6 +1106,15 @@ function runFlows(): void {
 	recordTrue("MSC_FLOWS writes the total, setup, phase A and emit rows of a build", flowRow(rows, "total", "ms") > 0 && flowRow(rows, "phase.setup", "ms") > 0 && flowRow(rows, "phase.A", "ms") > 0 && flowRow(rows, "emit.module", "ms") > 0);
 	recordTrue("the pass rows of a build fit inside its phase A", passMs > 0 && passMs <= flowRow(rows, "phase.A", "ms"));
 	record("a build lowers each module once under a2.xform", "true", `${flowRow(rows, "a2.xform", "count") > 0}`);
+	put(`${dir}/check.ms`, "test \"sum\" { assert 1 + 2 == 3; }\n");
+	const testRowsFile = `${dir}/test-flows.tsv`;
+	env.set("MSC_FLOWS", testRowsFile);
+	const tested = command(dir, "flows-test", compiler, ["test", "check.ms"]);
+	env.delete("MSC_FLOWS");
+	need(tested.code == 0, "flows test");
+	const testRead = readFile(testRowsFile);
+	const testRows = testRead.ok ? testRead.value : "";
+	recordTrue("MSC_FLOWS splits a test run into graph, phase A, cc, link and the run of the test binary", flowRow(testRows, "phase.graph", "ms") > 0 && flowRow(testRows, "phase.A", "ms") > 0 && flowRow(testRows, "cc", "count") > 0 && flowRow(testRows, "phase.link", "ms") > 0 && flowRow(testRows, "test.run", "ms") > 0 && flowRow(testRows, "total", "ms") >= flowRow(testRows, "test.run", "ms"));
 }
 
 function runTestScope(): void {
