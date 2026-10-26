@@ -431,9 +431,10 @@ export function stableOFileFp(srcPath: string, fp: string): string {
 	return `${getCacheDir()}/${cacheStem(srcPath)}.${fpKey(fp)}.o`;
 }
 
-// Per-fingerprint generated-C path — the emitted C is config-dependent too
-// (drc vs orc teardown), so a concurrent build must never swap it under a
-// running cc of another config.
+// Generated-C path. Generated C is keyed by its content: the emitted C is
+// config-dependent too (drc vs orc teardown), so another config writes another
+// file, while a change of compile flags alone keeps the name, and with it the
+// object bytes the debug info records.
 export function stableCFileFp(modPath: string, fp: string): string {
 	return `${getCacheDir()}/${cacheStem(modPath)}.${fpKey(fp)}.c`;
 }
@@ -1277,10 +1278,10 @@ export function moduleDepFile(modPath: string, baseFp: string): string {
 }
 
 function moduleHeaderPaths(modPath: string, baseFp: string): string[] {
-	const own = stableCFileFp(modPath, baseFp);
+	const ownStem = `${getCacheDir()}/${cacheStem(modPath)}.`;
 	const result: string[] = [];
 	for (const path of dependencyPathsIn(moduleDepFile(modPath, baseFp))) {
-		if (path != own) result.push(path);
+		if (!(path.startsWith(ownStem) && path.endsWith(".c"))) result.push(path);
 	}
 	return result;
 }

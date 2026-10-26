@@ -80,7 +80,7 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, withoutIncludeDirs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -2080,9 +2080,10 @@ function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: s
 		oSlots.push([stableOFileFp(key, fp)]);
 		return;
 	}
-	writeCSource(key, fp, source);
+	const sourceFp = moduleStoreSource(source);
+	writeCSource(key, sourceFp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1, storeKey: "" });
+	cJobs.push({ cFile: stableCFileFp(key, sourceFp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1, storeKey: "" });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -2168,7 +2169,7 @@ function linkHcrImages(
 	coreBaseFlags: string,
 	opts: CliOptions,
 ): string[] {
-	let linkFlags = cliLinkFlags(allFlags, opts);
+	let linkFlags = cliLinkFlags(withoutIncludeDirs(flagArgsOrExit(allFlags)).join(" "), opts);
 	for (const flag of globalLinkFlags()) linkFlags = appendFlag(linkFlags, flag);
 	const externalInputs = linkInputs(opts);
 
@@ -3648,7 +3649,7 @@ resetLiftedOps();
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 			if (session.keep && opts.isHcr && hcrModulePaths.includes(p.modPath)) {
-				_hcrWarmJobs.push({ cFile: stableCFileFp(p.modPath, baseFp), oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: -1 });
+				_hcrWarmJobs.push({ cFile: stableCFileFp(p.modPath, moduleStoreSource(cCode)), oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: -1 });
 			}
 
 			const cached = isCCodeCached(p.modPath, modFp);
@@ -3664,8 +3665,9 @@ resetLiftedOps();
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
 				// failed zig cc doesn't leave a false cache hit for the next run.
-				writeCSource(p.modPath, baseFp, cCode);
-				const cFile = stableCFileFp(p.modPath, baseFp);
+				const sourceFp = moduleStoreSource(cCode);
+				writeCSource(p.modPath, sourceFp, cCode);
+				const cFile = stableCFileFp(p.modPath, sourceFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
 				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey });
@@ -4124,8 +4126,9 @@ resetLiftedOps();
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
 			// Same as main path — defer fingerprint until success.
-			writeCSource(p.modPath, baseFp, cCode);
-			const cFile = stableCFileFp(p.modPath, baseFp);
+			const sourceFp = moduleStoreSource(cCode);
+			writeCSource(p.modPath, sourceFp, cCode);
+			const cFile = stableCFileFp(p.modPath, sourceFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
 			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey: "" });

@@ -1108,7 +1108,7 @@ function includeDirKind(arg: string): string {
 	return "";
 }
 
-function withoutIncludeDirs(args: string[]): string[] {
+export function withoutIncludeDirs(args: string[]): string[] {
 	const kept: string[] = [];
 	for (let i = 0; i < args.length; i++) {
 		const kind = includeDirKind(args[i]);
