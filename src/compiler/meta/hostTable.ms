@@ -2028,6 +2028,8 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		join(stdPath, "core/string/bytes.rms"),
 		join(stdPath, "core/array/index.rms"),
 		join(stdPath, "process/child.rms"),
+		join(stdPath, "core/buffer/index.rms"),
+		join(stdPath, "core/date/index.rms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [
