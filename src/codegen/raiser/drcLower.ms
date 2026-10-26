@@ -5,6 +5,7 @@ import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocRef, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { getOpByKey } from "../c/types";
+import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
 import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
@@ -168,6 +169,11 @@ function isCellType(type: Type | null): boolean {
 	return isStructType(t) || (t != null && isUnionCell(t));
 }
 
+function isCopiedAsValue(type: Type | null): boolean {
+	const t = valueCopyRepr(type);
+	return t != null && t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t));
+}
+
 function isSizedArrayType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
 	return t != null && t.kind == TypeKind.SizedArray;
@@ -243,6 +249,10 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		const hookName = d.callee.resolvedSym!.name;
 		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, hookName, d.arguments[0]), 0, 0));
 		emitClear(s, hookName, d.arguments[0]);
+		return true;
+	}
+	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) && isCopiedAsValue(placeOf(d.arguments[0]).nodeType) && userHookOf(placeOf(d.arguments[0]).nodeType!, AttachedOp.AttachedAsgn) == null) {
+		emitCopyValue(s, d.callee.resolvedSym!.name, d.arguments[0], d.arguments[1]);
 		return true;
 	}
 	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);

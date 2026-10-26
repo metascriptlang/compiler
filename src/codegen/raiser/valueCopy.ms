@@ -2,6 +2,7 @@ import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { getOpByKey } from "../c/types";
 import { isSlotUnion } from "../../checker/fit";
+import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findSharedStringDiscriminant, isMaybeType, isStructType, needsValueCopy, peelToStruct, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
@@ -39,14 +40,20 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
-	} else if (isMixedUnion(valueType)) {
-		const field = sharedLiteralField(valueType);
-		plan.kind = RaiserCopyKind.Literal;
-		plan.names.push(field);
+	} else if (valueType.kind == TypeKind.Union && raiserFlatCellUnion(valueType)) {
+		plan.kind = RaiserCopyKind.Object;
 		for (const arm of valueType.typeChildren) {
-			const shape = peelToStruct(arm)!;
-			plan.names.push(shape.typeChildren[shape.typeNames.indexOf(field)].typeName);
-			plan.children.push(copyPlan(s, arm));
+			for (let i = 0; i < arm.typeNames.length; i += 1) {
+				const child = copyPlan(s, arm.typeChildren[i]);
+				const at = plan.names.indexOf(arm.typeNames[i]);
+				if (at < 0) {
+					plan.names.push(arm.typeNames[i]);
+					plan.children.push(child);
+				} else if (plan.children[at] != child) {
+					if (s.copyPlans[plan.children[at]].kind != RaiserCopyKind.Preserve) throw new Error(`internal: the arms of union '${valueType.typeName}' give field '${arm.typeNames[i]}' different copy plans`);
+					plan.children[at] = child;
+				}
+			}
 		}
 	} else if (valueType.kind == TypeKind.Union && needsValueCopy(valueType)) {
 		plan.kind = RaiserCopyKind.Union;
