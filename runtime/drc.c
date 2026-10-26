@@ -503,7 +503,7 @@ static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
 
 _Thread_local msCellSeq msRoots;
 MS_TLS_PUBLISH(msRoots)
-_Thread_local int32_t msRootsThreshold = 128;
+_Thread_local int32_t msRootsThreshold = 0;
 MS_TLS_PUBLISH(msRootsThreshold)
 
 /* ===== ORC Diagnostics ===== */
