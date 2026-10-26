@@ -126,7 +126,8 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		// side channel that still holds the original "K, V" strings, defeating
 		// substitution. replaceTypeVars substitutes this field in substNodeLocal.
 		dst.typeArg = src.typeArg;
-		if (src.kind == NodeKind.CallExpr) dst.typeExprs = src.typeExprs;
+		if (src.kind == NodeKind.CallExpr || src.kind == NodeKind.NewExpr) dst.typeExprs = src.typeExprs;
+		if (src.typeExpr != null && src.typeExpr.flags.has(NodeFlag.BoundSym)) dst.typeExpr = src.typeExpr;
 	} else {
 		// Check mode: preserve all parse-time side channels the checker reads
 		// (typeExpr/typeExprs for resolvePass, paramLocations for function
