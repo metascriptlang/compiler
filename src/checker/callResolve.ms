@@ -6012,7 +6012,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// String-specific properties: .byteLength, .unicodeLength
 	// Skip when accessed on a TYPE (e.g., Buffer.byteLength(json)) — that's a static extension call.
 	// Only resolve as property when accessed on an instance (e.g., str.byteLength).
-	if ((d.property == "byteLength" || d.property == "unicodeLength") && resolvedObjType.kind == TypeKind.String) {
+	const isByteArray = resolvedObjType.kind == TypeKind.Array && resolvedObjType.typeReturn != null && resolvedObjType.typeReturn.kind == TypeKind.Uint8;
+	if ((d.property == "byteLength" && (resolvedObjType.kind == TypeKind.String || isByteArray)) || (d.property == "unicodeLength" && resolvedObjType.kind == TypeKind.String)) {
 		const isTypeAccess = d.object.resolvedSym != null
 			&& (d.object.resolvedSym.symbolKind == SymbolKind.TypeAlias
 				|| d.object.resolvedSym.symbolKind == SymbolKind.Class
