@@ -63,7 +63,7 @@ const hooked = new Hooked(`cfg:${"x".repeat(32)}`);
 hooked.tmp = new Tmp(hooked);
 viaHook(hooked);
 
-abstract class Poker { abstract poke(d: Doc): void; }
+class Poker { poke(d: Doc): void {} }
 class Setter extends Poker { poke(d: Doc): void { d.value = "o" + "q".repeat(40); } }
 function viaOverride(p: Poker, o: Doc): void {
 	const t = o.value;
