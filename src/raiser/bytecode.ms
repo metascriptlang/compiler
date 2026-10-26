@@ -217,7 +217,7 @@ export enum RaiserOpcode {
 	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
 	RcInc,            // ABC: count +1 on the handle in refs[A]; nil and constant handles stay as they are
 	RcDec,            // ABC: count -1 on refs[A]; the last reference destroys the cell by its dynamic type and nils refs[A]; B = 1 registers a surviving cell with the cycle collector
-	WasMoved,         // ABC: R[A] = nil (ref file) or 0 (word file) without touching any count; B=1 after a user move hook: the sole-held cell R[A] stood on is freed without walking its slots
+	WasMoved,         // ABC: R[A] = nil (Ref or Dyn) or 0 (Word, Float or Bool) without touching any count; B=1 after a user move hook: the sole-held cell R[A] stood on is freed without walking its slots
 	DestroyValue,     // ABC: destroy the aggregate in refs[A] by copy plan C: release its ref slots, destroy its nested aggregates, free its cell, nil refs[A]
 	SinkValue,        // ABC: DestroyValue the aggregate in refs[A] by copy plan C, then refs[A] = refs[B]; a destination that already holds B's handle stays
 	RcHeld,           // ABC: words[B] = the count of the cell in refs[A], 0 for nil
@@ -245,8 +245,8 @@ export enum RaiserCombine {
 	Any,
 }
 
-// A register holds one class for the whole function: Word, Float and Bool live in the word file,
-// Ref and Dyn in the ref file. The numbers are the 3-bit class tag of a tagged operand.
+// A register holds one class for the whole function and is one slot of its frame: Word, Float and Bool hold a word,
+// Ref and Dyn a heap handle. The numbers are the 3-bit class tag of a tagged operand.
 export enum RaiserRegClass {
 	Word,
 	Ref,
@@ -290,10 +290,10 @@ export enum RaiserRole {
 	IntLike,  // a Word or Bool register read for its integer payload
 	Float,
 	Bool,
-	Word,     // any register of the word file, class equal to the other operand
+	Word,     // any Word, Float or Bool register, class equal to the other operand
 	Ref,
 	Dyn,
-	Slot,     // any register of the ref file, class equal to the other operand
+	Slot,     // any Ref or Dyn register, class equal to the other operand
 	Any,      // a register of any class, tagged
 	IntPair,  // a Word register followed by the next Word register
 	Route,    // a Word register followed by a Dyn register, the second named by B

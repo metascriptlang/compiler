@@ -10,7 +10,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | `value.ms` | `RaiserValue`, array, object and string heaps (rc, color, free list), `rcIncref` / `rcDecref`, `copyGraph` |
 | `valueCopy.ms` | `copyTypedValue`: runs the copy plans `CopyValue` carries |
 | `module.ms` | `RaiserFunction`, `RaiserModule` |
-| `regs.ms` | register layout: class inference, the operand verifier, renumbering into the word file and the ref file |
+| `regs.ms` | register layout: class inference and the operand verifier; a register number is its slot in the frame, and a call site names where the callee frame begins |
 | `memory.ms` / `vmString.ms` / `vmSeq.ms` | VM memory at host addresses (regions, size-class heap, ref cell header), the string cells and the typed array cells (`{len, p, meta, base}` over a `{cap, data}` payload, element width in `meta`, a view pointing into its base payload) built on it |
 | `ledger.ms` | live-0 audit: finds heap items whose count exceeds the references that remain |
 | `vm.ms` | dispatch loop, strands and scheduler, futures, safepoints, loop budget |

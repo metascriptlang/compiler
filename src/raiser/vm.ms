@@ -37,16 +37,14 @@ extern function msToInt32(d: float64): int32;
 // --- VM State ---
 
 export interface RaiserRegFile {
-	words: int64[];   // int, bool, enum and float bits
-	refs: int64[];    // heap handles; 0 is nil, a Dyn register holds a box handle
+	slots: int64[];   // a register's number is its slot: int, bool, enum and float bits, or a heap handle (0 is nil; a Dyn slot holds a box handle)
 }
 
 export interface RaiserCallFrame {
 	funcIdx: int32;
 	returnIp: int32;
 	returnDest: int32;   // the caller's destination operand, tagged
-	wordBase: int32;     // the caller's frame
-	refBase: int32;
+	base: int32;         // the caller's frame
 	spBase: int32;       // safePoints length where the callee's own handlers begin
 }
 
@@ -59,7 +57,7 @@ export interface RaiserCallFrames {
 // A strand is one independent line of execution: its own register file, its
 // own frame stack and its own heap. The whole of it is reified data — MS-level
 // calls never use the host stack (vmHandleCall pushes a frame and re-points
-// funcIdx/ip/wordBase/refBase) — so a strand suspends by copying those fields out of
+// funcIdx/ip/base) — so a strand suspends by copying those fields out of
 // the VM and resumes by copying them back. No CPS transform, no per-opcode
 // changes: vm.arrayHeap / vm.objectHeap are the running strand's heap, so
 // every allocating opcode stays exactly as it was.
@@ -79,8 +77,7 @@ export interface RaiserStrand {
 	objectHeap: RaiserObjectHeap;
 	ip: int32;
 	funcIdx: int32;
-	wordBase: int32;
-	refBase: int32;
+	base: int32;
 	loopCount: int64;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
@@ -228,8 +225,7 @@ export interface RaiserVM {
 	output: string;
 	printSink: RaiserPrintSink | null;
 	funcIdx: int32;
-	wordBase: int32;
-	refBase: int32;
+	base: int32;
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
@@ -257,17 +253,14 @@ export interface RaiserVM {
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
-	wordFloor: number;
-	refFloor: number;
+	floor: number;
 	suspendedRuns: RaiserRun[];
 }
 
 interface RaiserRun {
-	wordFloor: number;
-	refFloor: number;
+	floor: number;
 	funcIdx: int32;
-	wordBase: int32;
-	refBase: int32;
+	base: int32;
 	ip: int32;
 	halted: boolean;
 	yielded: boolean;
@@ -291,19 +284,21 @@ interface RaiserRun {
 }
 
 // Initial register file size. Each file grows on demand at function-call entry
-// (`ensureWords`, `ensureRefs`); this constant only sets the starting capacity to avoid most
+// (`ensureSlots`); this constant only sets the starting capacity to avoid most
 // early reallocations. NOT a hard cap.
 const RAISER_INITIAL_SLOTS = 256;
 
 // Grow a file to hold at least `count` registers. Called at every function-call entry with the
 // callee's base plus its register count, so the frame is fully reserved before any opcode in it
 // reads or writes a register.
-export function ensureWords(regs: RaiserRegFile, count: number): void {
-	while (regs.words.length < count) regs.words.push(0);
+export function ensureSlots(regs: RaiserRegFile, count: number): void {
+	while (regs.slots.length < count) regs.slots.push(0);
 }
 
-export function ensureRefs(regs: RaiserRegFile, count: number): void {
-	while (regs.refs.length < count) regs.refs.push(0);
+// An entry frame starts on slots an earlier run may have left words in.
+function startFrame(regs: RaiserRegFile, base: number, callee: RaiserFunction): void {
+	ensureSlots(regs, base + callee.frameSize);
+	zeroFrame(regs.slots, base as int64, (base + callee.frameSize) as int64);
 }
 
 // Default iteration budget. The unit is the BACKWARD JUMP (loop back-edge),
@@ -327,13 +322,12 @@ export function setDefaultLoopLimit(n: number): void {
 }
 
 export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM {
-	const regs: RaiserRegFile = { words: [], refs: [] };
+	const regs: RaiserRegFile = { slots: [] };
 	// Reserve the entry function's frame up-front (and at least the initial
 	// capacity) so the entry's first opcode can write to its locals without
 	// hitting an empty register file.
 	const entryFunc = getModuleFunc(mod, mod.entry);
-	ensureWords(regs, entryFunc.wordRegs > RAISER_INITIAL_SLOTS ? entryFunc.wordRegs : RAISER_INITIAL_SLOTS);
-	ensureRefs(regs, entryFunc.refRegs > RAISER_INITIAL_SLOTS ? entryFunc.refRegs : RAISER_INITIAL_SLOTS);
+	ensureSlots(regs, entryFunc.frameSize > RAISER_INITIAL_SLOTS ? entryFunc.frameSize : RAISER_INITIAL_SLOTS);
 	const nilVal = raiserNil();
 	const callFrames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: callFrames, depth: 0 };
@@ -343,7 +337,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(i < mod.globalInit.length ? mod.globalInit[i] : raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -353,13 +347,13 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
 
-// A tagged operand is (rank << 3) | class. Word, Float and Bool name a word of the word file, Ref and
-// Dyn a handle of the ref file. The typed handlers read the files directly; every other opcode reads
+// A tagged operand is (register number << 3) | class, and the number is the slot in the frame. Word, Float and Bool
+// hold a word, Ref and Dyn a handle. The typed handlers read the slots directly; every other opcode reads
 // and writes through the helpers below, which turn a register into a RaiserValue and back.
 
 const CLS_WORD: int32 = 0;
@@ -374,16 +368,16 @@ function slotOutside(cls: int32, idx: number): Error {
 
 function absOf(vm: RaiserVM, t: int32): number {
 	const cls = t & 7;
-	return (t >> 3) + (cls == CLS_REF || cls == CLS_DYN ? vm.refBase : vm.wordBase);
+	return (t >> 3) + (cls == CLS_REF || cls == CLS_DYN ? vm.base : vm.base);
 }
 
 function readAbs(vm: RaiserVM, cls: int32, abs: number): RaiserValue {
 	if (cls == CLS_REF || cls == CLS_DYN) {
-		when (mode != "danger") { if (abs >= vm.regs.refs.length) throw slotOutside(cls, abs); }
-		return handleValue(vm.regs.refs[abs]);
+		when (mode != "danger") { if (abs >= vm.regs.slots.length) throw slotOutside(cls, abs); }
+		return handleValue(vm.regs.slots[abs]);
 	}
-	when (mode != "danger") { if (abs >= vm.regs.words.length) throw slotOutside(cls, abs); }
-	const w = vm.regs.words[abs];
+	when (mode != "danger") { if (abs >= vm.regs.slots.length) throw slotOutside(cls, abs); }
+	const w = vm.regs.slots[abs];
 	if (cls == CLS_WORD) return raiserInt(w);
 	if (cls == CLS_FLOAT) return raiserFloat(msBitsFloat64(w));
 	return raiserBool(w != 0);
@@ -424,7 +418,7 @@ function innerHandle(vm: RaiserVM, h: int64): int64 {
 }
 
 function unshell(vm: RaiserVM, abs: int64): void {
-	const h = vm.regs.refs[abs];
+	const h = vm.regs.slots[abs];
 	if (h == 0 || !isShell(h)) return;
 	const data = vm.arrayHeap.boxes.items[handleIndex(h)];
 	if (data.rc <= 1) data.value = raiserNil();
@@ -438,14 +432,14 @@ function vmDecref(vm: RaiserVM, val: RaiserValue): void {
 	if (val.kind == RaiserValueKind.Box) releaseShell(vm, val.intVal);
 }
 
-// The store of a handle into the ref file: storing the handle a register already holds
+// The store of a handle into a Ref or Dyn slot: storing the handle a register already holds
 // changes no count, and otherwise the new shell is held before the old one is released.
 @inline
 function writeRef(vm: RaiserVM, abs: int64, handle: int64): void {
-	const old = vm.regs.refs[abs];
+	const old = vm.regs.slots[abs];
 	if (old == handle) return;
 	holdShell(vm, handle);
-	vm.regs.refs[abs] = handle;
+	vm.regs.slots[abs] = handle;
 	releaseShell(vm, old);
 }
 
@@ -459,14 +453,51 @@ function storeSlotRef(vm: RaiserVM, obj: Cursor<RaiserObjectData>, idx: int32, h
 	releaseShell(vm, old);
 }
 
-function releaseFrameShells(vm: RaiserVM, base: int64, count: int64): void {
-	for (let r = base; r < base + count; r += 1) {
-		const h = vm.regs.refs[r];
+// A frame's exit releases the shells in its own ref slots and zeroes everything above its parameters: the next frame
+// starts on those slots, and a word left in a slot some caller keeps a handle in would be read back as one.
+function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction): void {
+	const own = func.ownRefs;
+	for (let i = 0; i < own.length; i += 1) {
+		const r = base + own[i];
+		const h = vm.regs.slots[r];
 		if (h != 0) {
-			vm.regs.refs[r] = 0;
+			vm.regs.slots[r] = 0;
 			releaseShell(vm, h);
 		}
 	}
+	zeroFrame(vm.regs.slots, base + (func.arity as int64), base + (func.frameSize as int64));
+}
+
+// A callee frame overlays the registers above the call window. Shells a caller's dead temporaries still
+// hold there are released before the callee's words land on them, and the callee's own ref slots
+// start at zero, because a caller's word left in one would be read as a handle.
+function enterRefs(vm: RaiserVM, base: int64, caller: RaiserFunction, site: int32, callee: RaiserFunction): void {
+	const slots = vm.regs.slots;
+	const first = caller.blocks[site] as int32;
+	const callerBase = base - (first as int64);
+	const from = first + (caller.blocks[site + 1] as int32);
+	const to = first + callee.frameSize;
+	const held = caller.ownRefs;
+	for (let i = held.length - 1; i >= 0 && held[i] >= from; i -= 1) {
+		if (held[i] < to) {
+			const r = callerBase + held[i];
+			const h = slots[r];
+			if (h != 0) {
+				slots[r] = 0;
+				releaseShell(vm, h);
+			}
+		}
+	}
+	zeroOwnRefs(slots, base, callee);
+}
+
+function zeroOwnRefs(slots: Span<int64>, base: int64, callee: RaiserFunction): void {
+	const own = callee.ownRefs;
+	for (let i = 0; i < own.length; i += 1) slots[base + own[i]] = 0;
+}
+
+function zeroFrame(slots: Span<int64>, from: int64, end: int64): void {
+	for (let z = from; z < end; z += 1) slots[z] = 0;
 }
 
 function setException(vm: RaiserVM, value: RaiserValue): void {
@@ -489,19 +520,19 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 		return;
 	}
 	if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Int) {
-		vm.regs.words[abs] = msFloat64Bits(val.intVal as number);
+		vm.regs.slots[abs] = msFloat64Bits(val.intVal as number);
 		return;
 	}
 	when (mode != "danger") {
 		if (!kindFitsClass(val.kind, cls as RaiserRegClass)) {
-			const rank = abs - (cls == CLS_REF ? vm.refBase : vm.wordBase);
+			const rank = abs - (cls == CLS_REF ? vm.base : vm.base);
 			vmError(vm, `internal: register R${rank} of ${vm.mod.functions[vm.funcIdx].name} is ${cls as RaiserRegClass}, got ${val.kind}`);
 			return;
 		}
 	}
 	if (cls == CLS_REF) { writeRef(vm, abs as int64, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
-	if (cls == CLS_WORD || cls == CLS_BOOL) { vm.regs.words[abs] = val.intVal; return; }
-	vm.regs.words[abs] = msFloat64Bits(val.floatVal);
+	if (cls == CLS_WORD || cls == CLS_BOOL) { vm.regs.slots[abs] = val.intVal; return; }
+	vm.regs.slots[abs] = msFloat64Bits(val.floatVal);
 }
 
 function setRegConform(vm: RaiserVM, t: int32, val: RaiserValue): void {
@@ -509,17 +540,17 @@ function setRegConform(vm: RaiserVM, t: int32, val: RaiserValue): void {
 }
 
 function setRegInt(vm: RaiserVM, t: int32, n: int64): void {
-	if ((t & 7) == CLS_WORD) { vm.regs.words[(t >> 3) + vm.wordBase] = n; return; }
+	if ((t & 7) == CLS_WORD) { vm.regs.slots[(t >> 3) + vm.base] = n; return; }
 	setRegConform(vm, t, raiserInt(n));
 }
 
 function setRegFloat(vm: RaiserVM, t: int32, f: number): void {
-	if ((t & 7) == CLS_FLOAT) { vm.regs.words[(t >> 3) + vm.wordBase] = msFloat64Bits(f); return; }
+	if ((t & 7) == CLS_FLOAT) { vm.regs.slots[(t >> 3) + vm.base] = msFloat64Bits(f); return; }
 	setRegConform(vm, t, raiserFloat(f));
 }
 
 function setRegBool(vm: RaiserVM, t: int32, b: boolean): void {
-	if ((t & 7) == CLS_BOOL) { vm.regs.words[(t >> 3) + vm.wordBase] = b ? 1 : 0; return; }
+	if ((t & 7) == CLS_BOOL) { vm.regs.slots[(t >> 3) + vm.base] = b ? 1 : 0; return; }
 	setRegConform(vm, t, raiserBool(b));
 }
 
@@ -530,7 +561,7 @@ function setRegNil(vm: RaiserVM, t: int32): void {
 function setRegRef(vm: RaiserVM, t: int32, kind: RaiserValueKind, handle: int64): void {
 	if ((t & 7) == CLS_REF) {
 		when (mode != "danger") { if (!kindFitsClass(kind, RaiserRegClass.Ref)) { setRegConform(vm, t, { kind, intVal: handle, floatVal: 0.0 }); return; } }
-		writeRef(vm, (t >> 3) + vm.refBase, handle);
+		writeRef(vm, (t >> 3) + vm.base, handle);
 		return;
 	}
 	setRegConform(vm, t, { kind, intVal: handle, floatVal: 0.0 });
@@ -588,8 +619,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	const callee = getModuleFunc(vm.mod, funcIdx);
 	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
 	vm.funcIdx = funcIdx as int32;
-	vm.wordBase = vm.wordFloor as int32;
-	vm.refBase = vm.refFloor as int32;
+	vm.base = vm.floor as int32;
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
@@ -598,8 +628,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.loopCount = 0;
 	vm.callStack.depth = 0;
 	resetStrands(vm, funcIdx);
-	ensureWords(vm.regs, vm.wordBase + callee.wordRegs);
-	ensureRefs(vm.regs, vm.refBase + callee.refRegs);
+	startFrame(vm.regs, vm.base, callee);
 	let i = 0;
 	while (i < args.length && i < callee.regOps.length) {
 		setRegConform(vm, callee.regOps[i], args[i]);
@@ -622,26 +651,26 @@ function forgetHeapStringRefs(refs: int64[]): void {
 }
 
 function hasFloor(vm: RaiserVM): boolean {
-	return vm.wordFloor > 0 || vm.refFloor > 0;
+	return vm.floor > 0;
 }
 
 export function vmReleaseHeaps(vm: RaiserVM): void {
 	if (hasFloor(vm)) return;
 	clearObjectHeap(vm.objectHeap);
 	clearArrayHeap(vm.arrayHeap);
-	forgetHeapStringRefs(vm.regs.refs);
+	forgetHeapStringRefs(vm.regs.slots);
 	forgetHeapStrings(vm.globals);
 	if (vm.currentException.kind == RaiserValueKind.String && handleHeapKind(vm.currentException.intVal) == RaiserHeapKind.String) vm.currentException = raiserNil();
 }
 
 function runSuspendedAt(vm: RaiserVM): boolean {
 	const runs = vm.suspendedRuns;
-	return runs.length > 0 && runs[runs.length - 1].wordFloor == vm.wordFloor && runs[runs.length - 1].refFloor == vm.refFloor;
+	return runs.length > 0 && runs[runs.length - 1].floor == vm.floor;
 }
 
 function suspendRun(vm: RaiserVM): void {
 	vm.suspendedRuns.push({
-		wordFloor: vm.wordFloor, refFloor: vm.refFloor, funcIdx: vm.funcIdx, wordBase: vm.wordBase, refBase: vm.refBase, ip: vm.ip, halted: vm.halted, yielded: vm.yielded,
+		floor: vm.floor, funcIdx: vm.funcIdx, base: vm.base, ip: vm.ip, halted: vm.halted, yielded: vm.yielded,
 		exitValue: vm.exitValue, error: vm.error, diagMessage: vm.diagMessage, diagLine: vm.diagLine, diagColumn: vm.diagColumn,
 		diagEndLine: vm.diagEndLine, diagEndColumn: vm.diagEndColumn, loopCount: vm.loopCount, globals: vm.globals, regs: vm.regs,
 		callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, sched: vm.sched, current: vm.current,
@@ -659,8 +688,7 @@ function suspendRun(vm: RaiserVM): void {
 
 function resumeRun(vm: RaiserVM, run: RaiserRun): void {
 	vm.funcIdx = run.funcIdx;
-	vm.wordBase = run.wordBase;
-	vm.refBase = run.refBase;
+	vm.base = run.base;
 	vm.ip = run.ip;
 	vm.halted = run.halted;
 	vm.yielded = run.yielded;
@@ -691,7 +719,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.safePoints.length = 0;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -766,26 +794,26 @@ function thenWriteArg(t: RaiserThen, regs: RaiserRegFile, tag: int32, val: Raise
 	const cls = tag & 7;
 	const at = tag >> 3;
 	if (cls == CLS_REF) {
-		regs.refs[at] = val.kind == RaiserValueKind.Nil ? 0 : val.intVal;
+		regs.slots[at] = val.kind == RaiserValueKind.Nil ? 0 : val.intVal;
 		return;
 	}
 	if (cls == CLS_DYN) {
 		if (val.kind == RaiserValueKind.Nil) {
-			regs.refs[at] = 0;
+			regs.slots[at] = 0;
 			return;
 		}
 		const box = heapAllocBox(t.arrayHeap, val);
 		t.arrayHeap.boxes.items[handleIndex(box)].rc = 0;
 		rcIncrefHandle(t.arrayHeap, t.objectHeap, box);
 		t.shell = box;
-		regs.refs[at] = box;
+		regs.slots[at] = box;
 		return;
 	}
 	if (cls == CLS_FLOAT) {
-		regs.words[at] = msFloat64Bits(val.kind == RaiserValueKind.Float ? val.floatVal : val.intVal as number);
+		regs.slots[at] = msFloat64Bits(val.kind == RaiserValueKind.Float ? val.floatVal : val.intVal as number);
 		return;
 	}
-	regs.words[at] = val.kind == RaiserValueKind.Float ? val.floatVal as int64 : val.intVal;
+	regs.slots[at] = val.kind == RaiserValueKind.Float ? val.floatVal as int64 : val.intVal;
 }
 
 // A callback strand: the pair's function on the heaps of the registering strand, with the settled value
@@ -803,9 +831,8 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	}
 	const funcIdx = fnField.intVal as number;
 	const callee = getModuleFunc(vm.mod, funcIdx);
-	const regs: RaiserRegFile = { words: [], refs: [] };
-	ensureWords(regs, callee.wordRegs);
-	ensureRefs(regs, callee.refRegs);
+	const regs: RaiserRegFile = { slots: [] };
+	ensureSlots(regs, callee.frameSize);
 	const hasEnv = envField.kind == RaiserValueKind.Object;
 	const params = callee.arity - (hasEnv ? 1 : 0);
 	if (params > 1) {
@@ -818,14 +845,14 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 			vmError(vm, `internal: .then callback ${callee.name} does not take the closure environment in a ref register`);
 			return;
 		}
-		regs.refs[callee.regOps[params] >> 3] = envField.intVal;
+		regs.slots[callee.regOps[params] >> 3] = envField.intVal;
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	t.strand = vm.sched.strands.items.length - 1;
 	t.arg = arg;
@@ -876,10 +903,10 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 
 function vmHandleFutureThen(vm: RaiserVM, ia: int32, ic: int32): void {
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
-	const argc = func.blocks[ic + 2] as int32;
-	const source = getDyn(vm, func.blocks[ic + 4] as int32);
-	const fulfilled = getDyn(vm, func.blocks[ic + 5] as int32);
-	const rejected = argc > 2 ? getDyn(vm, func.blocks[ic + 6] as int32) : raiserNil();
+	const argc = func.blocks[ic + 1] as int32;
+	const source = getDyn(vm, func.blocks[ic + 3] as int32);
+	const fulfilled = getDyn(vm, func.blocks[ic + 4] as int32);
+	const rejected = argc > 2 ? getDyn(vm, func.blocks[ic + 5] as int32) : raiserNil();
 	let input: int64 = source.intVal;
 	if (source.kind != RaiserValueKind.Future) {
 		input = newFuture(vm);
@@ -1038,13 +1065,13 @@ function literalListHolds(arr: RaiserArrayHeap, list: string, held: RaiserValue)
 // value named twice enters once, so its slots keep sharing it.
 function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
-	const arr = vmHeapOperand(vm, getDyn(vm, func.blocks[ic + 4] as int32), RaiserValueKind.Array, "an array of futures");
+	const arr = vmHeapOperand(vm, getDyn(vm, func.blocks[ic + 3] as int32), RaiserValueKind.Array, "an array of futures");
 	if (arr < 0) return;
 	const handle = newFuture(vm);
 	const f = vm.sched.futures.items[handleIndex(handle)];
 	f.combine = ib;
 	if (ib == RaiserCombine.Any as int32) {
-		const rejection = getDyn(vm, func.blocks[ic + 5] as int32);
+		const rejection = getDyn(vm, func.blocks[ic + 4] as int32);
 		f.errorMsg = vmExceptionText(vm, rejection);
 		const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection, strandCopyMap(vm));
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
@@ -1176,16 +1203,15 @@ function popSafePoint(vm: RaiserVM): number {
 function unwindFrame(vm: RaiserVM): void {
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	const disposing = vm.callStack.items[vm.callStack.depth - 1].returnDest == DISPOSE_DEST;
-	if (disposing) vm.regs.refs[vm.refBase] = 0;
-	releaseFrameShells(vm, vm.refBase + func.paramRefs, func.refRegs - func.paramRefs);
+	if (disposing) vm.regs.slots[vm.base] = 0;
+	leaveFrame(vm, vm.base, func);
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
 	vm.callStack.depth = depth;
 	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
-	vm.wordBase = frame.wordBase;
-	vm.refBase = frame.refBase;
+	vm.base = frame.base;
 	if (disposing) vmFreeCell(vm, vm.disposing.pop());
 }
 
@@ -1226,7 +1252,7 @@ const FINALLY_RAISE: int64 = 1;
 const FINALLY_RETURN: int64 = 2;
 
 function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: int64, value: RaiserValue): void {
-	vm.regs.words[vm.wordBase + routeRank] = kind;
+	vm.regs.slots[vm.base + routeRank] = kind;
 	const held = operandTagged(heldRank as int32, RaiserRegClass.Dyn);
 	setRegConform(vm, held, value);
 	if (kind != FINALLY_NORMAL) vm.safePoints.push(pendingMarker(absOf(vm, held)));
@@ -1245,9 +1271,9 @@ function dropSafePoints(vm: RaiserVM, base: number): void {
 }
 
 function freePendingBox(vm: RaiserVM, abs: int64): void {
-	const h = vm.regs.refs[abs];
+	const h = vm.regs.slots[abs];
 	if (h == 0) return;
-	vm.regs.refs[abs] = 0;
+	vm.regs.slots[abs] = 0;
 	releaseShell(vm, h);
 }
 
@@ -1365,8 +1391,7 @@ function strandSave(vm: RaiserVM): void {
 	s.objectHeap = vm.objectHeap;
 	s.ip = vm.ip;
 	s.funcIdx = vm.funcIdx;
-	s.wordBase = vm.wordBase;
-	s.refBase = vm.refBase;
+	s.base = vm.base;
 	s.loopCount = vm.loopCount;
 	s.safePoints = vm.safePoints;
 	s.currentException = vm.currentException;
@@ -1382,8 +1407,7 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.objectHeap = s.objectHeap;
 	vm.ip = s.ip;
 	vm.funcIdx = s.funcIdx;
-	vm.wordBase = s.wordBase;
-	vm.refBase = s.refBase;
+	vm.base = s.base;
 	vm.loopCount = s.loopCount;
 	vm.safePoints = s.safePoints;
 	vm.currentException = s.currentException;
@@ -1418,6 +1442,29 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	return vm.current != 0;
 }
 
+// The handles the frames of a strand hold: each frame's registers below its callee's first slot, because the
+// callee's frame overlaps the rest of the caller's, which is arguments already read into it.
+function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: RaiserValue[]): void {
+	const slots = s.regs.slots;
+	const frames = running ? vm.callStack : s.callStack;
+	let funcIdx = running ? vm.funcIdx : s.funcIdx;
+	let base = running ? vm.base : s.base;
+	let depth = frames.depth;
+	let limit = getModuleFunc(vm.mod, funcIdx).frameSize;
+	while (true) {
+		const classes = getModuleFunc(vm.mod, funcIdx).regClasses;
+		for (let r = 0; r < limit && r < classes.length; r += 1) {
+			if (inRefFile(classes[r]) && slots[base + r] != 0) roots.push(handleValue(slots[base + r]));
+		}
+		if (depth == 0) return;
+		const frame = frames.items[depth - 1];
+		limit = base - frame.base;
+		base = frame.base;
+		funcIdx = frame.funcIdx;
+		depth = depth - 1;
+	}
+}
+
 function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string): void {
 	if (vm.comptime || !vm.auditLedger || vm.error != "") return;
 	vmLedgerCollect(vm);
@@ -1425,7 +1472,7 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 	roots.push(vm.currentException);
 	const running = vm.sched.strands.items[vm.current];
 	for (const s of held) {
-		for (const h of s.regs.refs) if (h != 0) roots.push(handleValue(h));
+		frameRefRoots(vm, s, s == running, roots);
 		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
 		if (s != running) roots.push(s.currentException);
 	}
@@ -1482,8 +1529,7 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 
 function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
 	const map = createCopyMap();
-	map.sourceWords = vm.regs.words;
-	map.sourceRefs = vm.regs.refs;
+	map.sourceSlots = vm.regs.slots;
 	map.sourceGlobals = vm.globals;
 	return map;
 }
@@ -1510,9 +1556,8 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const regs: RaiserRegFile = { words: [], refs: [] };
-	ensureWords(regs, callee.wordRegs);
-	ensureRefs(regs, callee.refRegs);
+	const regs: RaiserRegFile = { slots: [] };
+	ensureSlots(regs, callee.frameSize);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
@@ -1522,7 +1567,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return id;
 }
@@ -1543,9 +1588,8 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const regs: RaiserRegFile = { words: [], refs: [] };
-	ensureWords(regs, callee.wordRegs);
-	ensureRefs(regs, callee.refRegs);
+	const regs: RaiserRegFile = { slots: [] };
+	ensureSlots(regs, callee.frameSize);
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
@@ -1561,7 +1605,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 			vmError(vm, `spawn: ${callee.name} does not take the closure environment in a ref register`);
 			return -1;
 		}
-		regs.refs[callee.regOps[0] >> 3] = envSlot.intVal;
+		regs.slots[callee.regOps[0] >> 3] = envSlot.intVal;
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -1570,7 +1614,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -1680,13 +1724,13 @@ function vmHandleModuleImport(vm: RaiserVM, ia: int32, bx: int32, func: RaiserFu
 
 function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const main = vm.sched.strands.items[0];
-	const regs: RaiserRegFile = { words: [], refs: [] };
+	const regs: RaiserRegFile = { slots: [] };
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return vm.sched.strands.items.length - 1;
 }
@@ -1733,14 +1777,12 @@ function moduleFail(vm: RaiserVM, error: RaiserValue): void {
 
 function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	const body = getModuleFunc(vm.mod, funcIdx);
-	ensureWords(vm.regs, body.wordRegs);
-	ensureRefs(vm.regs, body.refRegs);
+	startFrame(vm.regs, 0, body);
 	vm.callStack.depth = 0;
 	const sp: number[] = [];
 	vm.safePoints = sp;
 	vm.funcIdx = funcIdx as int32;
-	vm.wordBase = 0;
-	vm.refBase = 0;
+	vm.base = 0;
 	vm.ip = 0;
 }
 
@@ -1753,8 +1795,7 @@ function moduleExecuteAsync(vm: RaiserVM, at: int32): void {
 	}
 	const init = vm.mod.records[at].init;
 	const s = moduleNewStrand(vm, init);
-	ensureWords(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).wordRegs);
-	ensureRefs(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).refRegs);
+	ensureSlots(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).frameSize);
 	ev.states[at].bodyStrand = s;
 	ev.starting = s;
 	ev.fresh = true;
@@ -2099,8 +2140,8 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 	const target = obj.slots[0];
 	when (mode != "danger") { if (target < 0 || target >= vm.mod.functions.length) return -1; }
 	const env = obj.slots[1];
-	let argc = func.blocks[site + 2];
-	let sig = func.blocks[site + 3];
+	let argc = func.blocks[site + 1];
+	let sig = func.blocks[site + 2];
 	if (env == 0) {
 		argc = argc - 1;
 		sig = sigPrefix(sig, argc);
@@ -2109,30 +2150,29 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 		const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
 		if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
 	}
-	if (env != 0) writeRef(vm, rb + ((func.blocks[site + 3 + argc] as int32) >> 3), env);
+	if (env != 0) writeRef(vm, rb + ((func.blocks[site + 2 + argc] as int32) >> 3), env);
 	return target;
 }
 
 // The hot opcodes run here on the two files and the frame's bases; every other opcode takes its
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
-// vm.ip, vm.funcIdx, vm.wordBase and vm.refBase are written back before any call that reads
+// vm.ip, vm.funcIdx, vm.base and vm.base are written back before any call that reads
 // them; between calls the running frame lives in dispatch's locals.
-// Any edit to dispatch re-allocates the registers of its hot locals (words, refs, code, ip): one added case measured
+// Any edit to dispatch re-allocates the registers of its hot locals (slots, code, ip): one added case measured
 // +1..4% on call-heavy programs, so a new opcode's fast path goes into vmStepHeap and leaves dispatch's code as it is.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	assertPacked(func);
-	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs, vm.objectHeap.objects);
+	dispatch(vm, func.packed, vm.regs.slots, vm.objectHeap.objects);
 }
 
-function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>, objects: Span<RaiserObjectData>): void {
+function dispatch(vm: RaiserVM, code: Span<int64>, slots: Span<int64>, objects: Span<RaiserObjectData>): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
 	let func: Cursor<RaiserFunction> = mod.functions[funcIdx];
 	let ip = vm.ip;
-	let wb = vm.wordBase;
-	let rb = vm.refBase;
+	let fb = vm.base;
 	let budget = vm.loopLimit - vm.loopCount;
 	while (true) {
 		@computedGoto;
@@ -2149,16 +2189,16 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const bx = (ib * 256 + ic);
 				if (bx >= getFuncConstLen(func)) {
-					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `constant index out of bounds: ${bx}`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `constant index out of bounds: ${bx}`); return;
 				} else {
 					const val: Cursor<RaiserValue> = func.constants[bx];
 					const cls = ia & 7;
 					if (cls == CLS_WORD || cls == CLS_BOOL) {
-						words[wb + (ia >> 3)] = val.intVal;
+						slots[fb + (ia >> 3)] = val.intVal;
 					} else if (cls == CLS_FLOAT) {
-						words[wb + (ia >> 3)] = msFloat64Bits(val.floatVal);
+						slots[fb + (ia >> 3)] = msFloat64Bits(val.floatVal);
 					} else {
-						writeRef(vm, rb + (ia >> 3), val.kind == RaiserValueKind.Nil ? 0 : val.intVal);
+						writeRef(vm, fb + (ia >> 3), val.kind == RaiserValueKind.Nil ? 0 : val.intVal);
 					}
 				}
 				break;
@@ -2166,35 +2206,35 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.MoveW: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				words[wb + ia] = words[wb + ib];
+				slots[fb + ia] = slots[fb + ib];
 				break;
 			}
 			case RaiserOpcode.MoveR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				writeRef(vm, rb + ia, refs[rb + ib]);
+				writeRef(vm, fb + ia, slots[fb + ib]);
 				break;
 			}
 			case RaiserOpcode.LoadNil: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const cls = ia & 7;
 				if (cls == CLS_REF || cls == CLS_DYN) {
-					writeRef(vm, rb + (ia >> 3), 0);
+					writeRef(vm, fb + (ia >> 3), 0);
 				} else {
-					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
 				}
 				break;
 			}
 			case RaiserOpcode.LoadGlobal: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; setRegConform(vm, ia, vm.globals[ib]);
+				vm.funcIdx = funcIdx; vm.base = fb; setRegConform(vm, ia, vm.globals[ib]);
 				break;
 			}
 			case RaiserOpcode.StoreGlobal: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; storeRegGlobal(vm, ia, ib);
+				vm.funcIdx = funcIdx; vm.base = fb; storeRegGlobal(vm, ia, ib);
 				break;
 			}
 			case RaiserOpcode.Jump: {
@@ -2206,7 +2246,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					// worth budgeting (reference: handleJmpBack decrements
 					// loopIterations only on backward jumps).
 					budget -= 1;
-					if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				}
 				ip = ip + offset;
 				break;
@@ -2214,7 +2254,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.LoadInt: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				words[wb + ia] = immValue(ib);
+				slots[fb + ia] = immValue(ib);
 				break;
 			}
 			case RaiserOpcode.IsKind: {
@@ -2222,7 +2262,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				if ((ib & 7) == CLS_REF && ic < 64) {
-					words[wb + ia] = (handleKind(refs[rb + (ib >> 3)]) as number) == ic ? 1 : 0;
+					slots[fb + ia] = (handleKind(slots[fb + (ib >> 3)]) as number) == ic ? 1 : 0;
 				} else {
 					slow = true;
 				}
@@ -2232,7 +2272,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const cls = ia & 7;
-				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? words[wb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, readAbs(vm, cls, (ia >> 3) + (cls == CLS_REF || cls == CLS_DYN ? rb : wb)));
+				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? slots[fb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, readAbs(vm, cls, (ia >> 3) + (cls == CLS_REF || cls == CLS_DYN ? fb : fb)));
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
@@ -2244,26 +2284,21 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (depth < MAX_CALL_DEPTH) {
 					const callee: Cursor<RaiserFunction> = mod.functions[ib];
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
 					frame.returnIp = ip;
 					frame.returnDest = ia;
-					frame.wordBase = wb;
-					frame.refBase = rb;
+					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
 					vm.callStack.depth = depth + 1;
-					wb = wb + (func.blocks[ic] as int32);
-					rb = rb + (func.blocks[ic + 1] as int32);
-					if (words.length < wb + callee.wordRegs) {
-						ensureWords(vm.regs, wb + callee.wordRegs);
-						words = vm.regs.words;
+					fb = fb + (func.blocks[ic] as int32);
+					if (slots.length < fb + callee.frameSize) {
+						ensureSlots(vm.regs, fb + callee.frameSize);
+						slots = vm.regs.slots;
 					}
-					if (refs.length < rb + callee.refRegs) {
-						ensureRefs(vm.regs, rb + callee.refRegs);
-						refs = vm.regs.refs;
-					}
+					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					funcIdx = ib;
 					func = callee;
 					code = callee.packed;
@@ -2278,30 +2313,25 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const depth = vm.callStack.depth;
-				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic) : -1;
+				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, slots[fb + ib], fb, ic) : -1;
 				if (target >= 0) {
 					const callee: Cursor<RaiserFunction> = mod.functions[target];
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
 					frame.returnIp = ip;
 					frame.returnDest = ia;
-					frame.wordBase = wb;
-					frame.refBase = rb;
+					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
 					vm.callStack.depth = depth + 1;
-					wb = wb + (func.blocks[ic] as int32);
-					rb = rb + (func.blocks[ic + 1] as int32);
-					if (words.length < wb + callee.wordRegs) {
-						ensureWords(vm.regs, wb + callee.wordRegs);
-						words = vm.regs.words;
+					fb = fb + (func.blocks[ic] as int32);
+					if (slots.length < fb + callee.frameSize) {
+						ensureSlots(vm.regs, fb + callee.frameSize);
+						slots = vm.regs.slots;
 					}
-					if (refs.length < rb + callee.refRegs) {
-						ensureRefs(vm.regs, rb + callee.refRegs);
-						refs = vm.regs.refs;
-					}
+					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -2315,40 +2345,35 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const target = op == RaiserOpcode.CallIndirect ? words[wb + ib] : ib;
+				const target = op == RaiserOpcode.CallIndirect ? slots[fb + ib] : ib;
 				const depth = vm.callStack.depth;
 				let ok = depth < MAX_CALL_DEPTH;
 				let callee: Cursor<RaiserFunction> = func;
 				if (target >= 0 && target < mod.functions.length) {
 					callee = mod.functions[target];
-					const argc = func.blocks[ic + 2];
-					const sig = func.blocks[ic + 3];
+					const argc = func.blocks[ic + 1];
+					const sig = func.blocks[ic + 2];
 					ok = ok && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig;
 				} else {
 					ok = false;
 				}
 				if (ok) {
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
 					frame.returnIp = ip;
 					frame.returnDest = ia;
-					frame.wordBase = wb;
-					frame.refBase = rb;
+					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
 					vm.callStack.depth = depth + 1;
-					wb = wb + (func.blocks[ic] as int32);
-					rb = rb + (func.blocks[ic + 1] as int32);
-					if (words.length < wb + callee.wordRegs) {
-						ensureWords(vm.regs, wb + callee.wordRegs);
-						words = vm.regs.words;
+					fb = fb + (func.blocks[ic] as int32);
+					if (slots.length < fb + callee.frameSize) {
+						ensureSlots(vm.regs, fb + callee.frameSize);
+						slots = vm.regs.slots;
 					}
-					if (refs.length < rb + callee.refRegs) {
-						ensureRefs(vm.regs, rb + callee.refRegs);
-						refs = vm.regs.refs;
-					}
+					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -2370,22 +2395,22 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					const cls = ia & 7;
 					if (cls == (dest & 7)) {
 						if (cls == CLS_REF || cls == CLS_DYN) {
-							const handle = refs[rb + (ia >> 3)];
+							const handle = slots[fb + (ia >> 3)];
 							if ((ia >> 3) >= ib) {
-								refs[rb + (ia >> 3)] = 0;
-								const old = refs[frame.refBase + (dest >> 3)];
-								refs[frame.refBase + (dest >> 3)] = handle;
+								slots[fb + (ia >> 3)] = 0;
+								const old = slots[frame.base + (dest >> 3)];
+								slots[frame.base + (dest >> 3)] = handle;
 								releaseShell(vm, old);
 							} else {
-								writeRef(vm, frame.refBase + (dest >> 3), handle);
+								writeRef(vm, frame.base + (dest >> 3), handle);
 							}
 						} else {
-							words[frame.wordBase + (dest >> 3)] = words[wb + (ia >> 3)];
+							slots[frame.base + (dest >> 3)] = slots[fb + (ia >> 3)];
 						}
-						if (ic > 1) releaseFrameShells(vm, rb + ib, ic >> 1);
+						if (ic > 1) leaveFrame(vm, fb, func);
+						else zeroFrame(slots, fb + ib, fb + func.frameSize);
 						vm.callStack.depth = depth - 1;
-						wb = frame.wordBase;
-						rb = frame.refBase;
+						fb = frame.base;
 						funcIdx = frame.funcIdx;
 						func = mod.functions[funcIdx];
 						code = func.packed;
@@ -2401,9 +2426,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrEqI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] == words[wb + ib]) {
+				if (slots[fb + ia] == slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2411,9 +2436,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrNeI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] != words[wb + ib]) {
+				if (slots[fb + ia] != slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2421,9 +2446,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrLtI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] < words[wb + ib]) {
+				if (slots[fb + ia] < slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2431,9 +2456,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrLeI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] <= words[wb + ib]) {
+				if (slots[fb + ia] <= slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2441,9 +2466,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrGtI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] > words[wb + ib]) {
+				if (slots[fb + ia] > slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2451,9 +2476,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrGeI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] >= words[wb + ib]) {
+				if (slots[fb + ia] >= slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2461,9 +2486,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrEqI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] == immValue(ib)) {
+				if (slots[fb + ia] == immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2471,9 +2496,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrNeI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] != immValue(ib)) {
+				if (slots[fb + ia] != immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2481,9 +2506,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrLtI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] < immValue(ib)) {
+				if (slots[fb + ia] < immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2491,9 +2516,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrLeI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] <= immValue(ib)) {
+				if (slots[fb + ia] <= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2501,9 +2526,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrGtI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] > immValue(ib)) {
+				if (slots[fb + ia] > immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2511,9 +2536,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrGeI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (words[wb + ia] >= immValue(ib)) {
+				if (slots[fb + ia] >= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2521,9 +2546,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrEqR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (refs[rb + ia] == refs[rb + ib]) {
+				if (slots[fb + ia] == slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2531,9 +2556,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.BrNeR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				if (refs[rb + ia] != refs[rb + ib]) {
+				if (slots[fb + ia] != slots[fb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2541,22 +2566,22 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.ForLtI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				const lhs = words[wb + ia];
-				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
-				words[wb + ia] = lhs + 1;
+				const lhs = slots[fb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				slots[fb + ia] = lhs + 1;
 				budget -= 1;
-				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
-				if (lhs + 1 < words[wb + ib]) ip = ip + packedBranch(word);
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (lhs + 1 < slots[fb + ib]) ip = ip + packedBranch(word);
 				break;
 			}
 			case RaiserOpcode.ForLtI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				const lhs = words[wb + ia];
-				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
-				words[wb + ia] = lhs + 1;
+				const lhs = slots[fb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				slots[fb + ia] = lhs + 1;
 				budget -= 1;
-				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				if (lhs + 1 < immValue(ib)) ip = ip + packedBranch(word);
 				break;
 			}
@@ -2564,224 +2589,224 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (refs[rb + ia] == refs[rb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] == slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BneR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (refs[rb + ia] != refs[rb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] != slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BeqI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] == words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] == slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BneI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] != words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] != slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BltI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] < words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] < slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BleI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] <= words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] <= slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgtI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] > words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] > slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgeI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] >= words[wb + ib]) ip = ip + (ic as int32);
+				if (slots[fb + ia] >= slots[fb + ib]) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BeqI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] == immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] == immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BneI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] != immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] != immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BltI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] < immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] < immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BleI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] <= immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] <= immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgtI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] > immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] > immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgeI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ia] >= immValue(ib)) ip = ip + (ic as int32);
+				if (slots[fb + ia] >= immValue(ib)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BeqF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) == msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) == msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BneF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) != msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) != msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BltF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) < msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) < msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BleF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) <= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) <= msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgtF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) > msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) > msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BgeF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (msBitsFloat64(words[wb + ia]) >= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+				if (msBitsFloat64(slots[fb + ia]) >= msBitsFloat64(slots[fb + ib])) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BltU64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if ((words[wb + ia] as uint64) < (words[wb + ib] as uint64)) ip = ip + (ic as int32);
+				if ((slots[fb + ia] as uint64) < (slots[fb + ib] as uint64)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.BleU64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if ((words[wb + ia] as uint64) <= (words[wb + ib] as uint64)) ip = ip + (ic as int32);
+				if ((slots[fb + ia] as uint64) <= (slots[fb + ib] as uint64)) ip = ip + (ic as int32);
 				break;
 			}
 			case RaiserOpcode.AddF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) + msBitsFloat64(words[wb + ic]));
+				slots[fb + ia] = msFloat64Bits(msBitsFloat64(slots[fb + ib]) + msBitsFloat64(slots[fb + ic]));
 				break;
 			}
 			case RaiserOpcode.SubF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) - msBitsFloat64(words[wb + ic]));
+				slots[fb + ia] = msFloat64Bits(msBitsFloat64(slots[fb + ib]) - msBitsFloat64(slots[fb + ic]));
 				break;
 			}
 			case RaiserOpcode.MulF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) * msBitsFloat64(words[wb + ic]));
+				slots[fb + ia] = msFloat64Bits(msBitsFloat64(slots[fb + ib]) * msBitsFloat64(slots[fb + ic]));
 				break;
 			}
 			case RaiserOpcode.DivF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) / msBitsFloat64(words[wb + ic]));
+				slots[fb + ia] = msFloat64Bits(msBitsFloat64(slots[fb + ib]) / msBitsFloat64(slots[fb + ic]));
 				break;
 			}
 			case RaiserOpcode.NegF64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				words[wb + ia] = msFloat64Bits(-msBitsFloat64(words[wb + ib]));
+				slots[fb + ia] = msFloat64Bits(-msBitsFloat64(slots[fb + ib]));
 				break;
 			}
 			case RaiserOpcode.AddI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
+				const lhs = slots[fb + ib];
 				const imm = immValue(ic);
 				const sum = int64Bits((lhs as uint64) + (imm as uint64));
-				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { slots[fb + ia] = sum;
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64Imm: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
+				const lhs = slots[fb + ib];
 				const imm = immValue(ic);
 				const diff = int64Bits((lhs as uint64) - (imm as uint64));
-				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { slots[fb + ia] = diff;
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.LoadField: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ib];
+				const handle = slots[fb + ib];
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < vm.objectHeap.objects.length) {
 					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					const idx = func.fieldCache[pc];
 					if (idx >= 0 && idx < obj.slots.length && obj.classType.fieldIds[idx] == func.nameIds[ic]) {
 						const cls = ia & 7;
 						if ((cls == CLS_WORD || cls == CLS_FLOAT) && (slotKind(obj, idx) as int32) == cls) {
-							words[wb + (ia >> 3)] = obj.slots[idx];
+							slots[fb + (ia >> 3)] = obj.slots[idx];
 						} else {
 							slow = true;
 						}
@@ -2797,14 +2822,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ia];
+				const handle = slots[fb + ia];
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < vm.objectHeap.objects.length) {
 					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					const idx = func.fieldCache[pc];
 					if (idx >= 0 && idx < obj.slots.length && obj.classType.fieldIds[idx] == func.nameIds[ib]) {
 						const cls = ic & 7;
 						if ((cls == CLS_WORD || cls == CLS_FLOAT) && (slotKind(obj, idx) as int32) == cls) {
-							obj.slots[idx] = words[wb + (ic >> 3)];
+							obj.slots[idx] = slots[fb + (ic >> 3)];
 						} else {
 							slow = true;
 						}
@@ -2820,7 +2845,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ib];
+				const handle = slots[fb + ib];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2829,8 +2854,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[ic]) { slow = true; break; } }
 					const cls = ia & 7;
 					if ((slotKind(obj, idx) as int32) != cls || cls == CLS_DYN) { slow = true; break; }
-					if (cls == CLS_REF) writeRef(vm, rb + (ia >> 3), obj.slots[idx]);
-					else words[wb + (ia >> 3)] = obj.slots[idx];
+					if (cls == CLS_REF) writeRef(vm, fb + (ia >> 3), obj.slots[idx]);
+					else slots[fb + (ia >> 3)] = obj.slots[idx];
 				} else {
 					slow = true;
 				}
@@ -2840,7 +2865,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ia];
+				const handle = slots[fb + ia];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2849,8 +2874,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[ib]) { slow = true; break; } }
 					const cls = ic & 7;
 					if ((slotKind(obj, idx) as int32) != cls || cls == CLS_DYN) { slow = true; break; }
-					if (cls == CLS_REF) storeSlotRef(vm, obj, idx, refs[rb + (ic >> 3)]);
-					else obj.slots[idx] = words[wb + (ic >> 3)];
+					if (cls == CLS_REF) storeSlotRef(vm, obj, idx, slots[fb + (ic >> 3)]);
+					else obj.slots[idx] = slots[fb + (ic >> 3)];
 				} else {
 					slow = true;
 				}
@@ -2859,7 +2884,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.LoadSlotW: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				const handle = refs[rb + ib];
+				const handle = slots[fb + ib];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2867,7 +2892,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
-					words[wb + ia] = obj.slots[idx];
+					slots[fb + ia] = obj.slots[idx];
 				} else {
 					slow = true;
 				}
@@ -2876,7 +2901,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.LoadSlotR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				const handle = refs[rb + ib];
+				const handle = slots[fb + ib];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2884,7 +2909,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
-					writeRef(vm, rb + ia, obj.slots[idx]);
+					writeRef(vm, fb + ia, obj.slots[idx]);
 				} else {
 					slow = true;
 				}
@@ -2893,7 +2918,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.StoreSlotW: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ia];
+				const handle = slots[fb + ia];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2901,7 +2926,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
-					obj.slots[idx] = words[wb + ic];
+					obj.slots[idx] = slots[fb + ic];
 				} else {
 					slow = true;
 				}
@@ -2910,7 +2935,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			case RaiserOpcode.StoreSlotR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const handle = refs[rb + ia];
+				const handle = slots[fb + ia];
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
@@ -2918,7 +2943,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					when (mode != "danger") { if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
 					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
-					storeSlotRef(vm, obj, idx, refs[rb + ic]);
+					storeSlotRef(vm, obj, idx, slots[fb + ic]);
 				} else {
 					slow = true;
 				}
@@ -2928,46 +2953,46 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
-				const rhs = words[wb + ic];
+				const lhs = slots[fb + ib];
+				const rhs = slots[fb + ic];
 				const sum = int64Bits((lhs as uint64) + (rhs as uint64));
-				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { slots[fb + ia] = sum;
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
-				const rhs = words[wb + ic];
+				const lhs = slots[fb + ib];
+				const rhs = slots[fb + ic];
 				const diff = int64Bits((lhs as uint64) - (rhs as uint64));
-				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { slots[fb + ia] = diff;
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.MulI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
-				const rhs = words[wb + ic];
-				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
-				} else { words[wb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
+				const lhs = slots[fb + ib];
+				const rhs = slots[fb + ic];
+				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
+				} else { slots[fb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
 				break;
 			}
 			case RaiserOpcode.DivI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = words[wb + ib];
-				const rhs = words[wb + ic];
-				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
+				const lhs = slots[fb + ib];
+				const rhs = slots[fb + ic];
+				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
 				} else if (rhs == -1) {
-					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
-					} else { words[wb + ia] = -lhs; }
+					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
+					} else { slots[fb + ia] = -lhs; }
 				} else {
-					words[wb + ia] = lhs / rhs;
+					slots[fb + ia] = lhs / rhs;
 				}
 				break;
 			}
@@ -2975,9 +3000,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
+				if (slots[fb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
 				} else {
-					words[wb + ia] = words[wb + ic] == -1 ? 0 : words[wb + ib] % words[wb + ic];
+					slots[fb + ia] = slots[fb + ic] == -1 ? 0 : slots[fb + ib] % slots[fb + ic];
 				}
 				break;
 			}
@@ -2985,9 +3010,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
+				if (slots[fb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "division by zero"); return;
 				} else {
-					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
+					slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) / (slots[fb + ic] as uint64));
 				}
 				break;
 			}
@@ -2995,9 +3020,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
+				if (slots[fb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
 				} else {
-					words[wb + ia] = int64Bits((words[wb + ib] as uint64) % (words[wb + ic] as uint64));
+					slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) % (slots[fb + ic] as uint64));
 				}
 				break;
 			}
@@ -3005,104 +3030,104 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = int64Bits((words[wb + ib] as uint64) + (words[wb + ic] as uint64));
+				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) + (slots[fb + ic] as uint64));
 				break;
 			}
 			case RaiserOpcode.SubU64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = int64Bits((words[wb + ib] as uint64) - (words[wb + ic] as uint64));
+				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) - (slots[fb + ic] as uint64));
 				break;
 			}
 			case RaiserOpcode.MulU64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = int64Bits((words[wb + ib] as uint64) * (words[wb + ic] as uint64));
+				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) * (slots[fb + ic] as uint64));
 				break;
 			}
 			case RaiserOpcode.NegI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				const val = words[wb + ib];
-				if (val == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
-				} else { words[wb + ia] = -val; }
+				const val = slots[fb + ib];
+				if (val == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
+				} else { slots[fb + ia] = -val; }
 				break;
 			}
 			case RaiserOpcode.BitAnd: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = words[wb + ib] & words[wb + ic];
+				slots[fb + ia] = slots[fb + ib] & slots[fb + ic];
 				break;
 			}
 			case RaiserOpcode.BitOr: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = words[wb + ib] | words[wb + ic];
+				slots[fb + ia] = slots[fb + ib] | slots[fb + ic];
 				break;
 			}
 			case RaiserOpcode.BitXor: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = words[wb + ib] ^ words[wb + ic];
+				slots[fb + ia] = slots[fb + ib] ^ slots[fb + ic];
 				break;
 			}
 			case RaiserOpcode.BitNot: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				words[wb + ia] = ~words[wb + ib];
+				slots[fb + ia] = ~slots[fb + ib];
 				break;
 			}
 			case RaiserOpcode.ShiftLeft: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const count = (words[wb + ic] & 63) as uint64;
-				words[wb + ia] = int64Bits((words[wb + ib] as uint64) << count);
+				const count = (slots[fb + ic] & 63) as uint64;
+				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) << count);
 				break;
 			}
 			case RaiserOpcode.ShiftRight: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = words[wb + ib] >> (words[wb + ic] & 63);
+				slots[fb + ia] = slots[fb + ib] >> (slots[fb + ic] & 63);
 				break;
 			}
 			case RaiserOpcode.ShiftRightU: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const count = (words[wb + ic] & 63) as uint64;
-				words[wb + ia] = int64Bits((words[wb + ib] as uint64) >> count);
+				const count = (slots[fb + ic] & 63) as uint64;
+				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) >> count);
 				break;
 			}
 			case RaiserOpcode.NarrowU: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const width = ib as int64;
-				words[wb + ia] = words[wb + ia] & (((1 as int64) << width) - 1);
+				slots[fb + ia] = slots[fb + ia] & (((1 as int64) << width) - 1);
 				break;
 			}
 			case RaiserOpcode.NarrowS: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const val = words[wb + ia];
+				const val = slots[fb + ia];
 				const half = (1 as int64) << ((ib as int64) - 1);
 				const low = ic == 1 ? 0 : -half;
-				if (val < low || val >= low + 2 * half) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				if (val < low || val >= low + 2 * half) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SignExtend: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const imm = 64 - (ib as int64);
-				const raised = int64Bits((words[wb + ia] as uint64) << (imm as uint64));
-				words[wb + ia] = raised >> imm;
+				const raised = int64Bits((slots[fb + ia] as uint64) << (imm as uint64));
+				slots[fb + ia] = raised >> imm;
 				break;
 			}
 			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
@@ -3112,7 +3137,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 		}
 		if (slow) {
 			vm.ip = ip;
-			vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget;
+			vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget;
 			const ia = ((word >> 8) & 65535) as int32;
 			const ib = ((word >> 24) & 65535) as int32;
 			const ic = ((word >> 40) & 65535) as int32;
@@ -3123,23 +3148,20 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
 				ip = vm.ip;
 				if (vm.halted) break;
-				words = vm.regs.words;
-				refs = vm.regs.refs;
+				slots = vm.regs.slots;
 				objects = vm.objectHeap.objects;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
 				if (vm.halted || vm.yielded) break;
 				ip = vm.ip;
-				wb = vm.wordBase;
-				rb = vm.refBase;
+				fb = vm.base;
 				if (vm.funcIdx != funcIdx) {
 					funcIdx = vm.funcIdx;
 					func = mod.functions[funcIdx];
 					code = func.packed;
 					if (code.length != func.code.length) assertPacked(func);
 				}
-				words = vm.regs.words;
-				refs = vm.regs.refs;
+				slots = vm.regs.slots;
 				objects = vm.objectHeap.objects;
 			}
 			budget = vm.loopLimit - vm.loopCount;
@@ -3150,28 +3172,28 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 // The indexed array opcodes on an array of the register's own element class, straight on the files; false leaves the
 // instruction to the general handler.
 function fastLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
-	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
-	const idx = vm.regs.words[vm.wordBase + (ic >> 3)];
+	const handle = vm.regs.slots[vm.base + (ib >> 3)];
+	const idx = vm.regs.slots[vm.base + (ic >> 3)];
 	if (!isSeqHandle(handle)) return false;
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ia & 7;
 	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
-	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), seqLoad(cell, idx as number));
-	else vm.regs.words[vm.wordBase + (ia >> 3)] = seqLoad(cell, idx as number);
+	if (cls == CLS_REF) writeRef(vm, vm.base + (ia >> 3), seqLoad(cell, idx as number));
+	else vm.regs.slots[vm.base + (ia >> 3)] = seqLoad(cell, idx as number);
 	return true;
 }
 
 function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
-	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
-	const idx = vm.regs.words[vm.wordBase + (ib >> 3)];
+	const handle = vm.regs.slots[vm.base + (ia >> 3)];
+	const idx = vm.regs.slots[vm.base + (ib >> 3)];
 	if (!isSeqHandle(handle)) return false;
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ic & 7;
 	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
 	if (cls == CLS_REF) {
-		const held = vm.regs.refs[vm.refBase + (ic >> 3)];
+		const held = vm.regs.slots[vm.base + (ic >> 3)];
 		const old = seqLoad(cell, idx as number);
 		if (old != held) {
 			holdShell(vm, held);
@@ -3179,33 +3201,33 @@ function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean 
 			releaseShell(vm, old);
 		}
 	} else {
-		seqStore(cell, idx as number, vm.regs.words[vm.wordBase + (ic >> 3)]);
+		seqStore(cell, idx as number, vm.regs.slots[vm.base + (ic >> 3)]);
 	}
 	return true;
 }
 
 function fastArrayLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
-	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
+	const handle = vm.regs.slots[vm.base + (ib >> 3)];
 	if (!isSeqHandle(handle)) return false;
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
-	vm.regs.words[vm.wordBase + (ia >> 3)] = seqLen(cell) as int64;
+	vm.regs.slots[vm.base + (ia >> 3)] = seqLen(cell) as int64;
 	return true;
 }
 
 function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
-	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
+	const handle = vm.regs.slots[vm.base + (ia >> 3)];
 	if (!isSeqHandle(handle)) return false;
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ib & 7;
 	if ((seqClass(cell) as int32) != cls || seqBase(cell) != 0) return false;
 	if (cls == CLS_REF) {
-		const held = vm.regs.refs[vm.refBase + (ib >> 3)];
+		const held = vm.regs.slots[vm.base + (ib >> 3)];
 		seqPush(vm.arrayHeap.mem, cell, held);
 		holdShell(vm, held);
 	} else {
-		seqPush(vm.arrayHeap.mem, cell, vm.regs.words[vm.wordBase + (ib >> 3)]);
+		seqPush(vm.arrayHeap.mem, cell, vm.regs.slots[vm.base + (ib >> 3)]);
 	}
 	return true;
 }
@@ -3228,7 +3250,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			if (ic == 1) {
 				const inner = readDyn(vm.arrayHeap, source);
 				if (cls != CLS_WORD) { vmError(vm, `internal: payload unbox into a ${regClassLetter(cls as RaiserRegClass)} register of ${func.name}`); return true; }
-				vm.regs.words[absOf(vm, ia)] = inner.kind == RaiserValueKind.Float ? msFloat64Bits(inner.floatVal) : inner.intVal;
+				vm.regs.slots[absOf(vm, ia)] = inner.kind == RaiserValueKind.Float ? msFloat64Bits(inner.floatVal) : inner.intVal;
 			} else if (source.kind == RaiserValueKind.Box) {
 				setRegConform(vm, ia, heapBoxValue(vm.arrayHeap, source.intVal));
 			} else if (source.kind == RaiserValueKind.Nil && (cls == CLS_WORD || cls == CLS_FLOAT || cls == CLS_BOOL)) {
@@ -3365,10 +3387,10 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleConcatStrR(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StrByteAt => {
-			setRegInt(vm, ia, heapHandleByteAt(vm.arrayHeap, vm.regs.refs[(ib >> 3) + vm.refBase], getReg(vm, ic).intVal));
+			setRegInt(vm, ia, heapHandleByteAt(vm.arrayHeap, vm.regs.slots[(ib >> 3) + vm.base], getReg(vm, ic).intVal));
 		},
 		RaiserOpcode.StrCharCodeAt => {
-			setRegInt(vm, ia, heapHandleCharCodeAt(vm.arrayHeap, vm.regs.refs[(ib >> 3) + vm.refBase], getReg(vm, ic).intVal));
+			setRegInt(vm, ia, heapHandleCharCodeAt(vm.arrayHeap, vm.regs.slots[(ib >> 3) + vm.base], getReg(vm, ic).intVal));
 		},
 		RaiserOpcode.StrSlice => {
 			vmHandleStrSlice(vm, ia, ib, ic);
@@ -3407,7 +3429,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleCallClosure(vm, ia, ib, ic);
 		},
 		RaiserOpcode.RcInc => {
-			const handle = innerHandle(vm, vm.regs.refs[vm.refBase + ia]);
+			const handle = innerHandle(vm, vm.regs.slots[vm.base + ia]);
 			if (handle != 0) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, handle);
 		},
 		RaiserOpcode.RcDec => {
@@ -3415,11 +3437,11 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.WasMoved => {
 			if (inRefFile((ia & 7) as RaiserRegClass)) {
-				const moved = vm.regs.refs[absOf(vm, ia)];
-				vm.regs.refs[absOf(vm, ia)] = 0;
+				const moved = vm.regs.slots[absOf(vm, ia)];
+				vm.regs.slots[absOf(vm, ia)] = 0;
 				if (ib == 1) vmFreeMovedCell(vm, moved);
 				else releaseShell(vm, moved);
-			} else vm.regs.words[absOf(vm, ia)] = 0;
+			} else vm.regs.slots[absOf(vm, ia)] = 0;
 		},
 		RaiserOpcode.DestroyValue => {
 			vmDestroyValue(vm, ia, func.copyPlans, ic);
@@ -3431,7 +3453,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmAssignInPlace(vm, ia, ib, func.copyPlans, ic);
 		},
 		RaiserOpcode.RcHeld => {
-			vm.regs.words[vm.wordBase + ib] = rcCountOf(vm.arrayHeap, vm.objectHeap, innerHandle(vm, vm.regs.refs[vm.refBase + ia]));
+			vm.regs.slots[vm.base + ib] = rcCountOf(vm.arrayHeap, vm.objectHeap, innerHandle(vm, vm.regs.slots[vm.base + ia]));
 		},
 		RaiserOpcode.RcKeptCheck => {
 			vmRcKeptCheck(vm, ia, ib);
@@ -3516,7 +3538,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			enterFinally(vm, ia >> 3, ib, FINALLY_NORMAL, raiserNil());
 		},
 		RaiserOpcode.FinallyEnd => {
-			const kind = vm.regs.words[absOf(vm, ia)];
+			const kind = vm.regs.slots[absOf(vm, ia)];
 			const heldReg = operandTagged(ib, RaiserRegClass.Dyn);
 			const held = getDyn(vm, heldReg);
 			if (kind == FINALLY_RAISE) setException(vm, held);
@@ -3553,40 +3575,37 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 
 // --- Call/Ret handlers ---
 
-// The frame of the callee begins at the first word and the first ref the call site names, so an
-// argument whose class matches its parameter is already in place; one that differs is read out as a value
-// first and then written into the callee's own class, because the two layouts overlap.
+// The frame of the callee begins at the first slot the call site names, so an argument whose class matches its
+// parameter is already in place; one that differs is read out as a value first and then written into the callee's own
+// class, because the two layouts overlap.
 function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32, withoutLast: boolean = false): void {
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	const callee = vm.mod.functions[calleeFuncIdx];
 	const blocks = caller.blocks;
-	const argc = (blocks[site + 2] as int32) - (withoutLast ? 1 : 0);
-	const sig = withoutLast ? sigPrefix(blocks[site + 3], argc) : blocks[site + 3];
+	const argc = (blocks[site + 1] as int32) - (withoutLast ? 1 : 0);
+	const sig = withoutLast ? sigPrefix(blocks[site + 2], argc) : blocks[site + 2];
 	let args: RaiserValue[] | null = null;
 	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) {
 		args = [];
-		for (let i = 0; i < argc; i += 1) args.push(getReg(vm, blocks[site + 4 + i] as int32));
+		for (let i = 0; i < argc; i += 1) args.push(getReg(vm, blocks[site + 3 + i] as int32));
 	}
-	const newWordBase = vm.wordBase + (blocks[site] as int32);
-	const newRefBase = vm.refBase + (blocks[site + 1] as int32);
-	if (vm.regs.words.length < newWordBase + callee.wordRegs) ensureWords(vm.regs, newWordBase + callee.wordRegs);
-	if (vm.regs.refs.length < newRefBase + callee.refRegs) ensureRefs(vm.regs, newRefBase + callee.refRegs);
+	const newBase = vm.base + (blocks[site] as int32);
+	ensureSlots(vm.regs, newBase + callee.frameSize);
+	enterRefs(vm, newBase as int64, caller, site, callee);
 
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
-		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
 	}
 	const frame = vm.callStack.items[depth];
 	frame.funcIdx = vm.funcIdx;
 	frame.returnIp = vm.ip;
 	frame.returnDest = dest;
-	frame.wordBase = vm.wordBase;
-	frame.refBase = vm.refBase;
+	frame.base = vm.base;
 	frame.spBase = vm.safePoints.length as int32;
 	vm.callStack.depth = depth + 1;
 
-	vm.wordBase = newWordBase as int32;
-	vm.refBase = newRefBase as int32;
+	vm.base = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
 	if (args != null) {
@@ -3658,15 +3677,13 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const returned = getReg(vm, ia);
 	const frame = vm.callStack.items[depth - 1];
 	const callee = getModuleFunc(vm.mod, vm.funcIdx);
-	const calleeOwnBase = vm.refBase + callee.paramRefs;
-	const calleeOwn = callee.refRegs - callee.paramRefs;
+	const calleeBase = vm.base;
 
 	vm.funcIdx = frame.funcIdx;
-	vm.wordBase = frame.wordBase;
-	vm.refBase = frame.refBase;
+	vm.base = frame.base;
 	vm.ip = frame.returnIp;
 	setRegConform(vm, frame.returnDest, returned);
-	releaseFrameShells(vm, calleeOwnBase, calleeOwn);
+	leaveFrame(vm, calleeBase, callee);
 }
 
 // --- Destroying a cell whose last reference went ---
@@ -3680,11 +3697,11 @@ const DISPOSE_DEST: int32 = 7;
 const DROP_NEST_LIMIT: int32 = 32;
 
 function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
-	const abs = vm.refBase + ia;
-	const handle = innerHandle(vm, vm.regs.refs[abs]);
+	const abs = vm.base + ia;
+	const handle = innerHandle(vm, vm.regs.slots[abs]);
 	if (handle == 0) return;
 	if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) {
-		if (handle == vm.regs.refs[abs]) vm.regs.refs[abs] = 0;
+		if (handle == vm.regs.slots[abs]) vm.regs.slots[abs] = 0;
 		else unshell(vm, abs);
 		vmDestroyTop(vm, handle);
 		vmDrain(vm);
@@ -3695,8 +3712,8 @@ function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
 }
 
 function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
-	const handle = innerHandle(vm, vm.regs.refs[vm.refBase + ia]);
-	if (rcCountOf(vm.arrayHeap, vm.objectHeap, handle) <= vm.regs.words[vm.wordBase + ib]) return;
+	const handle = innerHandle(vm, vm.regs.slots[vm.base + ia]);
+	if (rcCountOf(vm.arrayHeap, vm.objectHeap, handle) <= vm.regs.slots[vm.base + ib]) return;
 	const name = handleHeapKind(handle) == RaiserHeapKind.Object ? vm.objectHeap.objects[handleIndex(handle)].classType.name : "cell";
 	vmError(vm, `onDestroy kept a reference to the ${name} it destroys; that reference would dangle once the object is freed`);
 }
@@ -3828,27 +3845,24 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 		return;
 	}
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
-	const newWordBase = vm.wordBase + caller.wordRegs;
-	const newRefBase = vm.refBase + caller.refRegs;
-	ensureWords(vm.regs, newWordBase + callee.wordRegs);
-	ensureRefs(vm.regs, newRefBase + callee.refRegs);
+	const newBase = vm.base + caller.frameSize;
+	ensureSlots(vm.regs, newBase + callee.frameSize);
+	zeroOwnRefs(vm.regs.slots, newBase as int64, callee);
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
-		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
 	}
 	const frame = vm.callStack.items[depth];
 	frame.funcIdx = vm.funcIdx;
 	frame.returnIp = vm.ip;
 	frame.returnDest = DISPOSE_DEST;
-	frame.wordBase = vm.wordBase;
-	frame.refBase = vm.refBase;
+	frame.base = vm.base;
 	frame.spBase = vm.safePoints.length as int32;
 	vm.callStack.depth = depth + 1;
-	vm.wordBase = newWordBase;
-	vm.refBase = newRefBase;
+	vm.base = newBase;
 	vm.funcIdx = fn;
 	vm.ip = 0;
-	vm.regs.refs[newRefBase] = handle;
+	vm.regs.slots[newBase] = handle;
 	vm.objectHeap.objects[handleIndex(handle)].rc = 1;
 	vm.disposing.push(handle);
 }
@@ -3856,16 +3870,14 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 	const frame = vm.callStack.items[depth - 1];
 	const callee = getModuleFunc(vm.mod, vm.funcIdx);
-	const ownBase = vm.refBase + callee.paramRefs;
-	const ownCount = callee.refRegs - callee.paramRefs;
-	vm.regs.refs[vm.refBase] = 0;
+	const calleeBase = vm.base;
+	vm.regs.slots[vm.base] = 0;
 	vm.callStack.depth = depth - 1;
 	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
-	vm.wordBase = frame.wordBase;
-	vm.refBase = frame.refBase;
+	vm.base = frame.base;
 	vm.ip = frame.returnIp;
-	releaseFrameShells(vm, ownBase, ownCount);
+	leaveFrame(vm, calleeBase, callee);
 	vmFreeCell(vm, vm.disposing.pop());
 	vmDrain(vm);
 }
@@ -3956,29 +3968,29 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 }
 
 function vmDestroyValue(vm: RaiserVM, ia: int32, plans: RaiserCopyPlan[], planIndex: int32): void {
-	const abs = vm.refBase + ia;
-	const shelled = vm.regs.refs[abs];
+	const abs = vm.base + ia;
+	const shelled = vm.regs.slots[abs];
 	const handle = innerHandle(vm, shelled);
-	vm.regs.refs[abs] = 0;
+	vm.regs.slots[abs] = 0;
 	releaseShell(vm, shelled);
 	vmDestroyAggregate(vm, handle, plans, planIndex);
 	vmDrain(vm);
 }
 
 function vmSinkValue(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPlan[], planIndex: int32): void {
-	const oldShell = vm.regs.refs[vm.refBase + ia];
-	const next = vm.regs.refs[vm.refBase + ib];
+	const oldShell = vm.regs.slots[vm.base + ia];
+	const next = vm.regs.slots[vm.base + ib];
 	if (oldShell == next) return;
 	holdShell(vm, next);
-	vm.regs.refs[vm.refBase + ia] = next;
+	vm.regs.slots[vm.base + ia] = next;
 	releaseShell(vm, oldShell);
 	vmDestroyAggregate(vm, innerHandle(vm, oldShell), plans, planIndex);
 	vmDrain(vm);
 }
 
 function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPlan[], planIndex: int32): void {
-	const destShell = vm.regs.refs[vm.refBase + ia];
-	const sourceShell = vm.regs.refs[vm.refBase + ib];
+	const destShell = vm.regs.slots[vm.base + ia];
+	const sourceShell = vm.regs.slots[vm.base + ib];
 	const dest = innerHandle(vm, destShell);
 	const source = innerHandle(vm, sourceShell);
 	if (dest == source) return;
@@ -4022,7 +4034,7 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 		const added = to.added; to.added = from.added; from.added = added;
 		const classType = to.classType; to.classType = from.classType; from.classType = classType;
 	}
-	vm.regs.refs[vm.refBase + ib] = 0;
+	vm.regs.slots[vm.base + ib] = 0;
 	releaseShell(vm, sourceShell);
 	vmFreeCell(vm, source);
 	vm.dropNest -= 1;
@@ -4033,7 +4045,7 @@ function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): vo
 	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
 		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
 	}
-	const calleeFuncIdx = vm.regs.words[absOf(vm, ib)];
+	const calleeFuncIdx = vm.regs.slots[absOf(vm, ib)];
 	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
@@ -4052,7 +4064,7 @@ function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	}
 	const env = heapObjectGetField(vm.objectHeap, handle, "env");
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
-	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 3 + caller.blocks[ic + 2]] as int32, env);
+	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 2 + caller.blocks[ic + 1]] as int32, env);
 	enterCallee(vm, ia, fn.intVal as number, ic, env.kind == RaiserValueKind.Nil);
 }
 
@@ -4064,7 +4076,7 @@ function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int
 	heapArraySetFlags(vm.arrayHeap, handle, slotArrayCyclic(slot), slotArrayUncounted(slot));
 	const elemCount = ib;
 	for (let i = 0; i < elemCount; i = i + 1) {
-		const elem = getDyn(vm, func.blocks[ic + 4 + i] as int32);
+		const elem = getDyn(vm, func.blocks[ic + 3 + i] as int32);
 		if (vmElemRefused(vm, handle, elem)) return;
 		heapArrayPush(vm.arrayHeap, handle, elem);
 		vmIncref(vm, elem);
@@ -4545,13 +4557,13 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 }
 
 function vmHandleConcatStrR(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = vm.regs.refs[(ib >> 3) + vm.refBase];
-	const rhs = vm.regs.refs[(ic >> 3) + vm.refBase];
+	const lhs = vm.regs.slots[(ib >> 3) + vm.base];
+	const rhs = vm.regs.slots[(ic >> 3) + vm.base];
 	if (ia == ib && heapHandleHeldOnce(vm.arrayHeap, lhs) && rhs != lhs) {
 		heapAppendHandle(vm.arrayHeap, lhs, rhs);
 		return;
 	}
-	writeRef(vm, (ia >> 3) + vm.refBase, heapConcatHandles(vm.arrayHeap, lhs, rhs));
+	writeRef(vm, (ia >> 3) + vm.base, heapConcatHandles(vm.arrayHeap, lhs, rhs));
 }
 
 function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {
@@ -4767,11 +4779,11 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	const fn = entry.fn;
 
-	const argc = func.blocks[ic + 2] as int32;
+	const argc = func.blocks[ic + 1] as int32;
 	const args: RaiserValue[] = [];
 	let i = 0;
 	while (i < argc) {
-		args.push(getDyn(vm, func.blocks[ic + 4 + i] as int32));
+		args.push(getDyn(vm, func.blocks[ic + 3 + i] as int32));
 		i = i + 1;
 	}
 
@@ -4782,18 +4794,15 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const prevArgv = activeProgramArgv();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	setActiveProgramArgv(vm.programArgv);
-	const outerWordFloor = vm.wordFloor;
-	const outerRefFloor = vm.refFloor;
+	const outerFloor = vm.floor;
 	const suspended = vm.suspendedRuns.length;
-	vm.wordFloor = vm.regs.words.length;
-	vm.refFloor = vm.regs.refs.length;
+	vm.floor = vm.regs.slots.length;
 	const result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
 		vm.suspendedRuns.shrink(suspended);
 	}
-	vm.wordFloor = outerWordFloor;
-	vm.refFloor = outerRefFloor;
+	vm.floor = outerFloor;
 	setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	setActiveProgramArgv(prevArgv);
 
@@ -4940,7 +4949,7 @@ test "Unbox of nil into a word register names the register" {
 		[],
 		[RaiserRegClass.Dyn, RaiserRegClass.Word]
 	));
-	assert vm.error.indexOf("internal: unbox of nil into the word register R0 of classed") >= 0, vm.error;
+	assert vm.error.indexOf("internal: unbox of nil into the word register R1 of classed") >= 0, vm.error;
 }
 
 test "Unbox into a ref register reads a boxed run-time string back" {
@@ -5693,9 +5702,9 @@ test "releasing the heaps leaves no register or global holding a string of the c
 	));
 	execLoop(vm);
 	assert vm.error == "", vm.error;
-	assert vm.regs.refs[2] != 0 && handleHeapKind(vm.regs.refs[2]) == RaiserHeapKind.String;
+	assert vm.regs.slots[2] != 0 && handleHeapKind(vm.regs.slots[2]) == RaiserHeapKind.String;
 	vmReleaseHeaps(vm);
-	for (const h of vm.regs.refs) {
+	for (const h of vm.regs.slots) {
 		assert handleHeapKind(h) != RaiserHeapKind.String;
 	}
 	vm.ip = 0;
@@ -6522,7 +6531,7 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 	assert vm.error == "", vm.error;
 	assert r.intVal == 218;
 	assert vm.suspendedRuns.length == 0;
-	assert vm.wordFloor == 0 && vm.refFloor == 0;
+	assert vm.floor == 0 && vm.floor == 0;
 }
 
 test "vmCallFunction: a host call made two frames deep returns through the frames it left" {
@@ -6564,7 +6573,7 @@ test "vmCallFunction: a host call made two frames deep returns through the frame
 	assert r.intVal == 23;
 	assert vm.callStack.depth == 0;
 	assert vm.suspendedRuns.length == 0;
-	assert vm.wordFloor == 0 && vm.refFloor == 0;
+	assert vm.floor == 0 && vm.floor == 0;
 }
 
 // --- Strand scheduling ---
@@ -7465,9 +7474,9 @@ test "a packed Ret names the refs its frame owns and whether a handler can still
 	];
 	const worker = createRaiserFunction("worker", body, dropsEverythingConsts, 0, 0, 8);
 	const guarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
-	const owned = worker.refRegs - worker.paramRefs;
+	const owned = worker.ownRefs.length;
 	const ret = worker.packed[worker.packed.length - 1];
-	assert owned > 0 && packedB(ret) == worker.paramRefs && ((ret >> 40) & 65535) == owned * 2, `${packedB(ret)} ${(ret >> 40) & 65535} ${owned}`;
+	assert owned > 0 && packedB(ret) == worker.arity && ((ret >> 40) & 65535) == owned * 2, `${packedB(ret)} ${(ret >> 40) & 65535} ${owned}`;
 	for (let pc = 0; pc < guarded.code.length; pc += 1) {
 		if (guarded.code[pc].op == RaiserOpcode.Ret) assert ((guarded.packed[pc] >> 40) & 1) == 1;
 	}
@@ -7484,11 +7493,11 @@ test "Unbox with the payload flag reads the word of any boxed kind" {
 		[RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word]
 	));
 	assert vm.error == "", vm.error;
-	assert vm.exitValue.kind == RaiserValueKind.Int && vm.exitValue.intVal == vm.regs.refs[2];
-	assert vm.regs.words[1] == 0;
+	assert vm.exitValue.kind == RaiserValueKind.Int && vm.exitValue.intVal == vm.regs.slots[2];
+	assert vm.regs.slots[6] == 0;
 }
 
-// A callee of `argc` parameters whose class in the word or ref file follows bit i of `pattern`, and the
+// A callee of `argc` parameters whose class, Word or Ref, follows bit i of `pattern`, and the
 // value it returns: ten times each word argument's position plus the length of each ref argument.
 function windowCallee(pattern: int32, argc: int32): RaiserFunction {
 	const classes: RaiserRegClass[] = [];
@@ -7555,6 +7564,16 @@ test "word and ref arguments in every order reach their parameters through Call 
 			}
 		}
 	}
+}
+
+test "a callee's word registers leave no word in the slots a caller holds handles in" {
+	const word = RaiserRegClass.Word;
+	const main = createRaiserFunction("main", [raiserABC(RaiserOpcode.Call, 0, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [], 0, 0, 2, [word, word]);
+	const mid = createRaiserFunction("mid", [raiserABC(RaiserOpcode.Call, 0, 2, 0), raiserABC(RaiserOpcode.LoadInt, 3, immField(5), 0), raiserABC(RaiserOpcode.Ret, 3, 0, 0)], [], 0, 0, 4, [word, RaiserRegClass.Ref, word, word]);
+	const leaf = createRaiserFunction("leaf", [raiserABC(RaiserOpcode.LoadInt, 0, immField(30), 0), raiserABC(RaiserOpcode.LoadInt, 1, immField(30), 0), raiserABC(RaiserOpcode.Ret, 0, 0, 0)], [], 0, 0, 2, [word, word]);
+	const vm = execModule(createRaiserModule("leftover", [main, mid, leaf], 0));
+	assert vm.error == "" && vm.exitValue.intVal == 5, vm.error;
+	for (const slot of vm.regs.slots) assert slot == 0 || slot == 5;
 }
 
 // A spawned strand runs in a frame of its own whose first register is the environment slot, whatever
@@ -7812,7 +7831,7 @@ test "placed: DestroyValue by plan frees an owned nested aggregate and releases 
 	main.copyPlans = [copyPlan(RaiserCopyKind.Object, ["inner"], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vmLiveCount(vm) == 1 && vm.objectHeap.objects[0].rc == 1 && vm.regs.refs[0] == 0, `${vmLiveCount(vm)} ${vm.objectHeap.objects[0].rc}`;
+	assert vmLiveCount(vm) == 1 && vm.objectHeap.objects[0].rc == 1 && vm.regs.slots[0] == 0, `${vmLiveCount(vm)} ${vm.objectHeap.objects[0].rc}`;
 }
 
 test "placed: DestroyValue by an array plan frees the array and every aggregate element" {
@@ -7843,7 +7862,7 @@ test "placed: SinkValue destroys the old aggregate and takes the source, and a d
 	main.copyPlans = [copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.refs[0] == vm.regs.refs[1] && vmLiveCount(vm) == 1 && vm.objectHeap.objects[1].rc == 1, `${vmLiveCount(vm)}`;
+	assert vm.regs.slots[0] == vm.regs.slots[1] && vmLiveCount(vm) == 1 && vm.objectHeap.objects[1].rc == 1, `${vmLiveCount(vm)}`;
 }
 
 test "placed: CopyValue counts an alias and leaves a fresh copy with its allocation count" {
@@ -7857,7 +7876,7 @@ test "placed: CopyValue counts an alias and leaves a fresh copy with its allocat
 	main.copyPlans = [copyPlan(RaiserCopyKind.Preserve, [], []), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.refs[1] == vm.regs.refs[0] && vm.regs.refs[2] != vm.regs.refs[0], `${vm.regs.refs[0]} ${vm.regs.refs[2]}`;
+	assert vm.regs.slots[1] == vm.regs.slots[0] && vm.regs.slots[2] != vm.regs.slots[0], `${vm.regs.slots[0]} ${vm.regs.slots[2]}`;
 	assert vm.objectHeap.objects[0].rc == 2 && vm.objectHeap.objects[1].rc == 1, `${vm.objectHeap.objects[0].rc} ${vm.objectHeap.objects[1].rc}`;
 }
 
@@ -8023,7 +8042,7 @@ test "WasMoved clears a word register to 0 and a ref register to nil without tou
 	], [RaiserRegClass.Ref, RaiserRegClass.Word], [leaf], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.words[0] == 0 && vm.regs.refs[0] == 0 && vm.objectHeap.objects[0].rc == 1;
+	assert vm.regs.slots[0] == 0 && vm.regs.slots[1] == 0 && vm.objectHeap.objects[0].rc == 1;
 }
 
 function throwingDestroy(): RaiserVM {
@@ -8104,10 +8123,10 @@ function numberSplice(values: number[], start: number, count: number, withItem: 
 		withItem ? raiserABC(RaiserOpcode.ArraySplice3, 0, 3, 1) : raiserABC(RaiserOpcode.ArraySplice, 0, 0, 1),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], [raiserInt(start as int64), raiserInt(count as int64), raiserFloat(item)]);
-	vm.regs.refs[0] = numberArray(vm, values);
+	vm.regs.slots[0] = numberArray(vm, values);
 	execLoop(vm);
 	if (vm.error != "") return vm.error;
-	return heldText(vm, vm.regs.refs[0]);
+	return heldText(vm, vm.regs.slots[0]);
 }
 
 test "array kernels: splice removes by the C clamps and splice3 inserts where the removal began" {
@@ -8129,10 +8148,10 @@ test "array kernels: splice removes by the C clamps and splice3 inserts where th
 
 function numberTransform(values: number[], op: RaiserOpcode): string {
 	const vm = kernelVM([RaiserRegClass.Ref], [raiserABC(op, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
-	vm.regs.refs[0] = numberArray(vm, values);
+	vm.regs.slots[0] = numberArray(vm, values);
 	execLoop(vm);
 	if (vm.error != "") return vm.error;
-	return heldText(vm, vm.regs.refs[0]);
+	return heldText(vm, vm.regs.slots[0]);
 }
 
 test "array kernels: reverse and sort rewrite a number array in place" {
@@ -8149,10 +8168,10 @@ function numberFill(values: number[], value: number): string {
 		raiserABC(RaiserOpcode.ArrayFill, 0, 1, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], [raiserFloat(value)]);
-	vm.regs.refs[0] = numberArray(vm, values);
+	vm.regs.slots[0] = numberArray(vm, values);
 	execLoop(vm);
 	if (vm.error != "") return vm.error;
-	return heldText(vm, vm.regs.refs[0]);
+	return heldText(vm, vm.regs.slots[0]);
 }
 
 function numberCopy(values: number[], other: number[], op: RaiserOpcode, start: number, end: number): string {
@@ -8162,12 +8181,12 @@ function numberCopy(values: number[], other: number[], op: RaiserOpcode, start: 
 		op == RaiserOpcode.ArrayConcat ? raiserABC(op, 1, 0, 4) : raiserABC(op, 1, 0, 2),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], [raiserInt(start as int64), raiserInt(end as int64)]);
-	vm.regs.refs[0] = numberArray(vm, values);
-	vm.regs.refs[2] = numberArray(vm, other);
+	vm.regs.slots[0] = numberArray(vm, values);
+	vm.regs.slots[4] = numberArray(vm, other);
 	execLoop(vm);
 	if (vm.error != "") return vm.error;
-	if (vm.regs.refs[1] == vm.regs.refs[0] || vm.regs.refs[1] == vm.regs.refs[2]) return "result aliases an operand";
-	return heldText(vm, vm.regs.refs[1]);
+	if (vm.regs.slots[1] == vm.regs.slots[0] || vm.regs.slots[1] == vm.regs.slots[4]) return "result aliases an operand";
+	return heldText(vm, vm.regs.slots[1]);
 }
 
 test "array kernels: fill, slice and concat of a number array follow the C kernels" {
@@ -8195,7 +8214,7 @@ test "array kernels: pop and shift hand the element out, an empty shift gives th
 		raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], []);
-	vm.regs.refs[0] = numberArray(vm, [1, 2]);
+	vm.regs.slots[0] = numberArray(vm, [1, 2]);
 	execLoop(vm);
 	assert vm.output == "2\n1\n0\n", vm.output;
 	assert vm.error.includes("index -1 out of bounds (length 0)"), vm.error;
@@ -8205,7 +8224,7 @@ function stringKernel(texts: string[], code: RaiserInstruction[], consts: Raiser
 	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], code, consts);
 	const elems: RaiserValue[] = [];
 	for (const t of texts) elems.push(ownedString(vm, t));
-	vm.regs.refs[0] = refArray(vm, elems);
+	vm.regs.slots[0] = refArray(vm, elems);
 	return vm;
 }
 
@@ -8219,83 +8238,83 @@ test "array kernels: slice, concat, splice, pop and fill count string elements" 
 	const abc = ["p", "q", "r"];
 
 	const sliced = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(1), raiserInt(3)]);
-	const slicedFrom = elemAt(sliced, sliced.regs.refs[0], 0);
+	const slicedFrom = elemAt(sliced, sliced.regs.slots[0], 0);
 	execLoop(sliced);
-	assert heldText(sliced, sliced.regs.refs[1]) == "[q,r]";
-	assert stringRc(sliced, slicedFrom) == 1 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 1)) == 2 && stringRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 2;
-	assert heapArrayRc(sliced.arrayHeap, sliced.regs.refs[1]) == 1;
+	assert heldText(sliced, sliced.regs.slots[1]) == "[q,r]";
+	assert stringRc(sliced, slicedFrom) == 1 && stringRc(sliced, elemAt(sliced, sliced.regs.slots[0], 1)) == 2 && stringRc(sliced, elemAt(sliced, sliced.regs.slots[0], 2)) == 2;
+	assert heapArrayRc(sliced.arrayHeap, sliced.regs.slots[1]) == 1;
 
 	const joined = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayConcat, 1, 0, 0), halt], []);
 	execLoop(joined);
-	assert heldText(joined, joined.regs.refs[1]) == "[p,q,r,p,q,r]" && stringRc(joined, elemAt(joined, joined.regs.refs[0], 1)) == 3;
+	assert heldText(joined, joined.regs.slots[1]) == "[p,q,r,p,q,r]" && stringRc(joined, elemAt(joined, joined.regs.slots[0], 1)) == 3;
 
 	const spliced = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(1), raiserInt(1)]);
-	const survivor = elemAt(spliced, spliced.regs.refs[0], 2);
+	const survivor = elemAt(spliced, spliced.regs.slots[0], 2);
 	const splicedLive = heapStringLive(spliced.arrayHeap);
 	execLoop(spliced);
-	assert heldText(spliced, spliced.regs.refs[0]) == "[p,r]" && heapStringLive(spliced.arrayHeap) == splicedLive - 1 && stringRc(spliced, survivor) == 1;
+	assert heldText(spliced, spliced.regs.slots[0]) == "[p,r]" && heapStringLive(spliced.arrayHeap) == splicedLive - 1 && stringRc(spliced, survivor) == 1;
 
 	const inserted = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
-	inserted.regs.refs[2] = elemAt(inserted, inserted.regs.refs[0], 0).intVal;
+	inserted.regs.slots[4] = elemAt(inserted, inserted.regs.slots[0], 0).intVal;
 	const insertedLive = heapStringLive(inserted.arrayHeap);
 	execLoop(inserted);
-	assert heldText(inserted, inserted.regs.refs[0]) == "[p,p,r]" && heapStringLive(inserted.arrayHeap) == insertedLive - 1 && stringRc(inserted, handleValue(inserted.regs.refs[2])) == 2;
+	assert heldText(inserted, inserted.regs.slots[0]) == "[p,p,r]" && heapStringLive(inserted.arrayHeap) == insertedLive - 1 && stringRc(inserted, handleValue(inserted.regs.slots[4])) == 2;
 
 	const itself = stringKernel(abc, [...range, raiserABC(RaiserOpcode.ArraySplice3, 0, 4, 2), halt], [raiserInt(1), raiserInt(1)]);
-	itself.regs.refs[2] = elemAt(itself, itself.regs.refs[0], 1).intVal;
+	itself.regs.slots[4] = elemAt(itself, itself.regs.slots[0], 1).intVal;
 	const itselfLive = heapStringLive(itself.arrayHeap);
 	execLoop(itself);
-	assert heldText(itself, itself.regs.refs[0]) == "[p,q,r]" && heapStringLive(itself.arrayHeap) == itselfLive && stringRc(itself, handleValue(itself.regs.refs[2])) == 1;
+	assert heldText(itself, itself.regs.slots[0]) == "[p,q,r]" && heapStringLive(itself.arrayHeap) == itselfLive && stringRc(itself, handleValue(itself.regs.slots[4])) == 1;
 
 	const popped = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayPop, 1, 0, 0), raiserABC(RaiserOpcode.ArrayShift, 4, 0, 0), halt], []);
 	execLoop(popped);
-	assert heldText(popped, popped.regs.refs[0]) == "[q]" && stringRc(popped, handleValue(popped.regs.refs[1])) == 1 && stringRc(popped, handleValue(popped.regs.refs[2])) == 1;
+	assert heldText(popped, popped.regs.slots[0]) == "[q]" && stringRc(popped, handleValue(popped.regs.slots[1])) == 1 && stringRc(popped, handleValue(popped.regs.slots[4])) == 1;
 
 	const filled = stringKernel(abc, [raiserABC(RaiserOpcode.ArrayFill, 0, 4, 0), halt], []);
 	const z = ownedString(filled, "z");
-	filled.regs.refs[2] = z.intVal;
+	filled.regs.slots[4] = z.intVal;
 	const filledLive = heapStringLive(filled.arrayHeap);
 	execLoop(filled);
-	assert heldText(filled, filled.regs.refs[0]) == "[z,z,z]" && heapStringLive(filled.arrayHeap) == filledLive - 3 && stringRc(filled, z) == 4;
+	assert heldText(filled, filled.regs.slots[0]) == "[z,z,z]" && heapStringLive(filled.arrayHeap) == filledLive - 3 && stringRc(filled, z) == 4;
 }
 
 test "array kernels: a sort of strings is by bytes and keeps equal strings in their order" {
 	const texts = ["pear", "apple", "fig", "apple", "Zed", "fig", ""];
 	const vm = stringKernel(texts, [raiserABC(RaiserOpcode.ArraySort, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
-	const before = vm.regs.refs[0];
+	const before = vm.regs.slots[0];
 	const handles: int64[] = [];
 	for (let i = 0; i < texts.length; i += 1) handles.push(elemAt(vm, before, i).intVal);
 	execLoop(vm);
 	assert vm.error == "", vm.error;
-	assert heldText(vm, vm.regs.refs[0]) == "[,Zed,apple,apple,fig,fig,pear]", heldText(vm, vm.regs.refs[0]);
-	const sorted = vm.regs.refs[0];
+	assert heldText(vm, vm.regs.slots[0]) == "[,Zed,apple,apple,fig,fig,pear]", heldText(vm, vm.regs.slots[0]);
+	const sorted = vm.regs.slots[0];
 	assert elemAt(vm, sorted, 2).intVal == handles[1] && elemAt(vm, sorted, 3).intVal == handles[3];
 	assert elemAt(vm, sorted, 4).intVal == handles[2] && elemAt(vm, sorted, 5).intVal == handles[5];
 	const reversed = stringKernel(["a", "b", "c"], [raiserABC(RaiserOpcode.ArrayReverse, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
 	execLoop(reversed);
-	assert heldText(reversed, reversed.regs.refs[0]) == "[c,b,a]";
+	assert heldText(reversed, reversed.regs.slots[0]) == "[c,b,a]";
 }
 
 test "array kernels: an empty shift of strings gives \"\" or nil by the instruction's flag" {
 	const asString = stringKernel([], [raiserABC(RaiserOpcode.ArrayShift, 1, 0, 1), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
 	execLoop(asString);
-	assert asString.error == "" && raiserToString(asString.arrayHeap, handleValue(asString.regs.refs[1])) == "";
-	assert handleTag(asString.regs.refs[1]) == (RaiserHeapKind.ConstString as int64);
+	assert asString.error == "" && raiserToString(asString.arrayHeap, handleValue(asString.regs.slots[1])) == "";
+	assert handleTag(asString.regs.slots[1]) == (RaiserHeapKind.ConstString as int64);
 	const asObject = stringKernel([], [raiserABC(RaiserOpcode.ArrayShift, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
 	execLoop(asObject);
-	assert asObject.error == "" && asObject.regs.refs[1] == 0;
+	assert asObject.error == "" && asObject.regs.slots[1] == 0;
 }
 
 test "array kernels: a view is read by slice and concat and refused by every kernel that rewrites" {
 	const ops = [RaiserOpcode.ArrayReverse, RaiserOpcode.ArraySort];
 	for (const op of ops) {
 		const vm = stringKernel(["b", "a", "c"], [raiserABC(op, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
-		vm.regs.refs[1] = heapAllocView(vm.arrayHeap, handleValue(vm.regs.refs[0]), 1, 2);
+		vm.regs.slots[1] = heapAllocView(vm.arrayHeap, handleValue(vm.regs.slots[0]), 1, 2);
 		execLoop(vm);
 		assert vm.error.includes("a slice"), vm.error;
 	}
 	const popping = stringKernel(["b", "a", "c"], [raiserABC(RaiserOpcode.ArrayPop, 4, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
-	popping.regs.refs[1] = heapAllocView(popping.arrayHeap, handleValue(popping.regs.refs[0]), 1, 2);
+	popping.regs.slots[1] = heapAllocView(popping.arrayHeap, handleValue(popping.regs.slots[0]), 1, 2);
 	execLoop(popping);
 	assert popping.error.includes("cannot pop from a slice"), popping.error;
 	const reading = stringKernel(["b", "a", "c"], [
@@ -8303,17 +8322,17 @@ test "array kernels: a view is read by slice and concat and refused by every ker
 		raiserABC(RaiserOpcode.ArraySliceCopy, 4, 1, 2), raiserABC(RaiserOpcode.ArrayConcat, 4, 1, 1),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	], [raiserInt(0), raiserInt(5)]);
-	reading.regs.refs[1] = heapAllocView(reading.arrayHeap, handleValue(reading.regs.refs[0]), 1, 2);
+	reading.regs.slots[1] = heapAllocView(reading.arrayHeap, handleValue(reading.regs.slots[0]), 1, 2);
 	execLoop(reading);
-	assert heldText(reading, reading.regs.refs[2]) == "[a,c,a,c]", heldText(reading, reading.regs.refs[2]);
+	assert heldText(reading, reading.regs.slots[4]) == "[a,c,a,c]", heldText(reading, reading.regs.slots[4]);
 }
 
 test "array kernels: a fill with a value the element class cannot hold is refused before any element changes" {
 	const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref], [raiserABC(RaiserOpcode.ArrayFill, 0, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], []);
-	vm.regs.refs[0] = numberArray(vm, [1, 2]);
-	vm.regs.refs[1] = heapAllocString(vm.arrayHeap, "s").intVal;
+	vm.regs.slots[0] = numberArray(vm, [1, 2]);
+	vm.regs.slots[1] = heapAllocString(vm.arrayHeap, "s").intVal;
 	execLoop(vm);
-	assert vm.error != "" && heldText(vm, vm.regs.refs[0]) == "[1,2]", vm.error;
+	assert vm.error != "" && heldText(vm, vm.regs.slots[0]) == "[1,2]", vm.error;
 }
 
 test "array kernels: object elements are shared by a slice and freed by the splice that evicts the last holder" {
@@ -8321,15 +8340,15 @@ test "array kernels: object elements are shared by a slice and freed by the spli
 	const halt = raiserABC(RaiserOpcode.Halt, 0, 0, 0);
 	const make = (code: RaiserInstruction[], consts: RaiserValue[]): RaiserVM => {
 		const vm = kernelVM([RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref], code, consts);
-		vm.regs.refs[0] = refArray(vm, [ownedObject(vm), ownedObject(vm), ownedObject(vm)]);
+		vm.regs.slots[0] = refArray(vm, [ownedObject(vm), ownedObject(vm), ownedObject(vm)]);
 		return vm;
 	};
 	const evicting = make([...range, raiserABC(RaiserOpcode.ArraySplice, 0, 0, 2), halt], [raiserInt(0), raiserInt(99)]);
 	execLoop(evicting);
-	assert vmLiveCount(evicting) == 1 && heapArrayLen(evicting.arrayHeap, evicting.regs.refs[0]) == 0, `${vmLiveCount(evicting)}`;
+	assert vmLiveCount(evicting) == 1 && heapArrayLen(evicting.arrayHeap, evicting.regs.slots[0]) == 0, `${vmLiveCount(evicting)}`;
 	const sliced = make([...range, raiserABC(RaiserOpcode.ArraySliceCopy, 1, 0, 2), halt], [raiserInt(0), raiserInt(2)]);
 	execLoop(sliced);
-	assert objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 0)) == 2 && objectRc(sliced, elemAt(sliced, sliced.regs.refs[0], 2)) == 1;
+	assert objectRc(sliced, elemAt(sliced, sliced.regs.slots[0], 0)) == 2 && objectRc(sliced, elemAt(sliced, sliced.regs.slots[0], 2)) == 1;
 }
 
 function returnThroughFinally(): RaiserVM {
@@ -8380,8 +8399,8 @@ test "placed: AssignInPlace gives an array behind a pointer the source's element
 	main.copyPlans = [copyPlan(RaiserCopyKind.Array, [], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
-	const dest = vm.regs.refs[0];
+	assert vm.regs.slots[0] == vm.regs.slots[2] && vm.regs.slots[3] == 0, `${vm.regs.slots[0]} ${vm.regs.slots[2]} ${vm.regs.slots[3]}`;
+	const dest = vm.regs.slots[0];
 	assert heapArrayLen(vm.arrayHeap, dest) == 2 && heapArrayRc(vm.arrayHeap, dest) == 2, `${heapArrayLen(vm.arrayHeap, dest)} ${heapArrayRc(vm.arrayHeap, dest)}`;
 	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 0 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
 }
@@ -8408,8 +8427,8 @@ test "placed: AssignInPlace gives a union behind a pointer the source's tag and 
 	main.copyPlans = [whole, arm, copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.refs[0] == vm.regs.refs[2] && vm.regs.refs[3] == 0, `${vm.regs.refs[0]} ${vm.regs.refs[2]} ${vm.regs.refs[3]}`;
-	const dest = vm.objectHeap.objects[handleIndex(vm.regs.refs[0])];
+	assert vm.regs.slots[0] == vm.regs.slots[2] && vm.regs.slots[3] == 0, `${vm.regs.slots[0]} ${vm.regs.slots[2]} ${vm.regs.slots[3]}`;
+	const dest = vm.objectHeap.objects[handleIndex(vm.regs.slots[0])];
 	assert handleIndex(dest.slots[1]) == 3 && dest.rc == 2, `${handleIndex(dest.slots[1])} ${dest.rc}`;
 	assert vmLiveCount(vm) == 2 && vm.objectHeap.freeList.length == 2, `${vmLiveCount(vm)}`;
 }

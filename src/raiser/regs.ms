@@ -1,5 +1,5 @@
-// Raiser VM — register layout: class inference for hand-built code, the operand verifier and the renumbering
-// from one number per register to a rank in the word file or the ref file.
+// Raiser VM — register layout: class inference for hand-built code and the operand verifier. A register's number is
+// its slot in the frame.
 
 import {
 	RaiserOpcode, RaiserInstruction, TYPED_SLOTS, RaiserRegClass, RaiserRole, RaiserConvClass, regClassLetter, inRefFile, operandTagged,
@@ -10,15 +10,12 @@ import { RaiserValue, RaiserValueKind } from "./value";
 const MAX_TAGGED_RANK: int32 = 8191;
 const MAX_FIELD: int32 = 65535;
 const MAX_SIG_ARGS: int32 = 20;
-const SITE_HEADER: int32 = 4;
 
 export interface RaiserRegLayout {
 	code: RaiserInstruction[];
 	regClasses: RaiserRegClass[];
 	regOps: int32[];       // the tagged operand of each input register
-	wordRegs: int32;
-	refRegs: int32;
-	blocks: int64[];       // per site: word start, ref start, argument count, class signature, then one tagged operand per argument
+	blocks: int64[];       // per site: the callee's first slot, argument count, class signature, then one tagged operand per argument
 	sigs: int64[];         // sigs[n] is the class signature of the first n registers, for a callee's parameters
 }
 
@@ -160,20 +157,8 @@ function typedSlot(op: RaiserOpcode, value: RaiserRegClass): RaiserOpcode {
 export function layoutRegisters(name: string, code: RaiserInstruction[], constants: RaiserValue[], regCount: int32, declared: RaiserRegClass[] | null): RaiserRegLayout {
 	const classes = declared != null ? declared : inferClasses(name, code, constants, regCount);
 	if (classes.length != regCount) throw new Error(`internal: function ${name} has ${regCount} registers but ${classes.length} register classes`);
-	const wordsBefore: int32[] = [];
-	const refsBefore: int32[] = [];
 	const regOps: int32[] = [];
-	let words: int32 = 0;
-	let refs: int32 = 0;
-	for (let r = 0; r < regCount; r += 1) {
-		wordsBefore.push(words);
-		refsBefore.push(refs);
-		const rank = inRefFile(classes[r]) ? refs : words;
-		regOps.push(operandTagged(rank, classes[r]));
-		if (inRefFile(classes[r])) refs += 1; else words += 1;
-	}
-	wordsBefore.push(words);
-	refsBefore.push(refs);
+	for (let r = 0; r < regCount; r += 1) regOps.push(operandTagged(r, classes[r]));
 	const out: RaiserInstruction[] = [];
 	const blocks: int64[] = [];
 	for (let pc = 0; pc < code.length; pc += 1) {
@@ -218,8 +203,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 			if (first + argc > regCount) throw new Error(`internal: instruction ${pc} (opcode ${inst.op}) of ${name} has ${argc} arguments after R${inst.a} but only ${regCount} registers`);
 			c = blocks.length;
 			if (c > 65535) throw new Error(`internal: function ${name} has more call sites than a site index holds`);
-			blocks.push(wordsBefore[first] as int64);
-			blocks.push(refsBefore[first] as int64);
+			blocks.push(first as int64);
 			blocks.push(argc as int64);
 			blocks.push(signatureOf(classes, first, argc));
 			for (let i = 0; i < argc; i += 1) blocks.push(regOps[first + i] as int64);
@@ -232,7 +216,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 	const sigs: int64[] = [];
 	const sigLimit = regCount < MAX_SIG_ARGS ? regCount : MAX_SIG_ARGS;
 	for (let n = 0; n <= sigLimit; n += 1) sigs.push(signatureOf(classes, 0, n));
-	return { code: out, regClasses: classes, regOps, wordRegs: words, refRegs: refs, blocks, sigs };
+	return { code: out, regClasses: classes, regOps, blocks, sigs };
 }
 
 function refusal(code: RaiserInstruction[], classes: RaiserRegClass[]): string {
