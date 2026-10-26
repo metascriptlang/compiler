@@ -3462,7 +3462,7 @@ function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
 		_heldBySym.set(slot.sym, made);
 		return made;
 	}
-	const key = typeKey(slot);
+	const key = "{" + slot.typeNames.join(",") + "}";
 	const known = _heldByName.get(key);
 	if (known != null || !create) return known;
 	const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
