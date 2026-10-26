@@ -1274,7 +1274,7 @@ function mayWriteAny(w: WriteEffects, writes: WriteSummary, slots: string[]): bo
 	return false;
 }
 
-function pathSlots(w: WriteEffects, n: Node, out: string[]): Symbol | null {
+export function pathSlots(w: WriteEffects, n: Node, out: string[]): Symbol | null {
 	const t = skipConvDfa(n);
 	match (t.kind) {
 		NodeKind.Identifier => {

@@ -231,7 +231,7 @@ export function createLiftState(ctx: TransformContext): LiftState {
 	return state;
 }
 
-function liftWrites(ctx: TransformContext): WriteEffects {
+export function liftWrites(ctx: TransformContext): WriteEffects {
 	return {
 		tables: ctx.liftTables ?? createWriteSummaries(createRoutineDecls(), []),
 		checker: ctx.checkerCtx,

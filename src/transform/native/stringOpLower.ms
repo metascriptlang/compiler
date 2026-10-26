@@ -21,22 +21,28 @@
 // isSameIdent handles Identifier, MemberExpr, ArrayAccess, NumberLiteral —
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, Symbol, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, UpdateExprData, TypeKind } from "../../ast/node";
 import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance, stringType } from "../../checker/types";
-import { TransformContext } from "../context";
-import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
+import { TransformContext, reportTransformError } from "../context";
+import { walkNode, isFuncBoundary } from "../walker";
+import { makeCall, makeNumber, makeHiddenAddr, makeAssign, runtimeRef, isRuntimeProcCall } from "../util";
+import { clonePlace } from "../place";
+import { anyDescendant, Visit } from "../../ast/visitor";
+import { isAssignOp } from "../../ast/operators";
+import { ANY_HEAP_SLOT, WriteEffects, addressSlots, mayWrite, pathSlots } from "../../analyzer/writeEffects";
+import { liftWrites } from "../lowering/lambdaLiftingEnv";
 
 // ===== Main Entry Point =====
 
 export function lowerStringOps(program: Node, ctx: TransformContext): Node {
-	walkNode(program, rewriteStringOp);
+	const w = liftWrites(ctx);
+	walkNode(program, (node: Node): Node => rewriteStringOp(node, w, ctx));
 	return program;
 }
 
 // ===== Rewriter =====
 
-function rewriteStringOp(node: Node): Node {
+function rewriteStringOp(node: Node, w: WriteEffects, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 
@@ -53,7 +59,7 @@ function rewriteStringOp(node: Node): Node {
 	// Avoids O(n) allocation per concat — uses amortized O(1) append with capacity growth.
 	if (d.operator == "=" && d.right.kind == NodeKind.BinaryExpr) {
 		const rd = d.right.data as BinaryExprData;
-		if (rd.operator == "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
+		if (rd.operator == "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left) && !rightSideWritesTarget(w, d.left, rd.right)) {
 			const loc = node.location;
 			const addrOf = makeHiddenAddr(d.left, loc);
 			const code = asAsciiCharCode(rd.right);
@@ -75,7 +81,7 @@ function rewriteStringOp(node: Node): Node {
 	// AFTER flattening so the fast path still fires for chains and templates.
 	if (d.operator == "=" && isStringTyped(d.left) && d.right.kind == NodeKind.CallExpr) {
 		const cd = d.right.data as CallExprData;
-		if (cd.callee.kind == NodeKind.Identifier) {
+		if (cd.callee.kind == NodeKind.Identifier && !rightSideWritesTarget(w, d.left, d.right)) {
 			const loc = node.location;
 			// msStringConcat(x, p) — 2-part with self-first → msStringAppend(&x, p)
 			if (isRuntimeProcCall(d.right, "msStringConcat") && cd.arguments.length == 2
@@ -137,6 +143,7 @@ function rewriteStringOp(node: Node): Node {
 	// We do the same rewrite here so DRC sees a normal call (no special-casing)
 	// and codegen emits a normal call (no special-casing).
 	if (d.operator == "+=" && isStringTyped(d.left)) {
+		if (rightSideWritesTarget(w, d.left, d.right)) return concatReadingTargetFirst(node, d, ctx);
 		const addrOf = makeHiddenAddr(d.left, loc);
 		const code = asAsciiCharCode(d.right);
 		if (code >= 0) {
@@ -157,6 +164,63 @@ function rewriteStringOp(node: Node): Node {
 	}
 
 	return node;
+}
+
+function rightSideWritesTarget(w: WriteEffects, target: Node, right: Node): boolean {
+	const slots: string[] = [];
+	const roots: Symbol[] = [];
+	targetReads(w, target, slots, roots);
+	const reads = addressSlots(slots);
+	return anyDescendant(right, (n: Node): Visit => {
+		if (isFuncBoundary(n)) return Visit.Skip;
+		if (writesRoot(w, n, roots)) return Visit.Hit;
+		const site = n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr || n.kind == NodeKind.BinaryExpr;
+		return site && reads.length > 0 && mayWrite(w, n, reads, null) ? Visit.Hit : Visit.Descend;
+	});
+}
+
+function targetReads(w: WriteEffects, n: Node, slots: string[], roots: Symbol[]): void {
+	const root = pathSlots(w, n, slots);
+	if (root != null) {
+		roots.push(root!);
+		const t = root!.symbolType;
+		if (t != null && (t.kind == TypeKind.Var || t.kind == TypeKind.Ptr)) slots.push(ANY_HEAP_SLOT);
+	}
+	let cur: Node | null = n;
+	while (cur != null) {
+		match (cur!.kind) {
+			NodeKind.ArrayAccess => {
+				targetReads(w, (cur!.data as ArrayAccessData).index, slots, roots);
+				cur = (cur!.data as ArrayAccessData).array;
+			},
+			NodeKind.MemberExpr => { cur = (cur!.data as MemberExprData).object; },
+			NodeKind.HiddenDeref | NodeKind.HiddenAddr => { cur = (cur!.data as HiddenDerefData).expr; },
+			_ => { cur = null; },
+		};
+	}
+}
+
+function writesRoot(w: WriteEffects, n: Node, roots: Symbol[]): boolean {
+	const place = n.kind == NodeKind.HiddenAddr ? n
+		: n.kind == NodeKind.UpdateExpr ? (n.data as UpdateExprData).updateArg
+		: n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) ? (n.data as BinaryExprData).left
+		: null;
+	if (place == null) return false;
+	const root = pathSlots(w, place, []);
+	return root != null && roots.includes(root!);
+}
+
+function concatReadingTargetFirst(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
+	const loc = node.location;
+	if (anyDescendant(d.left, (n: Node): Visit => n.kind == NodeKind.CallExpr ? Visit.Hit : Visit.Descend)) {
+		reportTransformError(ctx, "a string `+=` whose target calls a routine has a right side that can write the target; bind the target's object to a const first", loc);
+		return node;
+	}
+	const concat = makeCall(runtimeRef("msStringConcat", loc), [clonePlace(d.left, loc), coercePartToString(d.right, loc)], loc);
+	concat.nodeType = d.left.nodeType;
+	const assign = makeAssign(d.left, concat, loc);
+	assign.nodeType = node.nodeType;
+	return assign;
 }
 
 // ===== String Index Assignment =====
