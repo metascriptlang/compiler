@@ -31,7 +31,7 @@ export function jStr(b: JsonBuilder, key: string, val: string): void {
 	jRaw(b, key, lspJsonString(val));
 }
 
-export function jNum(b: JsonBuilder, key: string, val: number): void {
+export function jNum(b: JsonBuilder, key: string, val: float64): void {
 	jRaw(b, key, lspJsonNumber(val));
 }
 
