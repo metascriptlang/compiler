@@ -1,5 +1,5 @@
 import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset } from "./vmSeq";
-import { isLiveCell, VmMemory, reserveSlots } from "./memory";
+import { isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
 // Raiser VM — Bytecode executor
 
 import {
@@ -39,6 +39,7 @@ extern function msToInt32(d: float64): int32;
 export interface RaiserRegFile {
 	slots: Ptr<int64>;   // a register's number is its slot: int, bool, enum and float bits, or a heap handle (0 is nil; a Dyn slot holds a box handle)
 	cap: number;         // the slots reserved; the block never moves
+	owner: VmMemory;     // holds the block, so clearing a heap's memory leaves the registers alone
 }
 
 export interface RaiserCallFrame {
@@ -297,11 +298,12 @@ const RAISER_MIN_FRAME = 256;
 
 // A register file holds a call depth of MAX_CALL_DEPTH frames of the widest function, twice over for a run a host bridge starts
 // inside another, in one block that never moves, so a register's address stays valid.
-export function createRegFile(mem: VmMemory, mod: RaiserModule): RaiserRegFile {
+export function createRegFile(mod: RaiserModule): RaiserRegFile {
+	const owner = createVmMemory();
 	let widest = RAISER_MIN_FRAME;
 	for (const f of mod.functions) if (f.frameSize > widest) widest = f.frameSize;
 	const cap = (MAX_CALL_DEPTH + 2) * 2 * widest;
-	return { slots: reserveSlots(mem, cap as int64) as Ptr<int64>, cap };
+	return { slots: reserveSlots(owner, cap as int64) as Ptr<int64>, cap, owner };
 }
 
 // Called at every function-call entry with the callee's base plus its register count.
@@ -337,7 +339,7 @@ export function setDefaultLoopLimit(n: number): void {
 
 export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM {
 	const arrayHeap = createArrayHeap();
-	const regs = createRegFile(arrayHeap.mem, mod);
+	const regs = createRegFile(mod);
 	const nilVal = raiserNil();
 	const callFrames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: callFrames, depth: 0 };
@@ -857,7 +859,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	}
 	const funcIdx = fnField.intVal as number;
 	const callee = getModuleFunc(vm.mod, funcIdx);
-	const regs = createRegFile(t.arrayHeap.mem, vm.mod);
+	const regs = createRegFile(vm.mod);
 	const hasEnv = envField.kind == RaiserValueKind.Object;
 	const params = callee.arity - (hasEnv ? 1 : 0);
 	if (params > 1) {
@@ -1349,7 +1351,7 @@ const FINALLY_RAISE: int64 = 1;
 const FINALLY_RETURN: int64 = 2;
 
 function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: int64, value: RaiserValue): void {
-	vm.regs.slots[vm.base + routeRank] = kind;
+	vm.regs.slots[(vm.base + routeRank) as int64] = kind;
 	const held = operandTagged(heldRank as int32, RaiserRegClass.Dyn);
 	setRegConform(vm, held, value);
 	if (kind != FINALLY_NORMAL) vm.safePoints.push(pendingMarker(absOf(vm, held)));
@@ -1677,7 +1679,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const arrayHeap = createArrayHeap();
-	const regs = createRegFile(arrayHeap.mem, vm.mod);
+	const regs = createRegFile(vm.mod);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
@@ -1709,7 +1711,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const arrayHeap = createArrayHeap();
-	const regs = createRegFile(arrayHeap.mem, vm.mod);
+	const regs = createRegFile(vm.mod);
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
 	const copyMap = strandCopyMap(vm);
@@ -1859,7 +1861,7 @@ function vmHandleModuleImport(vm: RaiserVM, ia: int32, bx: int32, func: RaiserFu
 
 function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const main = vm.sched.strands.items[0];
-	const regs = createRegFile(main.arrayHeap.mem, vm.mod);
+	const regs = createRegFile(vm.mod);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const sp: number[] = [];
@@ -4934,7 +4936,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	setActiveProgramArgv(vm.programArgv);
 	const outerFloor = vm.floor;
 	const suspended = vm.suspendedRuns.length;
-	vm.floor = vm.base + getModuleFunc(vm.mod, vm.funcIdx).frameSize;
+	vm.floor = Math.max(1, vm.base + getModuleFunc(vm.mod, vm.funcIdx).frameSize);
 	const result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
