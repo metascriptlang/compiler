@@ -64,6 +64,63 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 	return result;
 }
 
+// The enum-name part of lowerBuiltins for a backend that keeps every other builtin as its own opcode.
+function namedEnumType(t: Type | null): Type | null {
+	if (t == null) return null;
+	const peeled = peelTransparentInstance(literalBase(t));
+	return peeled.kind == TypeKind.Enum && peeled.typeName != "" ? peeled : null;
+}
+
+function enumTextCall(obj: Node, t: Type, ctx: TransformContext): Node {
+	const call = makeCall(makeTypedIdentResolved(enumToStringSym(ctx, t), null, obj.location), [obj], obj.location);
+	call.nodeType = stringType();
+	return call;
+}
+
+export function lowerArrayLengthAssign(program: Node): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.BinaryExpr) return node;
+		const d = node.data as BinaryExprData;
+		if (d.operator != "=" || d.left.kind != NodeKind.MemberExpr) return node;
+		const md = d.left.data as MemberExprData;
+		if (md.property != "length" || md.object.nodeType == null || peelTransparentInstance(md.object.nodeType).kind != TypeKind.Array) return node;
+		const call = makeCall(makeMember(md.object, "setLength", node.location), [d.right], node.location);
+		call.nodeType = node.nodeType;
+		return call;
+	});
+}
+
+export function lowerEnumNames(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind == NodeKind.ArrayAccess) return lowerEnumReverseIndex(node, ctx);
+		if (node.kind == NodeKind.BinaryExpr) {
+			const bd = node.data as BinaryExprData;
+			if (bd.operator != "+") return node;
+			const leftEnum = namedEnumType(bd.left.nodeType);
+			const rightEnum = namedEnumType(bd.right.nodeType);
+			const leftText = isStringLike(bd.left.nodeType) || bd.left.kind == NodeKind.StringLiteral;
+			const rightText = isStringLike(bd.right.nodeType) || bd.right.kind == NodeKind.StringLiteral;
+			if (leftEnum != null && rightText) bd.left = enumTextCall(bd.left, leftEnum, ctx);
+			if (rightEnum != null && leftText) bd.right = enumTextCall(bd.right, rightEnum, ctx);
+			return node;
+		}
+		if (node.kind != NodeKind.CallExpr) return node;
+		const cd = node.data as CallExprData;
+		if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "Echo") {
+			for (let i = 0; i < cd.arguments.length; i += 1) {
+				const t = namedEnumType(cd.arguments[i].nodeType);
+				if (t != null) cd.arguments[i] = enumTextCall(cd.arguments[i], t, ctx);
+			}
+			return node;
+		}
+		if (cd.callee.kind != NodeKind.MemberExpr || (cd.callee.data as MemberExprData).property != "toString") return node;
+		const object = (cd.callee.data as MemberExprData).object;
+		if (node.resolvedSym != null && node.resolvedSym.declNode != null) return node;
+		const t = namedEnumType(object.nodeType);
+		return t != null ? enumTextCall(object, t, ctx) : node;
+	});
+}
+
 // ===== Call Expression Lowering =====
 
 function lowerCallExpr(node: Node, ctx: TransformContext): Node {

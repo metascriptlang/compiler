@@ -9,6 +9,8 @@ import { walkNode } from "./walker";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerStaticInit } from "./lowering/staticLower";
+import { lowerEnumNames, lowerArrayLengthAssign } from "./native/builtinLower";
+import { lowerEnumToString } from "./native/enumToStringLower";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
@@ -51,13 +53,13 @@ import { lowerStringOps } from "./native/stringOpLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx, placed);
+		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
@@ -72,7 +74,7 @@ function dropUnionTextMemberTexts(program: Node): Node {
 	});
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean): Node {
+function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean): Node {
 	let result = dropUnionTextMemberTexts(planModuleTdz(program, ctx));
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
@@ -98,6 +100,8 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean): 
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerTypeof(result, ctx);
+	result = lowerArrayLengthAssign(result);
+	if (namesEnums) result = lowerEnumToString(lowerEnumNames(result, ctx), ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);

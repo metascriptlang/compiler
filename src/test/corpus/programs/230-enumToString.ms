@@ -1,5 +1,4 @@
 // @stdout: codes Bad Neg Ok | shades Hi Lo
-// @xfail(raiser): raiser runtime error: cannot evaluate 'Color' at comptime: symbol kind is Enum
 enum Color { Red, Green, Blue }
 enum Code { Ok = 5, Bad = 9, Neg = -1 }
 enum Shade { Lo, Hi }
