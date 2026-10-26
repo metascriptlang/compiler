@@ -184,17 +184,23 @@ test "quoteBindsWhereWritten: a type written in a quote names the macro module's
 	assert bad == "", bad;
 }
 
-test "quoteBindsWhereWritten: a type naming a class declared in the quote resolves to that class" {
+test "quoteBindsWhereWritten: a type parameter declared in the quote shadows the macro module's class of that name" {
 	const lib = `import { Node } from "std/meta";
+export class Box { v: int32 = 100; }
 export macro m(x: Node): Node {
 	return quote { (() => {
-		class Box { v: int32 = 7; }
-		const b: Box = new Box();
+		function id<Box>(b: Box): Box { const c: Box = b; return c as Box; }
 		const m = new Map<string, Box>();
-		m.set("a", b);
-		function get(c: Box): int32 { return c.v; }
-		return (m.get("a")! as Box).v + get(b);
+		m.set("a", new Box());
+		return id<int32>(7) + m.get("a")!.v;
 	})() };
+}
+`;
+	const bad = failures([
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf(callerNamesakes, "m(0)")], "quote type parameter beside a caller namesake"),
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf("", "m(0)")], "quote type parameter with no caller namesake"),
+	]);
+	assert bad == "", bad;
 }
 `;
 	const bad = failures([
