@@ -84,7 +84,7 @@ function findSinks(n: Node, params: Symbol[], hits: boolean[], branched: boolean
 			if (formals != null) {
 				for (let i = 0; i < d.arguments.length && i < formals.length; i += 1) {
 					const at = paramIndex(d.arguments[i], params);
-					if (at >= 0 && formals[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(formals, i, d.arguments))) hits[at] = true;
+					if (at >= 0 && formals[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(formals, i, d.arguments, null, d.callee))) hits[at] = true;
 				}
 			}
 		} else if (n.kind == NodeKind.ObjectLiteral) {

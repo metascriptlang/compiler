@@ -486,13 +486,15 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 	}
 }
 
-export function boundElement(formals: Type[], i: int32, args: Node[]): Type | null {
+export function boundElement(formals: Type[], i: int32, args: Node[], receiverFormal: Type | null, callee: Node): Type | null {
 	const formal = formals[i].typeReturn;
 	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
-	for (let j = 0; j < formals.length && j < args.length; j += 1) {
-		const f = peelSlot(formals[j]);
+	const allFormals = receiverFormal == null ? formals : [receiverFormal, ...formals];
+	const allArgs = receiverFormal == null ? args : [(callee.data as MemberExprData).object, ...args];
+	for (let j = 0; j < allFormals.length && j < allArgs.length; j += 1) {
+		const f = peelSlot(allFormals[j]);
 		if (f == null || f.kind != TypeKind.Array || f.typeReturn == null || f.typeReturn.kind != TypeKind.GenericParam || f.typeReturn.typeName != formal.typeName) continue;
-		const arr = peelSlot(args[j].nodeType);
+		const arr = peelSlot(allArgs[j].nodeType);
 		if (arr != null && arr.kind == TypeKind.Array) return arr.typeReturn;
 	}
 	return null;
@@ -511,8 +513,12 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	const sym = node.resolvedSym;
 
+	let receiverFormal: Type | null = null;
 	let sinkParams = calledRoutineType(node)?.typeChildren ?? null;
-	if (sinkParams != null && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr && sinkParams.length > 0) sinkParams = sinkParams.slice(1);
+	if (sinkParams != null && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr && sinkParams.length > 0) {
+		receiverFormal = sinkParams[0];
+		sinkParams = sinkParams.slice(1);
+	}
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
@@ -534,7 +540,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && isSinkTypeForParam(sinkParams[i]) && !isUncountedElement(boundElement(sinkParams, i, cd.arguments)))) {
+		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && isSinkTypeForParam(sinkParams[i]) && !isUncountedElement(boundElement(sinkParams, i, cd.arguments, receiverFormal, cd.callee)))) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
