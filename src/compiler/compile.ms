@@ -5026,6 +5026,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		exit(1);
 	}
 
+	if (ctx.vm != null && ctx.vm.unsettled) console.log("Warning: Detected unsettled await: no task, timer, message or I/O is left to settle it");
+
 	// C-target parity: the program's exit code becomes msc's own.
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal as int32);
