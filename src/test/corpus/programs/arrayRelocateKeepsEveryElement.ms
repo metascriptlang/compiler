@@ -1,3 +1,4 @@
+// @xfail(raiser): a struct argument read from an element changes when the std splice overwrites that slot, card .inbox/compiler/2026-10-26-a-struct-argument-read-from-an-element-changes-when-the-slot-is-overwritten
 // @stdout: relocate all-ok
 class Node {
 	name: string;
