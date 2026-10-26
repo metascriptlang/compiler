@@ -137,7 +137,7 @@ msc test src/index.ms
 msc test src/lexer/scanner.ms
 ```
 
-`msc test` does not support `--filter` or `--jobs`.
+`--tests-in-dir` keeps only the tests of modules under the entry's directory, and `--tests-shard=<i>/<n>` runs every n-th tested module. `msc test` does not support `--filter` or `--jobs`.
 
 Output format:
 ```

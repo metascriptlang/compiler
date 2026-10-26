@@ -21,8 +21,9 @@ Optimization level and LTO are separate axes. The default build is `-O0 -g`, `--
 ## Test
 
 ```bash
-msc test src/index.ms                 # full compiler suite
+msc test src/utils/string.ms --tests-in-dir   # one module's tests: the check while you edit
 msc test src/utils/string.ms          # one file plus the tests of everything it imports
+msc test src/index.ms                 # full compiler suite
 
 msc run src/test/corpus/run.ms                        # corpus: C/JS parity + RSS lanes, ~19 min
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms         # corpus: ASan + reference-count ledger, ~10 min
@@ -30,7 +31,7 @@ MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
 msc run --target=raiser src/test/guard/run.ms          # lifecycle guards
 ```
 
-`test` is a keyword and a test body asserts with `assert`; see [docs/LANG-TEST.md](docs/LANG-TEST.md). `msc test <file>` runs that file's `test` blocks plus those of its transitive imports; there are no `--filter` or `--jobs` flags. Corpus runners test `./msc` when it exists, otherwise the installed `msc`; `MSC=<path>` overrides.
+`test` is a keyword and a test body asserts with `assert`; see [docs/LANG-TEST.md](docs/LANG-TEST.md). `msc test <file>` runs that file's `test` blocks plus those of its transitive imports; `--tests-in-dir` keeps only the modules under the entry's directory, and `--tests-shard=<i>/<n>` runs every n-th tested module. While you edit, run the one check that observes your change; the full suite and the corpus belong to the land gate ([src/test/CLAUDE.md](src/test/CLAUDE.md) §Running). Corpus runners test `./msc` when it exists, otherwise the installed `msc`; `MSC=<path>` overrides.
 
 A lifecycle guard is proven red on a binary that has the bug before it is trusted green. A fixed bug gets a contract in the test module that owns its invariant, never a numbered bug file; [src/test/CLAUDE.md](src/test/CLAUDE.md) says where. Bugs and gaps you can hit today are listed in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), each measured on a named commit.
 
