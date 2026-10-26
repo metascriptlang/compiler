@@ -82,10 +82,16 @@ export function copyTypedValue(
 	}
 	const plan = plans[index];
 	if (plan.kind == RaiserCopyKind.Array && value.kind == RaiserValueKind.Array) {
-		const handle = heapAllocArrayOf(arrays, arrayBaseOf(arrays, arrays.arrays[handleIndex(value.intVal)]).elemClass);
+		const base = arrayBaseOf(arrays, arrays.arrays[handleIndex(value.intVal)]);
+		const handle = heapAllocArrayOf(arrays, base.elemClass);
+		arrays.arrays[handleIndex(handle)].elemUncounted = base.elemUncounted;
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
 			const original = heapArrayGet(arrays, value.intVal, i);
+			if (base.elemUncounted) {
+				heapArrayPush(arrays, handle, original);
+				continue;
+			}
 			const copied = copyTypedValue(arrays, objects, original, plans, plan.children[0]);
 			heapArrayPush(arrays, handle, copied);
 			holdCopied(arrays, objects, original, copied);

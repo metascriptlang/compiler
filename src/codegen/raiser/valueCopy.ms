@@ -7,7 +7,7 @@ import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCop
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isPlainFunctionPointer } from "../../checker/types";
+import { peelToRepr, unwrapRef, isUncountedElement, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
 import { raiserPlaced, RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
@@ -409,7 +409,7 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 
 // An array holds its elements in the register class of their type.
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType)));
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType), isCyclicType(elementType), raiserPlaced() && isUncountedElement(elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {
