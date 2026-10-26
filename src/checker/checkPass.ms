@@ -1133,6 +1133,8 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 		if (ctx.inferredReturn.kind != TypeKind.Inferred) {
 			if (ctx.inferredReturn.kind == TypeKind.Span) {
 				addError(ctx, "function '" + name + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", at.line, at.column);
+			} else {
+				refuseNestedView(ctx, "the return value of '" + name + "'", ctx.inferredReturn, at.line, at.column);
 			}
 			const storedReturn = closureStorageType(ctx.inferredReturn);
 			sym.symbolType.typeReturn = storedReturn;

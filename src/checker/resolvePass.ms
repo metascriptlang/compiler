@@ -2505,7 +2505,7 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
-function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
+export function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
 	const view = findViewType(fieldType);
 	if (view == null) return;
 	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
