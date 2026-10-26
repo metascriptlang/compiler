@@ -1,10 +1,6 @@
-// Array Spread Lower — [...a, x, ...b] → accumulator + push loops (C backend).
-//
-// The JS backend keeps native spread. C codegen had no lowering at all: the
-// SpreadExpr passthrough emitted the source array into an element slot. The
-// rewrite stays inside the literal's own type — elements are read one by one
-// and pushed into an accumulator of the literal's type — so it never crosses
-// the Vec<T> / T[] boundary (that coercion is a separate open hole).
+// [...a, x, ...b] becomes an accumulator filled by push loops (C backend; JS keeps
+// native spread). Elements are pushed into an accumulator of the literal's own type,
+// so the rewrite never crosses the Vec<T> / T[] boundary.
 //
 //   const b: Vec<int32> = [...a, 3];
 //     → const $sps0 = a; let $spa1 = []; let $spi2 = 0;
@@ -14,14 +10,13 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
-	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
+	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind, Symbol,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { int32Type, peelTransparentInstance, typeDisplayName } from "../../checker/types";
-import { Symbol } from "../../ast/node";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import {
-	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
+	makeVarDecl, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeWhile, makeBinary, makeNumber, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef, counterType, makeCounterStep,
 } from "../util";
 
@@ -81,14 +76,9 @@ function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 }
 
 function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation): Node {
-	const args: Node[] = [];
-	if (isRefArray(accT)) {
-		args.push(typedRef(accSym, accT, loc));
-	} else {
-		args.push(makeHiddenAddr(typedRef(accSym, accT, loc), loc));
-	}
-	args.push(arg);
-	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), args, loc), loc);
+	const acc = typedRef(accSym, accT, loc);
+	const target = isRefArray(accT) ? acc : makeHiddenAddr(acc, loc);
+	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), [target, arg], loc), loc);
 }
 
 export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): void {
@@ -137,9 +127,7 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, indexType, loc), loc);
 		const bareSrc = bareArrayType(srcT);
 		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
-		const bodyStmts: Node[] = [];
-		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc));
-		bodyStmts.push(makeCounterStep(iSym, indexType, loc));
+		const bodyStmts = [pushStmt(accSym, litT, elemAccess, loc), makeCounterStep(iSym, indexType, loc)];
 		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
 		lenMember.nodeType = int32Type();
 		const cond = makeBinary(typedRef(iSym, indexType, loc), "<", lenMember, loc);

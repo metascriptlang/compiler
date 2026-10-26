@@ -86,7 +86,7 @@ function materializeSlotList(items: Node[], pre: Node[], ctx: TransformContext):
 	let lastVoid = -1;
 	let voidCount = 0;
 	for (let i = 0; i < items.length; i += 1) {
-		if (isVoidTyped(items[i])) { lastVoid = i; voidCount = voidCount + 1; }
+		if (isVoidTyped(items[i])) { lastVoid = i; voidCount += 1; }
 	}
 	if (lastVoid < 0) return 0;
 	for (let i = 0; i <= lastVoid; i += 1) {
