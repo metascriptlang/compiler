@@ -1,21 +1,13 @@
-// AST Printer - generic debug dump driven by the shared per-kind field spec
-// (ast/fieldspec.ms). Every payload field prints as `name: value` lines;
-// completeness is inherited from the spec — new NodeData fields show up here
-// with zero printer changes. This replaced a curated 700-line per-kind
-// pretty-printer: the old format showed a hand-picked subset of fields; this
-// one shows everything (it's a completeness-first debug dumper — the fmt
-// printer is the pretty-printer and lives in compiler/fmt/printer).
+// Debug dump of every payload field of a node, driven by the shared field spec (ast/fieldspec.ms).
 
 import { Node, Type, SourceLocation } from "./node";
 import { FieldSink, nodeFields, nodeKindName } from "./fieldspec";
 
 function indent(level: int32): string {
-	let spaces = "";
-	for (let i = 0; i < level; i++) spaces = spaces + "  ";
-	return spaces;
+	return "  ".repeat(level);
 }
 
-// Module-level recursion level for the sink (debug CLI tool, not reentrant).
+// The field sink reads this level; the dump is a single-threaded CLI tool.
 let _level = 0;
 
 function pad(): string {
