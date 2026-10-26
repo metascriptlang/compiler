@@ -18,7 +18,7 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, stringHandleRc, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, stringHandleRc, heapSeqHandles, heapArrayIsView, heapArrayClass, raiserToFloat, raiserToBool, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -1635,26 +1635,29 @@ test "untag: an array holds scalar elements as raw words, references as handles 
 	let bools = 0;
 	let refs = 0;
 	let dyns = 0;
-	for (const a of vm.arrayHeap.arrays) {
-		if (a.rc == 0) continue;
-		if (a.viewOff >= 0) {
-			assert a.elemClass == RaiserRegClass.Dyn && a.items.length == 1 && a.words.length == 0;
-		} else if (a.elemClass == RaiserRegClass.Word && a.words.length == 4) {
+	const heap = vm.arrayHeap;
+	for (const h of heapSeqHandles(heap)) {
+		if (heapArrayIsView(heap, h)) continue;
+		const cls = heapArrayClass(heap, h);
+		const len = heapArrayLen(heap, h);
+		if (cls == RaiserRegClass.Word && len == 4) {
 			words += 1;
-			assert a.words[0] == 1 && a.words[3] == 4 && a.items.length == 0;
-		} else if (a.elemClass == RaiserRegClass.Float && a.words.length == 2) {
+			assert heapArrayGet(heap, h, 0).intVal == 1 && heapArrayGet(heap, h, 3).intVal == 4;
+		} else if (cls == RaiserRegClass.Float && len == 2) {
 			floats += 1;
-			assert a.words[0] == 4609434218613702656 && a.words[1] == 4615063718147915776;
-		} else if (a.elemClass == RaiserRegClass.Bool && a.words.length == 2) {
+			assert raiserToFloat(heapArrayGet(heap, h, 0)) == 1.5 && raiserToFloat(heapArrayGet(heap, h, 1)) == 3.5;
+		} else if (cls == RaiserRegClass.Bool && len == 2) {
 			bools += 1;
-			assert a.words[0] == 1 && a.words[1] == 0;
-		} else if (a.elemClass == RaiserRegClass.Ref && a.words.length == 1) {
+			assert raiserToBool(heap, heapArrayGet(heap, h, 0)) && !raiserToBool(heap, heapArrayGet(heap, h, 1));
+		} else if (cls == RaiserRegClass.Ref && len == 1) {
 			refs += 1;
-			assert heapStringText(vm.arrayHeap, handleValue(a.words[0])) == "x3" && a.items.length == 0;
-		} else if (a.elemClass == RaiserRegClass.Dyn && a.items.length == 3) {
-			dyns += 1;
-			assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil && a.words.length == 0;
+			assert heapStringText(heap, heapArrayGet(heap, h, 0)) == "x3";
 		}
+	}
+	for (const a of heap.arrays) {
+		if (a.rc == 0 || a.viewOff >= 0 || a.items.length != 3) continue;
+		dyns += 1;
+		assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil;
 	}
 	assert words == 1 && floats == 1 && bools == 1 && refs == 1 && dyns == 1, `${words} ${floats} ${bools} ${refs} ${dyns}`;
 }
@@ -2276,7 +2279,7 @@ test "engine: a slot of a word or ref register is read and written by the typed 
 		+ " const a = new N(); const b = new N(); b.v = 5; b.name = 'b'; let out = ''; for (let i = 0; i < 3; i++) { out = out + step(a, b) + ';'; } a.next = a; a.next = null; console.log(out);";
 	const step = compiledFunc(code, "step");
 	const text = disasmFunc(step);
-	assert countNamed(step, "LoadSlotW") == 3 && countNamed(step, "StoreSlotW") == 1 && countNamed(step, "LoadSlotR") >= 3 && countNamed(step, "StoreSlotR") == 3, text;
+	assert countNamed(step, "LoadSlotW") == 3 && countNamed(step, "StoreSlotW") == 1 && countNamed(step, "LoadSlotR") == 7 && countNamed(step, "StoreSlotR") == 3, text;
 	const vm = evalVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
@@ -2847,21 +2850,22 @@ test "a string a host function stores in the array it builds is held by that arr
 	}
 }
 
-test "orc: appending to a string held once keeps a constant number of heap items, not one per append" {
+test "orc: appending to a string held once leaves no string live" {
 	const vm = evalVM(selfAppend);
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
-	assert vm.arrayHeap.strings.texts.length <= 2, `${vm.arrayHeap.strings.texts.length}`;
+	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
 }
 
-test "arena: appending to a string held once keeps a constant number of heap items, not one per append" {
+test "arena: appending to a string held once leaves no string live" {
 	const vm = evalVM(selfAppend);
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
-	assert vm.arrayHeap.strings.texts.length <= 2, `${vm.arrayHeap.strings.texts.length}`;
+	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
 }
 
 // --- A self-append extends the register's own string in place ---
+
 
 const selfAppend = "function grow(): number { let s = \"\"; for (let i = 0; i < 20000; i++) { s = s + \"ab\"; } return s.length; }"
 	+ " console.log(grow() == 40000 ? \"ok\" : \"bad\");";
@@ -2961,6 +2965,8 @@ test "register classes: a local takes the class of its declared type, not of its
 	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
 		+ " console.log(`${l()}`);";
 	const f = compiledFunc(code, "l");
+	const table = classTable(f);
+	assert table == "RRRDFRRDFWFF", table;
 	const text = disasmFunc(f);
 	assert text.includes("LoadConst F0 K3  ; 1"), text;
 	assert countNamed(f, "Box") == 3, text;
