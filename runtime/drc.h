@@ -529,7 +529,9 @@ typedef struct {
 static inline void msOrcTraceRef(void* slotAddr, void* env) {
 	void* child = *(void**)slotAddr;
 	if (child == NULL) return;
-	msCell cell = { slotAddr, msHeader(child)->type };
+	const msTypeInfo* type = msHeader(child)->type;
+	if (type != NULL && (type->flags & MS_TYPE_FLAG_ARRAY_CELL) && *(const int64_t*)child == 0) return;
+	msCell cell = { slotAddr, type };
 	msCellSeqPush(&((msGcEnv*)env)->traceStack, cell);
 }
 
