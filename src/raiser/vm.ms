@@ -3929,9 +3929,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 		RaiserHeapKind.Seq => {
 			const c = seqCellOf(handle);
 			const base = seqBase(c);
-			if (base != 0) {
-				vmReleaseChild(vm, base, false);
-			} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
+			if (base == 0 && !seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 				const cyclic = seqCyclic(c);
 				for (let i = 0; i < seqLen(c); i += 1) {
 					const child = seqLoad(c, i);
