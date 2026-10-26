@@ -40,7 +40,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
-	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual,
+	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
@@ -972,7 +972,14 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
 	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
-	const handle = heapAllocArray(heap);
+	const placed = heap.allocRc > 0 && args[0].kind == RaiserValueKind.String;
+	let handle = placed ? stringBytesHandle(heap, args[0]) : 0;
+	if (handle == 0) {
+		handle = heapAllocArray(heap);
+		if (placed) setStringBytesHandle(heap, args[0], handle);
+	} else {
+		heap.arrays[handleIndex(handle)].items.length = 0;
+	}
 	let i = 0;
 	while (i < bytes.length) {
 		heapArrayPush(heap, handle, boxInt(bytes[i]));
