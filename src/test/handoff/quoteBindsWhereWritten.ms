@@ -202,10 +202,3 @@ export macro m(x: Node): Node {
 	]);
 	assert bad == "", bad;
 }
-`;
-	const bad = failures([
-		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf(callerNamesakes, "m(0)")], "quote-local class beside a caller namesake"),
-		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf("", "m(0)")], "quote-local class with no caller namesake"),
-	]);
-	assert bad == "", bad;
-}
