@@ -1,0 +1,32 @@
+// std/core/date — prelude (Raiser tier). Same shape as index.cms; the wall
+// clock is the one host bridge, because the clock is host state.
+
+import { Math, abs, trunc } from "../math";
+import { Number } from "../number";
+
+extern function msTimeNow(): number from "msTimeNow";
+
+function timeClip(t: number): number {
+	if (Math.abs(t) > 8.64e15) return Number.NaN;
+	return Math.trunc(t) + 0.0;
+}
+
+export class Date {
+	private ms: number;
+
+	constructor(ms: number = Date.now()) {
+		this.ms = timeClip(ms);
+	}
+
+	static now(): number {
+		return timeClip(msTimeNow());
+	}
+
+	getTime(): number {
+		return this.ms;
+	}
+
+	valueOf(): number {
+		return this.ms;
+	}
+}
