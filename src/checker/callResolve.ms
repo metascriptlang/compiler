@@ -23,6 +23,7 @@ import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isNodeWireMetaField } from "../compiler/meta/wire";
+import { isMetaNodeSym } from "../compiler/meta/nodeSym";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
@@ -5529,7 +5530,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// the member as Node so flat reads on it resolve via the NodeData
 	// unique-field-name rule below — same contract as reads on the node itself.
 	if (isEngineCheckMode() && d.property == "nodeType"
-			&& resolvedObjType.typeName == "Node" && !isUnresolvedType(propType)) {
+			&& isMetaNodeSym(resolvedObjType.sym) && !isUnresolvedType(propType)) {
 		// objType, not resolvedObjType: a Node-typed VALUE is Ref<Node> everywhere
 		// else (isPointerInC peels it above only to resolve the field). Handing back
 		// the peeled Struct makes `detectUnionDisc(tt)` fail against its Ref<Node>
@@ -6203,7 +6204,7 @@ function engineNodeDataField(recvType: Type, name: string): EngineNodeDataField 
 // field name" DU access rule).
 export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boolean {
 	if (!isEngineCheckMode()) return false;
-	if (recvType == null || recvType.typeName != "Node") return false;
+	if (recvType == null || !isMetaNodeSym(recvType.sym)) return false;
 	if (flattenedLocationFieldType(recvType, key) != null) return true;
 	if (isNodeWireMetaField(key)) return true;
 	return engineNodeDataField(recvType, key).fieldType != null;
@@ -6211,7 +6212,7 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 
 export function engineNodeVirtualKeyType(recvType: Type | null, key: string): Type | null {
 	if (!isEngineCheckMode()) return null;
-	if (recvType == null || recvType.typeName != "Node") return null;
+	if (recvType == null || !isMetaNodeSym(recvType.sym)) return null;
 	const locField = flattenedLocationFieldType(recvType, key);
 	if (locField != null) return locField;
 	const df = engineNodeDataField(recvType, key);
@@ -6242,7 +6243,7 @@ export function engineIsCompileErrorSentinel(node: Node | null): boolean {
 
 function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
 	if (!isEngineCheckMode()) return null;
-	if (recvType.typeName != "Node") return null;
+	if (!isMetaNodeSym(recvType.sym)) return null;
 	const locField = flattenedLocationFieldType(recvType, prop);
 	if (locField != null) return locField;
 	const dataField = engineNodeDataField(recvType, prop);
