@@ -3907,12 +3907,7 @@ resetLiftedOps();
 		filePath,
 		opts.showTime,
 	);
-	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
-	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
-	writeCSource("_test_dispatch", dispFp, dispatcher);
-	const dispFile = stableCFileFp("_test_dispatch", dispFp);
-	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
+	pushDispatcherJob(cJobs, oSlots, "_test_dispatch", dispatcher, allFlags, opts);
 
 	flowStop("phase.C", fC);
 	const fCc = flowStart();
@@ -3923,6 +3918,7 @@ resetLiftedOps();
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
+			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
 			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printError(`compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
