@@ -306,6 +306,7 @@ static inline int ms_test_run(MsTestModule* modules, int argc, char** argv, int 
                 fputc('\t', stdout);
                 ms_test_hex(e->name);
                 fputc('\n', stdout);
+                fflush(stdout);
             }
         }
 

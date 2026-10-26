@@ -1123,8 +1123,9 @@ function runTestTiming(): void {
 	put(
 		`${dir}/timing.ms`,
 		"import { argv } from \"std/process\";\n" +
-		"test \"a\\tline\\n\\u00e9\" { assert argv.length == 1; }\n" +
-		"test \"\" { assert true; }\n" +
+		"import { writeStderr } from \"std/io\";\n" +
+		"test \"a\\tline\\n\\u00e9" + "x".repeat(8192) + "\" { assert argv.length == 1; }\n" +
+		"test \"\" { writeStderr(\"ct 42\\n\"); assert true; }\n" +
 		"test \"failure stays named\" { assert false; }\n",
 	);
 	const plain = command(
@@ -1136,8 +1137,11 @@ function runTestTiming(): void {
 	const timed = command(
 		dir,
 		"timed",
-		compiler,
-		["test", "--tests-in-dir", "--time", "timing.ms"],
+		"bash",
+		[
+			"-c", "exec \"$@\" 2>&1", "test-timing", compiler,
+			"test", "--tests-in-dir", "--time", "timing.ms",
+		],
 	);
 	recordTrue(
 		"plain tests keep results without timing records",
@@ -1164,11 +1168,11 @@ function runTestTiming(): void {
 		}
 		valid = valid && parseFloat(cols[1]) >= 0 && cols[2] == `${i}` &&
 			cols[3].endsWith("74696d696e672e6d73") && !rows[i].includes("timing.ms");
-		if (cols[2] == "0") escaped = cols[4] == "61096c696e650ac3a9";
+		if (cols[2] == "0") escaped = cols[4] == "61096c696e650ac3a9" + "78".repeat(8192);
 		if (cols[2] == "1") empty = cols[4] == "";
 	}
 	recordTrue(
-		"timing records preserve escaped and empty identities without raw paths",
+		"long timing records survive later stderr with escaped and empty identities",
 		valid && escaped && empty,
 	);
 }
