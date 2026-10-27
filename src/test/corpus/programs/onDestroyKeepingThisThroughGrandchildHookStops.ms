@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: Error: onDestroy kept a reference to the Root it destroys
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
 // @skip-js: onDestroy does not run on JS
 // note: the grandchild's onDestroy keeps the root two links up in a global while the root's fields are being released, so the program stops naming the class. Sibling: onDestroyKeepingThisThroughChildHookStops
 
