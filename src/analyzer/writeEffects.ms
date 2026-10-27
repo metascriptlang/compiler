@@ -1039,9 +1039,10 @@ function settled(w: WriteEffects, s: WriteSummary): WriteSummary {
 	return s;
 }
 
-function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteSummary {
+function callWriteParts(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteSummary[] {
 	const s = newSummary(SummaryKind.Routine, null, []);
-	if (call.kind == NodeKind.CallExpr && isLifecycleOp(w, call)) return s;
+	const parts = [s];
+	if (call.kind == NodeKind.CallExpr && isLifecycleOp(w, call)) return parts;
 	if (call.kind == NodeKind.CallExpr) addressWrites(w, s, call, null, false);
 	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(w, call) : calleesOf(w, call, s, null, null, defs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
@@ -1049,9 +1050,16 @@ function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteS
 	}
 	for (const c of callees) {
 		if (reloadsApart(w, s, c)) markUnknown(s);
-		else absorb(w, s, { call: null, callee: settled(w, c) });
+		else parts.push(settled(w, c));
 	}
-	return s;
+	return parts;
+}
+
+function partsMayWrite(w: WriteEffects, parts: WriteSummary[], slots: string[]): boolean {
+	for (const p of parts) {
+		if (mayWriteAny(w, p, slots)) return true;
+	}
+	return false;
 }
 
 const SUBMITS_JOINED_BEFORE_FRAME_EXIT = ["msSpawnSlotSubmit", "msSpawnTaskSubmit", "msSpawnHeldSubmit", "msSpawnIntoHeldSubmit"];
@@ -1237,7 +1245,7 @@ export function stepSlot(w: WriteEffects, n: Node): string | null {
 }
 
 export function mayWrite(w: WriteEffects, n: Node, slots: string[], defs: LocalDefs | null): boolean {
-	if (n.kind != NodeKind.BinaryExpr) return mayWriteAny(w, callWrites(w, n, defs), slots);
+	if (n.kind != NodeKind.BinaryExpr) return partsMayWrite(w, callWriteParts(w, n, defs), slots);
 	if (!isAssign((n.data as BinaryExprData).operator)) return false;
 	const writes = newSummary(SummaryKind.Routine, null, []);
 	const target = (n.data as BinaryExprData).left;
@@ -1256,10 +1264,11 @@ export function callsPlainRoutine(call: Node): boolean {
 }
 
 export function reachesModuleState(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
-	const writes = callWrites(w, call, defs);
-	if (writes.unknown) return true;
-	for (const slot of writes.slots) {
-		if (slot.startsWith("G:")) return true;
+	for (const writes of callWriteParts(w, call, defs)) {
+		if (writes.unknown) return true;
+		for (const slot of writes.slots) {
+			if (slot.startsWith("G:")) return true;
+		}
 	}
 	return false;
 }
@@ -1327,7 +1336,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		if (borrowed) any = true;
 	}
 	if (!any) return flags;
-	const writes = callWrites(w, call, defs);
+	const writes = callWriteParts(w, call, defs);
 	const lends = runsCallbacks(w, call);
 	for (let i = 0; i < args.length; i += 1) {
 		if (!flags[i] || cstringSource(args[i]) != null) continue;
@@ -1336,7 +1345,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
 		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
-		if (!keep && slots[i].length > 0) keep = mayWriteAny(w, writes, reads);
+		if (!keep && slots[i].length > 0) keep = partsMayWrite(w, writes, reads);
 		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
 		flags[i] = keep;
 	}
