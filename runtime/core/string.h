@@ -236,7 +236,7 @@ bool msStringEquals(msString a, msString b);
 
 static inline bool msEqualMem(const uint8_t* a, int64_t aLen, const uint8_t* b, int64_t bLen) {
 	(void)bLen;
-	return memcmp(a, b, (size_t)aLen) == 0;
+	return aLen == 0 || memcmp(a, b, (size_t)aLen) == 0;
 }
 
 /* Ordering in UTF-16 code units (< 0, 0, > 0) */
@@ -277,13 +277,14 @@ int64_t msStringByteIndexOf(msString s, msString sub, int64_t start);
 
 static inline int64_t msMemChr(const uint8_t* hay, int64_t hayLen, int64_t from, int64_t end, uint8_t byte) {
 	(void)hayLen;
+	if (end <= from) return -1;
 	const uint8_t* hit = (const uint8_t*)memchr(hay + from, byte, (size_t)(end - from));
 	return hit ? (int64_t)(hit - hay) : -1;
 }
 
 static inline bool msMemEqAt(const uint8_t* hay, int64_t hayLen, int64_t at, const uint8_t* needle, int64_t needleLen) {
 	(void)hayLen;
-	return memcmp(hay + at, needle, (size_t)needleLen) == 0;
+	return needleLen == 0 || memcmp(hay + at, needle, (size_t)needleLen) == 0;
 }
 
 /* A string of `len` bytes whose content the caller fills before use (no zeroing). */
