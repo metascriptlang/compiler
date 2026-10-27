@@ -521,6 +521,26 @@ test "instantiating a generic mints in the instantiating module and leaves the g
 	assert backward == "instantiated " + counters, `${backward} vs ${idle}`;
 }
 
+function lazyCtorModule(firstAsker: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Plain { v: number = 1; }" });
+	entries.push({ entryPath: "/src/c.ms", entrySource: "import { Plain } from \"./b\";\nexport const pc = new Plain().v;" });
+	entries.push({ entryPath: "/src/d.ms", entrySource: "import { Plain } from \"./b\";\nexport const pd = new Plain().v;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: firstAsker == "c" ? "import { pc } from \"./c\";\nimport { pd } from \"./d\";\nconst x = pc + pd;" : "import { pd } from \"./d\";\nimport { pc } from \"./c\";\nconst x = pc + pd;" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const owner = lookupModuleCtx("/src/b.ms");
+	const plain = scopeSymbolOf("/src/b.ms", "Plain");
+	const routine = ctorRoutineOf(plain);
+	if (owner == null || routine == null) return "no constructor routine";
+	return `${routine.modulePath} ${routine.disamb} ${routine.itemModule == owner.itemModule ? "owner" : "importer"}`;
+}
+
+test "an implicit constructor routine is minted by its class's module, whichever importer asks first" {
+	assert lazyCtorModule("c") == "/src/b.ms 0 owner", lazyCtorModule("c");
+	assert lazyCtorModule("d") == "/src/b.ms 0 owner", lazyCtorModule("d");
+}
+
 function fooModuleIdWith(firstModule: string): int32 {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): number { return n; }" });

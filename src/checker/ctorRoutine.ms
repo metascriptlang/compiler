@@ -2,6 +2,7 @@ import { Node, NodeKind, ClassDeclData, ActorDeclData, DecoratedDeclData, Symbol
 import { CheckerContext, newSym } from "./context";
 import { SymbolFlag, classDeclNodeOf, hasFlag, initFnName } from "./symbol";
 import { createFunction, voidType } from "./types";
+import { pickBodyCtx } from "./instantiate";
 
 export interface CtorRow {
 	owner: Symbol;
@@ -76,7 +77,7 @@ export function ctorRoutineFor(ctx: CheckerContext, owner: Symbol): Symbol | nul
 	if (known != null) return known;
 	if (owner.symbolKind != SymbolKind.Class && owner.symbolKind != SymbolKind.Actor) return null;
 	if (hasFlag(owner, SymbolFlag.HasConstructor)) throw new Error(`internal: class '${owner.name}' has a written constructor but no routine symbol`);
-	return mintCtorRoutine(ctx, owner, owner.name, owner.symbolType, [], [], null, []);
+	return mintCtorRoutine(pickBodyCtx(owner.modulePath, ctx, owner), owner, owner.name, owner.symbolType, [], [], null, []);
 }
 
 export function ctorFormalTypes(routine: Symbol | null): Type[] | null {
