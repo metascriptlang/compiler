@@ -2758,3 +2758,13 @@ test "the selected developer directory keys the compiler identity on macOS only"
 		assert first == "" && second == "";
 	}
 }
+
+test "a source or dependency that cannot be read leaves the header query record untrusted" {
+	const dir = `out/test/unreadableQueries${performance.now()}`;
+	ensureDir(`${dir}/dep.h`);
+	writeFile(`${dir}/entry.c`, "int a;\n");
+	const search: HeaderSearch = { dirs: [], frameworks: [], complete: true };
+	assert queryRecord([`${dir}/entry.c`], [], search, []).bounded;
+	assert !queryRecord([`${dir}/gone.c`], [], search, []).bounded;
+	assert !queryRecord([`${dir}/entry.c`], [`${dir}/dep.h`], search, []).bounded;
+}
