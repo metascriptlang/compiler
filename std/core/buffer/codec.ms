@@ -30,7 +30,15 @@ export function base64Capacity(text: Readonly<Span<uint8>>): int64 {
 export function writeHex(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64): int64 {
 	const pairs = hexCapacity(text);
 	const count = limit < pairs ? limit : pairs;
+	const chunk: int64 = 64;
 	let k: int64 = 0;
+	while (k + chunk <= count) {
+		let bad: int32 = 0;
+		for (let j = k; j < k + chunk; j++) bad |= hexDigitValue(text[j * 2]) | hexDigitValue(text[j * 2 + 1]);
+		if (bad < 0) break;
+		for (let j = k; j < k + chunk; j++) bytes[at + j] = ((hexDigitValue(text[j * 2]) << 4) | hexDigitValue(text[j * 2 + 1])) as uint8;
+		k += chunk;
+	}
 	while (k < count) {
 		const hi = hexDigitValue(text[k * 2]);
 		const lo = hexDigitValue(text[k * 2 + 1]);
@@ -46,6 +54,18 @@ export function writeBase64(text: Readonly<Span<uint8>>, bytes: EncodingBytes, a
 	const n = text.length as int64;
 	let i: int64 = 0;
 	let k: int64 = 0;
+	while (i + 4 <= n && k + 3 <= limit) {
+		const a = base64Value(text[i]);
+		const b = base64Value(text[i + 1]);
+		const c = base64Value(text[i + 2]);
+		const d = base64Value(text[i + 3]);
+		if ((a | b | c | d) < 0) break;
+		bytes[at + k] = ((a << 2) | (b >> 4)) as uint8;
+		bytes[at + k + 1] = (((b & 0x0F) << 4) | (c >> 2)) as uint8;
+		bytes[at + k + 2] = (((c & 0x03) << 6) | d) as uint8;
+		i += 4;
+		k += 3;
+	}
 	let phase: int32 = 0;
 	let hi: int32 = 0;
 	while (i < n && k < limit) {

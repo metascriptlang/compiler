@@ -18,6 +18,7 @@ export function encodeHex(this data: Readonly<Span<uint8>>): string {
 	when (c) { return result; } else { return result.asString(); }
 }
 
+@inline
 export function hexDigitValue(byte: uint8): int32 {
 	const digit = (byte as int32) - "0".code;
 	if ((digit as uint32) < 10) return digit;
