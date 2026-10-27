@@ -135,14 +135,14 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		if (slot.innerType != null) {
 			if (thunk.kind == NodeKind.FunctionExpr) {
 				const fd = thunk.data as FunctionExprData;
-				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType); }
+				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType, ctx.raiserBackend); }
 			} else if (thunk.kind == NodeKind.ArrowFunction) {
 				const ad = thunk.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
-						boxReturns(ad.arrowBody, slot.innerType);
+						boxReturns(ad.arrowBody, slot.innerType, ctx.raiserBackend);
 					} else {
-						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ad.arrowBody.location);
+						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ctx.raiserBackend, ad.arrowBody.location);
 					}
 				}
 			}

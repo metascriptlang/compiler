@@ -79,8 +79,8 @@ import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, makeVal
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
 // Promise<T> so DRC's cross-pass contract holds; codegen extracts T via awaitedType.
-export function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
-	if (inlineInFuture(innerType)) {
+export function makeRetFutAlloc(innerType: Type | null, raiser: boolean, loc: SourceLocation): Node {
+	if (inlineInFuture(innerType, raiser)) {
 		const inlineCall = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		inlineCall.nodeType = promiseTypeFor(innerType);
 		return inlineCall;
@@ -109,7 +109,7 @@ function makeValueDropFn(t: Type, ctx: TransformContext, loc: SourceLocation): N
 
 // msFutureSetValueDrop($retFut, drop): the async function's future owns its value.
 function makeOwnValueStmt(retFutSym: Symbol, retFutType: Type, fnReturnInner: Type | null, ctx: TransformContext, loc: SourceLocation): Node | null {
-	if (!ownedInFuture(fnReturnInner)) return null;
+	if (!ownedInFuture(fnReturnInner, ctx.raiserBackend)) return null;
 	const call = makeCall(runtimeRef("msFutureSetValueDrop", loc),
 		[makeTypedIdentResolved(retFutSym, retFutType, loc), makeValueDropFn(fnReturnInner!, ctx, loc)], loc);
 	return makeExprStmt(call, loc);
@@ -166,7 +166,7 @@ function completeWithValue(valueExpr: Node, promiseType: Type, fnReturnInner: Ty
 	// Boxed types: msSinkBoxStruct is a multi-statement codegen expansion (can't
 	// nest in another call), so box via a separate VarDecl then complete with the
 	// void* pointer. Codegen reads sizeof(T) from the box arg's nodeType.
-	if (boxedInFuture(fnReturnInner)) {
+	if (boxedInFuture(fnReturnInner, ctx.raiserBackend)) {
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 		const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [valueExpr], loc);
 		boxCall.nodeType = voidPtrType;
@@ -188,8 +188,8 @@ function completeWithValue(valueExpr: Node, promiseType: Type, fnReturnInner: Ty
 	), loc)];
 }
 
-export function promisePendingAlloc(node: Node): Node {
-	return makeRetFutAlloc(awaitedType(node.nodeType), node.location);
+export function promisePendingAlloc(node: Node, raiser: boolean): Node {
+	return makeRetFutAlloc(awaitedType(node.nodeType), raiser, node.location);
 }
 
 function futurePending(futSym: Symbol, promiseType: Type, loc: SourceLocation): Node {
@@ -220,7 +220,7 @@ export function promiseSettleStmts(call: Node, ctx: TransformContext): Node {
 export function ownedCompletion(futSym: Symbol, held: Type | null, written: Node | null, promiseType: Type, loc: SourceLocation, ctx: TransformContext): Node[] {
 	const isVoid = held == null || held.kind == TypeKind.Void || written == null;
 	const out: Node[] = [];
-	if (!isVoid && ownedInFuture(held)) {
+	if (!isVoid && ownedInFuture(held, ctx.raiserBackend)) {
 		out.push(makeExprStmt(makeCall(runtimeRef("msFutureOwnResult", loc), [makeTypedIdentResolved(futSym, promiseType, loc), makeFutureDropClosure(held, ctx, loc)], loc), loc));
 	}
 	for (const s of makeFutureCompleteStmts(written, isVoid, promiseType, held, loc, futSym, ctx)) out.push(s);
@@ -424,7 +424,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				// Boxed types (struct/tuple/GI/array) — read the void* then copy out via
 				// msUnboxStruct. String never reaches here (typedFutureReadFn handles it).
 				const rawRead = makeCall(runtimeRef("msFutureRead", loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc);
-				if (boxedInFuture(varType)) {
+				if (boxedInFuture(varType, ctx.raiserBackend)) {
 					readExpr = makeCall(runtimeRef("msUnboxStruct", loc), [rawRead], loc);
 					readExpr.nodeType = varType;
 				} else {
@@ -433,10 +433,10 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				}
 			}
 			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
-			if (soleRead[prevIdx] || !ownedInFuture(varType)) {
+			if (soleRead[prevIdx] || !ownedInFuture(varType, ctx.raiserBackend)) {
 				stateStmts.push(takeStmt);
 			} else {
-				const copyRead = makeFutureCopyRead(makeTypedIdentResolved(prevYfSym, prevYfType, loc), varType!, loc);
+				const copyRead = makeFutureCopyRead(makeTypedIdentResolved(prevYfSym, prevYfType, loc), varType!, ctx.raiserBackend, loc);
 				const copyStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), copyRead, loc), loc);
 				const owns = makeOwnsValueCheck(makeTypedIdentResolved(prevYfSym, prevYfType, loc), loc);
 				stateStmts.push(makeIf(owns, makeBlock([copyStmt], loc), makeBlock([takeStmt], loc), loc));
@@ -649,7 +649,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// const $retFut = msFutureCreate[Inline]();
 	// Primitives use the generic 16-byte slot. Struct/tuple/generic-instance types
 	// larger than 16 bytes need typed-sized allocation via msFutureCreateInline.
-	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
+	const retFutInit = makeRetFutAlloc(fnReturnInner, ctx.raiserBackend, loc);
 	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl(retFutName, retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
@@ -755,7 +755,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tra
 	const promiseVoidType = createPromise(voidType());
 
 	// const $retFut = msFutureCreate[Inline]();  (see makeRetFutAlloc)
-	const retFutInit = makeRetFutAlloc(fnReturnInner, loc);
+	const retFutInit = makeRetFutAlloc(fnReturnInner, ctx.raiserBackend, loc);
 	if (!isStructLikeType(fnReturnInner)) retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl(retFutName, retFutInit, DeclKind.Const, loc);
 	retFutDecl.nodeType = retFutType;
