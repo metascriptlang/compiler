@@ -4747,7 +4747,7 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 // --- Object opcode handlers ---
 
 function vmHandleNewObject(vm: RaiserVM, ia: int32, ib: int32, func: RaiserFunction): void {
-	if (ib > 0 && func.classTypes[ib - 1].fields.length > 0) {
+	if (ib > 0) {
 		const cell = heapNewObjectCell(vm.arrayHeap.mem, func.classTypes[ib - 1], OWNED_BY_RECEIVER_RC as int64);
 		setRegRef(vm, ia, RaiserValueKind.Object, objectCellHandle(cell));
 		return;

@@ -1529,12 +1529,12 @@ test "arr[i] *= value" {
 }
 
 test "new with constructor sets fields" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.x;");
-	assert ctx.lastResult.intVal == 3, ctx.lastError;
+	const ctx = evalRaiser("class Point { x: int32; y: int32; constructor(x: int32, y: int32) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.x;");
+	assert ctx.lastResult.intVal == 3;
 }
 
 test "new carries every positional argument" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.y;");
+	const ctx = evalRaiser("class Point { x: int32; y: int32; constructor(x: int32, y: int32) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.y;");
 	assert ctx.lastResult.intVal == 4;
 }
 
@@ -1549,12 +1549,12 @@ test "new binds this for later method calls" {
 }
 
 test "new nested inside a call argument" {
-	const ctx = evalRaiser("class Box { constructor(v) { this.v = v; } } function take(b) { return b.v; } const r = take(new Box(7)); return r;");
+	const ctx = evalRaiser("class Box { v: int32; constructor(v: int32) { this.v = v; } } function take(b: Box): int32 { return b.v; } const r = take(new Box(7)); return r;");
 	assert ctx.lastResult.intVal == 7;
 }
 
 test "two news are independent objects" {
-	const ctx = evalRaiser("class Box { constructor(v) { this.v = v; } } const a = new Box(1); const b = new Box(2); return a.v + b.v;");
+	const ctx = evalRaiser("class Box { v: int32; constructor(v: int32) { this.v = v; } } const a = new Box(1); const b = new Box(2); return a.v + b.v;");
 	assert ctx.lastResult.intVal == 3;
 }
 
