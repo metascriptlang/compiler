@@ -4093,9 +4093,11 @@ interface ContextPick {
 
 function trialScore(candidate: Type, args: Node[], argTypes: Type[], skipMask: boolean[]): CandidateScore {
 	enterSpeculation();
-	const score = scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
-	leaveSpeculation();
-	return score;
+	try {
+		return scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
+	} finally {
+		leaveSpeculation();
+	}
 }
 
 // The reference's `chooseOverload`: a context-sensitive argument is checked against each
