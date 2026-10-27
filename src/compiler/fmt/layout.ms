@@ -71,6 +71,14 @@ function flushSuffixes(lineSuffixes: Doc[]): string {
 	return out;
 }
 
+function trimTrailingBlanks(text: string, floor: int32): string {
+	let end = text.length;
+	while (end > floor && (text[end - 1] == " " || text[end - 1] == "\t")) {
+		end -= 1;
+	}
+	return end == text.length ? text : text.slice(0, end);
+}
+
 function indentString(levels: int32, options: FormatOptions): string {
 	return options.useTabs ? "\t".repeat(levels) : " ".repeat(levels * options.tabWidth);
 }
@@ -169,6 +177,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 	let column = baseWidth;
 	const lineSuffixes: Doc[] = [];
 	const stack: Cmd[] = [{ indent: 0, mode: Mode.Break, doc }];
+	let literalEnd = 0;
 
 	while (stack.length > 0) {
 		const cmd = stack[stack.length - 1];
@@ -181,6 +190,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 				const text = textOf(d);
 				result = result + text;
 				column = column + text.length;
+				if (text.indexOf("\n") >= 0) literalEnd = result.length;
 			},
 			DocKind.Group => {
 				let childMode = Mode.Break;
@@ -196,7 +206,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Line | DocKind.HardLine => {
 				if (d.kind == DocKind.HardLine || cmd.mode == Mode.Break) {
 					if (lineSuffixes.length > 0) result = result + flushSuffixes(lineSuffixes);
-					result = result + "\n" + baseIndent + indentString(cmd.indent, options);
+					result = trimTrailingBlanks(result, literalEnd) + "\n" + baseIndent + indentString(cmd.indent, options);
 					column = baseWidth + cmd.indent * options.tabWidth;
 				} else if (!isSoft(d)) {
 					result = result + " ";
@@ -260,6 +270,19 @@ test "layout: ifBreak follows the nearest group and tabs indent by level" {
 	const tabs: FormatOptions = { ...narrow, useTabs: true };
 	assert formatDoc(docGroupBreak(body()), tabs) == "\n\tabcdefghijk,\n";
 	assert formatDoc(docGroup([docText("x"), docBreakParent()]), narrow) == "x\n";
+}
+
+test "layout: pending blanks are dropped before a line break" {
+	const doc = docGroupBreak([docText("a +"), docText(" "), docLine(), docText("b")]);
+	assert formatDoc(doc, narrow) == "a +\nb\n";
+}
+
+test "layout: an indented blank line carries no tab, and a multi-line text keeps its own blanks" {
+	const tabs: FormatOptions = { ...narrow, useTabs: true };
+	const blank = docGroupBreak([docText("a"), docIndent([docHardLine(), docHardLine(), docText("b")])]);
+	assert formatDoc(blank, tabs) == "a\n\n\tb\n";
+	const literal = docGroupBreak([docText("x\n  "), docText("  "), docHardLine(), docText("b")]);
+	assert formatDoc(literal, narrow) == "x\n  \nb\n";
 }
 
 test "layout: formatDocAt indents continuation lines by the base prefix" {
