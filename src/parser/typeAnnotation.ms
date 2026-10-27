@@ -507,6 +507,9 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 	if (isNegativeNumberAhead(state)) advance(state);
@@ -591,6 +594,9 @@ function skipTypeAtom(state: ParserState): void {
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		// Optional marker: [T, U]?
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 			advance(state);
@@ -803,6 +809,13 @@ test "typeExpr parenthesized atoms retain array suffixes" {
 	assert typeExprKind("(int32)[]") == NodeKind.TypeArray;
 	assert typeExprKind("(() => void)[]") == NodeKind.TypeArray;
 	assert typeExprKind("((() => int32)[])[]") == NodeKind.TypeArray;
+}
+
+test "tuple array annotations skip to the initializer" {
+	assert skipsType("[string, int32][]");
+	assert skipsType("[A, [B, C]][]");
+	assert skipsType("[A, B][][]");
+	assert skipsType("Array<[A, B][]>");
 }
 
 test "generic call lookahead consumes tuple array type arguments" {
