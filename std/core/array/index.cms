@@ -20,7 +20,7 @@ export class Array<T> {
 	length: number;
 }
 
-export { toString } from "./shared";
+export { toString, msFilledArray } from "./shared";
 import { isArray as isArrayType } from "std/typetraits";
 import { spliceStart, spliceCount } from "./shared";
 import { utf8String } from "../string/bytes";

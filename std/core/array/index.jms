@@ -1,4 +1,4 @@
-export { toString } from "./shared";
+export { toString, msFilledArray } from "./shared";
 
 // MetaScript Array Prelude — JavaScript Backend.
 // Array methods bind to native JS dispatch as element-typed UFCS extensions on
