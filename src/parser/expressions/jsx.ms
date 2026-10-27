@@ -4,10 +4,10 @@
 // to avoid an import cycle with core.ms) for `{expr}` containers and attribute values.
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode,
+import { Node, NodeKind, Expression, SourceLocation, createNode, makeLoc,
 	JSXElementData, JSXFragmentData, JSXTextData,
 	JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, addError } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, addError, hasPrecedingLineBreak } from "../cursor";
 import { exprNode, exprKind, parseOk } from "./testUtil";
 
 type ExprResult = Result<Expression, string>;
@@ -15,16 +15,23 @@ type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
 
 // Tag/closing name flattened to a string ("Foo.Bar", "svg:rect") — macros split it at expansion
 // time, so member/namespace names need no dedicated NodeKind.
-function parseJsxName(state: ParserState): Result<string, string> {
+function parseJsxName(state: ParserState, segments: SourceLocation[]): Result<string, string> {
 	if (current(state).kind != TokenKind.Ident) {
 		return Result.err(`Expected JSX tag name at line ${current(state).line}`);
 	}
 	let name = current(state).value;
+	segments.push(makeLoc(current(state).line, current(state).column));
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
-		if (current(state).kind != TokenKind.Ident) return Result.err("Expected name after '.' in JSX tag");
+		// `<Ui.` then `const w` on the next line: the name was never typed, `const w` starts a statement.
+		const startsNextLine = hasPrecedingLineBreak(state) && peek(state, 1).kind == TokenKind.Ident && peek(state, 1).line == current(state).line;
+		if (current(state).kind != TokenKind.Ident || startsNextLine) {
+			addError(state, "Expected name after '.' in JSX tag");
+			return Result.ok(name + ".");
+		}
 		name = name + "." + current(state).value;
+		segments.push(makeLoc(current(state).line, current(state).column));
 		advance(state);
 	}
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
@@ -129,7 +136,7 @@ function parseJsxChildren(state: ParserState, parseExpr: ExprParser): Result<Nod
 function parseJsxClose(state: ParserState): Result<string, string> {
 	if (current(state).kind != TokenKind.JsxClose) return Result.err("Expected JSX closing tag");
 	advance(state);
-	const name = try parseJsxName(state);
+	const name = try parseJsxName(state, []);
 	if (current(state).kind != TokenKind.Gt) return Result.err("Expected '>' in JSX closing tag");
 	advance(state);
 	return Result.ok(name);
@@ -137,11 +144,13 @@ function parseJsxClose(state: ParserState): Result<string, string> {
 
 function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token): ExprResult {
 	const tagTok = current(state);
-	const tag = try parseJsxName(state);
+	const segments: SourceLocation[] = [];
+	const tag = try parseJsxName(state, segments);
 	const attrs = try parseJsxAttributes(state, parseExpr);
 	// Positioned tag-name node on `typeExpr` (the LSP side-channel) so the checker can bind an
 	// uppercase component tag to its function symbol — see recordJsxTagSym for go-to-def / rename.
 	const tagNode = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+	tagNode.paramLocations = segments;
 
 	if (current(state).kind != TokenKind.Gt) {
 		if (current(state).kind == TokenKind.Slash) advance(state);
@@ -199,6 +208,12 @@ test "jsx tag left open still parses as a self-closing element" {
 	const d = exprNode("<d").data as JSXElementData;
 	assert d.jsxTag == "d";
 	assert d.jsxSelfClosing;
+}
+
+test "jsx member tag left after its dot keeps the element" {
+	assert (exprNode("<Ui.").data as JSXElementData).jsxTag == "Ui.";
+	assert (exprNode("<Ui.\nconst w = 1;").data as JSXElementData).jsxTag == "Ui.";
+	assert (exprNode("<Ui.\nCard/>").data as JSXElementData).jsxTag == "Ui.Card";
 }
 
 test "jsx attribute left without a value keeps the element and its attributes" {

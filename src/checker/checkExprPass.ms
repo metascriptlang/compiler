@@ -484,22 +484,48 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 // tag is a component reference (binds to the function symbol); a lowercase tag is a platform
 // string (no binding). node.typeExpr is the positioned Identifier the parser stored for the tag.
 export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null {
-	if (node.typeExpr == null) return null;
+	const path = jsxTagPath(ctx, node);
+	const segments = (node.data as JSXElementData).jsxTag.split(".").length;
+	return path.length == segments ? path[path.length - 1] : null;
+}
+
+// The symbols a component tag names, one per resolved segment: TS reads `<Ui.Card>` as the value
+// `Ui.Card` and a simple tag as a value only when it is capitalised. A segment that does not
+// resolve ends the path quietly, because the consuming macro decides what an unbound tag means.
+export function jsxTagPath(ctx: CheckerContext, node: Node): Symbol[] {
+	const path: Symbol[] = [];
+	if (node.typeExpr == null) return path;
+	const segments = (node.data as JSXElementData).jsxTag.split(".");
 	const base = (node.typeExpr.data as IdentifierData).name;
-	if (base.byteLength == 0 || base.byteAt(0) < "A".code || base.byteAt(0) > "Z".code) return null;
-	return lookupSymbol(ctx.table, base);
+	const capitalised = base.byteLength > 0 && base.byteAt(0) >= "A".code && base.byteAt(0) <= "Z".code;
+	if (segments.length == 1 && !capitalised) return path;
+	let sym: Symbol | null = lookupSymbol(ctx.table, base);
+	let i = 1;
+	while (sym != null) {
+		path.push(sym);
+		if (i >= segments.length || sym.symbolKind != SymbolKind.Module || sym.modulePath == "") break;
+		const member = findExportedSymbol(ctx.exportRegistry, sym.modulePath, segments[i]);
+		sym = member != null ? member.sym : null;
+		i += 1;
+	}
+	return path;
 }
 
 function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 	if (node.typeExpr == null) return;
 	const tag = node.typeExpr;
 	const base = (tag.data as IdentifierData).name;
-	const intrinsics = ctx.jsxMacroArgDepth > 0 ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
+	const dotted = (node.data as JSXElementData).jsxTag.indexOf(".") >= 0;
+	const intrinsics = ctx.jsxMacroArgDepth > 0 && !dotted ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
 	if (intrinsics != null) ensureShaped(intrinsics, ctx);
+	const path = jsxTagPath(ctx, node);
+	for (let i = 0; i < path.length && tag.paramLocations != null && i < tag.paramLocations.length; i += 1) {
+		const at = tag.paramLocations[i];
+		sgRecordSym(ctx, at.line, at.column, at.column + path[i].name.byteLength, path[i], path[i].symbolType, path[i].symbolKind, path[i].name, "", false);
+	}
 	const sym = jsxComponentSym(ctx, node);
 	if (sym != null) {
 		tag.resolvedSym = sym;
-		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
 		const fn = sym.symbolType;
 		if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
 	} else if (intrinsics != null) {
