@@ -1,25 +1,17 @@
 /*
  * MetaScript Buffer Runtime
- * Binary data type — byte-oriented operations without UTF-8 interpretation.
  *
- * msBuffer = typedef msString (zero-cost, same 16-byte struct)
- * Redundant functions (get, length, slice, compare, equals, concat, copy)
- * are handled by msString* equivalents — only unique ops live here.
+ * Buffer is uint8[] on every target; std/core/buffer holds its methods. This header only
+ * gives them the payload's first byte, which is NULL for an array that never allocated.
  */
 
 #ifndef MS_BUFFER_H
 #define MS_BUFFER_H
 
-#include "runtime/core/string.h"
+#include "runtime/core/array.h"
 
-/* ===== Core Type ===== */
-
-typedef msString msBuffer;
-#define MS_EMPTY_BUFFER MS_EMPTY_STRING
-
-/* ===== Allocation ===== */
-
-msBuffer msBufferAlloc(int64_t size);
-msBuffer msBufferAllocUnsafe(int64_t size);
+static inline uint8_t* msBufferData(msUint8Array* buf) {
+	return msArrDataOr0(buf->p);
+}
 
 #endif

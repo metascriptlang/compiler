@@ -1,34 +1,25 @@
 @include("runtime/core/buffer.h");
-@compile("runtime/core/buffer.c");
 
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/crypto/encoding";
 import { newEncodingOutput, freshEncodingOutputBytes } from "std/crypto/encodingOutput";
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
+import { asciiWords, utf8String } from "../string/bytes";
 
-// Buffer = string. Same raw bytes, different semantics.
-// String methods interpret UTF-8/UTF-16. Buffer methods treat raw bytes.
-// Since Buffer IS string, all string methods (equals, byteAt, byteSlice,
-// byteLength, indexOf, etc.) work on Buffer directly — no duplication needed.
-// Buffer only adds: hex/base64 encoding, endian integer I/O, BMH search,
-// byte-level fill/set, swap, validation, and encoding-aware string operations.
-export type Buffer = string;
+export type Buffer = uint8[];
 
-// ===== C Bindings =====
-
-// Allocation (zero-filled / uninitialized)
-extern function bufferAlloc(size: number): Buffer from "msBufferAlloc";
-extern function bufferAllocUnsafe(size: number): Buffer from "msBufferAllocUnsafe";
+function bufferAlloc(size: number): Buffer {
+	return new Array<uint8>(size as int64);
+}
 
 export function alloc(this typeof Buffer, size: number): Buffer {
 	return bufferAlloc(size);
 }
 
 export function allocUnsafe(this typeof Buffer, size: number): Buffer {
-	return bufferAllocUnsafe(size);
+	return bufferAlloc(size);
 }
 
-extern function shrinkTo(ref value: string, length: int64): void from "msStringSetLength";
 extern function newBytes(length: int64): string from "msStringNewUninit";
 extern function copyTo(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
 extern function msStringMarkAscii(s: string): void;
@@ -40,9 +31,6 @@ when (!bare && !solana) {
 	extern function msBigIntToInt64(b: bigint): int64;
 }
 
-extern function msStringConcat(a: string, b: string): string;
-extern function msStringCompareBytes(a: string, b: string): number;
-extern function msStringNew(data: cstring, length: int64): string;
 
 @include("string.h");
 extern function cMemset(p: Ptr<uint8>, value: int32, size: uint64): Ptr<uint8> from "memset";
@@ -57,12 +45,27 @@ extern function cMemcmp(a: Ptr<uint8>, b: Ptr<uint8>, size: uint64): int32 from 
 
 // ===== Byte access =====
 
-function bytePointer(this buf: Buffer): Ptr<uint8> {
-	return (buf as cstring) as Ptr<uint8>;
+extern function bytePointer(this buf: Buffer): Ptr<uint8> from "msBufferData";
+
+function textPointer(this text: string): Readonly<Ptr<uint8>> {
+	return (text as cstring) as Readonly<Ptr<uint8>>;
 }
 
 function byteCount(this buf: Buffer): int64 {
-	return buf.asBytes().length as int64;
+	return buf.length as int64;
+}
+
+function byteCount(this text: string): int64 {
+	return text.asBytes().length as int64;
+}
+
+export function byteLength(this buf: Buffer): number {
+	return buf.length;
+}
+
+export function byteAt(this buf: Buffer, index: number): int32 {
+	const at = index as int64;
+	return at >= 0 && at < buf.byteCount() ? buf.bytePointer()[at] as int32 : -1;
 }
 
 function fits(this buf: Buffer, at: int64, width: int64): boolean {
@@ -171,7 +174,7 @@ function fillRepeated(
 	this buf: Buffer,
 	from: int64,
 	to: int64,
-	pattern: Ptr<uint8>,
+	pattern: Readonly<Ptr<uint8>>,
 	patternLength: int64,
 ): void {
 	const at = buf.bytePointer() + from;
@@ -232,8 +235,11 @@ function findBytes(
 
 // ===== Free Functions (constructors / static-like) =====
 
-function copyOf(this value: string): Buffer {
-	return msStringNew(value as cstring, value.byteCount());
+function copyOf(value: Readonly<Span<uint8>>): Buffer {
+	const length = value.length as int64;
+	const buf = bufferAlloc(length as number);
+	copyTo(buf.bytePointer(), 0, value, 0, length);
+	return buf;
 }
 
 function isHex(encoding: string): boolean {
@@ -247,23 +253,21 @@ function isBase64(encoding: string): boolean {
 function decodeText(value: string, base64: boolean): Buffer {
 	const text = value.asBytes();
 	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
-	let buf = bufferAllocUnsafe(capacity as number);
-	const bytes = buf.bytePointer();
-	const written = base64 ? writeBase64(text, bytes, 0, capacity) : writeHex(text, bytes, 0, capacity);
-	if (written < capacity) shrinkTo(buf, written);
+	const buf = bufferAlloc(capacity as number);
+	const written = base64 ? writeBase64(text, buf.bytePointer(), 0, capacity) : writeHex(text, buf.bytePointer(), 0, capacity);
+	if (written < capacity) buf.length = written as int32;
 	return buf;
 }
 
 @inline
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (value.byteCount() == 0) return "";
 	return decodeString(value, encoding);
 }
 
 function decodeString(value: string, encoding: string): Buffer {
 	if (isHex(encoding)) return decodeText(value, false);
 	if (isBase64(encoding)) return decodeText(value, true);
-	return value.copyOf();
+	return copyOf(value.asBytes());
 }
 
 export function fromArray(this typeof Buffer, arr: number[]): Buffer {
@@ -273,27 +277,26 @@ export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 }
 
 export function copy(this typeof Buffer, value: Buffer): Buffer {
-	return value.copyOf();
+	return copyOf(value);
 }
 
 export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
-	return msStringCompareBytes(a, b);
+	const left = a.byteCount();
+	const right = b.byteCount();
+	const shared = left < right ? left : right;
+	const order = shared == 0 ? 0 : cMemcmp(a.bytePointer(), b.bytePointer(), shared as uint64);
+	if (order != 0) return order < 0 ? -1 : 1;
+	return left == right ? 0 : left < right ? -1 : 1;
 }
 
 export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
-	return msStringConcat(a, b);
+	const result = bufferAlloc((a.byteCount() + b.byteCount()) as number);
+	a.copyBytes(result, 0, 0, a.byteCount());
+	b.copyBytes(result, a.byteCount(), 0, b.byteCount());
+	return result;
 }
 
 const HIGH_BITS: uint64 = 0x8080808080808080;
-
-// Keep the scans single-exit: clang 18/21 turn a `return false` inside a byte loop of a
-// boolean function into a per-byte select, measured ~1.35x slower than the C kernel.
-function asciiWords(bytes: Readonly<Ptr<uint8>>, wordCount: int64): int64 {
-	const words = bytes as Readonly<Ptr<uint64>>;
-	let word: int64 = 0;
-	while (word < wordCount && (words[word] & HIGH_BITS) == 0) word += 1;
-	return word;
-}
 
 // Through memcpy, which clang folds into one load at any alignment.
 function wordAt(bytes: Readonly<Ptr<uint8>>): uint64 {
@@ -306,9 +309,9 @@ function wordAt(bytes: Readonly<Ptr<uint8>>): uint64 {
 // tested before any size dispatch (1.6-2.1x on x86 behind it), under 8 bytes run the C byte loop,
 // longer input joins one result from the words and the overlapping last word.
 export function isAscii(this typeof Buffer, value: Buffer): boolean {
-	const length = value.asBytes().length as int64;
+	const length = value.byteCount();
 	if (length == 0) return true;
-	const bytes = value.asBytes() as Readonly<Ptr<uint8>>;
+	const bytes: Readonly<Ptr<uint8>> = value.bytePointer();
 	if (bytes[0] > 0x7F) return false;
 	if (length < 8) {
 		let at: int64 = 1;
@@ -334,9 +337,9 @@ function isContinuation(byte: uint8): boolean {
 }
 
 export function isUtf8(this typeof Buffer, value: Buffer): boolean {
-	const length = value.asBytes().length as int64;
+	const length = value.byteCount();
 	if (length <= 0) return true;
-	const bytes = value.asBytes() as Readonly<Ptr<uint8>>;
+	const bytes: Readonly<Ptr<uint8>> = value.bytePointer();
 	// The word count is selected, not the call branched around, so short input reaches the byte
 	// loop through one taken branch as in C. ASCII runs get their own loop: in one loop clang
 	// merged the 1-4 byte steps into an add fed by a register move per byte.
@@ -405,7 +408,7 @@ export function isBufferEncoding(this typeof Buffer, encoding: string): boolean 
 
 export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 	let totalLength = 0;
-	for (let i = 0; i < buffers.length; i++) totalLength += buffers[i].byteLength;
+	for (let i = 0; i < buffers.length; i++) totalLength += buffers[i].length;
 	const result = bufferAlloc(totalLength);
 	let offset: int64 = 0;
 	for (let i = 0; i < buffers.length; i++) {
@@ -428,11 +431,11 @@ export function set(this buf: Buffer, index: number, value: number): void {
 // --- Hex/Base64 conversion ---
 
 export function toHex(this buf: Buffer): string {
-	return encodeHex(buf.asBytes());
+	return encodeHex(buf);
 }
 
 export function toBase64(this buf: Buffer): string {
-	return encodeBase64(buf.asBytes());
+	return encodeBase64(buf);
 }
 
 @inline
@@ -442,7 +445,7 @@ export function toStringEncoded(
 	start: number,
 	end: number,
 ): string {
-	const data = buf.asBytes();
+	const data: Readonly<Span<uint8>> = buf;
 	const length = data.length as int64;
 	const first = start as int64;
 	const last = end as int64;
@@ -453,13 +456,13 @@ export function toStringEncoded(
 }
 
 function encodeRange(range: Readonly<Span<uint8>>, encoding: string): string {
-	if (encoding == "utf8" || encoding.equalsIgnoreCase("utf8") || encoding.equalsIgnoreCase("utf-8")) return utf8Of(range);
+	if (encoding == "utf8" || encoding.equalsIgnoreCase("utf8") || encoding.equalsIgnoreCase("utf-8")) return utf8String(range, false);
 	if (isHex(encoding)) return encodeHex(range);
 	if (encoding == "base64" || encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
 	if (encoding.equalsIgnoreCase("base64url")) return encodeBase64Url(range);
 	if (encoding.equalsIgnoreCase("ascii")) return asciiOf(range);
 	if (encoding == "latin1" || encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return latin1Of(range);
-	return utf8Of(range);
+	return utf8String(range, false);
 }
 
 function latin1Of(range: Readonly<Span<uint8>>): string {
@@ -467,7 +470,7 @@ function latin1Of(range: Readonly<Span<uint8>>): string {
 	let high: int64 = 0;
 	for (let i: int64 = 0; i < length; i++) high += range[i] >> 7;
 	const result = newBytes(length + high);
-	const bytes = result.bytePointer();
+	const bytes = freshEncodingOutputBytes(result);
 	let at: int64 = 0;
 	for (let i: int64 = 0; i < length; i++) {
 		const byte = range[i];
@@ -481,92 +484,6 @@ function latin1Of(range: Readonly<Span<uint8>>): string {
 		}
 	}
 	if (high == 0) msStringMarkAscii(result); else msStringMarkNonAscii(result);
-	return result;
-}
-
-// Length of the well-formed UTF-8 sequence at `i`, or minus the length of its longest valid prefix
-// (at least one byte), which decodes to one U+FFFD.
-function utf8StepAt(data: Readonly<Span<uint8>>, i: int64): int64 {
-	const lead = data[i];
-	if (lead < 0x80) return 1;
-	let need: int64 = 0;
-	let low: uint8 = 0x80;
-	let high: uint8 = 0xBF;
-	if (lead >= 0xC2 && lead <= 0xDF) {
-		need = 1;
-	} else if (lead >= 0xE0 && lead <= 0xEF) {
-		need = 2;
-		if (lead == 0xE0) low = 0xA0;
-		if (lead == 0xED) high = 0x9F;
-	} else if (lead >= 0xF0 && lead <= 0xF4) {
-		need = 3;
-		if (lead == 0xF0) low = 0x90;
-		if (lead == 0xF4) high = 0x8F;
-	} else {
-		return -1;
-	}
-	const length = data.length as int64;
-	for (let j = i + 1; j <= i + need; j++) {
-		if (j >= length || data[j] < low || data[j] > high) return i - j;
-		low = 0x80;
-		high = 0xBF;
-	}
-	return need + 1;
-}
-
-function utf8Of(range: Readonly<Span<uint8>>): string {
-	const length = range.length as int64;
-	let ascii = true;
-	let i: int64 = 0;
-	while (i < length) {
-		if (range[i] < 0x80) {
-			i += 1;
-			continue;
-		}
-		ascii = false;
-		const step = utf8StepAt(range, i);
-		if (step < 0) break;
-		i += step;
-	}
-	if (i == length) {
-		const whole = newBytes(length);
-		copyTo(whole.bytePointer(), 0, range, 0, length);
-		if (ascii) msStringMarkAscii(whole); else msStringMarkNonAscii(whole);
-		return whole;
-	}
-	return repairedUtf8(range, i);
-}
-
-// `range[0..valid)` is well-formed; every ill-formed sequence after it becomes one U+FFFD.
-function repairedUtf8(range: Readonly<Span<uint8>>, valid: int64): string {
-	const length = range.length as int64;
-	let size = valid;
-	let i = valid;
-	while (i < length) {
-		const step = utf8StepAt(range, i);
-		i += step > 0 ? step : -step;
-		size += step > 0 ? step : 3;
-	}
-	const result = newBytes(size);
-	const bytes = result.bytePointer();
-	copyTo(bytes, 0, range, 0, valid);
-	let at = valid;
-	i = valid;
-	while (i < length) {
-		const step = utf8StepAt(range, i);
-		if (step > 0) {
-			copyTo(bytes, at, range, i, step);
-			at += step;
-			i += step;
-		} else {
-			bytes[at] = 0xEF;
-			bytes[at + 1] = 0xBF;
-			bytes[at + 2] = 0xBD;
-			at += 3;
-			i -= step;
-		}
-	}
-	msStringMarkNonAscii(result);
 	return result;
 }
 
@@ -710,7 +627,7 @@ export function write(
 	if (isBase64(encoding)) return writeBase64(str.asBytes(), buf.bytePointer(), at, room) as number;
 	const count = size < room ? size : room;
 	const to = buf.bytePointer() + at;
-	const from = str.bytePointer();
+	const from = str.textPointer();
 	if (encoding.equalsIgnoreCase("ascii")) {
 		for (let i: int64 = 0; i < count; i++) to[i] = from[i] & 0x7F;
 	} else {
@@ -731,7 +648,7 @@ function fillDecoded(
 	if (decoded.byteCount() > 0) {
 		buf.fillRepeated(from, to, decoded.bytePointer(), decoded.byteCount());
 	}
-	else buf.fillRepeated(from, to, text.bytePointer(), text.byteCount());
+	else buf.fillRepeated(from, to, text.textPointer(), text.byteCount());
 }
 
 export function fillString(
@@ -756,7 +673,7 @@ export function fillString(
 	else if (isBase64(encoding)) {
 		buf.fillDecoded(from, to, value, decodeText(value, true));
 	}
-	else buf.fillRepeated(from, to, value.bytePointer(), value.byteCount());
+	else buf.fillRepeated(from, to, value.textPointer(), value.byteCount());
 }
 
 // The range converts in the caller, where it inlines and a loop hoists it: converted in the
@@ -927,7 +844,7 @@ function byteSwap64(value: uint64): uint64 {
 }
 
 function swapWordCount(this buf: Buffer, width: int64): int64 {
-	const length = buf.asBytes().length as int64;
+	const length = buf.byteCount();
 	return length % width == 0 ? length / width : 0;
 }
 
@@ -953,7 +870,7 @@ export function swap64(this buf: Buffer): void {
 }
 
 export function bufReverse(this buf: Buffer): void {
-	const length = buf.asBytes().length as int64;
+	const length = buf.byteCount();
 	if (length <= 1) return;
 	const bytes = buf.bytePointer();
 	let left: int64 = 0;

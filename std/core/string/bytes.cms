@@ -8,6 +8,52 @@
 @builtin("AsBytes")
 export extern function asBytes(this s: string): Readonly<Span<uint8>> from "msAsBytes";
 
+import { wellFormedPrefix, repairedLength, writeRepaired } from "./utf8Repair";
+
+extern function newBytes(length: int64): string from "msStringNewUninit";
+extern function copyBytes(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
+extern function msStringMarkAscii(s: string): void;
+extern function msStringMarkNonAscii(s: string): void;
+
+const highBits: uint64 = 0x8080808080808080;
+
+// Keep the scan single-exit: clang 18/21 turn a `return false` inside a byte loop of a
+// boolean function into a per-byte select, measured ~1.35x slower than the C kernel.
+export function asciiWords(bytes: Readonly<Ptr<uint8>>, wordCount: int64): int64 {
+	const words = bytes as Readonly<Ptr<uint64>>;
+	let word: int64 = 0;
+	while (word < wordCount && (words[word] & highBits) == 0) word += 1;
+	return word;
+}
+
+function asciiPrefix(data: Readonly<Span<uint8>>): int64 {
+	const length = data.length as int64;
+	if (length == 0) return 0;
+	const bytes = data as Readonly<Ptr<uint8>>;
+	let i = asciiWords(bytes, length >> 3) << 3;
+	while (i < length && bytes[i] < 0x80) i += 1;
+	return i;
+}
+
+/** The bytes as a string: each ill-formed UTF-8 sequence becomes one U+FFFD per maximal subpart; with `surrogates`, encoded surrogates stay and a split pair joins into its 4-byte form. */
+export function utf8String(data: Readonly<Span<uint8>>, surrogates: boolean): string {
+	const length = data.length as int64;
+	const ascii = asciiPrefix(data);
+	const valid = ascii == length ? length : wellFormedPrefix(data, ascii, surrogates);
+	if (valid == length) {
+		const whole = newBytes(length);
+		copyBytes((whole as cstring) as Ptr<uint8>, 0, data, 0, length);
+		if (ascii == length) msStringMarkAscii(whole); else msStringMarkNonAscii(whole);
+		return whole;
+	}
+	const result = newBytes(repairedLength(data, valid, surrogates));
+	const bytes = (result as cstring) as Ptr<uint8>;
+	copyBytes(bytes, 0, data, 0, valid);
+	writeRepaired(data, valid, surrogates, bytes);
+	msStringMarkNonAscii(result);
+	return result;
+}
+
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 export function byteLength(this s: string): int32 {
 	return s.asBytes().length;

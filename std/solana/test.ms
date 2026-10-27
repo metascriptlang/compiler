@@ -3920,15 +3920,7 @@ test "the IDL's arguments read the bytes args<T>() reads for a struct that exten
 }
 
 function decodeBase64(text: string): uint8[] {
-	const out: uint8[] = [];
-	when (js) {
-		const decoded = Buffer.fromString(text, "base64");
-		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
-	} else {
-		const decoded = Buffer.fromString(text, "base64").asBytes();
-		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
-	}
-	return out;
+	return Buffer.fromString(text, "base64");
 }
 
 test "the IDL's fields of an event read back what emit<E>() logged for a struct that extends another" {

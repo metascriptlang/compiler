@@ -35,18 +35,9 @@ import { UntypedTree } from "../contracts";
 // --- Public decode entry ---
 //
 // Parses a Buffer as a single CBOR data item, returns Result<CborValue, error>.
-// Uses byte-by-byte access via byteAt (Buffer = string alias) to avoid pulling
-// extension-method paths through the test-harness loader.
 
 export function decode(buf: Buffer): Result<CborValue, string> {
-	const len = buf.byteLength();
-	const bytes: uint8[] = [];
-	let i = 0;
-	while (i < len) {
-		bytes.push((buf.byteAt(i) & 0xff) as uint8);
-		i = i + 1;
-	}
-	return decodeAll(bytes);
+	return decodeAll(buf);
 }
 
 // --- SERIALIZE Layer A capability instance ---

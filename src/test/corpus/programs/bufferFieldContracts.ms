@@ -175,7 +175,7 @@ function checkByteLength(): void {
 						rejectedMessages += 1;
 					}
 				}
-				if (value != before) untouched = false;
+				if (Buffer.compare(value, before) != 0) untouched = false;
 			}
 			for (const width of [1, 3, 6]) {
 				try {

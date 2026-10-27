@@ -98,10 +98,9 @@ export interface ConnectOptions {
 
 // ===== Bytes ↔ string boundary =====
 //
-// Frame layer works on `uint8[]`; std/net works on `string`. Conversions are
-// localised here: bytes→string rides the zero-copy `asString` bridge, the
-// string→bytes path is pure MS (charCodeAt loop) and is also exposed via
-// `stringToBytes` for callers building raw payloads.
+// Frame layer works on `uint8[]`; std/net carries socket bytes in a `string`. Conversions are
+// localised here: bytes→string copies the bytes unchanged, because `asString` decodes text and
+// would replace frame bytes that are not UTF-8; string→bytes reads them back with byteAt.
 
 export function stringToBytes(s: string): uint8[] {
 	// Use byteAt + byteLength — charCodeAt/length use UTF-16 indexing (with
@@ -116,8 +115,11 @@ export function stringToBytes(s: string): uint8[] {
 	return out;
 }
 
+extern function wireBytes(arr: uint8[]): Ptr<uint8> from "msBufferData";
+extern function msStringNew(data: cstring, length: int64): string;
+
 export function bytesToString(arr: uint8[]): string {
-	return arr.asString();
+	return msStringNew(wireBytes(arr) as cstring, arr.length as int64);
 }
 
 // ===== State helpers =====

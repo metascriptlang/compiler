@@ -42,7 +42,7 @@ export const DEFAULT_FILE_MODE: int32 = 420;
 
 export interface TarEntry {
 	name: string;       // POSIX-style path ("/" separator)
-	data: string;       // file contents (byte-safe)
+	data: Buffer;       // file contents
 	mode: number;       // UNIX mode bits (e.g. 420 = 0o644)
 	mtime: number;      // UNIX epoch seconds; use 0 for determinism
 }
@@ -53,7 +53,6 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 	// Two-pass: first compute headers + total size, then allocate once and
 	// copy everything in. O(n) memory traffic, not O(n²).
 	const headers: Buffer[] = [];
-	const datas: Buffer[] = [];
 
 	let totalSize = 0;
 	let i = 0;
@@ -64,12 +63,11 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 		const headerResult = buildHeader(entry);
 		if (!headerResult.ok) return Result.err(headerResult.error);
 		headers.push(headerResult.value);
-		const data = Buffer.fromString(entry.data, "utf8");
-		datas.push(data);
+		const data = entry.data;
 
 		totalSize = totalSize + BLOCK_SIZE;
 		// Body is padded to next 512-byte boundary.
-		const bodyLen: int32 = data.byteLength as int32;
+		const bodyLen: int32 = data.length;
 		const padded: int32 = bodyLen + ((BLOCK_SIZE - (bodyLen % BLOCK_SIZE)) % BLOCK_SIZE);
 		totalSize = totalSize + padded;
 	}
@@ -84,8 +82,8 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 		const hdr = headers[j];
 		hdr.copyTo(out, off, 0, BLOCK_SIZE);
 		off = off + BLOCK_SIZE;
-		const data = datas[j];
-		const bodyLen: int32 = data.byteLength as int32;
+		const data = entries[j].data;
+		const bodyLen: int32 = data.length;
 		if (bodyLen > 0) {
 			data.copyTo(out, off, 0, bodyLen);
 		}
@@ -123,7 +121,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 	writeOctal(hdr, 116, 8, 0);
 
 	// Size (offset 124, 12 bytes): 11 octal digits + NUL
-	writeOctal(hdr, 124, 12, entry.data.byteLength);
+	writeOctal(hdr, 124, 12, entry.data.length);
 
 	// Mtime (offset 136, 12 bytes): 11 octal digits + NUL
 	writeOctal(hdr, 136, 12, entry.mtime);

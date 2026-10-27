@@ -40,8 +40,8 @@ function headerChecksum(s: Buffer, base: int32): number {
 function main(): void {
 	const data2 = "BBBBBBBBBBBBBBBBBBBB";
 	const entries: TarEntry[] = [
-		{ name: "a.txt", data: "hello", mode: DEFAULT_FILE_MODE, mtime: 0 },
-		{ name: "b.bin", data: data2, mode: DEFAULT_FILE_MODE, mtime: 0 },
+		{ name: "a.txt", data: Buffer.fromString("hello", "utf8"), mode: DEFAULT_FILE_MODE, mtime: 0 },
+		{ name: "b.bin", data: Buffer.fromString(data2, "utf8"), mode: DEFAULT_FILE_MODE, mtime: 0 },
 	];
 	const r = writeTar(entries);
 	if (!r.ok) { console.log("FAIL writeTar " + r.error); return; }
