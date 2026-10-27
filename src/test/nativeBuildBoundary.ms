@@ -1,6 +1,9 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile, remove, removeAll, writeFile } from "std/fs";
+import {
+	appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile,
+	remove, removeAll, writeFile,
+} from "std/fs";
 
 const windows = platform == "windows";
 
@@ -27,8 +30,23 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+const cacheRootPathGroups = [
+	"cache-roots-default", "cache-roots-manifest", "cache-roots-env", "cache-roots-empty-env",
+	"cache-roots-cli-equals", "cache-roots-cli-separate",
+];
+const cacheRootSharingGroups = [
+	"cache-roots-sharing-off", "cache-roots-sharing-on", "cache-roots-sharing-cli-off",
+	"cache-roots-hard-disable",
+];
+const cacheRootGroups = [
+	...cacheRootPathGroups, ...cacheRootSharingGroups, "cache-roots-refuse-args",
+	"cache-roots-refuse-config", "cache-roots-refuse-hidden", "cache-local-preservation",
+	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink",
+];
+if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
 	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
+	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
 
@@ -138,6 +156,417 @@ function record(name: string, expected: string, actual: string): void {
 
 function recordTrue(name: string, actual: boolean): void {
 	record(name, "true", actual ? "true" : "false");
+}
+
+function runCachePreservation(): void {
+	const names = ["HOME", "USERPROFILE", "MSC_GLOBAL_CACHE_DIR", "MSC_NO_GLOBAL_CACHE"];
+	const saved: string[] = [];
+	for (const name of names) saved.push(env.get(name));
+	try {
+		for (const enabled of [true, false]) {
+			const label = enabled ? "enabled" : "disabled";
+			const dir = `${root}/cache-preservation-${label}`;
+			const home = `${dir}/home`;
+			const cache = `${home}/.metascript/cache`;
+			need(ensureDir(dir).ok, "preservation cwd");
+			put(`${dir}/build.ms`, "const config = {}; export default config;\n");
+			for (const bucket of ["objects", "store", "headers", "outside"]) {
+				need(ensureDir(`${cache}/${bucket}`).ok, "preservation bucket");
+				const old = `${cache}/${bucket}/old.user-data`;
+				put(old, "old foreign bytes");
+				put(`${cache}/${bucket}/young.user-data`, "young foreign bytes");
+				const aged = windows
+					? command(dir, `age-${bucket}`, "powershell", [
+						"-NoProfile", "-NonInteractive", "-Command",
+						`(Get-Item -LiteralPath '${old}').LastWriteTimeUtc = ` +
+							"[DateTime]::UtcNow.AddDays(-90)",
+					])
+					: command(dir, `age-${bucket}`, "touch", ["-t", "200001010000", old]);
+				if (aged.code != 0) throw new Error(`cannot age ${old}`);
+			}
+			env.set("HOME", home);
+			env.set("USERPROFILE", home);
+			env.delete("MSC_GLOBAL_CACHE_DIR");
+			if (enabled) env.delete("MSC_NO_GLOBAL_CACHE");
+			else env.set("MSC_NO_GLOBAL_CACHE", "1");
+			const ran = command(dir, "version", compiler, ["version"]);
+			record(`version preserves user files with global cache ${label}`, "0", `${ran.code}`);
+			for (const bucket of ["objects", "store", "headers", "outside"]) {
+				for (const age of ["old", "young"]) {
+					const body = try readFile(`${cache}/${bucket}/${age}.user-data`) catch "missing";
+					record(`${label} ${bucket} ${age} foreign file`, `${age} foreign bytes`, body);
+				}
+			}
+		}
+	} finally {
+		for (let i: int32 = 0; i < names.length; i += 1) {
+			if (saved[i] == "") env.delete(names[i]);
+			else env.set(names[i], saved[i]);
+		}
+	}
+}
+
+function withCacheRootFixture(name: string, run: (dir: string) => void): void {
+	const names = [
+		"HOME", "USERPROFILE", "MSC_CACHE_DIR", "MSC_GLOBAL_CACHE_DIR", "MSC_NO_GLOBAL_CACHE",
+		"MSC_NO_PRELUDE_PACK", "MSC_NO_UPDATE_CHECK",
+	];
+	const saved: string[] = [];
+	for (const name of names) saved.push(env.get(name));
+	const dir = `${root}/${name}`;
+	need(ensureDir(`${dir}/home`).ok, "isolated cache HOME");
+	try {
+		for (const name of names) env.delete(name);
+		env.set("HOME", `${dir}/home`);
+		env.set("USERPROFILE", `${dir}/home`);
+		env.set("MSC_NO_UPDATE_CHECK", "1");
+		run(dir);
+	} finally {
+		for (let i: int32 = 0; i < names.length; i += 1) {
+			if (saved[i] == "") env.delete(names[i]);
+			else env.set(names[i], saved[i]);
+		}
+	}
+}
+
+function cacheRootProject(dir: string, config: string): string {
+	const project = `${dir}/project`;
+	need(ensureDir(`${project}/app`).ok, "cache root project");
+	need(ensureDir(`${dir}/caller`).ok, "cache root caller");
+	put(`${project}/build.ms`, config);
+	put(`${project}/app/main.ms`, "console.log(73);\n");
+	return project;
+}
+
+function cacheRootConfig(sharing: boolean = true): string {
+	return "const config = { build: { cacheDir: './manifest/../manifest-local', " +
+		"globalCacheDir: './manifest/../manifest-shared', " +
+		`globalCache: ${sharing} } }; export default config;\n`;
+}
+
+function emitCacheRoot(dir: string, flags: string[] = []): Ran {
+	const args = ["build", "../project/app/main.ms", "--emit=c", "--cc=clang"];
+	for (const flag of flags) args.push(flag);
+	return command(`${dir}/caller`, "emit", compiler, args);
+}
+
+function hasCacheFile(dir: string, prefix: string, suffix: string): boolean {
+	for (const name of readDir(dir)) {
+		if (name.startsWith(prefix) && name.endsWith(suffix)) return true;
+	}
+	return false;
+}
+
+function recordRootRouting(
+	dir: string,
+	local: string,
+	shared: string,
+	ran: Ran,
+	sharing: boolean = true,
+): void {
+	record("root consumer exits successfully", "0", `${ran.code}`);
+	recordTrue("local schema initialized at selected root", exists(`${local}/.schema-fpkey`));
+	if (sharing) {
+		let snapshot = false;
+		for (const format of readDir(`${shared}/prelude`)) {
+			if (hasCacheFile(`${shared}/prelude/${format}`, "", ".deps")) snapshot = true;
+		}
+		recordTrue("prelude consumer writes dependency snapshot in selected shared root", snapshot);
+		recordTrue("stamp consumer writes selected shared root",
+			readDir(`${shared}/stamps`).length > 0);
+	} else {
+		recordTrue("disabled sharing does not create explicit shared root", !exists(shared));
+	}
+	for (const unselected of [
+		`${dir}/caller/out/debug/.cache`, `${dir}/project/out/debug/.cache`,
+		`${dir}/home/.metascript/cache`, `${dir}/project/manifest-local`,
+		`${dir}/project/manifest-shared`, `${dir}/caller/env-local`, `${dir}/caller/env-shared`,
+	]) {
+		if (unselected != local && unselected != shared) {
+			recordTrue(`unselected root remains absent ${unselected}`, !exists(unselected));
+		}
+	}
+}
+
+function runCacheRootPaths(mode: string): void {
+	withCacheRootFixture(mode, (dir: string): void => {
+		const defaults = mode == "cache-roots-default";
+		const project = cacheRootProject(
+			dir, defaults ? "const config = {}; export default config;\n" : cacheRootConfig(),
+		);
+		let local = `${project}/manifest-local`;
+		let shared = `${project}/manifest-shared`;
+		const flags: string[] = [];
+		if (defaults) {
+			local = `${dir}/caller/out/debug/.cache`;
+			shared = `${dir}/home/.metascript/cache`;
+		} else if (mode == "cache-roots-empty-env") {
+			env.set("MSC_CACHE_DIR", "");
+			env.set("MSC_GLOBAL_CACHE_DIR", "");
+		} else if (mode != "cache-roots-manifest") {
+			env.set("MSC_CACHE_DIR", "./environment/../env-local");
+			env.set("MSC_GLOBAL_CACHE_DIR", "./environment/../env-shared");
+			local = `${dir}/caller/env-local`;
+			shared = `${dir}/caller/env-shared`;
+			if (mode != "cache-roots-env") {
+				local = `${dir}/caller/cli-local`;
+				shared = `${dir}/caller/cli-shared`;
+				if (mode == "cache-roots-cli-equals") {
+					flags.push("--cache-dir=./command/../cli-local");
+					flags.push("--global-cache-dir=./command/../cli-shared");
+				} else {
+					flags.push("--cache-dir");
+					flags.push("./command/../cli-local");
+					flags.push("--global-cache-dir");
+					flags.push("./command/../cli-shared");
+				}
+			}
+		}
+		recordRootRouting(dir, local, shared, emitCacheRoot(dir, flags));
+	});
+}
+
+function runCacheRootSharing(mode: string): void {
+	withCacheRootFixture(mode, (dir: string): void => {
+		const enabled = mode == "cache-roots-sharing-on";
+		const manifestEnabled = mode == "cache-roots-sharing-cli-off" ||
+			mode == "cache-roots-hard-disable";
+		cacheRootProject(dir, cacheRootConfig(manifestEnabled));
+		env.set("MSC_CACHE_DIR", "local");
+		env.set("MSC_GLOBAL_CACHE_DIR", "shared");
+		const flags: string[] = ["--global-cache-dir=shared"];
+		if (enabled) {
+			flags.push("--no-global-cache");
+			flags.push("--global-cache");
+		}
+		if (mode == "cache-roots-sharing-cli-off") {
+			flags.push("--global-cache");
+			flags.push("--no-global-cache");
+		}
+		if (mode == "cache-roots-hard-disable") {
+			flags.push("--global-cache");
+			env.set("MSC_NO_GLOBAL_CACHE", "1");
+		}
+		recordRootRouting(
+			dir, `${dir}/caller/local`, `${dir}/caller/shared`, emitCacheRoot(dir, flags), enabled,
+		);
+	});
+}
+
+function recordCacheRefusal(
+	dir: string,
+	label: string,
+	args: string[],
+	diagnostic: string,
+): void {
+	const ran = command(`${dir}/caller`, label, compiler, args);
+	const log = try readFile(`${dir}/caller/${label}.log`) catch "";
+	recordTrue(`${label} is refused`, ran.code != 0);
+	recordTrue(`${label} diagnostic names ${diagnostic}`, log.indexOf(diagnostic, 0) >= 0);
+}
+
+function runCacheRootArgumentRefusals(): void {
+	withCacheRootFixture("cache-roots-refuse-args", (dir: string): void => {
+		cacheRootProject(dir, "const config = {}; export default config;\n");
+		env.set("MSC_NO_GLOBAL_CACHE", "1");
+		for (const flag of ["--cache-dir", "--global-cache-dir"]) {
+			const base = ["build", "../project/app/main.ms", "--emit=c", "--cc=clang"];
+			recordCacheRefusal(dir, `${flag}-missing`, [...base, flag], flag);
+			recordCacheRefusal(dir, `${flag}-empty-equals`, [...base, `${flag}=`], flag);
+			recordCacheRefusal(dir, `${flag}-empty-separate`, [...base, flag, ""], flag);
+			recordCacheRefusal(dir, `${flag}-next-option`, [...base, flag, "--release"], flag);
+		}
+	});
+}
+
+struct CacheConfigRefusal {
+	name: string;
+	source: string;
+}
+
+function runCacheRootConfigRefusals(hidden: boolean): void {
+	withCacheRootFixture(
+		hidden ? "cache-roots-refuse-hidden" : "cache-roots-refuse-config",
+		(dir: string): void => {
+			const project = cacheRootProject(dir, "");
+			env.set("MSC_CACHE_DIR", "env-local");
+			env.set("MSC_GLOBAL_CACHE_DIR", "env-shared");
+			const configs: CacheConfigRefusal[] = hidden ? [
+				{ name: "empty-file", source: "" },
+				{
+					name: "unextractable",
+					source: "const config = makeConfig(); export default config;",
+				},
+				{
+					name: "hidden-export-with-decoy",
+					source: "const visible = {}; const config = makeConfig(); " +
+						"export default config;",
+				},
+				{
+					name: "root-spread",
+					source: "const config = { ...base }; export default config;",
+				},
+				{
+					name: "root-computed",
+					source: "const key = 'build'; const config = { [key]: {} }; export default config;",
+				},
+				{
+					name: "build-spread",
+					source: "const config = { build: { ...base } }; export default config;",
+				},
+				{
+					name: "build-computed",
+					source: "const key = 'cacheDir'; const config = { build: { [key]: 'hidden' } }; " +
+						"export default config;",
+				},
+				{
+					name: "hidden-build",
+					source: "const config = { build: hidden }; export default config;",
+				},
+			] : [
+				{
+					name: "empty-local",
+					source: "const config = { build: { cacheDir: '' } }; export default config;",
+				},
+				{
+					name: "empty-shared",
+					source: "const config = { build: { globalCacheDir: '' } }; " +
+						"export default config;",
+				},
+				{
+					name: "numeric-local",
+					source: "const config = { build: { cacheDir: 3 } }; export default config;",
+				},
+				{
+					name: "nonliteral-shared",
+					source: "const config = { build: { globalCacheDir: path } }; " +
+						"export default config;",
+				},
+				{
+					name: "string-sharing",
+					source: "const config = { build: { globalCache: 'false' } }; " +
+						"export default config;",
+				},
+				{
+					name: "nonliteral-sharing",
+					source: "const config = { build: { globalCache: enabled } }; " +
+						"export default config;",
+				},
+				{
+					name: "control-line-local",
+					source: "const config = { build: { cacheDir: 'line\\nroot' } }; " +
+						"export default config;",
+				},
+			];
+			for (const config of configs) {
+				put(`${project}/build.ms`, config.source);
+				const base = ["build", "../project/app/main.ms", "--emit=c", "--cc=clang"];
+				recordCacheRefusal(dir, `${config.name}-env-override`, base, "build.ms");
+				recordCacheRefusal(dir, `${config.name}-cli-override`, [
+					...base, "--cache-dir=cli-local", "--global-cache-dir=cli-shared", "--global-cache",
+				], "build.ms");
+			}
+			for (const name of ["env-local", "env-shared", "cli-local", "cli-shared"]) {
+				recordTrue(`invalid config creates no ${name}`, !exists(`${dir}/caller/${name}`));
+			}
+		},
+	);
+}
+
+function runCacheLocalPreservation(): void {
+	withCacheRootFixture("cache-local-preservation", (dir: string): void => {
+		cacheRootProject(dir, "const config = {}; export default config;\n");
+		env.set("MSC_NO_GLOBAL_CACHE", "1");
+		for (const marker of ["absent", "legacy", "foreign"]) {
+			const local = `${dir}/local-${marker}`;
+			need(ensureDir(`${local}/nested`).ok, "local preservation root");
+			const names = [
+				"foreign.o", "foreign.fp", "foreign.c", "foreign.link", "notes.txt",
+				"project.cache", "nested/foreign.o",
+			];
+			for (const name of names) put(`${local}/${name}`, `user bytes ${name}`);
+			const schema = marker == "legacy" ? "v1" : "foreign marker bytes";
+			if (marker != "absent") put(`${local}/.schema-fpkey`, schema);
+			env.set("MSC_CACHE_DIR", local);
+			const ran = emitCacheRoot(dir);
+			record(`local ${marker} consumer exit`, "0", `${ran.code}`);
+			for (const name of names) {
+				record(`local ${marker} preserves ${name}`, `user bytes ${name}`,
+					try readFile(`${local}/${name}`) catch "missing");
+			}
+			if (marker != "absent") {
+				record(`local ${marker} preserves existing marker`, schema,
+					try readFile(`${local}/.schema-fpkey`) catch "missing");
+			}
+		}
+	});
+}
+
+function runCacheSymlink(): void {
+	if (windows) {
+		console.log("UNSUPPORTED cache-symlink: requires POSIX ln, touch and test -L");
+		exit(2);
+	}
+	for (const mode of ["old-directory", "old-child"]) {
+		withCacheRootFixture(`cache-symlink-${mode}`, (dir: string): void => {
+			const bucket = `${dir}/home/.metascript/cache/objects`;
+			const target = `${dir}/outside-cache`;
+			const link = `${bucket}/foreign-directory`;
+			need(ensureDir(bucket).ok && ensureDir(target).ok, "symlink preservation fixture");
+			put(`${target}/victim`, "external victim bytes");
+			put(`${dir}/unrelated-control`, "unrelated external bytes");
+			const linked = command(dir, "link", "ln", ["-s", target, link]);
+			const agedPath = mode == "old-directory" ? target : `${target}/victim`;
+			const aged = command(dir, "age-target", "touch", ["-t", "200001010000", agedPath]);
+			const checked = command(dir, "check-link", "test", ["-L", link]);
+			if (linked.code != 0 || aged.code != 0 || checked.code != 0) {
+				console.log(`UNSUPPORTED cache-symlink: POSIX fixture tools failed; root ${root}`);
+				exit(2);
+			}
+			const ran = command(dir, "version", compiler, ["version"]);
+			record(`${mode}: version with foreign directory symlink exits successfully`, "0", `${ran.code}`);
+			record(`${mode}: collector preserves bytes outside cache through symlink`, "external victim bytes",
+				try readFile(`${target}/victim`) catch "missing");
+			record(`${mode}: collector preserves unrelated external control`, "unrelated external bytes",
+				try readFile(`${dir}/unrelated-control`) catch "missing");
+			recordTrue(`${mode}: collector leaves foreign directory symlink intact`,
+				command(dir, "check-link-after", "test", ["-L", link]).code == 0);
+		});
+	}
+}
+
+function runCacheRootNative(tests: boolean): void {
+	withCacheRootFixture(
+		tests ? "cache-roots-native-test" : "cache-roots-native-build",
+		(dir: string): void => {
+			const project = cacheRootProject(dir, cacheRootConfig());
+			if (tests) {
+				put(`${project}/app/main.ms`, "test 'root routing' { assert 73 == 73; }\n");
+			}
+			const args = [tests ? "test" : "build", "../project/app/main.ms", "--cc=clang"];
+			if (tests) args.push("--tests-in-dir");
+			else args.push("--output=probe");
+			const ran = command(`${dir}/caller`, "native", compiler, args);
+			const local = `${project}/manifest-local`;
+			const shared = `${project}/manifest-shared`;
+			recordRootRouting(dir, local, shared, ran);
+			recordTrue("native consumer places objects in selected local root",
+				hasCacheFile(local, "", ".o"));
+			let stored = false;
+			for (const key of readDir(`${shared}/store`)) {
+				const entry = `${shared}/store/${key}`;
+				if (hasCacheFile(entry, "", ".o") && hasCacheFile(entry, "", ".m")) stored = true;
+			}
+			recordTrue("native consumer publishes shared store objects and manifests", stored);
+			if (!tests) {
+				recordTrue("build places project record in selected local root",
+					hasCacheFile(local, "project.", ".cache"));
+				if (ran.code == 0) {
+					record("native build retains output", "73", value(`${dir}/caller`));
+				}
+			}
+		},
+	);
 }
 
 function runCompileCache(): void {
@@ -1231,6 +1660,20 @@ function runReproducibleLink(): void {
 	recordTrue("an unchanged program builds to a byte-identical binary", sameBytes(dir, `${dir}/app.first`, `${dir}/app`));
 }
 
+if (group == "cache-preservation" || group == "all") runCachePreservation();
+for (const mode of cacheRootPathGroups) {
+	if (group == mode || group == "all") runCacheRootPaths(mode);
+}
+for (const mode of cacheRootSharingGroups) {
+	if (group == mode || group == "all") runCacheRootSharing(mode);
+}
+if (group == "cache-roots-refuse-args" || group == "all") runCacheRootArgumentRefusals();
+if (group == "cache-roots-refuse-config" || group == "all") runCacheRootConfigRefusals(false);
+if (group == "cache-roots-refuse-hidden" || group == "all") runCacheRootConfigRefusals(true);
+if (group == "cache-local-preservation" || group == "all") runCacheLocalPreservation();
+if (group == "cache-symlink" || group == "all") runCacheSymlink();
+if (group == "cache-roots-native-build" || group == "all") runCacheRootNative(false);
+if (group == "cache-roots-native-test" || group == "all") runCacheRootNative(true);
 if (group == "argv" || group == "all") runArgv();
 if (group == "reproducible-link" || group == "all") runReproducibleLink();
 if (group == "test-scope" || group == "all") runTestScope();
@@ -1263,5 +1706,5 @@ for (const r of results) {
 	if (!pass) failures = failures + 1;
 	console.log(`${pass ? "pass" : "FAIL"}  ${r.name}  expected=${r.expected} actual=${r.actual}`);
 }
-if (failures == 0) removeAll(root);
+if (failures == 0 && env.get("MSC_BOUNDARY_KEEP_ROOT") == "") removeAll(root);
 exit(failures == 0 ? 0 : 1);
