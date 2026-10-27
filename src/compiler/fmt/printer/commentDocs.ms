@@ -75,6 +75,15 @@ export function commentTrailing(node: Node): Doc[] {
 	return trailingDocs(unformatted(placed.trailing(node)));
 }
 
+export function takeOwnLineTrailing(node: Node): SourceComment[] {
+	const out: SourceComment[] = [];
+	for (const c of placed.trailing(node)) {
+		if (!c.formatted && c.linesBefore > 0) out.push(c);
+	}
+	for (const c of out) c.markFormatted();
+	return out;
+}
+
 export function commentLeadingBefore(node: Node, key: SourceLocation): Doc[] {
 	const ahead: SourceComment[] = [];
 	for (const c of placed.leading(node)) {

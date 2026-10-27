@@ -11,7 +11,7 @@ import {
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore } from "./commentDocs";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, takeOwnLineTrailing } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
@@ -158,6 +158,17 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MemberExprData;
 	let op = ".";
 	if (d.isOptional) { op = "?."; }
+	const ownLine = takeOwnLineTrailing(d.object);
+	if (ownLine.length > 0) {
+		const lines: Doc[] = [];
+		for (const c of ownLine) {
+			lines.push(docHardLine());
+			lines.push(docText(c.text));
+		}
+		lines.push(docHardLine());
+		lines.push(docText(op + d.property));
+		return docGroup([printAtom(d.object, options), docIndent(lines)]);
+	}
 	return docGroup([
 		printAtom(d.object, options),
 		docText(op + d.property),
