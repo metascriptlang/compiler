@@ -11,7 +11,7 @@ Node__SstdZmetaZnodeOms* dollarborrow_1_;
 __finally_1:
     msDecrefCyclic(dollarborrow_1_);
 }
-int32_t sum__SsrcZcheckerZvar80artitionsOms_u1(int32_t n) {
+int32_t sum__SsrcZcheckerZvarU50artitionsOms_u1(int32_t n) {
     msIncref((Node__SstdZmetaZnodeOms*)dollarborrow_2_);
     msDecrefCyclicEdge(x);
     __atomic_fetch_add(&c, 1);
