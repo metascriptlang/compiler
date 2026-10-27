@@ -19,4 +19,5 @@ test "fmt: a comment after a decorator stays on the decorator's line" {
 
 test "fmt: a comment after a decorated member stays after the member" {
 	assert keeps("class C {\n\t@dec\n\tname: string = \"x\"; // c\n}\n");
+	assert keeps("class C {\n\t@dec\n\tname: string = \"x\"; // c\n\tother: number = 1;\n}\n");
 }
