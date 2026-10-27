@@ -19,40 +19,58 @@ function drop(path: string): void {
 	}
 }
 
-export function collectStaleEntries(root: string, now: float64, suffixesRecordFirst: string[], staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
+function collectionDue(root: string, now: float64): string {
 	const mark = `${root}/${COLLECTED_MARK}`;
 	const last = modifiedTime(mark);
-	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return;
+	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return "";
 	const real = realpath(root);
-	if (real == "" || !writeFile(mark, "").ok) return;
+	if (real == "" || !writeFile(mark, "").ok) return "";
+	return real;
+}
+
+export function collectStaleEntries(root: string, now: float64, suffixesRecordFirst: string[], staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
+	const real = collectionDue(root, now);
+	if (real == "") return;
 	for (const e of readDir(root)) {
 		if (!e.endsWith("/")) continue;
 		const name = e.slice(0, e.length - 1);
 		const dir = `${root}/${name}`;
 		if (realpath(dir) != `${real}/${name}`) continue;
-		const stems: string[] = [];
-		const newest = new HashMap<string, number>();
-		for (const f of readDir(dir)) {
-			if (f.endsWith("/")) continue;
-			if (f.indexOf(".tmp.", 0) >= 0) {
-				if (now - modifiedTime(`${dir}/${f}`) > STALE_TMP_SECONDS) drop(`${dir}/${f}`);
-				continue;
-			}
-			const suffix = suffixesRecordFirst.find((s: string): boolean => f.endsWith(s));
-			if (suffix == null) continue;
-			const stem = f.slice(0, f.length - suffix.length);
-			const modified = modifiedTime(`${dir}/${f}`);
-			const seen = newest.get(stem);
-			if (seen == null) stems.push(stem);
-			if (seen == null || modified > seen) newest.set(stem, modified);
-		}
-		for (const stem of stems) {
-			if (now - (newest.get(stem) ?? now) <= staleSeconds) continue;
-			for (const s of suffixesRecordFirst) {
-				drop(`${dir}/${stem}${s}`);
-			}
-		}
+		collectStaleFiles(dir, now, suffixesRecordFirst, staleSeconds);
 		rmdir(dir);
+	}
+}
+
+export function collectStaleFlatEntries(root: string, now: float64, suffixesRecordFirst: string[], staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
+	if (collectionDue(root, now) != "") collectStaleFiles(root, now, suffixesRecordFirst, staleSeconds);
+}
+
+function collectStaleFiles(dir: string, now: float64, suffixesRecordFirst: string[], staleSeconds: float64): void {
+	const owned = (name: string): string | null =>
+		suffixesRecordFirst.find((s: string): boolean => name.endsWith(s));
+	const stems: string[] = [];
+	const newest = new HashMap<string, number>();
+	for (const f of readDir(dir)) {
+		if (f.endsWith("/")) continue;
+		const tmpAt = f.indexOf(".tmp.", 0);
+		if (tmpAt >= 0) {
+			const old = now - modifiedTime(`${dir}/${f}`) > STALE_TMP_SECONDS;
+			if (old && owned(f.slice(0, tmpAt)) != null) drop(`${dir}/${f}`);
+			continue;
+		}
+		const suffix = owned(f);
+		if (suffix == null) continue;
+		const stem = f.slice(0, f.length - suffix.length);
+		const modified = modifiedTime(`${dir}/${f}`);
+		const seen = newest.get(stem);
+		if (seen == null) stems.push(stem);
+		if (seen == null || modified > seen) newest.set(stem, modified);
+	}
+	for (const stem of stems) {
+		if (now - (newest.get(stem) ?? now) <= staleSeconds) continue;
+		for (const s of suffixesRecordFirst) {
+			drop(`${dir}/${stem}${s}`);
+		}
 	}
 }
 
@@ -92,9 +110,25 @@ test "a sibling stamp and its in-flight tmp survive collection" {
 
 test "a tmp older than an hour goes, its stamp stays" {
 	const root = scratchRoot("stamp-tmp");
+	writeFile(`${root}/stampB/notes.txt.tmp.1`, "foreign");
 	collectStaleEntries(root, nowSeconds() + STALE_TMP_SECONDS + 60, PK);
 	assert exists(`${root}/stampB/entry.pk`);
 	assert !exists(`${root}/stampB/entry.pk.tmp.1`);
+	assert text(`${root}/stampB/notes.txt.tmp.1`) == "foreign";
+	removeAll(root);
+}
+
+test "a flat bucket loses every file of a stale entry and keeps foreign files and directories" {
+	const root = scratchRoot("stamp-flat");
+	const memo = [".sum", ".files"];
+	writeFile(`${root}/old.sum`, "sum");
+	writeFile(`${root}/old.files`, "files");
+	writeFile(`${root}/notes.txt`, "foreign");
+	collectStaleFlatEntries(root, nowSeconds() + STALE_ENTRY_SECONDS + 60, memo);
+	assert !exists(`${root}/old.sum`);
+	assert !exists(`${root}/old.files`);
+	assert text(`${root}/notes.txt`) == "foreign";
+	assert text(`${root}/stampA/entry.pk`) == "a";
 	removeAll(root);
 }
 

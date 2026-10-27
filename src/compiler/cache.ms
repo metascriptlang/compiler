@@ -18,7 +18,7 @@ import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifie
 import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot } from "../utils/cachePaths";
-import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
+import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
@@ -838,6 +838,7 @@ export function collectGlobalCache(): void {
 	const now = nowSeconds();
 	collectStaleEntries(`${root}/store`, now, [".m", ".o"]);
 	collectStaleEntries(`${root}/headers`, now, [".hi"]);
+	collectStaleFlatEntries(`${root}/stamps`, now, [".sum", ".files", ".exe"]);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
