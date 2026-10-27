@@ -1,4 +1,4 @@
-import { Node, NodeKind, ProgramData, BlockStmtData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, ClassDeclData } from "../../ast/node";
 import { Token } from "../../lexer/token";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions } from "./options";
@@ -59,12 +59,34 @@ export function statementSpan(stmt: Node): Result<FmtEdit, string> {
 	return Result.ok({ start, end, newText: "" });
 }
 
-export function formatStatementEdit(stmt: Node, source: string, options: FormatOptions): Result<FmtEdit, string> {
-	const span = try statementSpan(stmt);
+export interface StatementRun {
+	stmts: Node[];
+	keepsBlankLines: boolean;
+}
+
+export function formatStatementsEdit(run: StatementRun, source: string, options: FormatOptions): Result<FmtEdit, string> {
+	const stmts = run.stmts;
 	options.source = source;
-	const printed = try formatNodeAt(stmt, options, leadingWhitespace(source, span.start.line));
-	const newText = printed.endsWith("\n") ? printed.byteSlice(0, printed.byteLength - 1) : printed;
-	return Result.ok({ start: span.start, end: span.end, newText });
+	const first = try statementSpan(stmts[0]);
+	const indent = leadingWhitespace(source, first.start.line);
+	let text = "";
+	let end = first.end;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const span = try statementSpan(stmts[i]);
+		if (i > 0) text += try gapBetween(source, end, span.start, indent, run.keepsBlankLines);
+		const printed = try formatNodeAt(stmts[i], options, indent);
+		text += printed.endsWith("\n") ? printed.byteSlice(0, printed.byteLength - 1) : printed;
+		end = span.end;
+	}
+	return Result.ok({ start: first.start, end, newText: text });
+}
+
+function gapBetween(source: string, from: FmtPos, to: FmtPos, indent: string, keepsBlankLines: boolean): Result<string, string> {
+	const lines = LineIndex.build(source);
+	const gap = source.byteSlice(lines.lineStart(from.line) + from.column - 1, lines.lineStart(to.line) + to.column - 1);
+	if (gap.trim() != "") return Result.err(`range formatting: unattached text "${gap.trim()}" between statements at ${from.line}:${from.column} and ${to.line}:${to.column}`);
+	if (to.line == from.line) return Result.ok(gap);
+	return Result.ok(keepsBlankLines && to.line - from.line > 1 ? "\n\n" + indent : "\n" + indent);
 }
 
 export function applyEdit(source: string, edit: FmtEdit): string {
@@ -74,32 +96,57 @@ export function applyEdit(source: string, edit: FmtEdit): string {
 	return source.byteSlice(0, from) + edit.newText + source.byteSlice(to, source.byteLength);
 }
 
-function containsRange(stmt: Node, from: FmtPos, to: FmtPos): boolean {
+function isStatementList(node: Node): boolean {
+	return node.kind == NodeKind.Program || node.kind == NodeKind.BlockStmt || node.kind == NodeKind.ClassDecl;
+}
+
+function statementsOf(node: Node): Node[] {
+	if (node.kind == NodeKind.Program) return (node.data as ProgramData).programStmts;
+	if (node.kind == NodeKind.ClassDecl) return (node.data as ClassDeclData).classBody;
+	return (node.data as BlockStmtData).statements;
+}
+
+function touches(stmt: Node, from: FmtPos, to: FmtPos): Result<boolean, string> {
 	const loc = stmt.location;
-	if (loc.endLine == 0) return false;
+	if (loc.endLine == 0) return Result.err(`statement at ${loc.line}:${loc.column} has no recorded end`);
 	const start: FmtPos = { line: loc.line, column: loc.column };
 	const end: FmtPos = { line: loc.endLine, column: loc.endColumn };
-	return !before(from, start) && !before(end, to);
+	if (before(from, to)) return Result.ok(before(from, end) && before(start, to));
+	return Result.ok(!before(from, start) && !before(end, from));
 }
 
-function collectContaining(node: Node, from: FmtPos, to: FmtPos, found: Node[]): void {
-	if (node.kind == NodeKind.Program) {
-		for (const s of (node.data as ProgramData).programStmts) {
-			if (containsRange(s, from, to)) found.push(s);
+function contains(stmt: Node, from: FmtPos, to: FmtPos): boolean {
+	const loc = stmt.location;
+	return !before(from, { line: loc.line, column: loc.column }) && !before(to, { line: loc.line, column: loc.column }) && !before({ line: loc.endLine, column: loc.endColumn }, to);
+}
+
+function runIn(node: Node, from: FmtPos, to: FmtPos): Result<StatementRun | null, string> {
+	if (isStatementList(node)) {
+		const touched: Node[] = [];
+		for (const s of statementsOf(node)) {
+			if (try touches(s, from, to)) touched.push(s);
 		}
-	} else if (node.kind == NodeKind.BlockStmt) {
-		for (const s of (node.data as BlockStmtData).statements) {
-			if (containsRange(s, from, to)) found.push(s);
-		}
+		if (touched.length == 0) return Result.ok(null);
+		const own: StatementRun = { stmts: touched, keepsBlankLines: node.kind == NodeKind.Program };
+		if (touched.length != 1 || !contains(touched[0], from, to)) return Result.ok(own);
+		const inner = try runInChildren(touched[0], from, to);
+		return Result.ok(inner != null ? inner : own);
 	}
-	forEachChild(node, (child: Node): void => {
-		collectContaining(child, from, to, found);
-	});
+	return runInChildren(node, from, to);
 }
 
-export function innermostStatement(program: Node, from: FmtPos, to: FmtPos): Node | null {
-	const found: Node[] = [];
-	collectContaining(program, from, to, found);
-	if (found.length == 0) return null;
-	return found[found.length - 1];
+function runInChildren(node: Node, from: FmtPos, to: FmtPos): Result<StatementRun | null, string> {
+	const runs: StatementRun[] = [];
+	let failure = "";
+	forEachChild(node, (child: Node): void => {
+		const run = runIn(child, from, to);
+		if (!run.ok) failure = run.error;
+		else if (run.value != null) runs.push(run.value);
+	});
+	if (failure != "") return Result.err(failure);
+	return Result.ok(runs.length == 1 ? runs[0] : null);
+}
+
+export function rangeStatements(program: Node, from: FmtPos, to: FmtPos): Result<StatementRun | null, string> {
+	return runIn(program, from, to);
 }

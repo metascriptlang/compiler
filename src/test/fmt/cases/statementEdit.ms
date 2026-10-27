@@ -2,24 +2,28 @@ import { parseSource } from "../../../parser/statements/validation";
 import "../../../parser/statements/core";
 import { NodeKind } from "../../../ast/node";
 import { defaultFormatOptions } from "../../../compiler/fmt/options";
-import { formatStatementEdit, innermostStatement, applyEdit } from "../../../compiler/fmt/edit";
+import { formatStatementsEdit, rangeStatements, applyEdit, StatementRun } from "../../../compiler/fmt/edit";
+
+function runAt(source: string, line: int32, column: int32): StatementRun | null {
+	const parsed = parseSource(source);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const run = rangeStatements(parsed.value, { line, column }, { line, column });
+	if (!run.ok) throw new Error(run.error);
+	return run.value;
+}
 
 function reformatAt(source: string, line: int32, column: int32): string {
-	const parsed = parseSource(source);
-	if (!parsed.ok) return "PARSE ERROR: " + parsed.error;
-	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });
-	if (stmt == null) return "NO STATEMENT";
-	const edit = formatStatementEdit(stmt, source, defaultFormatOptions());
+	const run = runAt(source, line, column);
+	if (run == null) return "NO STATEMENT";
+	const edit = formatStatementsEdit(run, source, defaultFormatOptions());
 	if (!edit.ok) return "FMT ERROR: " + edit.error;
 	return applyEdit(source, edit.value);
 }
 
 function stmtKindAt(source: string, line: int32, column: int32): string {
-	const parsed = parseSource(source);
-	if (!parsed.ok) return "PARSE ERROR";
-	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });
-	if (stmt == null) return "none";
-	return NodeKind[stmt.kind];
+	const run = runAt(source, line, column);
+	if (run == null) return "none";
+	return NodeKind[run.stmts[0].kind];
 }
 
 const MIXED = "const xs = [\n\t1,\n\t2,\n];\nfunction f(): void {\n\tlet   x=1;\n\tconst y = [3,\n\t\t4];\n}\n";

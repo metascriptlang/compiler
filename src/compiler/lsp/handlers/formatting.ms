@@ -8,7 +8,7 @@ import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGe
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
-import { FmtPos, formatStatementEdit, innermostStatement, applyEdit } from "../../fmt/edit";
+import { FmtPos, formatStatementsEdit, rangeStatements, applyEdit } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
 import { lspByteColumn, lspByteColumnIn, lspCharacterIn } from "../position";
 import { checkLossless } from "../../fmt/lossless";
@@ -178,10 +178,11 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	}
 	const parsed = parseSource(source);
 	if (!parsed.ok) return lspResponse(id, "[]");
-	const stmt = innermostStatement(parsed.value, from.value, to.value);
-	if (stmt == null) return lspResponse(id, "[]");
+	const stmts = rangeStatements(parsed.value, from.value, to.value);
+	if (!stmts.ok) return lspErrorResponse(id, -32603, stmts.error);
+	if (stmts.value == null) return lspResponse(id, "[]");
 
-	const edit = formatStatementEdit(stmt, source, getFormatOptions(db, path));
+	const edit = formatStatementsEdit(stmts.value, source, getFormatOptions(db, path));
 	if (!edit.ok) return lspErrorResponse(id, -32603, edit.error);
 	const e = edit.value;
 	const kept = checkLossless(source, applyEdit(source, e));
@@ -513,4 +514,55 @@ test "document formatting turns CRLF into LF with one edit per line break and on
 	}
 	assert inline == 1;
 	assert edits.length == 4;
+}
+
+function rangeFormatted(source: string, startLine: int32, startCharacter: int32, endLine: int32, endCharacter: int32): string {
+	const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"range":{"start":{"line":${startLine},"character":${startCharacter}},"end":{"line":${endLine},"character":${endCharacter}}}}`;
+	const result = applyClientUtf16Edits(source, formattingItems(handleRangeFormatting("1", params, formattingDb(source))));
+	assertFormattedBuffer(source, result);
+	return result;
+}
+
+const TWO_LOOSE = "export function f(): int32 {\n\tconst  x=1;\n\tconst   y=2;\n\treturn x+y;\n}\n";
+const TWO_TIDY = "export function f(): int32 {\n\tconst x = 1;\n\tconst y = 2;\n\treturn x+y;\n}\n";
+
+test "range over two statements formats both and leaves the third alone" {
+	assert rangeFormatted(TWO_LOOSE, 1, 0, 2, 14) == TWO_TIDY;
+}
+
+test "range starting mid-statement and ending in the next one formats both statements" {
+	assert rangeFormatted(TWO_LOOSE, 1, 9, 2, 8) == TWO_TIDY;
+}
+
+test "range over statements in a nested block formats the run inside the block" {
+	const source = "export function f(c: boolean): int32 {\n\tlet z=0;\n\tif (c) {\n\t\tconst  x=1;\n\t\tconst   y=2;\n\t\tz=x+y;\n\t}\n\treturn z;\n}\n";
+	const expected = "export function f(c: boolean): int32 {\n\tlet z=0;\n\tif (c) {\n\t\tconst x = 1;\n\t\tconst y = 2;\n\t\tz=x+y;\n\t}\n\treturn z;\n}\n";
+	assert rangeFormatted(source, 3, 2, 4, 5) == expected;
+}
+
+test "range over a statement and one in an outer block formats the enclosing statements" {
+	const source = "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) {\n\t\tz=1;\n\t}\n\treturn  z;\n}\n";
+	const expected = "export function f(c: boolean): int32 {\n\tlet z = 0;\n\tif (c) { z = 1; }\n\treturn z;\n}\n";
+	assert rangeFormatted(source, 1, 0, 5, 5) == expected;
+}
+
+test "range formatting keeps one blank line between covered statements and squeezes more" {
+	const source = "const  a=1;\n\n\n\nconst   b=2;\nconst c = 3;\n";
+	assert rangeFormatted(source, 0, 0, 4, 3) == "const a = 1;\n\nconst b = 2;\nconst c = 3;\n";
+}
+
+test "range formatting joins covered statements of a block without blank lines, as the document does" {
+	const source = "export function f(): int32 {\n\tconst  x=1;\n\n\n\tconst   y=2;\n\treturn x+y;\n}\n";
+	assert rangeFormatted(source, 1, 0, 4, 14) == TWO_TIDY;
+}
+
+test "range over two class members formats both and leaves the rest alone" {
+	const source = "export class C {\n\tx:   int32=1;\n\ty:   int32=2;\n\tz:   int32=3;\n}\n";
+	const expected = "export class C {\n\tx: int32 = 1;\n\ty: int32 = 2;\n\tz:   int32=3;\n}\n";
+	assert rangeFormatted(source, 1, 0, 2, 5) == expected;
+}
+
+test "range formatting over a run is idempotent" {
+	const once = rangeFormatted(TWO_LOOSE, 1, 0, 2, 14);
+	assert rangeFormatted(once, 1, 0, 2, 14) == once;
 }
