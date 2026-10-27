@@ -325,6 +325,10 @@ export function rawTemplateAt(node: Node, options: FormatOptions): string {
 	return options.source.byteSlice(pos, skipTemplate(options.source, pos));
 }
 
+export function nativeFrom(nativeName: string): string {
+	return " from \"" + escapeString(nativeName, "\"".code) + "\"";
+}
+
 export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as StringLiteralData;
 	const template = rawTemplateAt(node, options);

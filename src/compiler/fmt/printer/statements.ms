@@ -12,7 +12,7 @@ import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, co
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
 class ListItem {
 	line: int32;
@@ -765,7 +765,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 
 	if (isSynthesized(node, d.fnBody)) {
 		if (d.nativeName != "") {
-			parts.push(docText(" from \"" + d.nativeName + "\""));
+			parts.push(docText(nativeFrom(d.nativeName)));
 		}
 		parts.push(docText(";"));
 		return docGroup(parts);

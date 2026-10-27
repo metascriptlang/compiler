@@ -15,7 +15,7 @@ import {
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, isSynthesized, takeStructAccessors } from "./statements";
 
 function bodyComments(node: Node): SourceComment[] {
@@ -228,7 +228,7 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
-	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause + (d.nativeName != "" ? " from \"" + d.nativeName + "\"" : "");
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause + (d.nativeName != "" ? nativeFrom(d.nativeName) : "");
 	const accessors = keyword == "struct" ? takeStructAccessors() : [];
 	let accessorIdx = 0;
 	if (d.interfaceFields.length == 0 && accessors.length == 0) {
@@ -388,7 +388,7 @@ export function printExternDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.externType));
 	}
 	if (d.nativeName != "") {
-		parts.push(docText(" from \"" + d.nativeName + "\""));
+		parts.push(docText(nativeFrom(d.nativeName)));
 	}
 	if (options.semi) {
 		parts.push(docText(";"));
@@ -548,7 +548,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.methodReturnType));
 	}
 	if (isSynthesized(node, d.methodBody)) {
-		if (d.nativeName != "") parts.push(docText(" from \"" + d.nativeName + "\""));
+		if (d.nativeName != "") parts.push(docText(nativeFrom(d.nativeName)));
 		parts.push(docText(";"));
 		return docGroup(parts);
 	}
