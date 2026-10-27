@@ -3866,8 +3866,6 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturnStmts = [];
 	const savedReturnTries = ctx.inferredReturnTries;
 	ctx.inferredReturnTries = [];
-	const savedMatchDepth = ctx.matchExprDepth;
-	ctx.matchExprDepth = 0;
 
 	// Contextual param types from expectedType (e.g. callback signature at the call site).
 	// Used when the user wrote untyped params: `arr.forEach(n => f(n))` — `n` typed by callee.
@@ -3984,7 +3982,6 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		let bodyExpected = explicitReturnType;
 		if (isAsync && bodyExpected != null) bodyExpected = asyncBodyType(bodyExpected);
 		const hoistMark = ctx.pendingHoisted.length;
-		if (body.kind == NodeKind.MatchExpr) ctx.returnedMatches.push(body);
 		checkExpr(ctx, body, bodyExpected);
 		let result = body;
 		if (fnNode.kind == NodeKind.ArrowFunction && returnsFromAsyncBody(ctx)) {
@@ -4006,7 +4003,6 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.readonlyBoundary = savedBoundary;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
-	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = explicitReturnType == null && returnTypeAnnotation == "" && isGenerator && !isAsync
 		? settleYields(ctx, name, fnNode.location)

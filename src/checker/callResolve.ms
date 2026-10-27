@@ -4697,13 +4697,6 @@ function tailValue(tail: Node): Node {
 	return (tail.data as ExprStmtData).expr;
 }
 
-function takeReturnedMatch(ctx: CheckerContext, node: Node): boolean {
-	const at = ctx.returnedMatches.indexOf(node);
-	if (at < 0) return false;
-	ctx.returnedMatches.splice(at, 1);
-	return true;
-}
-
 function unionCalleeHint(t: Type): string {
 	if (t.kind != TypeKind.Union) return "";
 	for (const m of t.typeChildren) {
@@ -6253,7 +6246,6 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MatchExprData;
 	const asStatement = node == ctx.stmtPosExpr;
-	const inReturn = !asStatement && takeReturnedMatch(ctx, node);
 	callCheckExpr(ctx, d.matchDisc, null);
 	const discType = d.matchDisc.nodeType;
 	let returnType = inferredType();
@@ -6341,19 +6333,11 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		} else if (cd.caseBody.kind == NodeKind.BlockStmt) {
 			const tails: ArmTails = { values: [], missing: [] };
 			collectArmTails(cd.caseBody, tails);
-			if (inReturn) {
-				for (const t of tails.values) {
-					if (tailValue(t).kind == NodeKind.MatchExpr) ctx.returnedMatches.push(tailValue(t));
-				}
-			}
 			const outerTails = ctx.armTails;
 			const outerArmExpected = ctx.matchArmExpected;
-			const outerDepth = ctx.matchExprDepth;
 			ctx.armTails = tails.values;
 			ctx.matchArmExpected = expectedType;
-			if (!inReturn) ctx.matchExprDepth = outerDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
-			ctx.matchExprDepth = outerDepth;
 			ctx.matchArmExpected = outerArmExpected;
 			ctx.armTails = outerTails;
 			for (const m of tails.missing) {
@@ -6364,7 +6348,6 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 			}
 			armTails[armTails.length - 1] = tails.values;
 		} else {
-			if (inReturn && cd.caseBody.kind == NodeKind.MatchExpr) ctx.returnedMatches.push(cd.caseBody);
 			callCheckExpr(ctx, cd.caseBody, expectedType); if (cd.caseBody.nodeType != null) { bodyType = cd.caseBody.nodeType; }
 		}
 

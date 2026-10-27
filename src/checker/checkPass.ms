@@ -1403,7 +1403,6 @@ interface DeclarationState {
 	inTestBlock: boolean;
 	inTryExpr: boolean;
 	jsxMacroArgDepth: int32;
-	matchExprDepth: number;
 	matchArmExpected: Type | null;
 	initTracker: InitTracker;
 	condEvalDepth: int32;
@@ -1432,7 +1431,6 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		inTestBlock: ctx.inTestBlock,
 		inTryExpr: ctx.inTryExpr,
 		jsxMacroArgDepth: ctx.jsxMacroArgDepth,
-		matchExprDepth: ctx.matchExprDepth,
 		matchArmExpected: ctx.matchArmExpected,
 		initTracker: ctx.initTracker,
 		condEvalDepth: ctx.condEvalDepth,
@@ -1458,7 +1456,6 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.inTestBlock = false;
 	ctx.inTryExpr = false;
 	ctx.jsxMacroArgDepth = 0;
-	ctx.matchExprDepth = 0;
 	ctx.matchArmExpected = null;
 	ctx.initTracker = createInitTracker();
 	ctx.condEvalDepth = 0;
@@ -1487,7 +1484,6 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.inTestBlock = saved.inTestBlock;
 	ctx.inTryExpr = saved.inTryExpr;
 	ctx.jsxMacroArgDepth = saved.jsxMacroArgDepth;
-	ctx.matchExprDepth = saved.matchExprDepth;
 	ctx.matchArmExpected = saved.matchArmExpected;
 	ctx.initTracker = saved.initTracker;
 	ctx.condEvalDepth = saved.condEvalDepth;
@@ -2715,13 +2711,6 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		checkBareReturn(ctx, node);
 		return;
 	}
-	if (ctx.matchExprDepth > 0) {
-		addError(ctx, "`return` here would leave the function, not give this match arm its value: write the value as the arm's last expression",
-			node.location.line, node.location.column);
-		checkExpr(ctx, d.argument, null);
-		return;
-	}
-	if (d.argument.kind == NodeKind.MatchExpr) ctx.returnedMatches.push(d.argument);
 
 	// `return null`: validate assignability with retType=Null FIRST, then stamp
 	// d.argument.nodeType with the declared return type for codegen. The fast-path
@@ -2800,7 +2789,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// Re-read the post-fitNode type so converter substitutions
 	// (e.g. `expr` → `toNumber(expr)`) are reflected in downstream checks.
 	const finalRetType = d.argument != null ? d.argument.nodeType : retType;
-	if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
+	if (ctx.inferredReturn != null) {
 		if (ctx.inferredReturn.kind == TypeKind.Inferred) {
 			if (finalRetType != null) { ctx.inferredReturn = finalRetType; }
 		} else if (returnExpected == null && finalRetType != null && ctx.inferredReturn != finalRetType) {
@@ -3066,12 +3055,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const paramSyms: Symbol[] = [];
 	const _fb0 = _slowTrace ? performance.now() : 0;
 	const savedFunction = ctx.currentFunction;
-	const savedMatchDepth = ctx.matchExprDepth;
 	const savedCtorExits = ctx.ctorExits;
 	ctx.ctorExits = ctx.ctorExitsNext;
 	ctx.ctorExitsNext = null;
 	ctx.currentFunction = sym;
-	ctx.matchExprDepth = 0;
 	const compileTimeBody = sym != null && hasFlag(sym, SymbolFlag.CompileTime);
 	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth + 1;
 	// Ref parity: trackProc — scope + param init
@@ -3159,7 +3146,6 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
-	ctx.matchExprDepth = savedMatchDepth;
 	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth - 1;
 	// PROFILE: surface pathological per-function check times immediately.
 	const _fb1 = _slowTrace ? performance.now() : 0;
