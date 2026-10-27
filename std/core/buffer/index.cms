@@ -506,6 +506,7 @@ function utf8StepAt(data: Readonly<Span<uint8>>, i: int64): int64 {
 function utf8Of(range: Readonly<Span<uint8>>): string {
 	const length = range.length as int64;
 	let ascii = true;
+	let wellFormed = true;
 	let i: int64 = 0;
 	let size: int64 = 0;
 	while (i < length) {
@@ -516,12 +517,13 @@ function utf8Of(range: Readonly<Span<uint8>>): string {
 		}
 		ascii = false;
 		const step = utf8StepAt(range, i);
+		if (step < 0) wellFormed = false;
 		i += step > 0 ? step : -step;
 		size += step > 0 ? step : 3;
 	}
 	const result = newBytes(size);
 	const bytes = result.bytePointer();
-	if (size == length) {
+	if (wellFormed) {
 		copyTo(bytes, 0, range, 0, length);
 	} else {
 		let at: int64 = 0;
