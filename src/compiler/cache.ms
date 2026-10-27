@@ -17,8 +17,9 @@ import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/proce
 import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir } from "std/fs";
 import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
+import { localCacheDir, globalCacheRoot } from "../utils/cachePaths";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
-import { ensureDir, atomicWriteFile, renameReplace } from "./io";
+import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { VERSION } from "./usage";
@@ -209,13 +210,7 @@ let _projectInputHashes: string[] = [];
 export function initCache(mode: number, forceRebuild: boolean): void {
 	_projectInputKey = "";
 	_projectInputHashes = [];
-	const envDir = env.get("MSC_CACHE_DIR");
-	if (envDir != "") {
-		_cacheDir = envDir;
-	} else {
-		const modeDir = mode >= 1 ? "release" : "debug";
-		_cacheDir = `out/${modeDir}/.cache`;
-	}
+	_cacheDir = localCacheDir(mode >= 1);
 	ensureDir(_cacheDir);
 	ensureLocalSchema();
 	_forceRebuild = forceRebuild;
@@ -228,13 +223,9 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 
 function getCacheDir(): string {
 	if (_cacheDir != "") return _cacheDir;
-	const envDir = env.get("MSC_CACHE_DIR");
-	if (envDir != "") {
-		_cacheDir = envDir;
-	} else {
-		_cacheDir = "out/debug/.cache";
-	}
+	_cacheDir = localCacheDir();
 	ensureDir(_cacheDir);
+	ensureLocalSchema();
 	return _cacheDir;
 }
 
@@ -444,20 +435,13 @@ export function stableCFileFp(modPath: string, fp: string): string {
 	return `${getCacheDir()}/${cacheStem(modPath)}.${fpKey(fp)}.c`;
 }
 
-// One-time migration sweep: pre-fp-keyed layouts share physical files per
-// srcPath — unfixable in place — so bump the schema marker and wipe the dir
-// once. Cost is one cold rebuild, same as any objectStamp change.
 function ensureLocalSchema(): void {
 	const marker = `${getCacheDir()}/.schema-fpkey`;
 	if (exists(marker)) return;
-	const entries = readDir(getCacheDir());
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e == ".schema-fpkey") continue;
-		if (e.charAt(e.length - 1) == "/") continue;
-		remove(`${getCacheDir()}/${e}`);
+	if (!atomicWriteFile(marker, "v1")) {
+		console.log(`error: cannot initialize local cache marker: ${marker}`);
+		stopBuild();
 	}
-	writeFile(marker, "v1");
 }
 
 export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string, isCpp: boolean = false): string {
@@ -540,14 +524,6 @@ struct StoreHit {
 let _ccIdentity = "";
 let _ccIdentityName = "";
 let _dirNames: HashMap<string, HashSet<string>> = new HashMap<string, HashSet<string>>();
-
-function globalCacheRoot(): string {
-	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
-	const home = env.get("HOME");
-	const base = home != "" ? home : env.get("USERPROFILE");
-	if (base == "") return "";
-	return `${base}/.metascript/cache`;
-}
 
 function storeRoot(): string {
 	const root = globalCacheRoot();

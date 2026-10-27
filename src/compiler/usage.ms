@@ -60,6 +60,10 @@ export function printUsage(): void {
 	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");
 	console.log("  " + cyan("--link") + "=<file>        Link a file as @link does " + dim("(relative to the cwd)"));
 	console.log("  " + cyan("--emit") + "=c             Emit C source only " + dim("(no compile/link)"));
+	console.log("  " + cyan("--cache-dir") + "=<path>    Local cache (or --cache-dir <path>)");
+	console.log("  " + cyan("--global-cache-dir") + "=<path>  Shared build cache root");
+	console.log("  " + cyan("--global-cache") + "          Enable shared build cache (default)");
+	console.log("  " + cyan("--no-global-cache") + "       Disable shared build cache");
 	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
 	console.log("  " + cyan("--hcr") + "                 Build hot-reloadable module images " + dim("(docs/HCR.md)"));
 	console.log("                        run --hcr: build, launch under a host, rebuild and reload on every save");

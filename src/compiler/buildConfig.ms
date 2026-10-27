@@ -2,12 +2,13 @@
 // Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
 import { platform } from "std/process";
-import { exists, readFile } from "std/fs";
+import { exists, readFile, ensureDir, writeFile, removeAll } from "std/fs";
 import { registerCoreParsers } from "../parser/statements/core";
 import { parseSource } from "../parser/statements/validation";
 import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";
 import {
-	Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData,
+	Node, NodeKind, NodeFlag, ProgramData, VariableDeclData, ExportDeclData,
+	ExprStmtData, IdentifierData,
 	ObjectLiteralData, ArrayLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../ast/node";
 
@@ -18,6 +19,34 @@ export interface BuildSection {
 	outDir: string;
 	outFile: string;
 	optimize: string;
+	cacheDir: string;
+	globalCacheDir: string;
+	globalCache: boolean;
+	cacheError: string;
+}
+
+export function defaultBuildSection(): BuildSection {
+	return {
+		target: "c",
+		outDir: "out",
+		outFile: "",
+		optimize: "debug",
+		cacheDir: "",
+		globalCacheDir: "",
+		globalCache: true,
+		cacheError: "",
+	};
+}
+
+export function validateCacheDirectory(value: string): Result<void, string> {
+	if (value.length == 0) return Result.err("must be a non-empty string");
+	for (let i: int32 = 0; i < value.length; i += 1) {
+		const code = value.charCodeAt(i);
+		if (code < 32 || code == 127 || code == 133 || code == 8232 || code == 8233) {
+			return Result.err("must not contain NUL or control characters");
+		}
+	}
+	return Result.ok(null);
 }
 
 // `defines: { name: value }` — the project's `-d:` switches, as Nim's project config files carry
@@ -253,29 +282,39 @@ function nodeBool(node: Node): int32 {
 	return (node.data as BooleanLiteralData).boolValue ? 1 : 0;
 }
 
-// Find the root config ObjectLiteral from parsed build.ms AST.
-// Handles: `const config = { ... }; export default config;`
-// and:     `export default { ... };`
-// and:     `export default defineConfig({ ... });`
 function findConfigObject(program: Node): Node | null {
 	if (program == null || program.kind != NodeKind.Program) return null;
 	const pd = program.data as ProgramData;
+	let defaultExpr: Node | null = null;
+	let exportIndex: int32 = -1;
+	for (let i: int32 = 0; i < pd.programStmts.length; i += 1) {
+		const stmt = pd.programStmts[i];
+		if (stmt.kind != NodeKind.ExportDecl || !stmt.flags.has(NodeFlag.ExportDefault)) continue;
+		const decl = (stmt.data as ExportDeclData).exportedDecl;
+		if (defaultExpr != null || decl.kind != NodeKind.ExprStmt) return null;
+		defaultExpr = (decl.data as ExprStmtData).expr;
+		exportIndex = i;
+	}
+	let exportName = "";
+	if (defaultExpr != null) {
+		if (defaultExpr.kind == NodeKind.ObjectLiteral) return defaultExpr;
+		if (defaultExpr.kind != NodeKind.Identifier) return null;
+		exportName = (defaultExpr.data as IdentifierData).name;
+	}
 	let configObj: Node | null = null;
-
-	// First pass: find top-level VariableDecl with ObjectLiteral init
-	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
+	for (let i: int32 = 0; i < pd.programStmts.length; i += 1) {
 		let stmt = pd.programStmts[i];
-		// Unwrap export
-		if (stmt.kind == NodeKind.ExportDecl) {
-			const ed = stmt.data as ExportDeclData;
-			stmt = ed.exportedDecl;
+		if (stmt.kind == NodeKind.ExportDecl) stmt = (stmt.data as ExportDeclData).exportedDecl;
+		if (stmt.kind != NodeKind.VariableDecl) continue;
+		const vd = stmt.data as VariableDeclData;
+		if (exportName != "" && vd.declName != exportName) continue;
+		if (exportName != "" && i > exportIndex) return null;
+		if (vd.initializer == null || vd.initializer.kind != NodeKind.ObjectLiteral) {
+			if (exportName != "") return null;
+			continue;
 		}
-		if (stmt.kind == NodeKind.VariableDecl) {
-			const vd = stmt.data as VariableDeclData;
-			if (vd.initializer != null && vd.initializer.kind == NodeKind.ObjectLiteral) {
-				configObj = vd.initializer;
-			}
-		}
+		if (configObj != null) return null;
+		configObj = vd.initializer;
 	}
 	return configObj;
 }
@@ -348,9 +387,44 @@ function extractCc(ccNode: Node): CcSection {
 }
 
 // Extract BuildSection from an ObjectLiteral node.
-function extractBuild(buildNode: Node): BuildSection {
-	const bs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
-	if (buildNode == null || buildNode.kind != NodeKind.ObjectLiteral) return bs;
+function extractBuild(buildNode: Node | null): BuildSection {
+	const bs = defaultBuildSection();
+	if (buildNode == null) return bs;
+	if (buildNode.kind != NodeKind.ObjectLiteral) {
+		bs.cacheError = "build: must be an object literal";
+		return bs;
+	}
+	const fields = buildNode.data as ObjectLiteralData;
+	for (let i: int32 = 0; i < fields.keys.length; i += 1) {
+		const key = fields.keys[i];
+		const value = i < fields.properties.length ? fields.properties[i] : null;
+		if (value != null && (value.kind == NodeKind.SpreadExpr ||
+			value.kind == NodeKind.ComputedProperty)) {
+			bs.cacheError = "build: spread and computed fields require direct literal declarations";
+			return bs;
+		}
+		if (key != "cacheDir" && key != "globalCacheDir" && key != "globalCache") continue;
+		if (key == "globalCache") {
+			if (value == null || value.kind != NodeKind.BooleanLiteral) {
+				bs.cacheError = "build.globalCache: must be a boolean literal";
+				return bs;
+			}
+			bs.globalCache = nodeBool(value) == 1;
+			continue;
+		}
+		if (value == null || value.kind != NodeKind.StringLiteral) {
+			bs.cacheError = `build.${key}: must be a non-empty string literal`;
+			return bs;
+		}
+		const path = nodeString(value);
+		const checked = validateCacheDirectory(path);
+		if (!checked.ok) {
+			bs.cacheError = `build.${key}: ${checked.error}`;
+			return bs;
+		}
+		if (key == "cacheDir") bs.cacheDir = path;
+		else bs.globalCacheDir = path;
+	}
 	const t = nodeString(findObjField(buildNode, "target"));
 	if (t.length > 0) { bs.target = (t == "native") ? "c" : t; }
 	const od = nodeString(findObjField(buildNode, "outDir"));
@@ -360,6 +434,29 @@ function extractBuild(buildNode: Node): BuildSection {
 	const opt = nodeString(findObjField(buildNode, "optimize"));
 	if (opt.length > 0) { bs.optimize = opt; }
 	return bs;
+}
+
+function extractConfigBuild(configObj: Node): BuildSection {
+	const fields = configObj.data as ObjectLiteralData;
+	let build = defaultBuildSection();
+	let found = false;
+	for (let i: int32 = 0; i < fields.keys.length; i += 1) {
+		const value = i < fields.properties.length ? fields.properties[i] : null;
+		if (value != null && (value.kind == NodeKind.SpreadExpr ||
+			value.kind == NodeKind.ComputedProperty)) {
+			build.cacheError = "build: configuration fields require direct literal declarations";
+			return build;
+		}
+		if (fields.keys[i] != "build") continue;
+		if (found) {
+			build.cacheError = "build: duplicate build sections are not supported";
+			return build;
+		}
+		found = true;
+		build = extractBuild(value);
+		if (build.cacheError != "") return build;
+	}
+	return build;
 }
 
 // Extract PackageSection from an ObjectLiteral node (the `package: { ... }` block).
@@ -475,7 +572,7 @@ function extractDeps(depsNode: Node): DepsSection {
 let _parsersRegistered = false;
 
 export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfig {
-	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
+	const defBs = defaultBuildSection();
 	const defRs = defaultResolveSection();
 	const defFmt = defaultFmtSection();
 	const defLsp = defaultLspSection();
@@ -488,21 +585,35 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 
 	if (!exists(filePath)) return defCfg;
 
-	const source = try readFile(filePath) catch "";
-	if (source.length == 0) return defCfg;
+	const read = readFile(filePath);
+	if (!read.ok) {
+		defBs.cacheError = `build: cannot read configuration: ${read.error.message}`;
+		return defCfg;
+	}
+	const source = read.value;
+	if (source.length == 0) {
+		defBs.cacheError = "build: configuration is empty";
+		return defCfg;
+	}
 
 	if (!_parsersRegistered) {
 		registerCoreParsers();
 		_parsersRegistered = true;
 	}
 	const parseResult = parseSource(source);
-	if (!parseResult.ok) return defCfg;
+	if (!parseResult.ok) {
+		defBs.cacheError = "build: could not parse configuration";
+		return defCfg;
+	}
 
 	const configObj = findConfigObject(parseResult.value);
-	if (configObj == null) return defCfg;
+	if (configObj == null) {
+		defBs.cacheError = "build: configuration must contain an object literal";
+		return defCfg;
+	}
 
 	const entry = nodeString(findObjField(configObj, "entry"));
-	const bs = extractBuild(findObjField(configObj, "build"));
+	const bs = extractConfigBuild(configObj);
 	const rs = extractResolve(findObjField(configObj, "resolve"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
 	const lsp = extractLsp(findObjField(configObj, "lsp"));
@@ -544,6 +655,12 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 	const warnings: BuildWarning[] = [];
 	const configObj = parseBuildSource(source);
 	if (configObj == null) return warnings;
+	const buildNode = findObjField(configObj, "build");
+	const build = extractConfigBuild(configObj);
+	if (build.cacheError != "") {
+		const line = buildNode == null ? configObj.location.line : buildNode.location.line;
+		warnings.push({ message: build.cacheError, line });
+	}
 	const entryNode = findObjField(configObj, "entry");
 	if (entryNode != null) {
 		const entry = nodeString(entryNode);
@@ -616,7 +733,7 @@ function testExtractFromSource(source: string): BuildConfig {
 	const configObj = parseBuildSource(source);
 	if (configObj == null) {
 		return {
-			entry: "", build: { target: "c", outDir: "out", outFile: "", optimize: "debug" },
+			entry: "", build: defaultBuildSection(),
 			resolve: defaultResolveSection(), fmt: defaultFmtSection(), lsp: defaultLspSection(), cc: defaultCcSection(),
 			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(),
 			globalImports: [], defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false,
@@ -630,7 +747,7 @@ function testExtractFromSource(source: string): BuildConfig {
 	const passMacro: string[] = [];
 	extractModulePasses(findObjField(configObj, "globalImports"), passFrom, passMacro);
 	return {
-		entry, build: extractBuild(findObjField(configObj, "build")),
+		entry, build: extractConfigBuild(configObj),
 		resolve: extractResolve(findObjField(configObj, "resolve")),
 		fmt: extractFmt(findObjField(configObj, "fmt")),
 		lsp: extractLsp(findObjField(configObj, "lsp")),
@@ -845,4 +962,150 @@ test "extractPackage bin holds every declared command" {
 test "extractPackage bin defaults empty" {
 	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\" } }; export default config;");
 	assert cfg.package.bin.keys.length == 0;
+}
+
+test "build cache fields preserve literals and independent sharing policy" {
+	const cfg = testExtractFromSource(
+		'const config = { build: { cacheDir: "local", globalCacheDir: "shared", ' +
+		'globalCache: false } }; export default config;',
+	);
+	assert cfg.build.cacheError == "";
+	assert cfg.build.cacheDir == "local";
+	assert cfg.build.globalCacheDir == "shared";
+	assert !cfg.build.globalCache;
+	const enabled = testExtractFromSource(
+		'const config = { build: { globalCache: true } }; export default config;',
+	);
+	assert enabled.build.globalCache;
+	assert enabled.build.cacheError == "";
+}
+
+test "omitted build cache fields remain unset and sharing defaults true" {
+	for (const source of ["const config = {};", "const config = { build: {} };"]) {
+		const cfg = testExtractFromSource(source);
+		assert cfg.build.cacheDir == "";
+		assert cfg.build.globalCacheDir == "";
+		assert cfg.build.globalCache;
+		assert cfg.build.cacheError == "";
+	}
+}
+
+test "build cache paths refuse empty wrong-kind and nonliteral declarations" {
+	for (const field of ["cacheDir", "globalCacheDir"]) {
+		for (const value of ['""', "null", "42", "false", "[]", "{}", "path", '"a" + "b"']) {
+			const cfg = testExtractFromSource(`const config = { build: { ${field}: ${value} } };`);
+			assert cfg.build.cacheError.startsWith(`build.${field}:`);
+		}
+	}
+}
+
+test "build cache sharing refuses nonliteral booleans and a nonliteral build section" {
+	for (const value of ['"false"', "null", "0", "enabled", "!false"]) {
+		const cfg = testExtractFromSource(`const config = { build: { globalCache: ${value} } };`);
+		assert cfg.build.cacheError.startsWith("build.globalCache:");
+	}
+	for (const value of ["null", "false", '"cache"', "settings", "[]"]) {
+		const cfg = testExtractFromSource(`const config = { build: ${value} };`);
+		assert cfg.build.cacheError == "build: must be an object literal";
+	}
+}
+
+test "build cache paths refuse manifest control characters" {
+	for (const field of ["cacheDir", "globalCacheDir"]) {
+		for (const escape of ["\\0", "\\n", "\\r", "\\t", "\\v", "\\f"]) {
+			const cfg = testExtractFromSource(
+				`const config = { build: { ${field}: "a${escape}b" } };`,
+			);
+			assert cfg.build.cacheError.startsWith(`build.${field}:`);
+		}
+	}
+	for (const path of ["a\u0085b", "a\u2028b", "a\u2029b"]) {
+		assert !validateCacheDirectory(path).ok;
+	}
+}
+
+test "a duplicate valid cache field cannot conceal an invalid declaration" {
+	const cfg = testExtractFromSource(
+		'const config = { build: { cacheDir: "valid", cacheDir: "" } };',
+	);
+	assert cfg.build.cacheError.startsWith("build.cacheDir:");
+}
+
+test "build cache declaration warnings expose the field and line" {
+	const warnings = validateBuildConfig(
+		".", 'const config = {\n build: { globalCache: "false" }\n};',
+	);
+	assert warnings.length == 1;
+	assert warnings[0].message.startsWith("build.globalCache:");
+	assert warnings[0].line == 2;
+}
+
+test "a malformed build file cannot silently select cache defaults" {
+	const project = `out/test/buildCacheConfig${Date.now()}`;
+	const file = project + "/build.ms";
+	try {
+		assert ensureDir(project).ok;
+		for (const source of [
+			'const config = { build: { cacheDir: "unfinished";',
+			"const config = settings;",
+		]) {
+			assert writeFile(file, source).ok;
+			const config = loadBuildConfig(file, false);
+			assert config.build.cacheError.startsWith("build:");
+		}
+	} finally {
+		removeAll(project);
+	}
+}
+
+test "unextractable config keys cannot conceal cache declarations or disabled sharing" {
+	for (const source of [
+		'const config = { build: { ...{ cacheDir: "" } } };',
+		"const config = { build: { ...{ globalCache: false } } };",
+		'const config = { ...{ build: { cacheDir: "" } } };',
+		'const config = { build: { ["cache" + "Dir"]: "" } };',
+		'const config = { ["bu" + "ild"]: { globalCache: false } };',
+	]) {
+		assert testExtractFromSource(source).build.cacheError != "";
+	}
+}
+
+test "duplicate build sections cannot conceal a cache declaration" {
+	for (const section of ['cacheDir: ""', "globalCache: false"]) {
+		const source = `const config = { build: {}, build: { ${section} } };`;
+		assert testExtractFromSource(source).build.cacheError != "";
+	}
+}
+
+test "an exported config is not replaced by an unrelated object" {
+	for (const declaration of ['cacheDir: ""', "globalCache: false"]) {
+		const cfg = testExtractFromSource(
+			`const config = { build: { ${declaration} } }; const helper = {}; export default config;`,
+		);
+		if (declaration.startsWith("cacheDir")) assert cfg.build.cacheError != "";
+		else assert !cfg.build.globalCache;
+	}
+}
+
+test "a default object config and literal computed keys retain their static meaning" {
+	const cfg = testExtractFromSource(
+		'const helper = {}; export default { build: { ["globalCache"]: false } };',
+	);
+	assert cfg.valid && cfg.build.cacheError == "";
+	assert !cfg.build.globalCache;
+}
+
+test "a present empty or unreadable configuration cannot select defaults" {
+	const project = `out/test/emptyBuildCacheConfig${Date.now()}`;
+	const file = project + "/build.ms";
+	try {
+		assert ensureDir(project).ok;
+		assert writeFile(file, "").ok;
+		assert loadBuildConfig(file, false).build.cacheError != "";
+		assert removeAll(file).ok;
+		assert ensureDir(file).ok;
+		assert loadBuildConfig(file, false).build.cacheError != "";
+	} finally {
+		removeAll(project);
+	}
 }

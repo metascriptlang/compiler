@@ -1,6 +1,7 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
-import { argv, cwd, exit, platform, arch } from "std/process";
+import { argv, cwd, exit, platform, arch, env } from "std/process";
+import { ensureDir, writeFile, removeAll } from "std/fs";
 import { isAbsolute, join, normalize } from "std/fs/path";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
@@ -13,8 +14,10 @@ import {
 	applyConfigDefines,
 	seedProjectDir,
 } from "./defines";
-import { BuildConfig, loadBuildConfig } from "./buildConfig";
-import { setParserDefines } from "../parser/context";
+import {
+	BuildConfig, BuildSection, defaultBuildSection, loadBuildConfig, validateCacheDirectory,
+} from "./buildConfig";
+import { getParserDefines, setParserDefines } from "../parser/context";
 import { setExtraGlobalImports, setModulePasses } from "../checker/prelude";
 import { setDefaultLoopLimit } from "../raiser/vm";
 import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
@@ -53,6 +56,10 @@ export interface CliOptions {
 	targetInfo: TargetInfo;
 	genDeps: boolean;
 	forceRebuild: boolean;
+	cacheDir: string;
+	globalCacheDir: string;
+	globalCache: boolean;
+	globalCacheExplicit: boolean;
 	strip: boolean;
 	sanitize: string;
 	passC: string;
@@ -153,6 +160,10 @@ export function newCliOptions(): CliOptions {
 		targetInfo: hostTargetInfo(),
 		genDeps: false,
 		forceRebuild: false,
+		cacheDir: "",
+		globalCacheDir: "",
+		globalCache: true,
+		globalCacheExplicit: false,
 		strip: false,
 		sanitize: "",
 		passC: "",
@@ -246,6 +257,44 @@ function globalImportEntry(projectRoot: string, gi: string): string {
 	return normalize(join(projectRoot, gi));
 }
 
+function selectedCacheDirectory(
+	cli: string,
+	envName: string,
+	manifest: string,
+	projectRoot: string,
+): Result<string, string> {
+	let path = cli;
+	let base = cwd();
+	if (path == "") path = env.get(envName);
+	if (path == "") {
+		path = manifest;
+		base = isAbsolute(projectRoot) ? projectRoot : join(cwd(), projectRoot);
+	}
+	if (path == "") return Result.ok("");
+	const checked = validateCacheDirectory(path);
+	if (!checked.ok) return Result.err(`${envName}: ${checked.error}`);
+	return Result.ok(normalize(isAbsolute(path) ? path : join(base, path)));
+}
+
+function applyCacheConfig(
+	opts: CliOptions,
+	build: BuildSection,
+	projectRoot: string,
+): Result<void, string> {
+	if (build.cacheError != "") {
+		return Result.err(`${join(projectRoot, "build.ms")}: ${build.cacheError}`);
+	}
+	opts.cacheDir = try selectedCacheDirectory(
+		opts.cacheDir, "MSC_CACHE_DIR", build.cacheDir, projectRoot,
+	);
+	opts.globalCacheDir = try selectedCacheDirectory(
+		opts.globalCacheDir, "MSC_GLOBAL_CACHE_DIR", build.globalCacheDir, projectRoot,
+	);
+	if (!opts.globalCacheExplicit) opts.globalCache = build.globalCache;
+	if (env.get("MSC_NO_GLOBAL_CACHE") != "") opts.globalCache = false;
+	return Result.ok(null);
+}
+
 // The project's build.ms goes in before any source is parsed: target, defines under the
 // command line's -d: switches, then globalImports and their module passes.
 export function applyProjectConfig(opts: CliOptions, projectRoot: string): Result<BuildConfig, string> {
@@ -253,6 +302,7 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 	opts.projectRoot = projectRoot;
 	const buildMsPath = join(projectRoot, "build.ms");
 	const config = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
+	try applyCacheConfig(opts, config.build, projectRoot);
 	if (config.valid) {
 		const targeted = applyBuildTarget(opts, config.build.target);
 		if (!targeted.ok) return Result.err(`${buildMsPath}: build.target: ${targeted.error}`);
@@ -360,6 +410,27 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			opts.genDeps = true;
 		} else if (arg == "--force" || arg == "-f") {
 			opts.forceRebuild = true;
+		} else if (arg == "--cache-dir" || arg.startsWith("--cache-dir=") ||
+			arg == "--global-cache-dir" || arg.startsWith("--global-cache-dir=")) {
+			const local = arg == "--cache-dir" || arg.startsWith("--cache-dir=");
+			const flag = local ? "--cache-dir" : "--global-cache-dir";
+			let value = "";
+			if (arg == flag) {
+				if (i + 1 >= args.length || args[i + 1].startsWith("-")) {
+					return Result.err(`${flag}: expected a non-empty path`);
+				}
+				i += 1;
+				value = args[i];
+			} else {
+				value = arg.slice(flag.length + 1);
+			}
+			const checked = validateCacheDirectory(value);
+			if (!checked.ok) return Result.err(`${flag}: ${checked.error}`);
+			if (local) opts.cacheDir = value;
+			else opts.globalCacheDir = value;
+		} else if (arg == "--global-cache" || arg == "--no-global-cache") {
+			opts.globalCache = arg == "--global-cache";
+			opts.globalCacheExplicit = true;
 		} else if (arg == "--strip") {
 			opts.strip = true;
 		} else if (arg.startsWith("--sanitize=")) {
@@ -666,4 +737,227 @@ test "an unknown --os target is an error result, not a silent stop" {
 	const opts = newCliOptions();
 	const r = applyArgs(opts, ["build", "a.ms", "--os=plan9"], 0);
 	assert !r.ok;
+}
+
+test "cache directory switches accept equals and separate path forms" {
+	for (const args of [
+		["build", "--cache-dir=local", "--global-cache-dir=shared"],
+		["build", "--cache-dir", "local", "--global-cache-dir", "shared"],
+	]) {
+		const opts = newCliOptions();
+		assert applyArgs(opts, args, 0).ok;
+		assert opts.cacheDir == "local";
+		assert opts.globalCacheDir == "shared";
+	}
+}
+
+test "cache directory switches refuse missing empty and flag arguments" {
+	for (const flag of ["--cache-dir", "--global-cache-dir"]) {
+		for (const args of [[flag], [flag + "="], [flag, ""], [flag, "--release"]]) {
+			const parsed = applyArgs(newCliOptions(), args, 0);
+			assert !parsed.ok;
+			if (!parsed.ok) assert parsed.error.startsWith(flag + ":");
+		}
+		for (const path of ["a\0b", "a\nb", "a\rb", "a\tb"]) {
+			assert !applyArgs(newCliOptions(), [flag + "=" + path], 0).ok;
+		}
+	}
+}
+
+test "the last explicit global cache toggle wins" {
+	const opts = newCliOptions();
+	assert opts.globalCache && !opts.globalCacheExplicit;
+	assert applyArgs(opts, ["--no-global-cache", "--global-cache"], 0).ok;
+	assert opts.globalCache && opts.globalCacheExplicit;
+	assert applyArgs(opts, ["--global-cache", "--no-global-cache"], 0).ok;
+	assert !opts.globalCache && opts.globalCacheExplicit;
+}
+
+test "run cache options obey the existing file argument boundary" {
+	for (const flag of ["--cache-dir=local", "--global-cache-dir=shared", "--no-global-cache"]) {
+		assert !applyArgs(newCliOptions(), ["run", "app.ms", flag], 0).ok;
+		const opts = newCliOptions();
+		assert applyArgs(opts, ["run", "app.ms", "argument", flag], 0).ok;
+		assert opts.extraArgs[1] == flag;
+		assert opts.cacheDir == "" && opts.globalCacheDir == "" && opts.globalCache;
+	}
+	const before = newCliOptions();
+	assert applyArgs(before, ["run", "--cache-dir", "local", "app.ms"], 0).ok;
+	assert before.cacheDir == "local" && before.inputFile == "app.ms";
+}
+
+function withCacheEnvironment(run: () => void): void {
+	const names = ["MSC_CACHE_DIR", "MSC_GLOBAL_CACHE_DIR", "MSC_NO_GLOBAL_CACHE"];
+	const saved: string[] = [];
+	for (const name of names) saved.push(env.get(name));
+	try {
+		for (const name of names) env.delete(name);
+		run();
+	} finally {
+		for (let i: int32 = 0; i < names.length; i += 1) {
+			if (saved[i] == "") env.delete(names[i]);
+			else env.set(names[i], saved[i]);
+		}
+	}
+}
+
+test "cache paths use CLI then environment then manifest with their respective bases" {
+	withCacheEnvironment(() => {
+		const project = normalize(join(cwd(), "out/test/cacheProject"));
+		const build = defaultBuildSection();
+		build.cacheDir = "manifest/../local";
+		build.globalCacheDir = "manifest/../shared";
+		const manifest = newCliOptions();
+		assert applyCacheConfig(manifest, build, project).ok;
+		assert manifest.cacheDir == normalize(join(project, "local"));
+		assert manifest.globalCacheDir == normalize(join(project, "shared"));
+		env.set("MSC_CACHE_DIR", "environment/../envLocal");
+		env.set("MSC_GLOBAL_CACHE_DIR", "environment/../envShared");
+		const environment = newCliOptions();
+		assert applyCacheConfig(environment, build, project).ok;
+		assert environment.cacheDir == normalize(join(cwd(), "envLocal"));
+		assert environment.globalCacheDir == normalize(join(cwd(), "envShared"));
+		const cli = newCliOptions();
+		cli.cacheDir = "command/../cliLocal";
+		cli.globalCacheDir = "command/../cliShared";
+		assert applyCacheConfig(cli, build, project).ok;
+		assert cli.cacheDir == normalize(join(cwd(), "cliLocal"));
+		assert cli.globalCacheDir == normalize(join(cwd(), "cliShared"));
+		assert env.get("MSC_CACHE_DIR") == "environment/../envLocal";
+		assert env.get("MSC_GLOBAL_CACHE_DIR") == "environment/../envShared";
+	});
+}
+
+test "absolute cache paths stay absolute for every source" {
+	withCacheEnvironment(() => {
+		const project = normalize(join(cwd(), "out/test/cacheProject"));
+		const local = normalize(join(cwd(), "absoluteLocal"));
+		const shared = normalize(join(cwd(), "absoluteShared"));
+		const build = defaultBuildSection();
+		build.cacheDir = local;
+		build.globalCacheDir = shared;
+		for (let source: int32 = 0; source < 3; source += 1) {
+			const opts = newCliOptions();
+			if (source == 1) {
+				env.set("MSC_CACHE_DIR", local);
+				env.set("MSC_GLOBAL_CACHE_DIR", shared);
+			}
+			if (source == 2) {
+				opts.cacheDir = local;
+				opts.globalCacheDir = shared;
+			}
+			assert applyCacheConfig(opts, build, project).ok;
+			assert opts.cacheDir == local && opts.globalCacheDir == shared;
+		}
+	});
+}
+
+test "unset and empty environment cache paths preserve provider defaults" {
+	withCacheEnvironment(() => {
+		for (let source: int32 = 0; source < 2; source += 1) {
+			if (source == 1) {
+				env.set("MSC_CACHE_DIR", "");
+				env.set("MSC_GLOBAL_CACHE_DIR", "");
+			}
+			const opts = newCliOptions();
+			assert applyCacheConfig(opts, defaultBuildSection(), "").ok;
+			assert opts.cacheDir == "" && opts.globalCacheDir == "";
+			assert opts.globalCache;
+		}
+	});
+}
+
+test "cache path selection does not interpolate tilde or environment references" {
+	withCacheEnvironment(() => {
+		const opts = newCliOptions();
+		opts.cacheDir = "~/local";
+		opts.globalCacheDir = "$HOME/shared";
+		assert applyCacheConfig(opts, defaultBuildSection(), "").ok;
+		assert opts.cacheDir == normalize(join(cwd(), "~/local"));
+		assert opts.globalCacheDir == normalize(join(cwd(), "$HOME/shared"));
+	});
+}
+
+test "global cache sharing policy is independent of every directory source" {
+	withCacheEnvironment(() => {
+		const build = defaultBuildSection();
+		build.globalCacheDir = "manifestShared";
+		build.globalCache = false;
+		for (let source: int32 = 0; source < 3; source += 1) {
+			const opts = newCliOptions();
+			if (source == 1) env.set("MSC_GLOBAL_CACHE_DIR", "envShared");
+			if (source == 2) opts.globalCacheDir = "cliShared";
+			assert applyCacheConfig(opts, build, cwd()).ok;
+			assert opts.globalCacheDir != "";
+			assert !opts.globalCache;
+		}
+		const enabled = newCliOptions();
+		assert applyArgs(enabled, ["--global-cache"], 0).ok;
+		assert applyCacheConfig(enabled, build, cwd()).ok;
+		assert enabled.globalCache;
+		build.globalCache = true;
+		const disabled = newCliOptions();
+		assert applyArgs(disabled, ["--no-global-cache"], 0).ok;
+		assert applyCacheConfig(disabled, build, cwd()).ok;
+		assert !disabled.globalCache;
+		env.set("MSC_NO_GLOBAL_CACHE", "1");
+		assert applyCacheConfig(enabled, build, cwd()).ok;
+		assert !enabled.globalCache && enabled.globalCacheDir != "";
+	});
+}
+
+test "unsafe selected environment cache paths fail with the variable name" {
+	withCacheEnvironment(() => {
+		for (const name of ["MSC_CACHE_DIR", "MSC_GLOBAL_CACHE_DIR"]) {
+			env.set(name, "unsafe\npath");
+			const resolved = applyCacheConfig(newCliOptions(), defaultBuildSection(), "");
+			assert !resolved.ok;
+			if (!resolved.ok) assert resolved.error.startsWith(name + ":");
+			env.delete(name);
+		}
+	});
+}
+
+test "invalid project cache declarations fail even under CLI and environment overrides" {
+	withCacheEnvironment(() => {
+		const project = normalize(join(cwd(), `out/test/cacheConfig${Date.now()}`));
+		const parserDefines = getParserDefines();
+		try {
+			const made = ensureDir(project);
+			assert made.ok;
+			env.set("MSC_CACHE_DIR", "envLocal");
+			env.set("MSC_GLOBAL_CACHE_DIR", "envShared");
+			const declarations = ['cacheDir: ""', "globalCacheDir: path", 'globalCache: "no"'];
+			for (const declaration of declarations) {
+				const written = writeFile(
+					join(project, "build.ms"), `const config = { build: { ${declaration} } };`,
+				);
+				assert written.ok;
+				const opts = newCliOptions();
+				opts.cacheDir = "cliLocal";
+				opts.globalCacheDir = "cliShared";
+				assert applyArgs(opts, ["--global-cache"], 0).ok;
+				const configured = applyProjectConfig(opts, project);
+				assert !configured.ok;
+				if (!configured.ok) {
+					assert configured.error.startsWith(join(project, "build.ms") + ": build.");
+				}
+			}
+		} finally {
+			setParserDefines(parserDefines);
+			removeAll(project);
+		}
+	});
+}
+
+test "a relative project root still produces absolute manifest cache paths" {
+	withCacheEnvironment(() => {
+		const build = defaultBuildSection();
+		build.cacheDir = "local";
+		build.globalCacheDir = "shared";
+		const opts = newCliOptions();
+		assert applyCacheConfig(opts, build, "out/test/cacheProject").ok;
+		assert opts.cacheDir == normalize(join(cwd(), "out/test/cacheProject/local"));
+		assert opts.globalCacheDir == normalize(join(cwd(), "out/test/cacheProject/shared"));
+	});
 }

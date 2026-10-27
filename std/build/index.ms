@@ -44,7 +44,18 @@ export interface PackageMeta {
 	bin?: { [command: string]: string };  // command name → .ms entry, relative to the package root
 }
 
+export interface BuildOptions {
+	target?: string;
+	outDir?: string;
+	outFile?: string;
+	optimize?: string;
+	cacheDir?: string;
+	globalCacheDir?: string;
+	globalCache?: boolean;
+}
+
 export interface BuildConfig {
+	build?: BuildOptions;
 	entry?: string;
 	root?: string;              // project root for non-relative imports (default: ".")
 	resolve?: ResolveConfig;    // module resolution config
@@ -57,4 +68,26 @@ export interface BuildConfig {
 	package?: PackageMeta;                      // project metadata for `msc publish`
 	deps?: { [key: string]: string };           // runtime dependencies
 	devDeps?: { [key: string]: string };        // dev-only dependencies (tests, tooling)
+}
+
+test "public build cache configuration supports omission and explicit sharing policy" {
+	const omitted: BuildConfig = {};
+	assert omitted.build == null;
+	const configured: BuildConfig = {
+		build: {
+			target: "c",
+			outDir: "out",
+			outFile: "app",
+			optimize: "release",
+			cacheDir: "local",
+			globalCacheDir: "shared",
+			globalCache: false,
+		},
+	};
+	const build = configured.build;
+	assert build != null;
+	if (build != null) {
+		assert build.cacheDir == "local" && build.globalCacheDir == "shared";
+		assert build.globalCache == false;
+	}
 }

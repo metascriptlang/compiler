@@ -33,6 +33,7 @@ import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
 import { makeSymbolState, setFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
+import { globalCacheRoot } from "../utils/cachePaths";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
@@ -130,11 +131,8 @@ export function preludePackStats(): float64[] {
 }
 
 function packBase(): string {
-	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
-	const home = env.get("HOME");
-	const base = home != "" ? home : env.get("USERPROFILE");
-	if (base == "") return "";
-	return `${base}/.metascript/cache/prelude`;
+	const root = globalCacheRoot();
+	return root == "" ? "" : `${root}/prelude`;
 }
 
 // One directory per pack format: compilers that read different formats keep their packs side
