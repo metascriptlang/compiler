@@ -38,7 +38,7 @@
 
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
-	heapObjectFieldCount, heapObjectFieldValueAt, heapObjectGetField,
+	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
@@ -52,7 +52,7 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
-import { isNodeWireMetaSlot, allocWireObject, wireGet, wireSet, WIRE_UNION } from "./wire";
+import { isNodeWireMetaField, allocWireObject, wireGet, wireSet, WIRE_UNION } from "./wire";
 import { registerBigIntKernels } from "./bigintHost";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
 import { nodeKindName } from "../../ast/fieldspec";
@@ -785,7 +785,7 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // each such element of an Array field (recursively, so Node[][] fields like
 // typExprFieldDecorators are reachable), in field order. Metadata fields are
 // never children; resolvedSym and nodeType ARE node-shaped, so telling them
-// apart rests on isNodeWireMetaSlot (wire.ms). childAt returns the live heap ref, not a
+// apart rests on isNodeWireMetaField (wire.ms). childAt returns the live heap ref, not a
 // copy — mutations through it stick.
 
 function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
@@ -815,7 +815,7 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
-		if (isNodeWireMetaSlot(objHeap, h, i)) continue;
+		if (isNodeWireMetaField(heapObjectFieldNameAt(objHeap, h, i))) continue;
 		const v = heapObjectFieldValueAt(objHeap, h, i);
 		if (_isNodeShaped(objHeap, v)) {
 			out.push(v);
