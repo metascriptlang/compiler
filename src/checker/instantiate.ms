@@ -1266,7 +1266,7 @@ export function literalFieldInitializer(ctx: CheckerContext, classType: Type | n
 // The default of a type that has no zero it can hold. A union of literals defaults to its
 // first member, the way a range defaults to its first value; a struct whose fields need that
 // default is built from an empty literal, so each omitted field takes its own.
-function omittedFieldDefault(ctx: CheckerContext, fieldType: Type, loc: SourceLocation): Node | null {
+export function omittedFieldDefault(ctx: CheckerContext, fieldType: Type, loc: SourceLocation): Node | null {
 	let node: Node | null = null;
 	const first = firstLiteralMember(fieldType);
 	if (first != null) {
@@ -1276,7 +1276,15 @@ function omittedFieldDefault(ctx: CheckerContext, fieldType: Type, loc: SourceLo
 			const isFloat = numericLiteralIsFloat(first.typeName);
 			node = createNodeAt(NodeKind.NumberLiteral, { value: parseNumberLiteral(first.typeName), isFloat: isFloat, intVal: isFloat ? 0 : parseIntegerLiteral(first.typeName), outOfRangeText: "", isBitPattern: false }, loc);
 		}
-	} else if (isDeclaredStruct(fieldType) && structNeedsLiteralDefault(fieldType, [])) {
+	} else if (fieldType.kind == TypeKind.SizedArray && fieldType.typeReturn != null && needsLiteralDefault(fieldType.typeReturn, [])) {
+		const elements: Node[] = [];
+		for (let i = 0; i < (fieldType.typeValue as int32); i += 1) {
+			const element = omittedFieldDefault(ctx, fieldType.typeReturn!, loc);
+			if (element == null) return null;
+			elements.push(element);
+		}
+		node = createNodeAt(NodeKind.ArrayLiteral, { elements: elements }, loc);
+	} else if (isDeclaredStruct(fieldType) && needsLiteralDefault(fieldType, [])) {
 		node = createNodeAt(NodeKind.ObjectLiteral, { properties: [], keys: [], keyLocations: [] }, loc);
 	}
 	if (node == null) return null;
@@ -1293,11 +1301,13 @@ function firstLiteralMember(t: Type): Type | null {
 	return t.typeChildren[0];
 }
 
-function structNeedsLiteralDefault(t: Type, seen: Type[]): boolean {
-	if (seen.includes(t)) return false;
+function needsLiteralDefault(t: Type, seen: Type[]): boolean {
+	if (firstLiteralMember(t) != null) return true;
+	if (t.kind == TypeKind.SizedArray) return t.typeReturn != null && needsLiteralDefault(t.typeReturn, seen);
+	if (!isDeclaredStruct(t) || seen.includes(t)) return false;
 	seen.push(t);
 	for (const f of t.typeChildren) {
-		if (firstLiteralMember(f) != null || (isDeclaredStruct(f) && structNeedsLiteralDefault(f, seen))) return true;
+		if (needsLiteralDefault(f, seen)) return true;
 	}
 	return false;
 }

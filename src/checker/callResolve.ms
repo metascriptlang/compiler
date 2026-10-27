@@ -18,7 +18,7 @@ import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, omittedFieldDefault } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -982,6 +982,20 @@ function checkStructConstruction(ctx: CheckerContext, node: Node, structType: Ty
 	return node.nodeType!;
 }
 
+// `new Array<T>(n)` of an element type whose default is no zero (a union of literals, a struct
+// holding one) is `msFilledArray(n, default)`: the array is built, then every slot takes the default.
+function fillNewArray(ctx: CheckerContext, node: Node, d: NewExprData, elemType: Type): Type | null {
+	if (d.newArguments.length != 1) return null;
+	const value = omittedFieldDefault(ctx, elemType, node.location);
+	if (value == null) return null;
+	const factory = ctx.compilerFuncs.get("msFilledArray");
+	if (factory == null) throw new Error("internal: the prelude declares no @compilerFunc msFilledArray");
+	const call = boundCallOf(factory, [d.newArguments[0], value], node.location);
+	node.kind = NodeKind.CallExpr;
+	node.data = call.data;
+	return checkCallExpr(ctx, node, null);
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -1065,7 +1079,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			if (d.newArguments.length > 0 && hiddenHolder(ctx, expectedArrInner.typeReturn, 0) != null) {
 				addError(ctx, `new Array(count) would fill the array with default values: ${noDefaultReason(ctx, expectedArrInner.typeReturn)} — push values instead`, node.location.line, node.location.column);
 			}
-			return expected;
+			const filled = fillNewArray(ctx, node, d, expectedArrInner.typeReturn!);
+			return filled != null ? filled : expected;
 		}
 		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
 		if (id.name == "Array") {
@@ -1091,7 +1106,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				if (d.newArguments.length > 0 && requiresInit(ctx, elemType)) {
 					addError(ctx, `new Array<${trimmed}>(count) would fill the array with default values: ${noDefaultReason(ctx, elemType)} — push values instead`, node.location.line, node.location.column);
 				}
-				return arrType;
+				const filled = fillNewArray(ctx, node, d, elemType);
+				return filled != null ? filled : arrType;
 			}
 		}
 		// Promise, Map, Set all resolve through resolveGenericNewExpr below

@@ -20,7 +20,7 @@ export class Array<T> {
 	length: number;
 }
 
-export { toString } from "./shared";
+export { toString, msFilledArray } from "./shared";
 import { spliceStart, spliceCount } from "./shared";
 
 // ===== Number Array =====
