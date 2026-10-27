@@ -31,6 +31,7 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext, tables
 	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.raiserBackend = raiserBackend;
+	tables.valueCells = raiserBackend;
 	const dctx = createDrcContext(ctx, tables);
 	noteRoutineDecls(dctx.writes, program);
 	cloneCallbackReaders(dctx.writes, program);

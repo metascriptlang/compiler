@@ -96,6 +96,7 @@ export interface WriteSummaries {
 	lending: Lending;
 	envStores: HashMap<string, HashMap<Type, HashMap<string, Node[]>>>;
 	unloweredWritesAnything: boolean;
+	valueCells: boolean;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
@@ -106,7 +107,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
-		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null },
+		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
 	};
 }
@@ -255,6 +256,25 @@ function heldSlot(w: WriteEffects, slot: string, holder: Type | null): string {
 	return slot + HOLDER_MARK + id;
 }
 
+function isValueStruct(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Struct && !isClassType(t);
+}
+
+// A struct is a counted cell when its backend sets valueCells, so a view of one reads every field it holds
+// and a write to any field of it, scalar or not, changes what the view shows.
+export function valueFieldSlots(w: WriteEffects, t: Type | null, out: string[]): void {
+	if (!w.tables.valueCells) return;
+	valueFieldSlotsAt(w, holderType(t), out, 0);
+}
+
+function valueFieldSlotsAt(w: WriteEffects, holder: Type | null, out: string[], depth: int32): void {
+	if (!isValueStruct(holder) || depth > 4) return;
+	for (let i = 0; i < holder!.typeNames.length && i < holder!.typeChildren.length; i += 1) {
+		out.push(heldSlot(w, fieldSlot(holder!.typeNames[i]), holder));
+		valueFieldSlotsAt(w, holderType(holder!.typeChildren[i]), out, depth + 1);
+	}
+}
+
 function bareSlot(slot: string): string {
 	const at = slot.indexOf(HOLDER_MARK);
 	return at < 0 ? slot : slot.slice(0, at);
@@ -392,7 +412,7 @@ function writeTarget(w: WriteEffects, s: WriteSummary, target: Node | null, para
 		NodeKind.MemberExpr => {
 			const md = t.data as MemberExprData;
 			if ((inCtor && isThis(md.object)) || freshBase(md.object, fresh)) return false;
-			const field = !freesNothing(w, t.nodeType) && addSlot(s, heldSlot(w, fieldSlot(md.property), md.object.nodeType));
+			const field = (!freesNothing(w, t.nodeType) || (w.tables.valueCells && isValueStruct(holderType(md.object.nodeType)))) && addSlot(s, heldSlot(w, fieldSlot(md.property), md.object.nodeType));
 			const elements = md.property == "length" && addSlot(s, heldSlot(w, ELEMENT_SLOT, md.object.nodeType));
 			return field || elements;
 		},
@@ -1458,10 +1478,24 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		}
 		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
 		if (!keep && slots[i].length > 0) keep = partsMayWrite(w, writes, reads);
+		for (let j = i + 1; j < args.length && !keep && slots[i].length > 0; j += 1) {
+			if (args[j] != null) keep = evaluationMayWrite(w, args[j], reads, defs);
+		}
 		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
 		flags[i] = keep;
 	}
 	return flags;
+}
+
+function evaluationMayWrite(w: WriteEffects, n: Node, slots: string[], defs: LocalDefs | null): boolean {
+	if (isRoutineNode(n)) return false;
+	const k = n.kind;
+	if ((k == NodeKind.CallExpr || k == NodeKind.NewExpr || (k == NodeKind.BinaryExpr && isAssign((n.data as BinaryExprData).operator))) && mayWrite(w, n, slots, defs)) return true;
+	let hit = false;
+	forEachChild(n, (c: Node): void => {
+		if (!hit && c != null) hit = evaluationMayWrite(w, c, slots, defs);
+	});
+	return hit;
 }
 
 function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
