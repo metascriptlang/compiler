@@ -194,7 +194,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 	const lineSuffixes: Doc[] = [];
 	const stack: Cmd[] = [{ indent: 0, mode: Mode.Break, doc }];
 	let line = "";
-	let literalTail = 0;
+	let textEnd = 0;
 
 	while (stack.length > 0) {
 		const cmd = stack[stack.length - 1];
@@ -209,11 +209,12 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 				if (tailStart > 0) {
 					result = result + line + text.slice(0, tailStart);
 					line = text.slice(tailStart);
-					literalTail = line.length;
 					column = displayWidth(line, options.tabWidth);
+					textEnd = line.length;
 				} else {
 					line = line + text;
 					column = column + displayWidth(text, options.tabWidth);
+					if (trimTrailingBlanks(text, 0).length > 0) textEnd = line.length;
 				}
 			},
 			DocKind.Group => {
@@ -229,10 +230,13 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Indent => { pushChildren(stack, d, cmd.indent + 1, cmd.mode); },
 			DocKind.Line | DocKind.HardLine => {
 				if (d.kind == DocKind.HardLine || cmd.mode == Mode.Break) {
-					if (lineSuffixes.length > 0) line = line + flushSuffixes(lineSuffixes);
-					result = result + trimTrailingBlanks(line, literalTail) + "\n";
+					if (lineSuffixes.length > 0) {
+						line = line + flushSuffixes(lineSuffixes);
+						textEnd = line.length;
+					}
+					result = result + trimTrailingBlanks(line, textEnd) + "\n";
 					line = baseIndent + indentString(cmd.indent, options);
-					literalTail = 0;
+					textEnd = 0;
 					column = baseWidth + cmd.indent * options.tabWidth;
 				} else if (!isSoft(d)) {
 					line = line + " ";
@@ -302,6 +306,13 @@ test "layout: ifBreak follows the nearest group and tabs indent by level" {
 test "layout: pending blanks are dropped before a line break" {
 	const doc = docGroupBreak([docText("a +"), docText(" "), docLine(), docText("b")]);
 	assert formatDoc(doc, narrow) == "a +\nb\n";
+}
+
+test "layout: a text keeps its own trailing blanks at a line break, inline or as a line suffix" {
+	const inline = docGroupBreak([docText("// keep "), docText(" "), docHardLine(), docText("b")]);
+	assert formatDoc(inline, narrow) == "// keep \nb\n";
+	const suffix = docGroupBreak([docText("a;"), docLineSuffix([docText(" // tail ")]), docHardLine(), docText("b")]);
+	assert formatDoc(suffix, narrow) == "a; // tail \nb\n";
 }
 
 test "layout: an indented blank line carries no tab, and a multi-line text keeps its own blanks" {
