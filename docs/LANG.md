@@ -2057,9 +2057,9 @@ const label = match (node.kind) {
     _ => "unknown",
 };
 // Rule: an arm's value is its expression, or the last expression of its block, through a
-// trailing if/else or a nested match. `return` always leaves the function: inside a match
-// that is returned (`return match`, an arrow body) `return x` returns x from the function;
-// inside a bound or passed match `return x` is an error and a bare `return;` exits early.
+// trailing if/else or a nested match. `return x` always returns x from the function,
+// whether the match is returned, bound, passed or an arrow body, and is checked against the
+// function's return type; the arm that returns gives the match no value.
 // A path ending in throw, break or continue gives no value; any other ending (a loop, a
 // declaration, an `if` without `else`, an empty block) is an error.
 
