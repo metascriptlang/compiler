@@ -626,6 +626,44 @@ function runCompileCache(): void {
 	need(twinBuilt == 0, "twin build");
 	record("a compiler one byte apart reuses every object", "0", recompiledObjects(twinned, "twin"));
 	record("twin build output", "44", value(twinned, "probe2"));
+
+	const appeared = fixture("appeared", "@compile(\"./native.c\");", lateQuery("\"late.h\""));
+	waitForNextSecond();
+	need(build(appeared, "baseline") == 0, "appeared baseline");
+	need(value(appeared) == "11", "appeared baseline value");
+	need(build(appeared, "settled", "probe2", ["--verbose"]) == 0, "appeared settled");
+	record("an absent queried header keeps the object cached", "0", recompiledObjects(appeared, "settled"));
+	put(`${appeared}/late.h`, "#define VALUE 22\n");
+	record("a native header that appears after the build", "22", builtValue(appeared, build(appeared, "appeared")));
+
+	const relative = fixture("appeared relative", "@compile(\"./src/native.c\");", "", "", "unused.c");
+	ensureDir(`${relative}/src`);
+	put(`${relative}/src/native.c`, lateQuery("\"../late/late.h\""));
+	waitForNextSecond();
+	need(build(relative, "baseline") == 0, "appeared relative baseline");
+	need(value(relative) == "11", "appeared relative baseline value");
+	ensureDir(`${relative}/late`);
+	put(`${relative}/late/late.h`, "#define VALUE 22\n");
+	record("a header named by a relative path that appears after the build", "22", builtValue(relative, build(relative, "appeared")));
+
+	const computed = fixture("appeared macro", "@compile(\"./native.c\");", `#define LATE "late.h"\n${lateQuery("LATE")}`);
+	waitForNextSecond();
+	need(build(computed, "baseline") == 0, "appeared macro baseline");
+	need(value(computed) == "11", "appeared macro baseline value");
+	put(`${computed}/late.h`, "#define VALUE 22\n");
+	record("a header queried through a macro that appears after the build", "22", builtValue(computed, build(computed, "appeared")));
+
+	const moduleAppeared = includedFixture("appeared module", lateQuery("\"sub/late.h\"").replace("int probeValue", "static inline int probeValue"));
+	waitForNextSecond();
+	need(build(moduleAppeared, "baseline") == 0, "appeared module baseline");
+	need(value(moduleAppeared) == "11", "appeared module baseline value");
+	ensureDir(`${moduleAppeared}/sub`);
+	put(`${moduleAppeared}/sub/late.h`, "#define VALUE 22\n");
+	record("a header a module include queries that appears after the build", "22", builtValue(moduleAppeared, build(moduleAppeared, "appeared")));
+}
+
+function lateQuery(name: string): string {
+	return `#if __has_include(${name})\n#include ${name}\n#else\n#define VALUE 11\n#endif\nint probeValue(void) { return VALUE; }\n`;
 }
 
 function runLinkCache(): void {
@@ -1106,6 +1144,18 @@ function runObjectStore(): void {
 	removeAll(`${shadowed}/out`);
 	put(`${shadowed}/inc1/value.h`, "#define VALUE 33\n");
 	record("a stored object after an earlier include dir gained its header", "33", builtValue(shadowed, build(shadowed, "shadow", "probe", searched)));
+
+	const late = fixture("store appeared", "@compile(\"./native.c\");\n@passC(\"-I./inc\");", lateQuery("<late.h>"));
+	ensureDir(`${late}/inc`);
+	waitForNextSecond();
+	need(build(late, "baseline") == 0, "store appeared baseline");
+	need(value(late) == "11", "store appeared baseline value");
+	removeAll(`${late}/out`);
+	need(build(late, "stored", "probe", ["--verbose"]) == 0, "store appeared reuse");
+	record("a stored object with an absent queried header rebuilds nothing", "0", recompiledObjects(late, "stored"));
+	removeAll(`${late}/out`);
+	put(`${late}/inc/late.h`, "#define VALUE 22\n");
+	record("a stored object after a queried header appeared", "22", builtValue(late, build(late, "appeared")));
 
 	const tool = fixture("store-toolchain", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
 	const firstTool = writeWrapper(tool, 57);
