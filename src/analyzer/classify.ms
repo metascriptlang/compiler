@@ -403,7 +403,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {
-			if (!classifyType(t.typeReturn, ctx, requireOps).needsCleanup) return noRcInfo();
+			if (!classifyType(t.typeReturn, ctx, requireOps).needsCleanup) return ctx.raiserBackend ? structCellInfo() : noRcInfo();
 			const sn = sizedArrayHookName(t);
 			return makeOpsInfo(RcKind.Named, sn, t, false, requireOps);
 		},
@@ -415,7 +415,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			for (const child of t.typeChildren) {
 				if (classifyType(child, ctx, requireOps).needsCleanup) { hasRc = true; }
 			}
-			if (!hasRc) return noRcInfo();
+			if (!hasRc) return ctx.raiserBackend ? structCellInfo() : noRcInfo();
 			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false, requireOps);
 		},
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
