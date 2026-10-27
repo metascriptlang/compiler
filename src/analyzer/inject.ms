@@ -2757,7 +2757,8 @@ function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext,
 		},
 		NodeKind.ExprStmt => { d.exportedDecl = processExprStmt(d.exportedDecl, idx, stmts, dctx, loc); },
 		NodeKind.ImportDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.InterfaceDecl
-			| NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
+			| NodeKind.StructDecl | NodeKind.TypeAliasDecl => {},
+		NodeKind.ClassDecl => { processClass(d.exportedDecl, dctx, loc); },
 		_ => { throw new Error("internal: processExport has no arm for " + NodeKind[d.exportedDecl.kind]); },
 	};
 	return stmt;
@@ -2765,7 +2766,7 @@ function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext,
 
 function processMethodMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const md = member.data as MethodDeclData;
-	if (md.methodBody != null) {
+	if (md.methodBody != null && !routineFlagSet(md.methodFlags).has(RoutineFlag.Generic)) {
 		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, member.paramSyms, dctx, loc, member.nodeType!);
 	}
 }
