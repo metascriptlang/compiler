@@ -72,10 +72,10 @@ import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap, handleIndex,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
-	heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
+	heapAllocObject, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
 	createStructHeap, createArrayHeap, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldValueAt
 } from "../../raiser/value";
-import { allocWireObject, nodeWireClass, wireGet, wireSet, WIRE_LOC, WIRE_SYMBOL } from "./wire";
+import { allocWireObject, wireGet, wireSet, WIRE_LOC, WIRE_SYMBOL } from "./wire";
 
 // ===== Synthetic location/token helpers =====
 
@@ -849,7 +849,7 @@ export function builtNodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap:
 
 export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
 	const node = stripMacroArgWrappers(nodeIn);
-	const handle = allocWireObject(objHeap, nodeWireClass(node));
+	const handle = heapAllocObject(objHeap);
 	// Common fields: kind, line, column, endLine, endColumn
 	const kindVal = raiserInt(node.kind as int64);
 	wireSet(objHeap, handle, "kind", kindVal);
