@@ -18,7 +18,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -3204,6 +3204,7 @@ resetLiftedOps();
 	}
 	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
 	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths);
+	liftTables.unloweredWritesAnything = true;
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -3368,6 +3369,7 @@ resetLiftedOps();
 			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
 			if (job.ran) {
 				staged.push({ at, job, tree });
+				noteUnitDecls(liftTables, modPath, tree);
 			} else {
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
@@ -3377,9 +3379,12 @@ resetLiftedOps();
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
 				loweredByPath.set(modPath, tree);
+				noteUnitDecls(liftTables, modPath, tree);
 			}
 		} else {
-			staged.push({ at, job, tree: transformModuleA2(program, ctx, job) });
+			const tree = transformModuleA2(program, ctx, job);
+			staged.push({ at, job, tree });
+			noteUnitDecls(liftTables, modPath, tree);
 		}
 	}
 	for (const st of staged) {
@@ -4086,6 +4091,7 @@ resetLiftedOps();
 	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	liftTables.unloweredWritesAnything = true;
 	const stagedTests: { cm: { program: Node, ctx: CheckerContext, modPath: string, source: string }, nativeCtx: TransformContext, tree: Node }[] = [];
 	for (const cm of checkedMods) {
 		const program = cm.program;
@@ -4110,6 +4116,7 @@ resetLiftedOps();
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		stagedTests.push({ cm, nativeCtx, tree: hcrResult });
+		noteUnitDecls(liftTables, modPath, hcrResult);
 	}
 	for (const st of stagedTests) {
 		const cm = st.cm;

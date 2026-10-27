@@ -95,6 +95,7 @@ export interface WriteSummaries {
 	reusedClones: HashMap<Symbol, Symbol>;
 	lending: Lending;
 	envStores: HashMap<string, HashMap<Type, HashMap<string, Node[]>>>;
+	unloweredWritesAnything: boolean;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
@@ -106,7 +107,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null },
-		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(),
+		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
 	};
 }
 
@@ -119,9 +120,13 @@ export interface WriteEffects {
 }
 
 export function noteRoutineDecls(w: WriteEffects, program: Node): void {
-	const decls = w.tables.routineDecls;
-	w.tables.envStores.delete(w.unit);
-	const previous = decls.unitRoutines.get(w.unit);
+	noteUnitDecls(w.tables, w.unit, program);
+}
+
+export function noteUnitDecls(tables: WriteSummaries, unit: string, program: Node): void {
+	const decls = tables.routineDecls;
+	tables.envStores.delete(unit);
+	const previous = decls.unitRoutines.get(unit);
 	if (previous != null) {
 		for (const sym of previous) {
 			decls.decls.delete(sym);
@@ -134,10 +139,10 @@ export function noteRoutineDecls(w: WriteEffects, program: Node): void {
 		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = unpackDecl((decl.data as ExportDeclData).exportedDecl);
 		if (decl == null || decl.resolvedSym == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.ClassDecl)) continue;
 		decls.decls.set(decl.resolvedSym!, decl);
-		decls.routineUnits.set(decl.resolvedSym!, w.unit);
+		decls.routineUnits.set(decl.resolvedSym!, unit);
 		syms.push(decl.resolvedSym!);
 	}
-	decls.unitRoutines.set(w.unit, syms);
+	decls.unitRoutines.set(unit, syms);
 }
 
 function unitOf(w: WriteEffects, s: WriteSummary): string {
@@ -149,6 +154,12 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 	if (w.tables.reloadableUnits.length == 0 || callee.sym == null) return false;
 	const unit = w.tables.routineDecls.routineUnits.get(callee.sym!);
 	return unit != null && w.tables.reloadableUnits.includes(unit) && unit != unitOf(w, caller);
+}
+
+function notLoweredYet(w: WriteEffects, s: WriteSummary): boolean {
+	if (!w.tables.unloweredWritesAnything || s.sym == null) return false;
+	const decls = w.tables.routineDecls;
+	return !decls.decls.has(s.sym!) && !decls.unitRoutines.has(s.sym!.modulePath);
 }
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
@@ -1010,6 +1021,10 @@ function link(w: WriteEffects, s: WriteSummary, call: Node | null, callee: Write
 }
 
 function walkSummary(w: WriteEffects, s: WriteSummary): void {
+	if (notLoweredYet(w, s)) {
+		markUnknown(s);
+		return;
+	}
 	match (s.kind) {
 		SummaryKind.Routine | SummaryKind.Closure => {
 			const decl = summaryDecl(w, s);

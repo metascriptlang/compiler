@@ -31,7 +31,7 @@ import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { createTransformContextWithChecker, TransformContext, ModuleFact } from "./context";
-import { WriteSummaries } from "../analyzer/writeEffects";
+import { WriteSummaries, noteUnitDecls } from "../analyzer/writeEffects";
 import { bindCompilerFuncs } from "./util";
 import { skipsModule } from "./moduleFacts";
 import { flowLap, flowMark, flowTally } from "../compiler/flows";
@@ -251,6 +251,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// already match what we want at the source level).
 	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); flowLap("pass.lowerMethodToFunction"); }
 	if (!jsBackend) { result = lowerUserOperators(result, ctx); flowLap("pass.lowerUserOperators"); }
+	if (!jsBackend && liftTables != null) noteUnitDecls(liftTables!, checkerCtx.modulePath, result);
 	if (!jsBackend) { result = lowerLambda(result, ctx); flowLap("pass.lowerLambda"); }
 	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans
 	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
