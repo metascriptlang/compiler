@@ -486,13 +486,16 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 	processImport(graph, mod, d.importSource, d.importNames, d.importAliases, node.location != null ? node.location.line : 0, false, provider, config, useConfig);
 }
 
+function hasImportSpecifier(d: CallExprData): boolean {
+	return isImportKeyword(d.callee) && d.arguments.length > 0 && d.arguments[0].kind == NodeKind.StringLiteral;
+}
+
 export function collectImportCalls(program: Node): string[] {
 	const specifiers: string[] = [];
 	const visit = (n: Node): void => {
 		if (n.kind == NodeKind.CallExpr) {
-			const d = n.data as CallExprData;
-			if (isImportKeyword(d.callee) && d.arguments.length > 0 && d.arguments[0].kind == NodeKind.StringLiteral) {
-				const specifier = (d.arguments[0].data as StringLiteralData).value;
+			if (hasImportSpecifier(n.data as CallExprData)) {
+				const specifier = ((n.data as CallExprData).arguments[0].data as StringLiteralData).value;
 				if (specifiers.indexOf(specifier) < 0) specifiers.push(specifier);
 			}
 		}
