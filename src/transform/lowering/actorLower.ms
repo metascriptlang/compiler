@@ -26,7 +26,7 @@ import {
 	isValueLayoutType, makeHiddenAddr, makeHiddenDeref, makeHiddenStdConv, makeTryFinally, runtimeRef,
 	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount,
 } from "../util";
-import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { holdsIsolated, createSink, voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 import { peelHidden } from "../../checker/sendable";
@@ -70,6 +70,13 @@ function typeMsgKind(t: Type | null): string {
 	};
 	if (result == "") throw "actor: unsupported TypeKind " + typeDisplayName(t);
 	return result;
+}
+
+// A message that holds an Isolated<T> is boxed by move, and the box is the only owner, so the
+// proxy takes that parameter `sink`: its last read then moves instead of asking for a copy
+// the type does not have.
+function ownedIsolatedParams(paramTypes: Type[]): Type[] {
+	return paramTypes.map((t: Type): Type => t != null && holdsIsolated(t) ? createSink(t) : t);
 }
 
 function paramMsgKind(paramTypes: Type[], idx: number): string {
@@ -644,7 +651,7 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			//      count mismatch at the call site.
 			const proxyRetType = isVoid ? voidType()
 				: methodRetType != null ? createPromise(methodRetType) : noneType();
-			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);
+			const proxyFnType = createFunction(ownedIsolatedParams(proxyParamTypes), md.methodParams, proxyRetType);
 			const proxyNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_" + md.methodName,
 				params: md.methodParams,
