@@ -66,7 +66,8 @@ class LiftCtx {
 	refCellTraces: Type[];
 	refCellCustodies: Type[];
 	scannedTypes: HashSet<Type>;
-	arrayRootEpochs: HashMap<Type, int32>;
+	arraysScanned: HashSet<Type>;
+	arraysScannedEpoch: int32;
 	refusedArrayElems: HashSet<Type>;
 	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
@@ -2044,9 +2045,9 @@ function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellCustodies.push(canon);
 }
 
-function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void {
-	if (t == null || visited.has(t)) return;
-	visited.add(t);
+function scanTypeForArrays(t: Type, lctx: LiftCtx): void {
+	if (t == null || lctx.arraysScanned.has(t)) return;
+	lctx.arraysScanned.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
 		registerRefCellCustody(t.typeReturn, lctx);
@@ -2056,17 +2057,18 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void
 		return;
 	}
 	if (t.typeChildren != null) {
-		for (const child of t.typeChildren) scanTypeForArrays(child, lctx, visited);
+		for (const child of t.typeChildren) scanTypeForArrays(child, lctx);
 	}
-	if (t.typeReturn != null) scanTypeForArrays(t.typeReturn, lctx, visited);
+	if (t.typeReturn != null) scanTypeForArrays(t.typeReturn, lctx);
 }
 
 function scanRootForArrays(root: Type, lctx: LiftCtx): void {
 	const epoch = instantiatedBodyCount();
-	const seen = lctx.arrayRootEpochs.get(root);
-	if (seen != null && seen == epoch) return;
-	scanTypeForArrays(root, lctx, new HashSet<Type>());
-	if (instantiatedBodyCount() == epoch) lctx.arrayRootEpochs.set(root, epoch);
+	if (lctx.arraysScannedEpoch != epoch) {
+		lctx.arraysScanned = new HashSet<Type>();
+		lctx.arraysScannedEpoch = epoch;
+	}
+	scanTypeForArrays(root, lctx);
 }
 
 function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
@@ -2371,7 +2373,8 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refCellTraces: [],
 		refCellCustodies: [],
 		scannedTypes: new HashSet<Type>(),
-		arrayRootEpochs: new HashMap<Type, int32>(),
+		arraysScanned: new HashSet<Type>(),
+		arraysScannedEpoch: -1,
 		refusedArrayElems: new HashSet<Type>(),
 		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
