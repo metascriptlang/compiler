@@ -3882,7 +3882,7 @@ resetLiftedOps();
 		const code = cCodes[cji];
 		if (code == 0) {
 			const dirs = headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
-			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp, dirs) : cj.oFile;
+			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.cFile, cj.oFile, cj.fp, dirs) : cj.oFile;
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
 			if (cj.storeKey != "" && !driverPlansOn()) {
 				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
@@ -4268,7 +4268,7 @@ resetLiftedOps();
 		const code = cCodes[cji];
 		if (code == 0) {
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
-			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags)) : cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.cFile, cj.oFile, cj.fp, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags)) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printError(`compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;

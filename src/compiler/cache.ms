@@ -1825,9 +1825,9 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 	return `${result}:${trackedQueryPresence(moduleDepFile(modPath, baseFp))}`;
 }
 
-export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string, search: HeaderSearch): string {
+export function publishModuleObject(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
 	const headers = moduleHeaderPaths(modPath, baseFp);
-	if (!recordQueries(moduleDepFile(modPath, baseFp), [stableCFileFp(modPath, baseFp)], headers, search, [], _buildStartedSeconds)) return oFile;
+	if (!recordQueries(moduleDepFile(modPath, baseFp), [cFile], headers, search, [], _buildStartedSeconds)) return oFile;
 	for (const path of headers) {
 		if (changedSinceBuild(path, _buildStartedSeconds)) return oFile;
 	}
