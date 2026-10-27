@@ -2048,8 +2048,6 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (d.callee.kind == NodeKind.Identifier && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
 		const hostName = runtimeHostName(sym);
-		const timerMode = timerModeOf(hostName);
-		if (timerMode >= 0) return compileTimerCtl(s, node, timerMode);
 		if (hostName != "") {
 			if (hostName == sym.nativeName) checkHostBridgeCoverage(sym, d.callee);
 			const hostArgs = hostValues(d.arguments);
@@ -2187,29 +2185,6 @@ function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, override
 		patchJumpTo(s, next, codeLen(s));
 	}
 	return ends;
-}
-
-function timerModeOf(hostName: string): int32 {
-	if (hostName == "msSetTimeout") return 0;
-	if (hostName == "msSetInterval") return 1;
-	if (hostName == "msClearTimeout" || hostName == "msClearInterval") return 2;
-	return -1;
-}
-
-function compileTimerCtl(s: RaiserCompState, node: Node, mode: int32): int32 {
-	const d = node.data as CallExprData;
-	const all: Node[] = [];
-	for (const a of d.arguments) all.push(a);
-	const closures = reserveClosureArgs(s, all);
-	const dest = callBlock(s, node.nodeType, all, null);
-	for (let i = 0; i < all.length; i = i + 1) {
-		const funcIdx = all[i].kind == NodeKind.Identifier ? resolveRoutine(s, all[i].resolvedSym) : -1;
-		if (funcIdx >= 0 && i == 0 && mode < 2) emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, emitClosurePair(s, funcIdx, -1), 0));
-		else compileClosureArg(s, all[i], dest + 1 + i, closures[i]);
-	}
-	emitInst(s, raiserABC(RaiserOpcode.TimerCtl, dest, mode, all.length));
-	releaseClosureArgs(s, closures);
-	return dest;
 }
 
 function compileFutureThen(s: RaiserCompState, node: Node, rejectionOnly: boolean): int32 {
