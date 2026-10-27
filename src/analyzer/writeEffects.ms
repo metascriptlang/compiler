@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -270,8 +270,17 @@ function isClassType(t: Type): boolean {
 }
 
 function elementsMayAlias(a: Type | null, b: Type | null, depth: int32): boolean {
-	if (a == null || b == null || a === b) return true;
+	if (a == null || b == null || a === b || depth > 8) return true;
 	if (a.kind == TypeKind.Cursor || b.kind == TypeKind.Cursor) return a.kind == b.kind && elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
+		const union = a.kind == TypeKind.Union ? a : b;
+		const other = a.kind == TypeKind.Union ? b : a;
+		if (union.typeChildren.length == 0) return true;
+		for (const member of union.typeChildren) {
+			if (member == null || elementsMayAlias(member, other, depth + 1)) return true;
+		}
+		return false;
+	}
 	const ha = holderType(a);
 	const hb = holderType(b);
 	if (ha != null && hb != null) return mayBePartOf(ha, hb, depth);
@@ -1604,6 +1613,16 @@ test "a store through a generated access macro writes only elements of its array
 	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
 	assert mayWrite(w, store, [heldSlot(w, ELEMENT_SLOT, createArray(stringType()))], null);
 	assert !mayWrite(w, store, [heldSlot(w, ELEMENT_SLOT, createArray(createArray(int32Type())))], null);
+}
+
+test "a store into elements of a type matches a union slot only through a member that can be it" {
+	const w = writeProbe();
+	const loc = makeLoc(0, 0);
+	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
+	const slotOf = (element: Type): string => heldSlot(w, ELEMENT_SLOT, createArray(element));
+	assert mayWrite(w, store, [slotOf(createUnion([stringType(), nullType()]))], null);
+	assert !mayWrite(w, store, [slotOf(createUnion([int32Type(), nullType()]))], null);
+	assert mayWrite(w, store, [slotOf(createUnion([int32Type(), createGenericParam("T")]))], null);
 }
 
 function loweredViewCall(returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {
