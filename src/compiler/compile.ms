@@ -46,7 +46,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
-import { getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
+import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -60,7 +60,7 @@ import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctIn
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { markTypeOnlyImports } from "../checker/importElision";
 import { markVmOnlyRoutines } from "../checker/vmOnly";
-import { createTransformContextWithChecker } from "../transform/context";
+import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeHeaderTimings, registerHeaderCache, headerModuleSource, isCHeaderPath } from "../module/loader";
@@ -71,7 +71,7 @@ import { readLockfile, entryName } from "./package/lockfile";
 import { SourceKind } from "./package/version";
 import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { dbLower } from "./transam/index";
+import { dbLower, dbStoreLowered } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
@@ -708,6 +708,9 @@ interface A2Job {
 	asyncModuleBody: boolean;
 	writeTables: WriteSummaries;
 	liftTables: WriteSummaries;
+	errBase: int32;
+	nativeCtx: TransformContext | null;
+	transformOps: KeyedOp[];
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -746,7 +749,7 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 	return createNodeAt(NodeKind.Program, { programStmts: stmts }, program.location);
 }
 
-function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
+function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const keyedOpMark = opMark();
 	const opts = job.opts;
@@ -807,6 +810,17 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	flowStop("a2.native", _fn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
+	job.errBase = errBase;
+	job.nativeCtx = nativeCtx;
+	job.transformOps = opsFrom(keyedOpMark);
+	return hcrLifted;
+}
+
+function analyzeModuleA2(hcrLifted: Node, ctx: CheckerContext, job: A2Job): Node {
+	const keyedOpMark = opMark();
+	const opts = job.opts;
+	const modPath = job.modPath;
+	const nativeCtx = job.nativeCtx!;
 	ctx.gcMode = gcModeOf(opts.gcMode);
 	ctx.targetOs = opts.targetOs;
 	ctx.targetInfo = opts.targetInfo;
@@ -828,8 +842,10 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	flowStop("a2.lower", _fl0);
-	truncateErrors(ctx, errBase);
-	job.claims = { ops: opsFrom(keyedOpMark), contracts: contractClaims(job.writeTables) };
+	truncateErrors(ctx, job.errBase);
+	const ops = job.transformOps;
+	for (const op of opsFrom(keyedOpMark)) ops.push(op);
+	job.claims = { ops, contracts: contractClaims(job.writeTables) };
 	return nativeLowered;
 }
 
@@ -3007,7 +3023,7 @@ resetLiftedOps();
 	retainCheckedInstances(checkedModCtxs(checkedMods));
 	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep, homes);
 
-	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
 		const path = hcrModulePaths[i];
 		const checkedProgram = programByPath.has(path) ? programByPath.get(path) : null;
@@ -3049,12 +3065,12 @@ resetLiftedOps();
 		}
 	}
 	const loweredByPath = new HashMap<string, Node>();
+	const staged: { at: int32, job: A2Job, tree: Node }[] = [];
 	for (const at of lowerOrder) {
 		const cm = checkedMods[at];
 		const program = cm.program;
 		const ctx = cm.ctx;
 		const modPath = cm.modPath;
-		const modT0 = performance.now();
 		const routed = instancesByOwner.get(modPath);
 		const job: A2Job = {
 			modPath,
@@ -3074,22 +3090,16 @@ resetLiftedOps();
 			asyncModuleBody: asyncBodies.has(modPath),
 			writeTables,
 			liftTables,
+			errBase: 0,
+			nativeCtx: null,
+			transformOps: [],
 		};
-		let nativeLowered: Node;
 		if (session.keep) {
 			const earlier = session.lowerClaims.get(modPath);
 			if (earlier != null) reuseClones(writeTables, earlier.contracts);
-			nativeLowered = dbLower(session.check.db!, modPath, lowerModuleA2, job);
+			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
 			if (job.ran) {
-				session.loweredCount = session.loweredCount + 1;
-				const previous = session.lowerClaims.get(modPath);
-				if (previous != null && !sameClaims(previous, job.claims)) {
-					session.staleReason = `the operations lifted by ${modPath} changed`;
-					return BuildStatus.Stale;
-				}
-				session.lowerClaims.set(modPath, job.claims);
-				session.lowerDiagnostics.set(modPath, job.diagnostics);
-				session.lowerFingerprints.set(modPath, ownerFingerprints.get(modPath) ?? "");
+				staged.push({ at, job, tree });
 			} else {
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
@@ -3098,12 +3108,32 @@ resetLiftedOps();
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
+				loweredByPath.set(modPath, tree);
 			}
 		} else {
-			nativeLowered = lowerModuleA2(program, ctx, job);
+			staged.push({ at, job, tree: transformModuleA2(program, ctx, job) });
 		}
-		noteLoweredUnit(writeTables, modPath);
 		noteLoweredUnit(liftTables, modPath);
+	}
+	for (const at of lowerOrder) noteLoweredUnit(writeTables, checkedMods[at].modPath);
+	for (const st of staged) {
+		const cm = checkedMods[st.at];
+		const modPath = cm.modPath;
+		const job = st.job;
+		const modT0 = performance.now();
+		const nativeLowered = analyzeModuleA2(st.tree, cm.ctx, job);
+		if (session.keep) {
+			dbStoreLowered(session.check.db!, modPath, nativeLowered);
+			session.loweredCount = session.loweredCount + 1;
+			const previous = session.lowerClaims.get(modPath);
+			if (previous != null && !sameClaims(previous, job.claims)) {
+				session.staleReason = `the operations lifted by ${modPath} changed`;
+				return BuildStatus.Stale;
+			}
+			session.lowerClaims.set(modPath, job.claims);
+			session.lowerDiagnostics.set(modPath, job.diagnostics);
+			session.lowerFingerprints.set(modPath, ownerFingerprints.get(modPath) ?? "");
+		}
 		const modT1 = performance.now();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
@@ -3757,9 +3787,10 @@ resetLiftedOps();
 	// Owner-less nodes fall back to the entry program.
 	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
-	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	const stagedTests: { cm: { program: Node, ctx: CheckerContext, modPath: string, source: string }, nativeCtx: TransformContext, tree: Node }[] = [];
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
@@ -3782,6 +3813,16 @@ resetLiftedOps();
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
+		noteLoweredUnit(liftTables, modPath);
+		stagedTests.push({ cm, nativeCtx, tree: hcrResult });
+	}
+	for (const cm of checkedMods) noteLoweredUnit(writeTables, cm.modPath);
+	for (const st of stagedTests) {
+		const cm = st.cm;
+		const ctx = cm.ctx;
+		const modPath = cm.modPath;
+		const nativeCtx = st.nativeCtx;
+		const hcrResult = st.tree;
 		ctx.gcMode = gcModeOf(opts.gcMode);
 		ctx.targetOs = opts.targetOs;
 		ctx.targetInfo = opts.targetInfo;
@@ -3796,8 +3837,6 @@ resetLiftedOps();
 			exit(1);
 		}
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		noteLoweredUnit(writeTables, modPath);
-		noteLoweredUnit(liftTables, modPath);
 
 		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);
