@@ -675,15 +675,22 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
-function beginHookLift(lctx: LiftCtx): boolean {
-	const outer = lctx.callsUnavailableCopy;
+interface HookLift {
+	unavailable: boolean;
+	dropOwner: Symbol | null;
+}
+
+function beginHookLift(lctx: LiftCtx): HookLift {
+	const outer: HookLift = { unavailable: lctx.callsUnavailableCopy, dropOwner: lctx.dropOwner };
 	lctx.callsUnavailableCopy = false;
+	lctx.dropOwner = null;
 	return outer;
 }
 
-function endHookLift(lctx: LiftCtx, outer: boolean, hook: string, sym: Symbol, unavailable: boolean): void {
+function endHookLift(lctx: LiftCtx, outer: HookLift, hook: string, sym: Symbol, unavailable: boolean): void {
 	if (hook == "copy" && (unavailable || lctx.callsUnavailableCopy)) setFlag(sym, SymbolFlag.UnavailableOp);
-	lctx.callsUnavailableCopy = outer;
+	lctx.callsUnavailableCopy = outer.unavailable;
+	lctx.dropOwner = outer.dropOwner;
 }
 
 // --- Standard value-type object hook generator ---
