@@ -80,6 +80,7 @@ function byteSliceCopy(s: string, start: int64, end: int64): string {
 function concatPair(a: string, b: string): string {
 	const ab = a.asBytes();
 	const bb = b.asBytes();
+	if (ab.length + bb.length == 0) return "";
 	const out = newBytes(ab.length + bb.length);
 	const dst = writable(out);
 	copyTo(dst, 0, ab, 0, ab.length);
