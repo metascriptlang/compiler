@@ -7,7 +7,7 @@ import { ctorRoutineOf } from "./ctorRoutine";
 
 function ctorKeyOf(user: string, className: string): string {
 	const entries: MapEntry[] = [];
-	entries.push({ entryPath: "/src/b.ms", entrySource: "export class P { v: number = 1; }\nexport class Cell<T> { v: number = 1; }\nexport class Q extends P { w: number = 2; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function g<T>(x: T): T { return x; }\nexport class P { v: number = 1; }\nexport class Cell<T> { v: number = 1; }\nexport class Q extends P { w: number = 2; }" });
 	entries.push({ entryPath: "/src/a.ms", entrySource: user });
 	const graph = loadModuleGraph(user == "" ? "/src/b.ms" : "/src/a.ms", createMapProvider(entries));
 	checkModuleGraph(graph, "");
@@ -39,4 +39,21 @@ test "a generic class and a subclass of a class without a constructor do the sam
 		assert ctorKeyOf("", name).startsWith(`${name}_init.0./src/b.ms owner `), ctorKeyOf("", name);
 		assert ctorKeyOf(usersOf(name), name) == ctorKeyOf("", name), `${name}: ${ctorKeyOf(usersOf(name), name)} vs ${ctorKeyOf("", name)}`;
 	}
+}
+
+function idSpaceAfter(user: string): string {
+	ctorKeyOf(user, "P");
+	const owner = lookupModuleCtx("/src/b.ms")!;
+	const names: string[] = [];
+	for (const name of owner.disambTable.keys()) names.push(`${name}=${owner.disambTable.get(name)}`);
+	names.sort();
+	return `${owner.nextItem} ${names.join(",")}`;
+}
+
+test "what a module's importers instantiate leaves the module's item ids and disambiguators alone" {
+	const alone = idSpaceAfter("");
+	const cell = "import { Cell } from \"./b\";\nexport const x = new Cell<int32>().v;";
+	const fn = "import { g } from \"./b\";\nexport const x = g<string>(\"s\");";
+	assert idSpaceAfter(cell) == alone, `class: ${idSpaceAfter(cell)} vs ${alone}`;
+	assert idSpaceAfter(fn) == alone, `function: ${idSpaceAfter(fn)} vs ${alone}`;
 }

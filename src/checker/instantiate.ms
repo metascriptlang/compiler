@@ -1188,6 +1188,8 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const instMark = markInstanceBody(bodyCtx);
+	const savedHost = bodyCtx.instantiatingCtx;
+	bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1212,6 +1214,7 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	bodyCtx.instantiatingCtx = savedHost;
 	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return fields;
 }
@@ -1281,6 +1284,8 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const instMark = markInstanceBody(bodyCtx);
+	const savedHost = bodyCtx.instantiatingCtx;
+	bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1298,6 +1303,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	bodyCtx.instantiatingCtx = savedHost;
 	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return copy;
 }
