@@ -260,25 +260,27 @@ function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 // Returns `stmts` itself when every statement expands to itself, so a block no lowering touches
 // is neither copied nor rebuilt.
 function expandStmtList(stmts: Node[], w: ExpandWalk, visit: Visitor): Node[] {
-	let result: Node[] = stmts;
-	let changed = false;
+	let grown: Node[] | null = null;
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		const expanded = w.expander(stmt, w.ctx);
-		if (!changed && expanded.length == 1 && expanded[0] == stmt) continue;
-		if (!changed) {
-			changed = true;
-			result = [];
-			for (let j = 0; j < i; j += 1) result.push(stmts[j]);
+		if (grown == null) {
+			if (expanded.length == 1 && expanded[0] == stmt) continue;
+			grown = [];
+			for (let j = 0; j < i; j += 1) grown.push(stmts[j]);
 		}
 		for (const node of expanded) {
-			result.push(node);
+			grown.push(node);
 		}
 	}
-	for (const node of result) {
+	if (grown == null) {
+		for (let i = 0; i < stmts.length; i += 1) expandWalk(stmts[i], w, visit);
+		return stmts;
+	}
+	for (const node of grown) {
 		expandWalk(node, w, visit);
 	}
-	return result;
+	return grown;
 }
 
 // ===== Tests =====
