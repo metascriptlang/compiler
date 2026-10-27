@@ -50,6 +50,7 @@ export interface RaiserCallFrame {
 	returnDest: int32;   // the caller's destination operand, tagged
 	base: int32;         // the caller's frame
 	spBase: int32;       // safePoints length where the callee's own handlers begin
+	refTop: int32;       // one past the highest ref slot of the caller's frame and of every frame below it
 }
 
 // items[0..depth) are the live frames; a popped record stays for the next call to rewrite.
@@ -523,6 +524,54 @@ function enterRefs(vm: RaiserVM, base: int64, caller: RaiserFunction, site: int3
 function zeroOwnRefs(slots: Ptr<int64>, base: int64, callee: RaiserFunction): void {
 	const own = callee.ownRefs;
 	for (let i = 0; i < own.length; i += 1) slots[base + own[i]] = 0;
+}
+
+@inline
+function frameRefTop(vm: RaiserVM, depth: int32, base: int32, func: RaiserFunction): int32 {
+	const own = func.ownRefs;
+	const mine = own.length == 0 ? 0 : base + own[own.length - 1] + 1;
+	const below = depth == 0 ? 0 : vm.callStack.items[depth - 1].refTop;
+	return mine > below ? mine : below;
+}
+
+function enterBelow(vm: RaiserVM, callerAt: int32, base: int64, callee: RaiserFunction, frame: Cursor<RaiserCallFrame>): void {
+	const caller = getModuleFunc(vm.mod, frame.funcIdx);
+	const callerEnd = (frame.base as int64) + (caller.frameSize as int64);
+	const end = base + (callee.frameSize as int64);
+	if (end > callerEnd) overlayBelow(vm, callerAt, callerEnd, end, true);
+}
+
+function leaveBelow(vm: RaiserVM, callerAt: int32, base: int64, callee: RaiserFunction, frame: Cursor<RaiserCallFrame>): void {
+	const caller = getModuleFunc(vm.mod, frame.funcIdx);
+	const callerEnd = (frame.base as int64) + (caller.frameSize as int64);
+	const end = base + (callee.frameSize as int64);
+	if (end > callerEnd) overlayBelow(vm, callerAt, callerEnd, end, false);
+}
+
+function overlayBelow(vm: RaiserVM, callerAt: int32, from: int64, end: int64, release: boolean): void {
+	const slots = vm.regs.slots;
+	let lo = from;
+	let k = callerAt - 1;
+	while (lo < end && k >= 0 && (vm.callStack.items[k].refTop as int64) > lo) {
+		const rec = vm.callStack.items[k];
+		const f = getModuleFunc(vm.mod, rec.funcIdx);
+		const base = rec.base as int64;
+		const top = base + (f.frameSize as int64);
+		const held = f.ownRefs;
+		for (let i = held.length - 1; i >= 0; i -= 1) {
+			const r = base + (held[i] as int64);
+			if (r < lo) break;
+			if (r < end && r < top) {
+				const h = slots[r];
+				if (h != 0) {
+					slots[r] = 0;
+					if (release) releaseShell(vm, h);
+				}
+			}
+		}
+		if (top > lo) lo = top;
+		k -= 1;
+	}
 }
 
 function zeroFrame(slots: Ptr<int64>, from: int64, end: int64): void {
@@ -1263,6 +1312,7 @@ function unwindFrame(vm: RaiserVM): void {
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
 	leaveFrame(vm, vm.base, func, frame);
+	leaveBelow(vm, depth, vm.base as int64, func, frame);
 	vm.callStack.depth = depth;
 	dropSafePoints(vm, frame.spBase);
 	vm.funcIdx = frame.funcIdx;
@@ -2431,7 +2481,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				if (depth < MAX_CALL_DEPTH) {
 					const callee: Cursor<RaiserFunction> = mod.functions[ib];
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
@@ -2439,10 +2489,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					frame.returnDest = ia;
 					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
+					frame.refTop = frameRefTop(vm, depth, fb, func);
 					vm.callStack.depth = depth + 1;
 					fb = fb + (func.blocks[ic] as int32);
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
+					if (fb + callee.frameSize > frame.base + func.frameSize) {
+						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+					}
 					funcIdx = ib;
 					func = callee;
 					code = callee.packed;
@@ -2461,7 +2515,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				if (target >= 0) {
 					const callee: Cursor<RaiserFunction> = mod.functions[target];
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
@@ -2469,10 +2523,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					frame.returnDest = ia;
 					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
+					frame.refTop = frameRefTop(vm, depth, fb, func);
 					vm.callStack.depth = depth + 1;
 					fb = fb + (func.blocks[ic] as int32);
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
+					if (fb + callee.frameSize > frame.base + func.frameSize) {
+						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+					}
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -2500,7 +2558,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				}
 				if (ok) {
 					if (depth == vm.callStack.items.length) {
-						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
 					}
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
@@ -2508,10 +2566,14 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					frame.returnDest = ia;
 					frame.base = fb;
 					frame.spBase = vm.safePoints.length as int32;
+					frame.refTop = frameRefTop(vm, depth, fb, func);
 					vm.callStack.depth = depth + 1;
 					fb = fb + (func.blocks[ic] as int32);
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
+					if (fb + callee.frameSize > frame.base + func.frameSize) {
+						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+					}
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -2547,6 +2609,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 						}
 						const caller: Cursor<RaiserFunction> = mod.functions[frame.funcIdx];
 						if (func.ownRefs.length + caller.ownRefs.length != 0) leaveFrame(vm, fb, func, frame);
+						if (fb + func.frameSize > frame.base + caller.frameSize) {
+							overlayBelow(vm, depth - 1, (frame.base + caller.frameSize) as int64, (fb + func.frameSize) as int64, false);
+						}
 						vm.callStack.depth = depth - 1;
 						fb = frame.base;
 						funcIdx = frame.funcIdx;
@@ -3777,7 +3842,7 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
-		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
 	}
 	const frame = vm.callStack.items[depth];
 	frame.funcIdx = vm.funcIdx;
@@ -3785,7 +3850,9 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 	frame.returnDest = dest;
 	frame.base = vm.base;
 	frame.spBase = vm.safePoints.length as int32;
+	frame.refTop = frameRefTop(vm, depth, vm.base, caller);
 	vm.callStack.depth = depth + 1;
+	enterBelow(vm, depth, newBase as int64, callee, frame);
 
 	vm.base = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
@@ -3866,6 +3933,7 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	vm.ip = frame.returnIp;
 	setRegConform(vm, frame.returnDest, returned);
 	leaveFrame(vm, calleeBase, callee, frame);
+	leaveBelow(vm, depth - 1, calleeBase as int64, callee, frame);
 }
 
 // --- Destroying a cell whose last reference went ---
@@ -4038,7 +4106,7 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	zeroOwnRefs(vm.regs.slots, newBase as int64, callee);
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
-		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0 });
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
 	}
 	const frame = vm.callStack.items[depth];
 	frame.funcIdx = vm.funcIdx;
@@ -4046,7 +4114,9 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	frame.returnDest = DISPOSE_DEST;
 	frame.base = vm.base;
 	frame.spBase = vm.safePoints.length as int32;
+	frame.refTop = frameRefTop(vm, depth, vm.base, caller);
 	vm.callStack.depth = depth + 1;
+	enterBelow(vm, depth, newBase as int64, callee, frame);
 	vm.base = newBase;
 	vm.funcIdx = fn;
 	vm.ip = 0;
@@ -4066,6 +4136,7 @@ function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 	vm.base = frame.base;
 	vm.ip = frame.returnIp;
 	leaveFrame(vm, calleeBase, callee, frame);
+	leaveBelow(vm, depth - 1, calleeBase as int64, callee, frame);
 	vmFreeCell(vm, vm.disposing.pop());
 	vmDrain(vm);
 }
