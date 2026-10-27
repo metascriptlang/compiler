@@ -1075,6 +1075,7 @@ export interface RaiserClassType {
 	cyclic: boolean[];   // per slot: the slot's type can reach the object again, so a release that leaves its referent alive registers it with the cycle collector
 	uncounted: boolean[];   // per slot: the slot borrows its referent (a cursor), so a destroy or copy of the object never counts it
 	destroyFn: int32;   // function index of the lifted destroy routine of the type, -1 when the VM destroys its cells by walking them
+	tableIndex: int32;   // the entry of this type in the class type table, which a cell's header names
 }
 
 // A class type with its zero object computed once, so NewObject copies it instead of laying out each slot.
@@ -1099,22 +1100,20 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1 };
+	const type: RaiserClassType = { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1, tableIndex: classTypes.length as int32 };
+	classTypes.push(type);
+	return type;
 }
 
 export const OBJECT_CELL_SLOT_BYTES: int64 = 8;
 
 const classTypes: RaiserClassType[] = [];
-const registeredClassTypes: Map<string, int32> = new Map<string, int32>();
 
-// The table index of a class type, adding it on first use. Two types of one name and one field layout share an index.
+// The table index of a class type, given when the type is created: a class type is its own identity, so two
+// types of one name and layout hold two entries and each keeps the flags set on it after creation.
 export function classTypeIndex(t: RaiserClassType): int32 {
-	const key = `${t.name}/${t.depth}/${t.fields.join(",")}`;
-	if (registeredClassTypes.has(key)) return registeredClassTypes.get(key)!;
-	const index = classTypes.length as int32;
-	classTypes.push(t);
-	registeredClassTypes.set(key, index);
-	return index;
+	if (t.tableIndex < 0) throw new Error(`internal: class ${t.name} has no index in the class type table`);
+	return t.tableIndex;
 }
 
 export function classTypeAt(index: int64): RaiserClassType {

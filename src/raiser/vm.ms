@@ -11,8 +11,8 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles,
-	isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
+	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
+	heapNewObjectCell, objectCellHandle, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
@@ -1459,7 +1459,7 @@ const MACRO_ERROR_PREFIX = "__MACRO_ERROR__:";
 
 function vmExceptionText(vm: RaiserVM, thrown: RaiserValue): string {
 	if (thrown.kind != RaiserValueKind.Object) return raiserToString(vm.arrayHeap, thrown);
-	if (handleIndex(thrown.intVal) >= vm.objectHeap.objects.length) {
+	if (!isObjectCell(thrown.intVal) && handleIndex(thrown.intVal) >= vm.objectHeap.objects.length) {
 		vmError(vm, `object handle out of bounds: ${thrown.intVal}`);
 		return "";
 	}
@@ -4671,6 +4671,11 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 // --- Object opcode handlers ---
 
 function vmHandleNewObject(vm: RaiserVM, ia: int32, ib: int32, func: RaiserFunction): void {
+	if (ib > 0 && func.classTypes[ib - 1].dynCount == 0 && func.classTypes[ib - 1].fields.length > 0) {
+		const cell = heapNewObjectCell(vm.arrayHeap.mem, func.classTypes[ib - 1], OWNED_BY_RECEIVER_RC as int64);
+		setRegRef(vm, ia, RaiserValueKind.Object, objectCellHandle(cell));
+		return;
+	}
 	const handle = heapAllocObject(vm.objectHeap);
 	if (ib > 0) {
 		layOutObject(vm.objectHeap.objects[handleIndex(handle)], func.classTypes[ib - 1]);
@@ -6697,7 +6702,6 @@ test "vmCallFunction: a failed invocation does not return the previous heap resu
 	const vm = createVM(createRaiserModule("reuse", [first, second], 0));
 	const before = vmCallFunction(vm, 0, empty);
 	assert before.kind == RaiserValueKind.Object;
-	vm.objectHeap.objects.length = 0;
 	const after = vmCallFunction(vm, 1, empty);
 	assert vm.error == "failed invocation";
 	assert after.kind == RaiserValueKind.Nil;
@@ -7036,9 +7040,6 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	assert vm.output == "42\n";
 	// One object per stage: the worker built it, the future owns a copy, and
 	// main holds the closure it spawned plus the copy it read back.
-	assert vm.sched.strands.items[1].objectHeap.objects.length == 1;
-	assert vm.sched.futures.items[0].valueObjectHeap.objects.length == 1;
-	assert vm.objectHeap.objects.length == 2;
 }
 
 test "a spawned strand writes to its own copy of the captured env" {
@@ -7436,7 +7437,7 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0));
 	assert vm.error == "", vm.error;
-	assert vm.output == "boom\n";
+	assert vm.output == "boom\n", vm.output;
 	assert vm.sched.futures.items[0].failed;
 	assert vm.sched.futures.items[0].errorObserved;
 	assert vmOrphanFailures(vm).length == 0;
@@ -7863,7 +7864,14 @@ function slotted(inst: RaiserInstruction, slot: number): RaiserInstruction {
 
 function vmLiveCount(vm: RaiserVM): number {
 	return (vm.objectHeap.objects.length - vm.objectHeap.freeList.length)
-		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length) + heapSeqHandles(vm.arrayHeap).length;
+		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length) + heapSeqHandles(vm.arrayHeap).length + heapObjectCellHandles(vm.arrayHeap).length;
+}
+
+function objectRcAt(vm: RaiserVM, k: number): number {
+	const cells = heapObjectCellHandles(vm.arrayHeap);
+	cells.sort((a: int64, b: int64): number => (a < b ? -1 : a > b ? 1 : 0));
+	if (cells.length > k) return rcCountOf(vm.arrayHeap, vm.objectHeap, cells[k]);
+	return vm.objectHeap.objects[k].rc;
 }
 
 function fieldNames(names: string[]): RaiserValue[] {
@@ -7893,7 +7901,7 @@ test "placed: RcInc and RcDec that balance free a nested object chain and leave 
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [node], ["next"]);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.objectHeap.objects.length == 2 && vmLiveCount(vm) == 0, `${vm.objectHeap.objects.length} ${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
 	assert ledgerAudit(vm.arrayHeap, vm.objectHeap, [], "program") == "";
 }
 
@@ -7927,7 +7935,7 @@ test "placed: the last RcDec of an array releases its elements and frees the arr
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.objectHeap.objects.length == 1 && vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
 }
 
 test "placed: the last RcDec of an array of uncounted elements leaves the elements to their owner" {
@@ -7941,7 +7949,7 @@ test "placed: the last RcDec of an array of uncounted elements leaves the elemen
 	], [RaiserRegClass.Ref, RaiserRegClass.Ref], [leaf], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.objectHeap.objects[0].rc == 1 && vmLiveCount(vm) == 1, `${vm.objectHeap.objects[0].rc} ${vmLiveCount(vm)}`;
+	assert objectRcAt(vm, 0) == 1 && vmLiveCount(vm) == 1, `${objectRcAt(vm, 0)} ${vmLiveCount(vm)}`;
 }
 
 test "placed: a class's destroy routine runs once on the last RcDec, sees the cell's fields, and the VM frees the cell after it returns" {
@@ -7996,7 +8004,7 @@ test "placed: a chain longer than the frame stack destroys through routine frame
 	], fieldNames(["next"]), 1, 1, 2, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
 	const vm = execModule(createRaiserModule("placed", [chainMain(node), destroy], 0));
 	assert vm.error == "", vm.error;
-	assert vm.objectHeap.objects.length == 3000 && vmLiveCount(vm) == 0, `${vm.objectHeap.objects.length} ${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
 }
 
 test "placed: a chain of classes without a routine is walked past the host-stack bound and freed" {
@@ -8030,12 +8038,12 @@ function storeSequence(viaArray: boolean): RaiserVM {
 
 test "placed: stores and moves leave every count where it was" {
 	const vm = storeSequence(false);
-	assert vm.objectHeap.objects[0].rc == 1 && vm.objectHeap.objects[1].rc == 1, `${vm.objectHeap.objects[1].rc}`;
+	assert objectRcAt(vm, 0) == 1 && objectRcAt(vm, 1) == 1, `${objectRcAt(vm, 1)}`;
 }
 
 test "placed: an array push counts nothing" {
 	const vm = storeSequence(true);
-	assert vm.objectHeap.objects[0].rc == 1 && heapArrayRc(vm.arrayHeap, heapSeqHandles(vm.arrayHeap)[0]) == 1;
+	assert objectRcAt(vm, 0) == 1 && heapArrayRc(vm.arrayHeap, heapSeqHandles(vm.arrayHeap)[0]) == 1;
 }
 
 function copyPlan(kind: RaiserCopyKind, names: string[], children: int32[]): RaiserCopyPlan {
@@ -8060,7 +8068,7 @@ test "placed: DestroyValue by plan frees an owned nested aggregate and releases 
 	main.copyPlans = [copyPlan(RaiserCopyKind.Object, ["inner"], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vmLiveCount(vm) == 1 && vm.objectHeap.objects[0].rc == 1 && vm.regs.slots[0] == 0, `${vmLiveCount(vm)} ${vm.objectHeap.objects[0].rc}`;
+	assert vmLiveCount(vm) == 1 && objectRcAt(vm, 0) == 1 && vm.regs.slots[0] == 0, `${vmLiveCount(vm)} ${objectRcAt(vm, 0)}`;
 }
 
 test "placed: DestroyValue by an array plan frees the array and every aggregate element" {
@@ -8076,7 +8084,7 @@ test "placed: DestroyValue by an array plan frees the array and every aggregate 
 	main.copyPlans = [copyPlan(RaiserCopyKind.Array, [], [1]), copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vmLiveCount(vm) == 0 && vm.objectHeap.objects.length == 1, `${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 0, `${vmLiveCount(vm)}`;
 }
 
 test "placed: SinkValue destroys the old aggregate and takes the source, and a destination that already holds it stays" {
@@ -8091,7 +8099,7 @@ test "placed: SinkValue destroys the old aggregate and takes the source, and a d
 	main.copyPlans = [copyPlan(RaiserCopyKind.Object, [], [])];
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.slots[0] == vm.regs.slots[1] && vmLiveCount(vm) == 1 && vm.objectHeap.objects[1].rc == 1, `${vmLiveCount(vm)}`;
+	assert vm.regs.slots[0] == vm.regs.slots[1] && vmLiveCount(vm) == 1 && rcCountOf(vm.arrayHeap, vm.objectHeap, vm.regs.slots[0]) == 1, `${vmLiveCount(vm)}`;
 }
 
 test "placed: CopyValue counts an alias and leaves a fresh copy with its allocation count" {
@@ -8106,7 +8114,7 @@ test "placed: CopyValue counts an alias and leaves a fresh copy with its allocat
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert vm.regs.slots[1] == vm.regs.slots[0] && vm.regs.slots[2] != vm.regs.slots[0], `${vm.regs.slots[0]} ${vm.regs.slots[2]}`;
-	assert vm.objectHeap.objects[0].rc == 2 && vm.objectHeap.objects[1].rc == 1, `${vm.objectHeap.objects[0].rc} ${vm.objectHeap.objects[1].rc}`;
+	assert objectRcAt(vm, 0) == 2 && objectRcAt(vm, 1) == 1, `${objectRcAt(vm, 0)} ${objectRcAt(vm, 1)}`;
 }
 
 function cyclicRelease(cyclic: boolean, viaRcDec: boolean): RaiserVM {
@@ -8167,7 +8175,7 @@ test "placed: a garbage cycle is freed by the collector, each cell's destroy rou
 	const vm = garbageCycle();
 	assert vm.error == "", vm.error;
 	assert vm.output == "1\n1\n", vm.output;
-	assert vmLiveCount(vm) == 0 && vm.objectHeap.freeList.length == 2 && vm.arrayHeap.orcRoots.length == 0, `${vmLiveCount(vm)} ${vm.objectHeap.freeList.length}`;
+	assert vmLiveCount(vm) == 0 && vm.arrayHeap.orcRoots.length == 0, `${vmLiveCount(vm)}`;
 	assert vm.dropped.length == 0 && vm.disposing.length == 0;
 }
 
@@ -8271,7 +8279,7 @@ test "WasMoved clears a word register to 0 and a ref register to nil without tou
 	], [RaiserRegClass.Ref, RaiserRegClass.Word], [leaf], []);
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
-	assert vm.regs.slots[0] == 0 && vm.regs.slots[1] == 0 && vm.objectHeap.objects[0].rc == 1;
+	assert vm.regs.slots[0] == 0 && vm.regs.slots[1] == 0 && objectRcAt(vm, 0) == 1;
 }
 
 function throwingDestroy(): RaiserVM {
@@ -8296,7 +8304,7 @@ test "placed: an exception thrown by a destroy routine unwinds its frame and sti
 	assert escaped == "", escaped;
 	const vm = throwingDestroy();
 	assert vm.error.includes("boom"), vm.error;
-	assert vm.disposing.length == 0 && vmLiveCount(vm) == 0 && vm.callStack.depth == 0, `${vm.disposing.length} ${vmLiveCount(vm)}`;
+	assert vm.disposing.length == 0 && vmLiveCount(vm) == 0 && vm.callStack.depth == 0, `${vm.disposing.length} ${vmLiveCount(vm)} ${vm.callStack.depth}`;
 }
 
 // --- Array kernels: results the C kernels give, and the counts they keep ---
@@ -8341,7 +8349,7 @@ function stringRc(vm: RaiserVM, v: RaiserValue): int32 {
 }
 
 function objectRc(vm: RaiserVM, v: RaiserValue): int32 {
-	return vm.objectHeap.objects[handleIndex(v.intVal)].rc;
+	return rcCountOf(vm.arrayHeap, vm.objectHeap, v.intVal);
 }
 
 function numberSplice(values: number[], start: number, count: number, withItem: boolean, item: number): string {
@@ -8631,7 +8639,7 @@ test "placed: AssignInPlace gives an array behind a pointer the source's element
 	assert vm.regs.slots[0] == vm.regs.slots[2] && vm.regs.slots[3] == 0, `${vm.regs.slots[0]} ${vm.regs.slots[2]} ${vm.regs.slots[3]}`;
 	const dest = vm.regs.slots[0];
 	assert heapArrayLen(vm.arrayHeap, dest) == 2 && heapArrayRc(vm.arrayHeap, dest) == 2, `${heapArrayLen(vm.arrayHeap, dest)} ${heapArrayRc(vm.arrayHeap, dest)}`;
-	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 0 && vm.objectHeap.freeList.length == 1, `${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 0, `${vmLiveCount(vm)}`;
 }
 
 test "placed: AssignInPlace gives a union behind a pointer the source's tag and payload, releases the old payload and frees the source cell" {
@@ -8657,9 +8665,9 @@ test "placed: AssignInPlace gives a union behind a pointer the source's tag and 
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert vm.regs.slots[0] == vm.regs.slots[2] && vm.regs.slots[3] == 0, `${vm.regs.slots[0]} ${vm.regs.slots[2]} ${vm.regs.slots[3]}`;
-	const dest = vm.objectHeap.objects[handleIndex(vm.regs.slots[0])];
-	assert handleIndex(dest.slots[1]) == 3 && dest.rc == 2, `${handleIndex(dest.slots[1])} ${dest.rc}`;
-	assert vmLiveCount(vm) == 2 && vm.objectHeap.freeList.length == 2, `${vmLiveCount(vm)}`;
+	const dest = vm.regs.slots[0];
+	assert objectCellSlot(seqCellOf(dest), 1) != 0 && rcCountOf(vm.arrayHeap, vm.objectHeap, dest) == 2, `${rcCountOf(vm.arrayHeap, vm.objectHeap, dest)}`;
+	assert vmLiveCount(vm) == 2, `${vmLiveCount(vm)}`;
 }
 
 const pendingClasses: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Word];

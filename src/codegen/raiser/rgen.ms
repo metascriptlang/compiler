@@ -1529,7 +1529,7 @@ test "arr[i] *= value" {
 
 test "new with constructor sets fields" {
 	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.x;");
-	assert ctx.lastResult.intVal == 3;
+	assert ctx.lastResult.intVal == 3, ctx.lastError;
 }
 
 test "new carries every positional argument" {

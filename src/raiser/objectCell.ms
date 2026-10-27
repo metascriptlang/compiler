@@ -102,10 +102,14 @@ test "copyGraph copies a ring of cells into another heap, keeping the ring and l
 
 test "one class type shares a table index however many cells hold it" {
 	const mem = createVmMemory();
-	const a = objectCellNew(mem, pointType(), 0);
-	const b = objectCellNew(mem, pointType(), 0);
-	assert cellTypeIndex(a) == cellTypeIndex(b);
+	const t = pointType();
+	const a = objectCellNew(mem, t, 0);
+	const b = objectCellNew(mem, t, 0);
+	assert cellTypeIndex(a) == cellTypeIndex(b) && objectCellType(a) == t;
+	const other = objectCellNew(mem, pointType(), 0);
+	assert cellTypeIndex(other) != cellTypeIndex(a);
 	assert objectCellType(a).fields.length == 3;
+	objectCellFree(mem, other);
 	objectCellFree(mem, a);
 	objectCellFree(mem, b);
 	assert liveCellBlocks(mem).length == 0;
