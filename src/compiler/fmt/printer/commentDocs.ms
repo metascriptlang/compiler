@@ -1,6 +1,7 @@
 import { Node, SourceLocation } from "../../../ast/node";
 import { Comments, SourceComment, CommentKind, leading, trailing, dangling, unformattedWithin, markFormatted } from "../comments";
 import { Doc, docText, docGroup, docIndent, docLine, docHardLine, docLineSuffix, docBreakParent, docJoin } from "../doc";
+import { blankLineBefore } from "./literals";
 
 let placed: Comments = new Comments();
 
@@ -132,12 +133,31 @@ export function markWithin(from: SourceLocation, to: SourceLocation): void {
 	for (const c of commentsWithin(from, to)) c.markFormatted();
 }
 
-export function interleave(items: Doc[], lines: int32[], inner: SourceComment[]): Doc[] {
+export function startLineOf(node: Node): int32 {
+	const lead = placed.leading(node);
+	return lead.length > 0 ? lead[0].line : node.location.line;
+}
+
+export function joinKeepingBlankLines(docs: Doc[], starts: int32[]): Doc[] {
 	const out: Doc[] = [];
+	for (let i = 0; i < docs.length; i += 1) {
+		if (i > 0) {
+			out.push(docHardLine());
+			if (blankLineBefore(starts[i])) out.push(docHardLine());
+		}
+		out.push(docs[i]);
+	}
+	return out;
+}
+
+export function interleave(items: Doc[], lines: int32[], starts: int32[], inner: SourceComment[]): Doc[] {
+	const out: Doc[] = [];
+	const outStarts: int32[] = [];
 	let at = 0;
 	for (let i = 0; i < items.length; i += 1) {
 		while (at < inner.length && inner[at].line < lines[i]) {
 			out.push(docText(inner[at].text));
+			outStarts.push(inner[at].line);
 			inner[at].markFormatted();
 			at += 1;
 		}
@@ -149,15 +169,17 @@ export function interleave(items: Doc[], lines: int32[], inner: SourceComment[])
 			at += 1;
 		}
 		out.push(docGroup(entry));
+		outStarts.push(starts[i]);
 	}
 	while (at < inner.length) {
 		out.push(docText(inner[at].text));
+		outStarts.push(inner[at].line);
 		inner[at].markFormatted();
 		at += 1;
 	}
-	return out;
+	return joinKeepingBlankLines(out, outStarts);
 }
 
-export function boxed(open: string, lines: Doc[], close: string): Doc {
-	return docGroup([docText(open), docIndent([docHardLine(), docJoin(lines, docHardLine())]), docHardLine(), docText(close)]);
+export function boxed(open: string, body: Doc[], close: string): Doc {
+	return docGroup([docText(open), docIndent([docHardLine(), ...body]), docHardLine(), docText(close)]);
 }

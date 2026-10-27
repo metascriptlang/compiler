@@ -8,7 +8,7 @@ import {
 	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
 } from "../../../ast/node";
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
-import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments } from "./commentDocs";
+import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
@@ -18,7 +18,6 @@ class ListItem {
 	line: int32;
 	column: int32;
 	startLine: int32;
-	endLine: int32;
 	stmt: Node | null;
 	chain: WhenChain | null;
 	broken: boolean;
@@ -26,18 +25,14 @@ class ListItem {
 
 function chainItem(chain: WhenChain): ListItem {
 	const lead = chain.placed.leading;
-	const trail = chain.placed.trailing;
 	const startLine = lead.length > 0 ? lead[0].line : chain.line;
-	const endLine = trail.length > 0 ? Math.max(trail[trail.length - 1].endLine, chain.endLine) as int32 : chain.endLine;
-	return { line: chain.line, column: chain.column, startLine, endLine, stmt: null, chain, broken: true };
+	return { line: chain.line, column: chain.column, startLine, stmt: null, chain, broken: true };
 }
 
 function stmtItem(stmt: Node): ListItem {
 	const trail = commentsOfRun().trailing(stmt);
 	const lead = commentsOfRun().leading(stmt);
-	const startLine = lead.length > 0 ? lead[0].line : stmt.location.line;
-	const endLine = trail.length > 0 ? Math.max(trail[trail.length - 1].endLine, lastLineOf(stmt)) as int32 : lastLineOf(stmt);
-	return { line: stmt.location.line, column: stmt.location.column, startLine, endLine, stmt, chain: null, broken: lead.length > 0 || trail.length > 0 };
+	return { line: stmt.location.line, column: stmt.location.column, startLine: startLineOf(stmt), stmt, chain: null, broken: lead.length > 0 || trail.length > 0 };
 }
 
 function printChain(chain: WhenChain, options: FormatOptions): Doc {
@@ -71,22 +66,20 @@ function printListItem(item: ListItem, stmts: Node[], options: FormatOptions): D
 	return callPrintNode(item.stmt!, options);
 }
 
-function printItems(items: ListItem[], stmts: Node[], keepBlankLines: boolean, options: FormatOptions): Doc[] {
-	const parts: Doc[] = [];
-	for (let i = 0; i < items.length; i += 1) {
-		if (i > 0) {
-			parts.push(docHardLine());
-			if (keepBlankLines && items[i].startLine - items[i - 1].endLine > 1) parts.push(docHardLine());
-		}
-		parts.push(printListItem(items[i], stmts, options));
+function printItems(items: ListItem[], stmts: Node[], options: FormatOptions): Doc[] {
+	const docs: Doc[] = [];
+	const starts: int32[] = [];
+	for (const item of items) {
+		docs.push(printListItem(item, stmts, options));
+		starts.push(item.startLine);
 	}
-	return parts;
+	return joinKeepingBlankLines(docs, starts);
 }
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
 	const items = listItems(node, d.programStmts);
-	const parts = printItems(items, d.programStmts, true, options);
+	const parts = printItems(items, d.programStmts, options);
 	const orphans = danglingOf(node);
 	if (items.length == 0) return docGroup([danglingBlock(orphans)]);
 	return docGroup(parts);
@@ -161,9 +154,9 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	const orphans = danglingOf(node);
 	if (items.length == 0) {
 		if (orphans.length == 0) return docText("{}");
-		return boxed("{", danglingLines(orphans), "}");
+		return boxed("{", [danglingBlock(orphans)], "}");
 	}
-	const stmts = printItems(items, d.statements, false, options);
+	const stmts = printItems(items, d.statements, options);
 
 	// Single-statement block can stay inline (`{ stmt }`) when it fits
 	// printWidth. Multi-stmt blocks always break — flattening multiple
@@ -396,15 +389,17 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 
 export function printSwitchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SwitchStmtData;
+	const head = [docText("switch ("), callPrintNode(d.switchDisc, options), docText(") ")];
 	const cases: Doc[] = [];
+	const starts: int32[] = [];
 	for (const c of d.switchCases) {
 		cases.push(withComments(c, printSwitchCase(c, options)));
+		starts.push(startLineOf(c));
 	}
 	return docGroup([
-		docText("switch ("),
-		callPrintNode(d.switchDisc, options),
-		docText(") {"),
-		docIndent([docHardLine(), docJoin(cases, docHardLine())]),
+		...head,
+		docText("{"),
+		docIndent([docHardLine(), ...joinKeepingBlankLines(cases, starts)]),
 		docHardLine(),
 		docText("}"),
 	]);
@@ -425,12 +420,14 @@ function printSwitchCase(node: Node, options: FormatOptions): Doc {
 	}
 	if (d.caseStmts.length > 0) {
 		const stmts: Doc[] = [];
+		const starts: int32[] = [];
 		for (const s of d.caseStmts) {
 			if (listDeclarator(s) != null) continue;
 			noteFollowers(d.caseStmts, s);
 			stmts.push(callPrintNode(s, options));
+			starts.push(startLineOf(s));
 		}
-		parts.push(docIndent([docHardLine(), docJoin(stmts, docHardLine())]));
+		parts.push(docIndent([docHardLine(), ...joinKeepingBlankLines(stmts, starts)]));
 	}
 	return docGroup(parts);
 }
@@ -622,7 +619,7 @@ export function commentedList(items: Doc[], locs: SourceLocation[], inner: Sourc
 		lines.push(i < locs.length ? locs[i].line : 0);
 		entries.push(docGroup([items[i], docText(",")]));
 	}
-	return boxed(open, interleave(entries, lines, inner), close);
+	return boxed(open, interleave(entries, lines, lines, inner), close);
 }
 
 function pushPlaced(holder: Node, out: SourceComment[]): void {

@@ -103,9 +103,11 @@ function extractRawStringToken(source: string, line: int32, col: int32): string 
 }
 
 let lines = LineIndex.build("");
+let indexed = "";
 
 export function indexSourceLines(source: string): void {
 	lines = LineIndex.build(source);
+	indexed = source;
 }
 
 function sourceOffset(source: string, line: int32, col: int32): int32 {
@@ -119,6 +121,18 @@ export function sourceSpan(source: string, line: int32, column: int32, endLine: 
 	let end = sourceOffset(source, endLine, endColumn - 1);
 	if (end < 0) end = source.byteLength;
 	return start < 0 || end < start ? "" : source.byteSlice(start, end);
+}
+
+export function blankLineBefore(line: int32): boolean {
+	if (line < 2) return false;
+	const from = lines.lineStart(line - 1);
+	const to = lines.lineStart(line);
+	if (to == from) return false;
+	for (let i = from; i < to; i += 1) {
+		const ch = indexed.byteAt(i);
+		if (ch != " ".code && ch != "\t".code && ch != "\r".code && ch != "\n".code) return false;
+	}
+	return true;
 }
 
 export function sourceByteAt(source: string, line: int32, column: int32): int32 {

@@ -13,7 +13,7 @@ import {
 	docLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, danglingLines, commentsWithin, markWithin, interleave, boxed } from "./commentDocs";
+import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, isSynthesized, takeStructAccessors } from "./statements";
@@ -210,7 +210,7 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	const inner = bodyComments(node);
 	if (d.enumMembers.length == 0) {
 		if (inner.length == 0) return docText("enum " + d.enumName + " {}");
-		return boxed("enum " + d.enumName + " {", danglingLines(inner), "}");
+		return boxed("enum " + d.enumName + " {", [danglingBlock(inner)], "}");
 	}
 
 	const members: Doc[] = [];
@@ -222,7 +222,7 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 		members.push(docText(d.enumMembers[i] + (init != "" ? " = " + init : "") + ","));
 		lines.push(i < d.memberLocations.length ? d.memberLocations[i].line : 0);
 	}
-	return boxed("enum " + d.enumName + " {", interleave(members, lines, inner), "}");
+	return boxed("enum " + d.enumName + " {", interleave(members, lines, lines, inner), "}");
 }
 
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
@@ -233,18 +233,20 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	let accessorIdx = 0;
 	if (d.interfaceFields.length == 0 && accessors.length == 0) {
 		const orphans = bodyComments(node);
-		return orphans.length == 0 ? docText(head + " {}") : boxed(head + " {", danglingLines(orphans), "}");
+		return orphans.length == 0 ? docText(head + " {}") : boxed(head + " {", [danglingBlock(orphans)], "}");
 	}
 
 	const fieldLocs = node.paramLocations!;
 	const inner = bodyComments(node);
 	const fields: Doc[] = [];
 	const lines: int32[] = [];
+	const starts: int32[] = [];
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		const fieldLine = i < fieldLocs.length ? fieldLocs[i].line : 0;
 		while (accessorIdx < accessors.length && accessors[accessorIdx].location.line < fieldLine) {
 			fields.push(printStructGetter(accessors[accessorIdx], options));
 			lines.push(accessors[accessorIdx].location.line);
+			starts.push(accessors[accessorIdx].location.line);
 			accessorIdx = accessorIdx + 1;
 		}
 		let field = d.interfaceFields[i];
@@ -257,11 +259,13 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] != "") field = d.interfaceFieldVisibility[i] + " " + field;
 		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		const lead: Doc[] = [];
+		let startLine = fieldLine;
 		if (i < d.interfaceFieldDecorators.length) {
 			const decorators = d.interfaceFieldDecorators[i];
 			let ownLine = false;
 			for (const dec of decorators) {
 				if (dec.location.line != fieldLine) ownLine = true;
+				startLine = Math.min(startLine, dec.location.line) as int32;
 			}
 			for (const dec of decorators) {
 				lead.push(callPrintNode(dec, options));
@@ -271,13 +275,15 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		lead.push(docText(field + sep));
 		fields.push(lead.length > 1 ? docGroup(lead) : lead[0]);
 		lines.push(fieldLine);
+		starts.push(startLine);
 	}
 	while (accessorIdx < accessors.length) {
 		fields.push(printStructGetter(accessors[accessorIdx], options));
 		lines.push(accessors[accessorIdx].location.line);
+		starts.push(accessors[accessorIdx].location.line);
 		accessorIdx = accessorIdx + 1;
 	}
-	return boxed(head + " {", interleave(fields, lines, inner), "}");
+	return boxed(head + " {", interleave(fields, lines, starts, inner), "}");
 }
 
 function printStructGetter(getter: Node, options: FormatOptions): Doc {
@@ -322,15 +328,21 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docHardLine());
 	}
 	if (d.classBody.length > 0) {
-		const members: Doc[] = [];
-		for (const m of d.classBody) {
-			members.push(printBodyMember(m, options));
-		}
-		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
+		parts.push(docIndent([docHardLine(), ...printBodyMembers(d.classBody, options)]));
 		parts.push(docHardLine());
 	}
 	parts.push(docText("}"));
 	return docGroup(parts);
+}
+
+function printBodyMembers(members: Node[], options: FormatOptions): Doc[] {
+	const docs: Doc[] = [];
+	const starts: int32[] = [];
+	for (const m of members) {
+		docs.push(printBodyMember(m, options));
+		starts.push(startLineOf(m));
+	}
+	return joinKeepingBlankLines(docs, starts);
 }
 
 function printBodyMember(m: Node, options: FormatOptions): Doc {
@@ -349,11 +361,7 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docHardLine());
 	}
 	if (d.actorBody.length > 0) {
-		const members: Doc[] = [];
-		for (const m of d.actorBody) {
-			members.push(printBodyMember(m, options));
-		}
-		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
+		parts.push(docIndent([docHardLine(), ...printBodyMembers(d.actorBody, options)]));
 		parts.push(docHardLine());
 	}
 	parts.push(docText("}"));
