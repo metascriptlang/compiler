@@ -4694,6 +4694,16 @@ override whose `sink` positions differ from the one it is matched against is an 
 actor method refuses `sink`, `ref` and `out`. Literal fitting, generic binding and `sink`
 as a parameter name: `src/test/handoff/sinkParam.ms`.
 
+On C under DRC the compiler also infers `sink` for a parameter the body always stores into a
+field or a non-local, puts in an object or array literal, or passes to a `sink` parameter,
+outside any branch. It does so only where no caller can see the routine's type: a routine
+used as a value, given a native or library export name, overloaded, overridden or dispatched, async, a generator, generic,
+or one that builds a closure keeps its parameters borrowed. A caller's last use then moves
+in instead of being copied, and each program prints the same as with no inference. Measured
+2026-10-28: corpus `inferSinkParamsRcBudget` runs 640008 rc operations on the compiler before
+the pass and 400008 with it (`@maxrcops: 410000`), and `inferSinkParamsBoundaries` keeps the
+excluded routines borrowed across modules.
+
 ## Proxy
 
 `new Proxy(target, handler)` intercepts every member read and write of `target` through
