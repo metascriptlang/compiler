@@ -390,6 +390,10 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 export function printSwitchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SwitchStmtData;
 	const head = [docText("switch ("), callPrintNode(d.switchDisc, options), docText(") ")];
+	if (d.switchCases.length == 0) {
+		const orphans = danglingOf(node);
+		return docGroup([...head, orphans.length == 0 ? docText("{}") : boxed("{", [danglingBlock(orphans)], "}")]);
+	}
 	const cases: Doc[] = [];
 	const starts: int32[] = [];
 	for (const c of d.switchCases) {
