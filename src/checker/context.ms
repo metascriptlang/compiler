@@ -847,12 +847,47 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 	_dispBySym.set(sym, e);
 }
 
-export function forgetDispatchOf(classSym: Symbol): void {
-	const own = _dispByClass.get(classSym);
-	if (own == null) return;
-	_dispByClass.delete(classSym);
-	for (const e of own) _dispBySym.delete(e.sym);
-	_dispEntries = _dispEntries.filter((e: DispMethodEntry): boolean => e.classSym != classSym);
+// Drops every entry of the classes a module declares and returns where the first sat in the registry's order, -1 when
+// it had none, so the module's re-collection can be put back there by placeDispatchOfModule.
+export function forgetDispatchOfModule(modulePath: string): int32 {
+	let first = -1;
+	const kept: DispMethodEntry[] = [];
+	const gone = new HashSet<DispMethodEntry>();
+	for (const e of _dispEntries) {
+		if (e.classSym.modulePath != modulePath) {
+			kept.push(e);
+			continue;
+		}
+		if (first < 0) first = kept.length;
+		gone.add(e);
+		_dispByClass.delete(e.classSym);
+	}
+	_dispEntries = kept;
+	const stale: Symbol[] = [];
+	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+		if (gone.has(e)) stale.push(sym);
+	});
+	for (const sym of stale) _dispBySym.delete(sym);
+	return first;
+}
+
+// Moves the entries a module recorded since forgetDispatchOfModule to `at`, keeping their order, the place a first
+// collection of the modules in load order gives them.
+export function placeDispatchOfModule(modulePath: string, at: int32): void {
+	if (at < 0) return;
+	const mine: DispMethodEntry[] = [];
+	const rest: DispMethodEntry[] = [];
+	for (const e of _dispEntries) {
+		if (e.classSym.modulePath == modulePath) mine.push(e);
+		else rest.push(e);
+	}
+	const placed: DispMethodEntry[] = [];
+	for (let i = 0; i < rest.length; i += 1) {
+		if (i == at) for (const e of mine) placed.push(e);
+		placed.push(rest[i]);
+	}
+	if (at >= rest.length) for (const e of mine) placed.push(e);
+	_dispEntries = placed;
 }
 
 export function dispatchEntryCount(): int32 {

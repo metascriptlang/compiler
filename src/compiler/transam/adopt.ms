@@ -1,7 +1,7 @@
 import { Node, NodeKind, Symbol, SymbolState, Type, ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ExternDeclData } from "../../ast/node";
 import { declOfStatement, getDeclName, classMemberDecl } from "../../checker/collectPass";
 import { ScopeKind, SymbolTable, SymbolFlag, lookupLocal, openScope, symbolKey } from "../../checker/symbol";
-import { CheckerContext, createContext, forgetDispatchOf } from "../../checker/context";
+import { CheckerContext, createContext, forgetDispatchOfModule, placeDispatchOfModule } from "../../checker/context";
 import { collectTopLevel } from "../../checker/collectPass";
 import { resetResizeSummaries } from "../../checker/varPartitions";
 import { forgetInstanceHooks } from "../../checker/instantiate";
@@ -30,6 +30,8 @@ export class Adoption {
 	index: HashMap<string, Declared> = new HashMap<string, Declared>();
 	seen: HashMap<string, int32> = new HashMap<string, int32>();
 	summariesDropped: boolean = false;
+	dispatchForgotten: boolean = false;
+	dispatchAt: int32 = -1;
 }
 
 function memberKey(owner: Symbol | null, name: string, sym: Symbol): string {
@@ -138,13 +140,16 @@ export function adoptStmt(out: Adoption, stmt: Node): void {
 	const name = getDeclName(decl);
 	if (name == "" || out.visited.has(decl)) return;
 	out.visited.add(decl);
+	if (!out.dispatchForgotten && out.old.modulePath != "") {
+		out.dispatchForgotten = true;
+		out.dispatchAt = forgetDispatchOfModule(out.old.modulePath);
+	}
 	const now: Declared = { key: decl, probe: decl, probeInner: decl, name: name, group: groupOf(decl) };
 	const was = out.index.get(ordinalKey(now, out.seen));
 	if (was == null) return;
 	const sym = pair(out, was, now, null);
 	if (sym != null) {
 		forgetInstanceHooks(sym);
-		forgetDispatchOf(sym);
 	}
 	if (sym != null && !out.summariesDropped) {
 		out.summariesDropped = true;
@@ -168,6 +173,7 @@ export function moduleSymbols(table: SymbolTable, modulePath: string): Symbol[] 
 }
 
 export function verifyAdoption(adoption: Adoption): void {
+	placeDispatchOfModule(adoption.old.modulePath, adoption.dispatchAt);
 	for (const p of adoption.pairs) {
 		const now = memberKey(p.owner, p.name, p.sym);
 		if (now != p.before) throw new Error(`internal: adoption: '${p.before}' was adopted by a declaration that is now '${now}'`);
