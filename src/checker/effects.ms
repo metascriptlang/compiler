@@ -89,7 +89,7 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 let hookRegistry: ExtensionRegistry | null = null;
 const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
-const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "HiXorLo", "MapFatal", "LoadLE64", "LoadLE32", "AsBytes"];
+const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "HiXorLo", "MapFatal", "LoadLE64", "LoadLE32", "AsBytes", "ResultOk", "ResultErr"];
 
 function tableFor(e: Effect): EffectTable {
 	return match (e) {
@@ -518,7 +518,7 @@ export function isFreshValue(n: Node | null, s: FreshScope): boolean {
 		},
 		NodeKind.ObjectLiteral => allFresh((p.data as ObjectLiteralData).properties, s),
 		NodeKind.ArrayLiteral => allFresh((p.data as ArrayLiteralData).elements, s),
-		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, s),
+		NodeKind.SpreadExpr => spreadCopiesRefFree(p) || isFreshValue((p.data as SpreadExprData).spreadArg, s),
 		NodeKind.NewExpr => allFresh((p.data as NewExprData).newArguments, s) && s.buildsAlone(p),
 		NodeKind.CallExpr => {
 			const d = p.data as CallExprData;
@@ -755,7 +755,7 @@ function useEffect(node: Node, e: Effect): EffectCause | null {
 export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (node == null) return null;
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
-	if (e == Effect.Suspends && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.SpawnUnsafe) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e)
@@ -789,12 +789,23 @@ function borrowedOf(value: Node | null): BorrowSource | null {
 		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object) ?? heldBorrow((n.data as MemberExprData).object),
 		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array) ?? heldBorrow((n.data as ArrayAccessData).array),
 		NodeKind.CallExpr => callBorrow(n),
+		NodeKind.SpreadExpr => spreadBorrow(n),
 		NodeKind.Identifier => bindingBorrow(n, value),
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => capturedBorrow(n),
 		NodeKind.NewExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral | NodeKind.AwaitExpr | NodeKind.StringLiteral | NodeKind.NullLiteral
 			| NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.SizeofExpr => null,
 		_ => unfollowed(),
 	};
+}
+
+function spreadCopiesRefFree(spread: Node): boolean {
+	let t = (spread.data as SpreadExprData).spreadArg.nodeType;
+	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
+	return t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn);
+}
+
+function spreadBorrow(n: Node): BorrowSource | null {
+	return spreadCopiesRefFree(n) ? null : borrowedOf((n.data as SpreadExprData).spreadArg);
 }
 
 function viewsInScope(): boolean {
@@ -940,7 +951,13 @@ function scanFlows(node: Node | null): void {
 			const recv = receiverOf(n);
 			const root = recv != null ? pathRoot(recv) : null;
 			if (isLocalBinding(root)) {
-				for (const a of (n.data as CallExprData).arguments) addSource(heldSources, root!, peelConv(a));
+				const sig = calledRoutineType(n);
+				const shift = n.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+				const args = (n.data as CallExprData).arguments;
+				for (let i = 0; i < args.length; i += 1) {
+					const formal = sig != null && i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
+					if (!isReadonlyView(formal)) addSource(heldSources, root!, peelConv(args[i]));
+				}
 			}
 		}
 		forEachChild(n, visit);

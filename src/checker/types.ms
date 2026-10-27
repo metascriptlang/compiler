@@ -1601,7 +1601,7 @@ export function representedPayload(inner: Readonly<Type>): Readonly<Type> {
 export function createMaybeType(inner: Type): Type {
 	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind == TypeKind.Ref || inner.kind == TypeKind.Ptr) return inner;
-	const key = maybeCacheKey(inner);
+	const key = (isReadonlyView(inner) ? "ro:" : "") + maybeCacheKey(inner);
 	let i = 0;
 	while (i < _maybeCacheNames.length) {
 		if (_maybeCacheNames[i] == key) {
@@ -5482,6 +5482,23 @@ export function getBuiltinKind(t: Type | null): string {
 		break;
 	}
 	return "";
+}
+
+// isIsolatedType — true for an `Isolated<T>` (std/isolation): a value that cannot be copied,
+// so a binding of this type is the sole owner of the graph inside it.
+export function isIsolatedType(t: Type | null): boolean {
+	return getBuiltinKind(t) == "Isolated";
+}
+
+// holdsIsolated — an Isolated<T>, or a struct or tuple with one inside it: neither can be copied.
+export function holdsIsolated(t: Type | null): boolean {
+	if (t == null) return false;
+	if (isIsolatedType(t)) return true;
+	if (t.kind != TypeKind.Struct && t.kind != TypeKind.Tuple) return false;
+	for (const c of t.typeChildren) {
+		if (holdsIsolated(c)) return true;
+	}
+	return false;
 }
 
 // isIndexableMapType — true when t is a class tagged @builtin("IndexableMap").
