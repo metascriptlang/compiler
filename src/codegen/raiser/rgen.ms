@@ -580,6 +580,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	if (initIndices.length == 0) {
 		emitLoadConst(entryS, allocRef(entryS), raiserNil());
 	}
+	if (deinitIndices.length > 0) emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
 	for (let di = deinitIndices.length - 1; di >= 0; di -= 1) {
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, allocDyn(entryS), deinitIndices[di], 0));
 	}

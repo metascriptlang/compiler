@@ -54,21 +54,30 @@ function futureRepr(t: Type | null): Type | null {
 	return body != null ? futureRepr(body) : t;
 }
 
+let _valueFutures = false;
+
+// The Raiser holds every value in its future as the value itself: no inline slot, no box, no owner.
+export function setValueFutures(on: boolean): boolean {
+	const prior = _valueFutures;
+	_valueFutures = on;
+	return prior;
+}
+
 export function inlineInFuture(raw: Type | null): boolean {
 	const t = futureRepr(raw);
-	return t != null && literalBase(t).kind == TypeKind.String;
+	return !_valueFutures && t != null && literalBase(t).kind == TypeKind.String;
 }
 
 export function boxedInFuture(raw: Type | null): boolean {
 	const t = futureRepr(raw);
-	if (t == null) return false;
+	if (t == null || _valueFutures) return false;
 	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String)
 		|| (t.kind == TypeKind.Union && unwrapRefNullUnion(t) == null && literalUnionBase(t) == null);
 }
 
 export function refInFuture(raw: Type | null): boolean {
 	const t = futureRepr(raw);
-	return t != null && t.kind == TypeKind.Ref;
+	return !_valueFutures && t != null && t.kind == TypeKind.Ref;
 }
 
 // The future holds a value that has a destructor: the async writer makes it the
