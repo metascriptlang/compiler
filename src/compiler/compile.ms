@@ -1545,9 +1545,19 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 	return byHome;
 }
 
-function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false, ownHome: boolean = false): void {
 	retainCheckedInstances(moduleCtxs);
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
+	let homes: HashMap<Node, string> | null = null;
+	if (ownHome) {
+		homes = new HashMap<Node, string>();
+		const seen = new HashSet<CheckerContext>();
+		for (const moduleCtx of moduleCtxs) {
+			if (seen.has(moduleCtx)) continue;
+			seen.add(moduleCtx);
+			for (const instNode of moduleCtx.generatedInstances) homes.set(instNode, moduleCtx.modulePath);
+		}
+	}
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, homes, classesBesideGeneric);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -3258,12 +3268,8 @@ resetLiftedOps();
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
-	// created during a later module's check is OWNED by its defining module (set in
-	// instantiateGenericFunction). To emit it in that module's TU — so the generic body's
-	// module-private static helpers are visible in the same translation unit — it must be
-	// appended to that module's program BEFORE the module's transform/lower runs. Load order
-	// is dependency-first, so the owner is already past transform by the time a dependent
-	// instantiates it; hence we defer all transform to A2 and route instances by owner between.
+	// is HOMED in the module that minted it, so it is appended to that module's own program
+	// before the module's transform/lower runs, and no module's output depends on its importers.
 	const checkedMods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[] = [];
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
@@ -3293,10 +3299,9 @@ resetLiftedOps();
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
 		if (created == null) continue;
-		const keeps = reloadable.includes(modPath);
 		for (const instNode of created) {
 			routeOrder.push(instNode);
-			if (keeps) homes.set(instNode, modPath);
+			homes.set(instNode, modPath);
 		}
 	}
 	retainCheckedInstances(checkedModCtxs(checkedMods));
@@ -4106,10 +4111,8 @@ resetLiftedOps();
 		programByPath.set(modPath, checked.program);
 	}
 
-	// Single drain after A1 — route each pending generic instance to its OWNER module's
-	// program so the generic body's module-private helpers are visible in the same TU.
-	// Owner-less nodes fall back to the entry program.
-	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
+	// Single drain after A1 — each pending generic instance goes to the program of the module that minted it.
+	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods), false, true);
 
 	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);

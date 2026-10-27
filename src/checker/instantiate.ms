@@ -1065,13 +1065,8 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	if (boxed != null) addError(ctx, boxedReferenceRefusal(instancePhrase, boundParamName(dedup.params, dedup.types, boxed), boxed), callLoc.line, callLoc.column);
 
 	// Create and register symbol in root scope.
-	// Instance is OWNED by the generic's defining module (reference parity:
-	// generateInstance setOwner(result, fn)). It is emitted in that module's TU, so the
-	// generic body's module-private helpers (static functions, lifted closures) are visible
-	// to it — co-location, not cross-TU. The mangled C name becomes module-qualified
-	// (`gen__int32__<M>`) via mangledFunctionName; DCE/dedup predicates still key on the
-	// unqualified `fnName` containing `__`. Used-but-not-defining modules forward-decl it
-	// through the standard cross-module proto path.
+	// Routing re-homes a C instance to the module that minted it (`item` is already that module's);
+	// the JS and raiser backends keep it with the module declaring the generic.
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";

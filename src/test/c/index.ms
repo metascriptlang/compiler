@@ -39,6 +39,7 @@ import "./numericNarrowing";
 import "./voidValue";
 import "./promiseThenTyped";
 import "./buildIsolation";
+import "./instanceHome";
 import "./aggregateLifecycle";
 import "./inheritedTrace";
 import "./referenceTransfer";
