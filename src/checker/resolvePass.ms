@@ -23,7 +23,7 @@ import { headerTarget } from "../module/loader";
 import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/cimport/emit";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
+import { mintCtorRoutine, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
@@ -3312,6 +3312,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Propagate HasAsgn from any managed field (parent + own after merge)
 	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
+	ctorRoutineFor(ctx, sym);
 }
 
 function refuseActorHandleName(ctx: CheckerContext, actorName: string, memberName: string, member: Node): void {
@@ -3422,6 +3423,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 	inner.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
+	ctorRoutineFor(ctx, sym);
 }
 
 // ===== Tests =====

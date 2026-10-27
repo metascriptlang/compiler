@@ -77,7 +77,11 @@ export function ctorRoutineFor(ctx: CheckerContext, owner: Symbol): Symbol | nul
 	if (known != null) return known;
 	if (owner.symbolKind != SymbolKind.Class && owner.symbolKind != SymbolKind.Actor) return null;
 	if (hasFlag(owner, SymbolFlag.HasConstructor)) throw new Error(`internal: class '${owner.name}' has a written constructor but no routine symbol`);
-	return mintCtorRoutine(pickBodyCtx(owner.modulePath, ctx, owner), owner, owner.name, owner.symbolType, [], [], null, []);
+	if (owner.instantiatedFrom == null) return mintCtorRoutine(pickBodyCtx(owner.modulePath, ctx, owner), owner, owner.name, owner.symbolType, [], [], null, []);
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const routine = mintCtorRoutine(host, owner, owner.name, owner.symbolType, [], [], null, []);
+	routine.instantiatedFrom = ctorRoutineOf(owner.instantiatedFrom);
+	return routine;
 }
 
 export function ctorFormalTypes(routine: Symbol | null): Type[] | null {
