@@ -8,7 +8,7 @@ import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGe
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
-import { FmtPos, formatRunEdits, rangeStatements, applyEdit } from "../../fmt/edit";
+import { FmtPos, StatementRun, formatRunEdits, rangeStatements, applyEdit, lineOffset } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
 import { lspByteColumn, lspByteColumnIn, lspCharacterIn } from "../position";
 import { checkLossless } from "../../fmt/lossless";
@@ -182,7 +182,11 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	if (!stmts.ok) return lspErrorResponse(id, -32603, stmts.error);
 	if (stmts.value == null) return lspResponse(id, "[]");
 
-	const edits = formatRunEdits(stmts.value, source, getFormatOptions(db, path));
+	return formatRunResponse(id, source, db, path, stmts.value);
+}
+
+function formatRunResponse(id: string, source: string, db: TransAmDb, path: string, run: StatementRun): string {
+	const edits = formatRunEdits(run, source, getFormatOptions(db, path));
 	if (!edits.ok) return lspErrorResponse(id, -32603, edits.error);
 	let result = source;
 	for (let i = edits.value.length - 1; i >= 0; i -= 1) {
@@ -194,6 +198,34 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const items = textEditsJson(source, edits.value, 0);
 	if (!items.ok) return lspErrorResponse(id, -32603, items.error);
 	return lspResponse(id, "[" + items.value + "]");
+}
+
+export function handleOnTypeFormatting(id: string, params: string, db: TransAmDb): string {
+	const uri = lspDocumentUri(params);
+	const path = lspUriToPath(uri);
+	const source = dbGetSource(db, path);
+	if (source == "") return lspResponse(id, "[]");
+
+	const typed = lspGetField(params, "ch");
+	if (typed != ";" && typed != "}") return lspResponse(id, "[]");
+	const cursor = formattingBytePosition(source, lspGetObjectField(params, "position"));
+	if (!cursor.ok) return lspErrorResponse(id, -32602, cursor.error);
+	const offset = lineOffset(source, cursor.value.line) + cursor.value.column - 1;
+	if (offset < 1 || offset > source.byteLength || source.byteSlice(offset - 1, offset) != typed) return lspResponse(id, "[]");
+
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+	const parsed = parseSource(source);
+	if (!parsed.ok) return lspResponse(id, "[]");
+	const typedAt: FmtPos = { line: cursor.value.line, column: cursor.value.column - 1 };
+	const run = rangeStatements(parsed.value, typedAt, typedAt);
+	if (!run.ok) return lspErrorResponse(id, -32603, run.error);
+	if (run.value == null) return lspResponse(id, "[]");
+	const end = run.value.last.location;
+	if (end.endLine != cursor.value.line || end.endColumn != cursor.value.column) return lspResponse(id, "[]");
+	return formatRunResponse(id, source, db, path, run.value);
 }
 
 function formattingDb(source: string): TransAmDb {
@@ -566,4 +598,36 @@ test "range over two class members formats the whole class declaration" {
 test "range formatting over a run is idempotent" {
 	const once = rangeFormatted(TWO_LOOSE, 1, 0, 2, 14);
 	assert rangeFormatted(once, 1, 0, 2, 14) == once;
+}
+
+function onTypeFormatted(source: string, line: int32, character: int32, ch: string): string {
+	const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"position":{"line":${line},"character":${character}},"ch":"${ch}","options":{"tabSize":2,"insertSpaces":true}}`;
+	const result = applyClientUtf16Edits(source, formattingItems(handleOnTypeFormatting("1", params, formattingDb(source))));
+	assertFormattedBuffer(source, result);
+	return result;
+}
+
+test "semicolon formats the statement it ends and leaves its neighbours alone" {
+	assert onTypeFormatted(TWO_LOOSE, 1, 12, ";") == "export function f(): int32 {\n\tconst x = 1;\n\tconst   y=2;\n\treturn x+y;\n}\n";
+}
+
+test "semicolon formats the statement one block deeper and after a non-ASCII line" {
+	const source = "const s = \"h\u{e9}llo \u{1F600}\";\nexport function f(c: boolean): int32 {\n\tif (c) {\n\t\tconst  x=1;\n\t\tconst   y=2;\n\t}\n\treturn 0;\n}\n";
+	const expected = "const s = \"h\u{e9}llo \u{1F600}\";\nexport function f(c: boolean): int32 {\n\tif (c) {\n\t\tconst x = 1;\n\t\tconst   y=2;\n\t}\n\treturn 0;\n}\n";
+	assert onTypeFormatted(source, 3, 13, ";") == expected;
+}
+
+test "closing brace formats the block it closes" {
+	const source = "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) {\n\t\tz=1;\n\t}\n\treturn  z;\n}\n";
+	assert onTypeFormatted(source, 4, 2, "}") == "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) { z = 1; }\n\treturn  z;\n}\n";
+}
+
+test "on-type formatting answers no edit when the source does not parse" {
+	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"position\":{\"line\":0,\"character\":10},\"ch\":\";\"}";
+	assert formattingItems(handleOnTypeFormatting("1", params, formattingDb("const  x=;\nconst   y=2;\n"))).length == 0;
+}
+
+test "on-type formatting answers no edit when the typed character is not at the cursor" {
+	assert onTypeFormatted(TWO_LOOSE, 1, 11, ";") == TWO_LOOSE;
+	assert onTypeFormatted(TWO_LOOSE, 1, 12, "}") == TWO_LOOSE;
 }

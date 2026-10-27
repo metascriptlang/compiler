@@ -45,7 +45,7 @@ import {
 	handleRename,
 } from "./queries";
 import { handleSemanticTokensFull } from "./semanticTokens";
-import { handleCodeAction, handleFormatting, handleRangeFormatting } from "./formatting";
+import { handleCodeAction, handleFormatting, handleRangeFormatting, handleOnTypeFormatting } from "./formatting";
 
 
 // ===== Deferred Diagnostics (post-drain) =====
@@ -134,6 +134,7 @@ export function handleInitialize(id: string): string {
 		+ ",\"renameProvider\":true"
 		+ ",\"documentFormattingProvider\":true"
 		+ ",\"documentRangeFormattingProvider\":true"
+		+ ",\"documentOnTypeFormattingProvider\":{\"firstTriggerCharacter\":\";\",\"moreTriggerCharacter\":[\"}\"]}"
 		+ ",\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.fixAll\"]}"
 		+ ",\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":"
 		+ "[\"namespace\",\"type\",\"class\",\"enum\",\"interface\",\"struct\","
@@ -310,6 +311,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
 		"textDocument/rangeFormatting" => handleRangeFormatting(id, params, db),
+		"textDocument/onTypeFormatting" => handleOnTypeFormatting(id, params, db),
 		"textDocument/codeAction" => handleCodeAction(id, params, db),
 		"$/cancelRequest" => {
 			return "";
@@ -1992,4 +1994,16 @@ test "rangeFormatting breaks a long JSX statement under its own tab indentation"
 
 test "rangeFormatting on an already formatted statement returns no edit" {
 	assert applyRangeFormatting("const a = 1;\n", 0, 2) == "const a = 1;\n";
+}
+
+test "onTypeFormatting is advertised with its trigger characters" {
+	assert handleInitialize("1").indexOf("\"documentOnTypeFormattingProvider\":{\"firstTriggerCharacter\":\";\",\"moreTriggerCharacter\":[\"}\"]}") >= 0;
+}
+
+test "onTypeFormatting is dispatched and formats the statement a semicolon ends" {
+	const source = "function f(): int32 {\n\tlet   x=1;\n\treturn x;\n}\n";
+	const db = testDb("file:///ontype.ms", source);
+	const params = "{\"textDocument\":{\"uri\":\"file:///ontype.ms\"},\"position\":{\"line\":1,\"character\":11},\"ch\":\";\",\"options\":{\"tabSize\":2,\"insertSpaces\":true}}";
+	const r = lspDispatch("textDocument/onTypeFormatting", "21", params, db, testCache());
+	assert r.indexOf("\"result\":[{\"range\":{\"start\":{\"line\":1,") >= 0;
 }
