@@ -17,7 +17,7 @@ import {
 } from "../../ast/node";
 import { isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
-import { walkNode } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { wrapMaybeValue } from "../maybeCarrier";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
@@ -25,25 +25,24 @@ import { createTransformContext } from "../context";
 // ===== Main Entry Point =====
 
 export function coerceOptionals(program: Node, ctx: TransformContext): Node {
-	walkNode(program, optionalVisitor);
+	coerceOptionalReturns(program);
 	return program;
 }
 
-function optionalVisitor(node: Node): Node {
-	if (node.kind != NodeKind.FunctionDecl) return node;
+function coerceOptionalReturns(node: Node): void {
+	forEachChild(node, coerceOptionalReturns);
+	if (node.kind != NodeKind.FunctionDecl) return;
 	const d = node.data as FunctionDeclData;
 
 	// Only fire when the resolved return type is Maybe<T>.
 	// Ref/Ptr/null unions skip this transform — codegen handles them directly.
 	const sym = node.resolvedSym;
-	if (sym == null || sym.symbolType == null || sym.symbolType.typeReturn == null) return node;
+	if (sym == null || sym.symbolType == null || sym.symbolType.typeReturn == null) return;
 	const maybeType = sym.symbolType.typeReturn;
-	if (!isMaybeType(maybeType)) return node;
+	if (!isMaybeType(maybeType)) return;
 
 	// Walk the function body and transform return statements
 	transformReturnsInBody(d.fnBody, maybeType);
-
-	return node;
 }
 
 // Walk body and transform returns in T|null functions
