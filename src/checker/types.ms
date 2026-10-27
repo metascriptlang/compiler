@@ -5484,6 +5484,23 @@ export function getBuiltinKind(t: Type | null): string {
 	return "";
 }
 
+// isIsolatedType — true for an `Isolated<T>` (std/isolation): a value that cannot be copied,
+// so a binding of this type is the sole owner of the graph inside it.
+export function isIsolatedType(t: Type | null): boolean {
+	return getBuiltinKind(t) == "Isolated";
+}
+
+// holdsIsolated — an Isolated<T>, or a struct or tuple with one inside it: neither can be copied.
+export function holdsIsolated(t: Type | null): boolean {
+	if (t == null) return false;
+	if (isIsolatedType(t)) return true;
+	if (t.kind != TypeKind.Struct && t.kind != TypeKind.Tuple) return false;
+	for (const c of t.typeChildren) {
+		if (holdsIsolated(c)) return true;
+	}
+	return false;
+}
+
 // isIndexableMapType — true when t is a class tagged @builtin("IndexableMap").
 // Used by subscript lowering (m[k] → m.get(k) / m.set(k, v)) and m[k] element typing.
 // Both Map<K,V> and HashMap<K,V> in std/core/struct.ms carry this tag.

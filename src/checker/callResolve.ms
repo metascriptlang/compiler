@@ -30,7 +30,7 @@ import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, look
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
+import { checkActorArgSendable, checkArcPointeeSendable, checkIsolateArg, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -2740,6 +2740,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 	const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 	if (builtin == "Echo" || builtin == "ToString") textOfDistinctArgs(ctx, args, argTypes, hasReceiver);
 	if (builtin == "Echo") return;
+	if (builtin == "Isolate" && args.length == 1) checkIsolateArg(ctx, args[0]);
 	if (builtin == "ToString" && refuseTextlessArgs(ctx, args, hasReceiver)) return;
 	const d = node.data as CallExprData;
 	const lastCT = calleeType.typeChildren.length > 0
@@ -3565,6 +3566,14 @@ function takeBinding(out: UnifyBindings, eb: UnifyBindings, param: Type): void {
 	if (bi >= 0 && boundSlot(out, eb.params[bi]) < 0) bindAt(out, eb, bi);
 }
 
+// An intrinsic is a declaration the compiler lowers; a builtin function written with a body is an
+// ordinary generic that only carries a tag the checker reads.
+function hasFunctionBody(decl: Node): boolean {
+	let d = decl;
+	if (d.kind == NodeKind.DecoratedDecl) d = (d.data as DecoratedDeclData).decoratedNode;
+	return d.kind == NodeKind.FunctionDecl && (d.data as FunctionDeclData).fnBody != null;
+}
+
 function ownTypeParams(sym: Symbol, genericNames: string[]): Type[] {
 	return sym.typeParams.length == genericNames.length ? sym.typeParams : [];
 }
@@ -3572,7 +3581,7 @@ function ownTypeParams(sym: Symbol, genericNames: string[]): Type[] {
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
-	if (sym == null || sym.builtinKind != "" || sym.declNode == null) {
+	if (sym == null || sym.declNode == null || (sym.builtinKind != "" && !hasFunctionBody(sym.declNode))) {
 		return null as unknown as Type;
 	}
 	const cd = node.data as CallExprData;
