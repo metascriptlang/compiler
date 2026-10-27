@@ -64,14 +64,14 @@ function localOfPlace(s: RaiserCompState, place: Node): int32 {
 	return place.kind == NodeKind.Identifier && resolveGlobal(s, place.resolvedSym) < 0 ? resolveLocal(s, place.resolvedSym) : -1;
 }
 
-function emitClear(s: RaiserCompState, name: string, arg: Node): void {
+function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray: boolean = true): void {
 	const place = placeOf(arg);
 	const local = localOfPlace(s, place);
 	if (local >= 0) {
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
 		return;
 	}
-	if (needsValueCopy(place.nodeType)) {
+	if (needsValueCopy(place.nodeType) && !(leavesEmptyArray && isArrayType(place.nodeType))) {
 		const cleared = allocReg(s, RaiserRegClass.Ref);
 		emitLoadConst(s, cleared, raiserNil());
 		emitPlaceStore(s, name, place, cleared);
@@ -193,6 +193,11 @@ function isCopiedAsValue(type: Type | null): boolean {
 	return isMaybeHeld(type) || (t != null && t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t)));
 }
 
+function isArrayType(type: Type | null): boolean {
+	const t = valueCopyRepr(type);
+	return t != null && t.kind == TypeKind.Array;
+}
+
 function isSizedArrayType(type: Type | null): boolean {
 	const t = valueCopyRepr(type);
 	return t != null && (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple);
@@ -214,7 +219,7 @@ function isCellHook(call: CallExprData, flag: SymbolFlag): boolean {
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || !hasFlag(sym, flag) || call.arguments.length != 1) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
 	if (runsDistinctHook(call, type)) return false;
-	return isCellType(type) || isSizedArrayType(type);
+	return isCellType(type) || isSizedArrayType(type) || ((flag == SymbolFlag.WasMovedOp || flag == SymbolFlag.DestroyOp) && isArrayType(type));
 }
 
 function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {
@@ -282,7 +287,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	if (isCellHook(d, SymbolFlag.DestroyOp)) {
 		const hookName = d.callee.resolvedSym!.name;
 		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, hookName, d.arguments[0]), 0, 0));
-		emitClear(s, hookName, d.arguments[0]);
+		emitClear(s, hookName, d.arguments[0], false);
 		return true;
 	}
 	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) && isCopiedAsValue(placeOf(d.arguments[0]).nodeType) && userHookOf(placeOf(d.arguments[0]).nodeType!, AttachedOp.AttachedAsgn) == null) {

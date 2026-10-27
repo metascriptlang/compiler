@@ -596,7 +596,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 		"destroy" => {
 			if (needsElemLoop) {
 				const old = keepOld(xf, lctx, buf, loc);
-				genCall("msArrayWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+				if (!(lctx.raiserBackend && xf.kind == NodeKind.MemberExpr)) genCall("msArrayWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
 				genArrayLoop("destroy", elem, old, clonePath(old, loc), lctx, buf, loc);
 				genCall("msArrayDestroy", hook, clonePath(old, loc), old, buf, loc);
 			} else {
@@ -621,6 +621,11 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 			}
 		},
 		"sink" => {
+			if (lctx.raiserBackend) {
+				const store = makeBlock([makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc)], loc);
+				buf.items.push(makeIf(makeBinary(clonePath(xf, loc), "!==", clonePath(yf, loc), loc), store, null as unknown as Node, loc));
+				return;
+			}
 			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
 			const guardCond = makeBinary(makeMember(clonePath(old, loc), "p", loc), "!==", makeMember(clonePath(xf, loc), "p", loc), loc);
 			const destroyBuf = newBuf();
@@ -2032,12 +2037,14 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 		const srcNode = makeIdentResolved(s2, loc);
 		srcNode.nodeType = arrayType;
 		const selfCheck = makeIf(
-			makeBinary(
-				makeMember(clonePath(destNode, loc), "p", loc),
-				"===",
-				makeMember(clonePath(srcNode, loc), "p", loc),
-				loc
-			),
+			lctx.raiserBackend
+				? makeBinary(clonePath(destNode, loc), "===", clonePath(srcNode, loc), loc)
+				: makeBinary(
+					makeMember(clonePath(destNode, loc), "p", loc),
+					"===",
+					makeMember(clonePath(srcNode, loc), "p", loc),
+					loc
+				),
 			makeBlock([makeReturn(null as unknown as Node, loc)], loc),
 			null as unknown as Node,
 			loc
