@@ -1605,8 +1605,6 @@ export function stampOwner(ctx: CheckerContext, sym: Symbol): void {
 	stampItem(ctx, sym);
 }
 
-let hoistedTemps: int32 = 0;
-
 export function assignTemp(sym: Symbol, value: Node): Node {
 	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: boundRead(sym, value.location), right: value }, value.location);
 	assign.nodeType = sym.symbolType;
@@ -1615,8 +1613,7 @@ export function assignTemp(sym: Symbol, value: Node): Node {
 }
 
 export function hoistedTemp(ctx: CheckerContext, t: Type, loc: SourceLocation): Symbol {
-	hoistedTemps += 1;
-	const name = ":tmp" + String(hoistedTemps);
+	const name = ":tmp" + String(nextDisamb(ctx, ctx.modulePath, ":tmp"));
 	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
 	setFlag(sym, SymbolFlag.Used);
 	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
