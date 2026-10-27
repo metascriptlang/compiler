@@ -62,6 +62,7 @@ function noteExplicitExportNames(ctx: CheckerContext, stmt: Node): void {
 }
 
 export function collectTopLevelStmt(ctx: CheckerContext, stmt: Node): void {
+	if (ctx.adoptStmt != null) ctx.adoptStmt(stmt);
 	if (callDecoratorDefers(ctx, stmt)) {
 		collectDeclMint(ctx, stmt);
 		return;
@@ -100,6 +101,7 @@ function collectDeclMint(ctx: CheckerContext, stmt: Node): void {
 }
 
 export function collectOneStatement(ctx: CheckerContext, node: Node): void {
+	if (ctx.adoptStmt != null) ctx.adoptStmt(node);
 	collectDecl(ctx, node);
 }
 

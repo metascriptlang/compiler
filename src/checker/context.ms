@@ -1416,6 +1416,7 @@ export class CheckerContext {
 	topProgram: Node | null;   // the module body being checked: the owner walk of a move in top-level code
 	exportRegistry: ExportRegistry;
 	adoptedDecls: HashMap<Node, Symbol>;
+	adoptStmt: ((stmt: Node) => void) | null;
 	adoptedParams: HashMap<Node, Symbol[]>;
 	boundIdents: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
@@ -1516,6 +1517,7 @@ export function createContext(): CheckerContext {
 		topProgram: null,
 		exportRegistry: createExportRegistry(),
 		adoptedDecls: new HashMap<Node, Symbol>(),
+		adoptStmt: null,
 		adoptedParams: new HashMap<Node, Symbol[]>(),
 		boundIdents: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),

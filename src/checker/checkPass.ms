@@ -4274,7 +4274,7 @@ function checkProgramCore(
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean = false,
 ): CheckerContext {
-	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, applyModulePasses));
+	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, null, applyModulePasses));
 }
 
 export interface BoundModule {
@@ -4293,6 +4293,7 @@ export function bindModuleForCheck(
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
+	adoptStmt: ((stmt: Node) => void) | null,
 	applyModulePasses: boolean,
 	globalImports: CheckerContext | null = null,
 ): BoundModule {
@@ -4303,6 +4304,7 @@ export function bindModuleForCheck(
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
+	ctx.adoptStmt = adoptStmt;
 	injectPrelude(ctx, preludeCtx);
 	if (globalImports != null) injectPreludeExports(ctx, globalImports);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation

@@ -56,7 +56,7 @@ import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
-import { Adoption, adoptDecls, moduleSymbols, verifyAdoption } from "./adopt";
+import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
@@ -652,8 +652,9 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
 		tmpCtx.currentModule = depMod;
 		const collected = cloneNodeForCheck(depProgram);
-		const adoption = earlyAdoptions(db, depPath, collected);
+		const adoption = earlyAdoptions(db, depPath);
 		tmpCtx.adoptedDecls = adoption.decls;
+		tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);
 		collectTopLevel(tmpCtx, collected);
 		db.cache.collected += 1;
 		resolveDeclarations(tmpCtx, collected);
@@ -732,17 +733,17 @@ function checkOutputHash(ctx: CheckerContext, inputHashes: int64[]): int64 {
 	return h;
 }
 
-function earlyAdoptions(db: TransAmDb, filePath: string, program: Node): Adoption {
+function earlyAdoptions(db: TransAmDb, filePath: string): Adoption {
 	const fileId = getFileId(db.fileInput, filePath);
 	const checked = dbTree(db, checkNodeKey(fileId));
 	const checkedCtx = db.contexts.get(checkCtxKey(fileId));
-	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), program, filePath);
+	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), filePath);
 	const entry = findModuleExports(db.exportRegistry, filePath);
 	const parsed = dbTree(db, exportNodeKey(fileId));
 	if (entry == null || parsed == null) return new Adoption();
 	const exported: Symbol[] = [];
 	for (const info of entry.symbols) exported.push(info.sym);
-	return adoptDecls(parsed, exported, program, filePath);
+	return adoptDecls(parsed, exported, filePath);
 }
 
 function exportsMacro(db: TransAmDb, modulePath: string): boolean {
@@ -846,11 +847,12 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 	resetCapturedAssignments();
 	registerModuleProgram(filePath, program);
 	db.cache.bound += 1;
-	const adoption = earlyAdoptions(db, filePath, program);
+	const adoption = earlyAdoptions(db, filePath);
 	const unit = bindModuleForCheck(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
 		adoption.decls,
+		(stmt: Node): void => adoptStmt(adoption, stmt),
 		true,
 		globalImportsLayer(db, globals)
 	);
@@ -2472,4 +2474,25 @@ test "an edit to a high-durability module reaches the check of its importer" {
 	assert localTypeName(dbTypeCheck(db, user), "seen") == "string";
 	dbSetFileText(db, dep, "export const shared: int32 = 1;");
 	assert localTypeName(dbTypeCheck(db, user), "seen") == "int32";
+}
+
+const GENERATED_MAC = 'import { Node, NodeKind, DeclKind } from "std/meta";\nexport macro pair(): Node {\n\treturn { kind: NodeKind.SpliceMany, line: 0, column: 0, spliceNodes: [{ kind: NodeKind.ExportDecl, line: 0, column: 0, exportedDecl: { kind: NodeKind.VariableDecl, line: 0, column: 0, declName: "a", declType: "int32", initializer: { kind: NodeKind.NumberLiteral, line: 0, column: 0, value: 1, isFloat: false }, declKind: DeclKind.Const, nameLocation: { line: 0, column: 0 } } }] };\n}\n';
+const GENERATED_USE = 'import { pair } from "./mac";\npair();\n';
+
+function exportedSym(db: TransAmDb, path: string, name: string): Symbol {
+	const entry = findModuleExports(db.exportRegistry, path);
+	if (entry == null) throw new Error(`${path} has no registered exports`);
+	for (const info of entry.symbols) {
+		if (info.name == name) return info.sym;
+	}
+	throw new Error(`${path} exports no '${name}'`);
+}
+
+test "a declaration a macro generated keeps its Symbol when its module is edited" {
+	const db = macroDb(GENERATED_MAC, GENERATED_USE);
+	assert checkMessages(db, "/m/use.ms") == "";
+	const held = exportedSym(db, "/m/use.ms", "a");
+	dbSetFileText(db, "/m/use.ms", "const n: int32 = 1;\n" + GENERATED_USE);
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert exportedSym(db, "/m/use.ms", "a") == held;
 }

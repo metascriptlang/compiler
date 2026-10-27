@@ -1,6 +1,6 @@
 import { Node, NodeKind, Symbol, SymbolState, Type, ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ExternDeclData } from "../../ast/node";
 import { declOfStatement, getDeclName, classMemberDecl } from "../../checker/collectPass";
-import { ScopeKind, SymbolTable, SymbolFlag, lookupLocal, openScope } from "../../checker/symbol";
+import { ScopeKind, SymbolTable, SymbolFlag, lookupLocal, openScope, symbolKey } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
 import { collectTopLevel } from "../../checker/collectPass";
 import { parseSource } from "../../parser/statements/validation";
@@ -23,14 +23,14 @@ export class AdoptedPair {
 export class Adoption {
 	decls: HashMap<Node, Symbol> = new HashMap<Node, Symbol>();
 	pairs: AdoptedPair[] = [];
+	visited: HashSet<Node> = new HashSet<Node>();
+	old: OldSide = new OldSide();
+	index: HashMap<string, Declared> = new HashMap<string, Declared>();
+	seen: HashMap<string, int32> = new HashMap<string, int32>();
 }
 
-function topKey(sym: Symbol): string {
-	return `${sym.name}.${sym.disamb}.${sym.modulePath}`;
-}
-
-function pairKey(owner: Symbol | null, name: string, sym: Symbol): string {
-	return owner == null ? topKey(sym) : `${topKey(owner)}.${name}`;
+function memberKey(owner: Symbol | null, name: string, sym: Symbol): string {
+	return owner == null ? symbolKey(sym) : `${symbolKey(owner)}.${name}`;
 }
 
 function groupOf(decl: Node): string {
@@ -95,46 +95,54 @@ function oldSymbol(old: OldSide, d: Declared): Symbol | null {
 	return sym;
 }
 
-function pair(out: Adoption, old: OldSide, was: Declared, now: Declared, owner: Symbol | null): Symbol | null {
-	const sym = oldSymbol(old, was);
+function pair(out: Adoption, was: Declared, now: Declared, owner: Symbol | null): Symbol | null {
+	const sym = oldSymbol(out.old, was);
 	if (sym == null) return null;
 	out.decls.set(now.key, sym);
-	out.pairs.push({ sym: sym, owner: owner, name: now.name, before: pairKey(owner, now.name, sym) });
+	out.pairs.push({ sym: sym, owner: owner, name: now.name, before: memberKey(owner, now.name, sym) });
 	return sym;
 }
 
-function pairAll(out: Adoption, old: OldSide, was: Declared[], now: Declared[], owner: Symbol | null, onPaired: ((w: Declared, n: Declared, sym: Symbol) => void) | null): void {
+function pairMembers(out: Adoption, was: Declared[], now: Declared[], owner: Symbol): void {
 	const index = indexByOrdinal(was);
 	const seen = new HashMap<string, int32>();
 	for (const n of now) {
 		const w = index.get(ordinalKey(n, seen));
-		if (w == null) continue;
-		const sym = pair(out, old, w, n, owner);
-		if (sym != null && onPaired != null) onPaired(w, n, sym);
+		if (w != null) pair(out, w, n, owner);
 	}
 }
 
-// A declaration of the new program takes the Symbol of the declaration with the same
-// kind of declaration, name and ordinal among same-named declarations in statement
-// order, the order disamb is minted in. A declaration with no counterpart, or of
-// another kind, gets a new Symbol.
-export function adoptDecls(oldProgram: Node, oldSymbols: Symbol[], newProgram: Node, modulePath: string): Adoption {
+// The old program's declarations, indexed by kind of declaration, name and ordinal among
+// same-named declarations in statement order, the order disamb is minted in.
+export function adoptDecls(oldProgram: Node, oldSymbols: Symbol[], modulePath: string): Adoption {
 	const out = new Adoption();
-	const old = new OldSide();
-	old.modulePath = modulePath;
+	out.old.modulePath = modulePath;
 	for (const sym of oldSymbols) {
-		if (sym.declNode != null) old.byDecl.set(sym.declNode, sym);
+		if (sym.declNode != null) out.old.byDecl.set(sym.declNode, sym);
 		for (const o of sym.overloads) {
-			if (o.declNode != null) old.byDecl.set(o.declNode, o);
+			if (o.declNode != null) out.old.byDecl.set(o.declNode, o);
 		}
 	}
-	pairAll(out, old, topDecls(oldProgram), topDecls(newProgram), null, (w: Declared, n: Declared, sym: Symbol): void => {
-		const wasBody = classBodyOf(w.key);
-		const nowBody = classBodyOf(n.key);
-		if (wasBody == null || nowBody == null) return;
-		pairAll(out, old, memberDecls(wasBody), memberDecls(nowBody), sym, null);
-	});
+	out.index = indexByOrdinal(topDecls(oldProgram));
 	return out;
+}
+
+// Called for each statement just before it is collected, so a statement a module pass
+// rewrote or a macro or decorator generated pairs by the same key as a written one.
+// A declaration with no counterpart, or of another kind, gets a new Symbol.
+export function adoptStmt(out: Adoption, stmt: Node): void {
+	const decl = declOfStatement(stmt);
+	const name = getDeclName(decl);
+	if (name == "" || out.visited.has(decl)) return;
+	out.visited.add(decl);
+	const now: Declared = { key: decl, probe: decl, probeInner: decl, name: name, group: groupOf(decl) };
+	const was = out.index.get(ordinalKey(now, out.seen));
+	if (was == null) return;
+	const sym = pair(out, was, now, null);
+	const wasBody = classBodyOf(was.key);
+	const nowBody = classBodyOf(decl);
+	if (sym == null || wasBody == null || nowBody == null) return;
+	pairMembers(out, memberDecls(wasBody), memberDecls(nowBody), sym);
 }
 
 export function moduleSymbols(table: SymbolTable, modulePath: string): Symbol[] {
@@ -150,7 +158,7 @@ export function moduleSymbols(table: SymbolTable, modulePath: string): Symbol[] 
 
 export function verifyAdoption(adoption: Adoption): void {
 	for (const p of adoption.pairs) {
-		const now = pairKey(p.owner, p.name, p.sym);
+		const now = memberKey(p.owner, p.name, p.sym);
 		if (now != p.before) throw new Error(`internal: adoption: '${p.before}' was adopted by a declaration that is now '${now}'`);
 	}
 }
@@ -171,8 +179,10 @@ function collectText(text: string, previous: Collected | null): Collected {
 	openScope(ctx.table, ScopeKind.Module);
 	let adoption: Adoption | null = null;
 	if (previous != null) {
-		adoption = adoptDecls(previous.program, moduleSymbols(previous.ctx.table, testPath), parsed.value, testPath);
-		ctx.adoptedDecls = adoption.decls;
+		const taken = adoptDecls(previous.program, moduleSymbols(previous.ctx.table, testPath), testPath);
+		adoption = taken;
+		ctx.adoptedDecls = taken.decls;
+		ctx.adoptStmt = (stmt: Node): void => adoptStmt(taken, stmt);
 	}
 	collectTopLevel(ctx, parsed.value);
 	if (adoption != null) verifyAdoption(adoption);
@@ -258,7 +268,8 @@ test "a kind change is not paired, and a Symbol forced onto another kind refuses
 	const one = symbolOf(first, "one");
 	const classed = parseSource("export class one {}");
 	assert classed.ok;
-	const adoption = adoptDecls(first.program, moduleSymbols(first.ctx.table, testPath), classed.value, testPath);
+	const adoption = adoptDecls(first.program, moduleSymbols(first.ctx.table, testPath), testPath);
+	adoptStmt(adoption, (classed.value.data as ProgramData).programStmts[0]);
 	assert adoption.decls.size == 0;
 	const ctx = createContext();
 	ctx.modulePath = testPath;
