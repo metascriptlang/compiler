@@ -54,7 +54,7 @@ Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
 Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`): default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3`.
 
-`--lto` is capability-resolved after the compiler is known (`resolveLto`): `--danger` takes thin LTO where the resolved compiler can link it, drops it with a stderr notice where it cannot, and an explicit `--lto=` against a proven-broken pair fails loud.
+`--lto` is capability-resolved after the compiler is known (`resolveLto`): `--release` and `--danger` take thin LTO where the resolved compiler can link it (on the self-host `msc check` workload `--release` runs 6.7% fewer instructions with it, measured 2026-10-26); where it cannot, `--danger` drops it with a stderr notice and `--release` drops it silently; and an explicit `--lto=` against a proven-broken pair fails loud.
 
 ```bash
 msc build src/index.ms --danger --cc=clang --output=msc   # macOS
