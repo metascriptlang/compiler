@@ -636,6 +636,20 @@ function runCompileCache(): void {
 	put(`${appeared}/late.h`, "#define VALUE 22\n");
 	record("a native header that appears after the build", "22", builtValue(appeared, build(appeared, "appeared")));
 
+	for (const name of ["late.h", "sub/late.h"]) {
+		const remembered = fixture(`remembered ${name}`, "@compile(\"./native.c\");", lateQuery(`"${name}"`));
+		waitForNextSecond();
+		need(build(remembered, "baseline") == 0, `remembered ${name} baseline`);
+		need(value(remembered) == "11", `remembered ${name} baseline value`);
+		waitForNextSecond();
+		waitForNextSecond();
+		need(build(remembered, "settled", "probe", ["--verbose"]) == 0, `remembered ${name} settled`);
+		record(`a settled absent ${name} keeps the object cached`, "0", recompiledObjects(remembered, "settled"));
+		if (name.includes("/")) ensureDir(`${remembered}/sub`);
+		put(`${remembered}/${name}`, "#define VALUE 22\n");
+		record(`a ${name} that appears after its absence settled`, "22", builtValue(remembered, build(remembered, "appeared")));
+	}
+
 	const relative = fixture("appeared relative", "@compile(\"./src/native.c\");", "", "", "unused.c");
 	ensureDir(`${relative}/src`);
 	put(`${relative}/src/native.c`, lateQuery("\"../late/late.h\""));
