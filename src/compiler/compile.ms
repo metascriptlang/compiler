@@ -18,6 +18,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+import { inferSinkParams } from "../analyzer/sinkInference";
 import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
@@ -3387,6 +3388,9 @@ resetLiftedOps();
 			staged.push({ at, job, tree });
 			noteUnitDecls(liftTables, modPath, tree);
 		}
+	}
+	if (!session.keep && !opts.isHcr && gcModeOf(opts.gcMode) == GcMode.Drc) {
+		inferSinkParams(staged.map((st: { at: int32, job: A2Job, tree: Node }): Node => st.tree), staged.map((st: { at: int32, job: A2Job, tree: Node }): TransformContext => st.job.nativeCtx!));
 	}
 	for (const st of staged) {
 		const cm = checkedMods[st.at];
