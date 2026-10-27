@@ -339,6 +339,7 @@ export enum NodeFlag {
 	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
 	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
+	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
 }
 
 // ===== Node Kind Enum =====

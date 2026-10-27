@@ -307,8 +307,10 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	const inline: Token[] = [];
 	const remaining: Token[] = [];
 	const standalone: Token[] = [];
+	const loc = node.location;
 	for (const comment of node.comments) {
-		if (comment.line > node.location.line) {
+		const afterClose = loc.endLine > 0 && (comment.line > loc.endLine || (comment.line == loc.endLine && comment.column >= loc.endColumn));
+		if (comment.line > loc.line && !afterClose) {
 			// Body comment: try to match a field by line.
 			let matched = false;
 			for (let i = 0; i < d.interfaceFields.length; i += 1) {
@@ -430,7 +432,7 @@ export function printStructDecl(node: Node, options: FormatOptions): Doc {
 export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ClassDeclData;
 	const generics = genericsFor(options, d.nameLocation, d.className, node.typeArg);
-	const parts: Doc[] = [docText("class " + d.className + generics)];
+	const parts: Doc[] = [docText((node.flags.has(NodeFlag.Abstract) ? "abstract class " : "class ") + d.className + generics)];
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));
 	}
@@ -469,10 +471,11 @@ function distributeBodyComments(containerNode: Node, children: Node[]): void {
 			remaining.push(c);
 			continue;
 		}
-		// Find a child whose line matches.
+		// Find a child whose lines hold the comment.
 		let attached = false;
 		for (let i = 0; i < children.length; i += 1) {
-			if (children[i].location.line == c.line) {
+			const at = children[i].location;
+			if (at.line == c.line || (at.line < c.line && c.line <= at.endLine)) {
 				children[i].comments.push(c);
 				attached = true;
 				break;
@@ -561,6 +564,18 @@ export function printDecoratedDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(callPrintNode((d.decoratedNode.data as ExportDeclData).exportedDecl, options));
 		return docGroup(parts);
 	}
+	const kept: Token[] = [];
+	for (const c of node.comments) {
+		let owner: Node | null = null;
+		if (c.line < d.decoratedNode.location.line) {
+			for (const dec of d.decorators) {
+				if (dec.location.line == c.line) owner = dec;
+			}
+		}
+		if (owner != null) owner.comments.push(c);
+		else kept.push(c);
+	}
+	node.comments = kept;
 	for (const dec of d.decorators) {
 		parts.push(callPrintNode(dec, options));
 		parts.push(docHardLine());
@@ -626,6 +641,7 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propVisibility != "") parts.push(docText(d.propVisibility + " "));
 	if (d.propIsStatic) parts.push(docText("static "));
 	if (d.propIsReadonly) parts.push(docText("readonly "));
+	if (node.flags.has(NodeFlag.Abstract)) parts.push(docText("abstract "));
 	if (node.flags.has(NodeFlag.AutoAccessor)) parts.push(docText("accessor "));
 	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
 	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
@@ -677,6 +693,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 
 	const modifiers = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
 		+ (d.methodIsStatic ? "static " : "")
+		+ (node.flags.has(NodeFlag.Abstract) ? "abstract " : "")
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "");

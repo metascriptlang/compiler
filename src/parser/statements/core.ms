@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind, Token } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, IfStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, parenGroupThen, takeTrailingDecls } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { isGenericCallAhead } from "../typeAnnotation";
@@ -422,6 +422,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 
 	const block = createNode(NodeKind.BlockStmt, { statements: stmts }, token);
 	block.comments = dangling;
+	stampEnd(state, block);
 	return Result.ok(block);
 }
 
@@ -501,6 +502,16 @@ test "statement end covers a closing string's quotes and raw escapes" {
 test "statement end after a semicolon is the semicolon's column plus one" {
 	assert firstStmtEnd("let x = 1;") == "1:11";
 	assert firstStmtEnd("let s = \"a\\tb\";") == "1:16";
+}
+
+test "a block ends after its closing brace, a function body and a nested block alike" {
+	const res = parseSource("function f(): void {\n\tif (true) {\n\t}\n}");
+	assert res.ok;
+	const fn = (res.value.data as ProgramData).programStmts[0];
+	const body = (fn.data as FunctionDeclData).fnBody;
+	assert `${body.location.endLine}:${body.location.endColumn}` == "4:2";
+	const inner = ((body.data as BlockStmtData).statements[0].data as IfStmtData).consequent;
+	assert `${inner.location.endLine}:${inner.location.endColumn}` == "3:3";
 }
 
 // A parse error answers Program, which no first statement can be.

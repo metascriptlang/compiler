@@ -1081,10 +1081,8 @@ export function parseStructDecl(state: ParserState): NodeResult {
 
 export function parseClassDecl(state: ParserState): NodeResult {
 	const classToken = current(state);
-	// Skip 'abstract' modifier if present
-	if (current(state).kind == TokenKind.Abstract) {
-		advance(state);
-	}
+	const isAbstract = current(state).kind == TokenKind.Abstract;
+	if (isAbstract) advance(state);
 	if (current(state).kind != TokenKind.Class) {
 		return Result.err(`Expected 'class' at line ${current(state).line}`);
 	}
@@ -1157,6 +1155,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 			continue;
 		}
 		const member = try parseClassMember(state);
+		stampEnd(state, member);
 		members.push(member);
 	}
 
@@ -1174,6 +1173,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	}, classToken);
 	classNode.typeArg = classGenerics;
 	classNode.comments = bodyComments;
+	if (isAbstract) classNode.flags = classNode.flags.incl(NodeFlag.Abstract);
 	return Result.ok(classNode);
 }
 
@@ -1213,6 +1213,7 @@ export function parseActorDecl(state: ParserState): NodeResult {
 			continue;
 		}
 		const member = try parseClassMember(state);
+		stampEnd(state, member);
 		const refusal = autoAccessorRefusal(member, "an actor");
 		if (refusal != "") return Result.err(refusal);
 		members.push(member);
@@ -1280,10 +1281,8 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Check for abstract (skip as modifier)
-	if (current(state).kind == TokenKind.Abstract) {
-		advance(state);
-	}
+	const memberIsAbstract = current(state).kind == TokenKind.Abstract;
+	if (memberIsAbstract) advance(state);
 
 	const accessorToken = current(state);
 	const autoAccessor = accessorToken.kind == TokenKind.Ident && accessorToken.value == "accessor"
@@ -1352,7 +1351,9 @@ function parseClassMember(state: ParserState): NodeResult {
 		if (memberIsOptional) {
 			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
 		}
-		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
+		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
+		if (memberIsAbstract) method.flags = method.flags.incl(NodeFlag.Abstract);
+		return Result.ok(method);
 	}
 
 	// Property — capture type and optional initializer
@@ -1380,6 +1381,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	propNode.typeExpr = propTypeExpr;
 	if (autoAccessor) propNode.flags = propNode.flags.incl(NodeFlag.AutoAccessor);
 	if (memberIsOptional) propNode.flags = propNode.flags.incl(NodeFlag.Optional);
+	if (memberIsAbstract) propNode.flags = propNode.flags.incl(NodeFlag.Abstract);
 	return Result.ok(propNode);
 }
 
