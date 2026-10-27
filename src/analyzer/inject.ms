@@ -32,7 +32,7 @@ import {
 } from "./scope";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
-import { isViewCall, returnsView } from "../checker/effects";
+import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -499,12 +499,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	const sym = node.resolvedSym;
 
-	let sinkParams: Type[] | null = null;
-	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-		sinkParams = sym.symbolType.typeChildren;
-	} else if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		sinkParams = cd.callee.nodeType.typeChildren;
-	}
+	const sinkParams = calledRoutineType(node)?.typeChildren ?? null;
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
