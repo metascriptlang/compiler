@@ -14,7 +14,7 @@ import { SourceComment } from "../comments";
 import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, takeOwnLineTrailing } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
-	Doc, docText, docGroup, docGroupBreak, docIndent,
+	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
 	docCommaSepList,
 } from "../doc";
@@ -148,7 +148,7 @@ function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[])
 	const body = docCommaSepList(items, trailing);
 	for (const c of endComments) {
 		body.push(docHardLine());
-		body.push(docText(c.text));
+		body.push(docSourceText(c.text));
 		c.markFormatted();
 	}
 	return [docIndent(body), docSoftLine()];
@@ -163,7 +163,7 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 		const lines: Doc[] = [];
 		for (const c of ownLine) {
 			lines.push(docHardLine());
-			lines.push(docText(c.text));
+			lines.push(docSourceText(c.text));
 		}
 		lines.push(docHardLine());
 		lines.push(docText(op + d.property));
@@ -312,7 +312,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	// Collect trailing comments on the object node (before closing brace)
 	const trailingComments: Doc[] = [];
 	for (const comment of danglingOf(node)) {
-		trailingComments.push(docText(comment.text));
+		trailingComments.push(docSourceText(comment.text));
 		comment.markFormatted();
 	}
 

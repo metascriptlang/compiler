@@ -10,7 +10,7 @@ import {
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 
@@ -295,7 +295,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		const alt = d.alternate!;
 		for (const c of beforeElse) {
 			parts.push(docHardLine());
-			parts.push(docText(c.text));
+			parts.push(docSourceText(c.text));
 		}
 		const braceless = bracelessStatement(d.consequent, options);
 		const elseOnOwnLine = beforeElse.length > 0

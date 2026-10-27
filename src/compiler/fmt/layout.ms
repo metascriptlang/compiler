@@ -2,7 +2,7 @@
 // the current line.
 
 import { FormatOptions, TrailingComma } from "./options";
-import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak } from "./doc";
+import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText } from "./doc";
 
 enum Mode {
 	Flat,
@@ -56,15 +56,20 @@ function propagateBreaks(doc: Doc): boolean {
 			propagateBreaks(branches.broken);
 			return false;
 		},
-		DocKind.Nil | DocKind.Text | DocKind.Line => false,
+		DocKind.Nil | DocKind.Text | DocKind.SourceText | DocKind.Line => false,
 	};
+}
+
+function endsInSourceText(lineSuffixes: Doc[]): boolean {
+	const parts = childrenOf(lineSuffixes[lineSuffixes.length - 1]);
+	return parts.length > 0 && parts[parts.length - 1].kind == DocKind.SourceText;
 }
 
 function flushSuffixes(lineSuffixes: Doc[]): string {
 	let out = "";
 	for (const ls of lineSuffixes) {
 		for (const part of childrenOf(ls)) {
-			if (part.kind == DocKind.Text) out = out + textOf(part);
+			if (part.kind == DocKind.Text || part.kind == DocKind.SourceText) out = out + textOf(part);
 		}
 	}
 	lineSuffixes.length = 0;
@@ -152,7 +157,7 @@ function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32, tabWidth: in
 		const doc = cmd.doc;
 		match (doc.kind) {
 			DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => {},
-			DocKind.Text => {
+			DocKind.Text | DocKind.SourceText => {
 				const text = textOf(doc);
 				remaining = remaining - firstLineWidth(text, tabWidth);
 				if (text.indexOf("\n") >= 0) return remaining >= 0;
@@ -203,7 +208,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 
 		match (d.kind) {
 			DocKind.Nil | DocKind.BreakParent => {},
-			DocKind.Text => {
+			DocKind.Text | DocKind.SourceText => {
 				const text = textOf(d);
 				const tailStart = text.lastIndexOf("\n") + 1;
 				if (tailStart > 0) {
@@ -214,7 +219,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 				} else {
 					line = line + text;
 					column = column + displayWidth(text, options.tabWidth);
-					if (trimTrailingBlanks(text, 0).length > 0) textEnd = line.length;
+					if (d.kind == DocKind.SourceText) textEnd = line.length;
 				}
 			},
 			DocKind.Group => {
@@ -231,8 +236,9 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Line | DocKind.HardLine => {
 				if (d.kind == DocKind.HardLine || cmd.mode == Mode.Break) {
 					if (lineSuffixes.length > 0) {
+						const fromSource = endsInSourceText(lineSuffixes);
 						line = line + flushSuffixes(lineSuffixes);
-						textEnd = line.length;
+						if (fromSource) textEnd = line.length;
 					}
 					result = result + trimTrailingBlanks(line, textEnd) + "\n";
 					line = baseIndent + indentString(cmd.indent, options);
@@ -308,11 +314,16 @@ test "layout: pending blanks are dropped before a line break" {
 	assert formatDoc(doc, narrow) == "a +\nb\n";
 }
 
-test "layout: a text keeps its own trailing blanks at a line break, inline or as a line suffix" {
-	const inline = docGroupBreak([docText("// keep "), docText(" "), docHardLine(), docText("b")]);
+test "layout: source text keeps its own trailing blanks at a line break, inline or as a line suffix" {
+	const inline = docGroupBreak([docSourceText("// keep "), docText(" "), docHardLine(), docText("b")]);
 	assert formatDoc(inline, narrow) == "// keep \nb\n";
-	const suffix = docGroupBreak([docText("a;"), docLineSuffix([docText(" // tail ")]), docHardLine(), docText("b")]);
+	const suffix = docGroupBreak([docText("a;"), docLineSuffix([docText(" "), docSourceText("// tail ")]), docHardLine(), docText("b")]);
 	assert formatDoc(suffix, narrow) == "a; // tail \nb\n";
+}
+
+test "layout: a printed token's trailing blank is pending, so a line break drops it" {
+	const doc = docGroupBreak([docText("a ||"), docText(" b && "), docHardLine(), docText("c")]);
+	assert formatDoc(doc, narrow) == "a || b &&\nc\n";
 }
 
 test "layout: an indented blank line carries no tab, and a multi-line text keeps its own blanks" {

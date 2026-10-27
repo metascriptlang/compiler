@@ -1,6 +1,6 @@
 import { Node, SourceLocation } from "../../../ast/node";
 import { Comments, SourceComment, CommentKind, leading, trailing, dangling, unformattedWithin, markFormatted } from "../comments";
-import { Doc, docText, docGroup, docIndent, docLine, docHardLine, docLineSuffix, docBreakParent, docJoin } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docLine, docHardLine, docLineSuffix, docBreakParent, docJoin } from "../doc";
 import { blankLineBefore } from "./literals";
 
 let placed: Comments = new Comments();
@@ -28,7 +28,7 @@ function emptyLine(): Doc[] {
 export function leadingDocs(list: SourceComment[]): Doc[] {
 	const out: Doc[] = [];
 	for (const c of list) {
-		out.push(docText(c.text));
+		out.push(docSourceText(c.text));
 		c.markFormatted();
 		if (c.kind == CommentKind.Line) {
 			if (c.linesAfter <= 1) out.push(docHardLine());
@@ -54,13 +54,14 @@ export function trailingDocs(list: SourceComment[]): Doc[] {
 			if (c.linesBefore == 0) out.push(previous != null && previous.kind == CommentKind.Line ? docHardLine() : docText(" "));
 			else if (c.linesBefore == 1) out.push(docHardLine());
 			else for (const d of emptyLine()) out.push(d);
-			out.push(docText(c.text));
+			out.push(docSourceText(c.text));
 			out.push(docBreakParent());
 		} else if (c.kind == CommentKind.Line) {
-			out.push(docLineSuffix([docText(" " + c.text)]));
+			out.push(docLineSuffix([docText(" "), docSourceText(c.text)]));
 			out.push(docBreakParent());
 		} else {
-			out.push(docText(" " + c.text));
+			out.push(docText(" "));
+			out.push(docSourceText(c.text));
 		}
 		c.markFormatted();
 		previous = c;
@@ -111,7 +112,7 @@ export function withComments(node: Node, doc: Doc): Doc {
 export function danglingLines(list: SourceComment[]): Doc[] {
 	const out: Doc[] = [];
 	for (const c of list) {
-		out.push(docText(c.text));
+		out.push(docSourceText(c.text));
 		c.markFormatted();
 	}
 	return out;
@@ -156,7 +157,7 @@ export function interleave(items: Doc[], lines: int32[], starts: int32[], inner:
 	let at = 0;
 	for (let i = 0; i < items.length; i += 1) {
 		while (at < inner.length && inner[at].line < lines[i]) {
-			out.push(docText(inner[at].text));
+			out.push(docSourceText(inner[at].text));
 			outStarts.push(inner[at].line);
 			inner[at].markFormatted();
 			at += 1;
@@ -164,7 +165,7 @@ export function interleave(items: Doc[], lines: int32[], starts: int32[], inner:
 		const next = i + 1 < items.length ? lines[i + 1] : 999999;
 		const entry: Doc[] = [items[i]];
 		while (at < inner.length && inner[at].line == lines[i] && inner[at].line < next) {
-			entry.push(docLineSuffix([docText(" " + inner[at].text)]));
+			entry.push(docLineSuffix([docText(" "), docSourceText(inner[at].text)]));
 			inner[at].markFormatted();
 			at += 1;
 		}
@@ -172,7 +173,7 @@ export function interleave(items: Doc[], lines: int32[], starts: int32[], inner:
 		outStarts.push(starts[i]);
 	}
 	while (at < inner.length) {
-		out.push(docText(inner[at].text));
+		out.push(docSourceText(inner[at].text));
 		outStarts.push(inner[at].line);
 		inner[at].markFormatted();
 		at += 1;
