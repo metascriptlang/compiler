@@ -2270,6 +2270,13 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 
 const RAISER_ONLY_STD_DIRS: string[] = ["meta"];
 
+function raiserOnlyStd(path: string, stdPath: string): boolean {
+	for (const dir of RAISER_ONLY_STD_DIRS) {
+		if (isUnder(path, join(stdPath, dir))) return true;
+	}
+	return false;
+}
+
 function compileTimeModules(paths: string[], stdPath: string): string[] {
 	const modules: string[] = [];
 	if (stdPath == "") return modules;
@@ -2289,6 +2296,16 @@ function refuseRuntimeCompileTimeReach(aliveSet: Readonly<AliveSet>): void {
 	throw new Error(BUILD_STOPPED);
 }
 
+function collectCFunctionNames(node: Node, exports: HashMap<string, string>, externs: string[], compilerCalls: string[], path: string): void {
+	const sym = node.resolvedSym;
+	if (node.kind == NodeKind.FunctionDecl && sym != null) {
+		if (hasFlag(sym, SymbolFlag.ImportC)) externs.push(sym.name);
+		else if (sym.exportName != "") exports.set(sym.exportName, path);
+		if (hasFlag(sym, SymbolFlag.ImportC) && hasFlag(sym, SymbolFlag.CompilerProc)) compilerCalls.push(sym.name);
+	}
+	forEachChild(node, (child: Node): void => { collectCFunctionNames(child, exports, externs, compilerCalls, path); });
+}
+
 function hcrCoreModules(
 	graph: ModuleGraph,
 	stdPath: string,
@@ -2301,8 +2318,6 @@ function hcrCoreModules(
 		}
 		if (!changed) return session.hcrCoreModules;
 	}
-	const engine = canonicalModulePath(join(stdPath, "hcr/engine.cms"));
-	if (findModule(graph, engine) == null) return [];
 	const paths: string[] = [];
 	const programs: Node[] = [];
 	for (const path of graph.loadOrder) {
@@ -2314,18 +2329,45 @@ function hcrCoreModules(
 		paths.push(path);
 		programs.push(program);
 	}
-	let group: string[] = [engine];
+	const instancesByHome = new HashMap<string, Node[]>();
+	for (const path of paths) {
+		for (const instNode of session.check.instances.get(path) ?? []) {
+			const home = instNode.resolvedSym!.modulePath;
+			const placed = instancesByHome.get(home);
+			if (placed == null) instancesByHome.set(home, [instNode]);
+			else placed.push(instNode);
+		}
+	}
+	for (let i = 0; i < paths.length; i += 1) programs[i] = programWithInstances(programs[i], instancesByHome.get(paths[i]) ?? null);
+	const cExports = new HashMap<string, string>();
+	const cExterns = new HashMap<string, string[]>();
+	const compilerCalls: string[] = [];
+	for (let i = 0; i < paths.length; i += 1) {
+		const externs: string[] = [];
+		collectCFunctionNames(programs[i], cExports, externs, compilerCalls, paths[i]);
+		cExterns.set(paths[i], externs);
+	}
+	let group: string[] = [];
+	const engine = canonicalModulePath(join(stdPath, "hcr/engine.cms"));
+	if (findModule(graph, engine) != null) group.push(engine);
+	for (const name of compilerCalls) {
+		const owner = cExports.get(name);
+		if (owner != null && !group.includes(owner) && !raiserOnlyStd(owner, stdPath)) group.push(owner);
+	}
+	if (group.length == 0) return [];
+	group.sort();
 	while (true) {
-		const alive = computeAliveSet(programs, paths, engine, false, graph, group,
+		const alive = computeAliveSet(programs, paths, group[0], false, graph, group,
 			[], [], true, true);
 		const next: string[] = [];
 		for (const path of paths) {
-			if (!aliveSetHasModule(alive, path)) continue;
-			let raiserOnly = false;
-			for (const dir of RAISER_ONLY_STD_DIRS) {
-				if (isUnder(path, join(stdPath, dir))) raiserOnly = true;
+			if (aliveSetHasModule(alive, path) && !raiserOnlyStd(path, stdPath)) next.push(path);
+		}
+		for (let i = 0; i < next.length; i += 1) {
+			for (const name of cExterns.get(next[i]) ?? []) {
+				const owner = cExports.get(name);
+				if (owner != null && !next.includes(owner) && !raiserOnlyStd(owner, stdPath)) next.push(owner);
 			}
-			if (!raiserOnly) next.push(path);
 		}
 		next.sort();
 		if (next.join("\n") == group.join("\n")) break;
