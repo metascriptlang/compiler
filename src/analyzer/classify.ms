@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, setRepr } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -417,6 +417,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			if (!hasRc) return ctx.raiserBackend ? structCellInfo() : noRcInfo();
 			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false, requireOps);
 		},
+		TypeKind.Set => setRepr(t) != null ? classifyType(setRepr(t), ctx, requireOps) : noRcInfo(),
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
 	};

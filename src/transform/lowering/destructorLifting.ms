@@ -771,6 +771,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 	// — typedef emit drops them too, so generating copy/destroy for a missing
 	// field would produce invalid C (`(*dest).v0.value` on a void slot).
 	if (fieldType.kind == TypeKind.Void) return;
+	if (fieldType.kind == TypeKind.Set && setRepr(fieldType) != null) fieldType = setRepr(fieldType)!;
 	const arrayTuple = lctx.raiserBackend && tuplePosition >= 0;
 	let xf = fieldName != ""
 		? (arrayTuple ? positionalMember(clonePath(x, loc), tuplePosition, loc) : makeMember(clonePath(x, loc), fieldName, loc))
