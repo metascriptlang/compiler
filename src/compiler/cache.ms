@@ -924,7 +924,8 @@ function queriesIn(path: string): HeaderQueries {
 
 function asciiName(name: string): boolean {
 	for (let i = 0; i < name.length; i++) {
-		if (name.charCodeAt(i) > 127) return false;
+		const code = name.charCodeAt(i);
+		if (code < 32 || code > 126) return false;
 	}
 	return true;
 }
