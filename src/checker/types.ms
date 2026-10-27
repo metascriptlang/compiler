@@ -1748,7 +1748,7 @@ function isPodFieldType(t: Readonly<Type | null>, depth: int32): boolean {
 		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.Char
 			| TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
-		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
+		TypeKind.Distinct | TypeKind.SizedArray | TypeKind.Set | TypeKind.Alias => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
 		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
 		_ => false,
