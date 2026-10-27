@@ -314,8 +314,10 @@ when (windows) {
 		return statOf(path, st) ? st.st_mtime as number : -1;
 	}
 	function changedTimeKernel(path: string): number {
-		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+		const wide = widePath(path);
+		if (wide == null) return -1;
+		const file = openForAttributes(wide);
+		freeWide(wide);
 		if (file == INVALID_HANDLE_VALUE) return -1;
 		let basic: BasicInformation = {};
 		const ok = GetFileInformationByHandleEx(file, FileBasicInfo, basic, sizeof(BasicInformation) as uint32) != 0;
