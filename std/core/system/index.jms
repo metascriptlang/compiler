@@ -409,11 +409,10 @@ function msPowI32(a: int32, b: int32): int32 {
 function msPowU32(a: uint32, b: uint32): uint32 {
 	@emit(`let r = 1, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1) { r = r * x; if (r > 4294967295) ${msDefect}("over- or underflow"); }
+		if (y & 1) r = Math.imul(r, x) >>> 0;
 		y = y >>> 1;
 		if (y === 0) return r;
-		x = x * x;
-		if (x > 4294967295) ${msDefect}("over- or underflow");
+		x = Math.imul(x, x) >>> 0;
 	}`);
 	unreachable;
 }
@@ -467,11 +466,10 @@ function msPowI64(a: int64, b: int64): int64 {
 function msPowU64(a: uint64, b: uint64): uint64 {
 	@emit(`let r = 1n, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1n) { r = r * x; if (r > 18446744073709551615n) ${msDefect}("over- or underflow"); }
+		if (y & 1n) r = BigInt.asUintN(64, r * x);
 		y = y >> 1n;
 		if (y === 0n) return r;
-		x = x * x;
-		if (x > 18446744073709551615n) ${msDefect}("over- or underflow");
+		x = BigInt.asUintN(64, x * x);
 	}`);
 	unreachable;
 }

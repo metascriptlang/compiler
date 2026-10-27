@@ -721,12 +721,6 @@ when (mscDeclaresRuntime) {
 		return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
 	}
 
-	@inline
-	function mulFitsU64(a: uint64, b: uint64): boolean {
-		if (b == 0) return true;
-		return a <= 18446744073709551615 / b;
-	}
-
 	@compilerFunc @inline
 	function msPowI32(a: int32, b: int32): int32 {
 		return powChecked(a, b, 2147483647);
@@ -739,36 +733,12 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc @inline
 	function msPowU32(a: uint32, b: uint32): uint32 {
-		let r: uint64 = 1;
-		let x: uint64 = a;
-		let y = b;
-		while (true) {
-			if ((y & 1) != 0) {
-				r *= x;
-				if (r > 4294967295) msRaiseOverflow();
-			}
-			y >>= 1;
-			if (y == 0) return r as uint32;
-			x *= x;
-			if (x > 4294967295) msRaiseOverflow();
-		}
+		return powWrap(a, b);
 	}
 
 	@compilerFunc @inline
 	function msPowU64(a: uint64, b: uint64): uint64 {
-		let r: uint64 = 1;
-		let x = a;
-		let y = b;
-		while (true) {
-			if ((y & 1) != 0) {
-				if (!mulFitsU64(r, x)) msRaiseOverflow();
-				r *= x;
-			}
-			y >>= 1;
-			if (y == 0) return r;
-			if (!mulFitsU64(x, x)) msRaiseOverflow();
-			x *= x;
-		}
+		return powWrap(a, b);
 	}
 
 	@compilerFunc @inline

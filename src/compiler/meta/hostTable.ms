@@ -905,19 +905,15 @@ function _bridgePowSigned(args: RaiserValue[], exponentMax: int64): RaiserValue 
 function _bridgeMsPowI64(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 9223372036854775807); }
 function _bridgeMsPowI32(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 2147483647); }
 
-function _bridgePowUnsigned(args: RaiserValue[], max: uint64): RaiserValue {
+function _bridgePowUnsigned(args: RaiserValue[], mask: uint64): RaiserValue {
 	let result: uint64 = 1;
-	let base = args[0].intVal as uint64;
+	let base = (args[0].intVal as uint64) & mask;
 	let rest = args[1].intVal as uint64;
 	while (true) {
-		if ((rest & 1) != 0) {
-			if (result != 0 && base > max / result) return _powOverflow();
-			result = result * base;
-		}
+		if ((rest & 1) != 0) result = (result * base) & mask;
 		rest = rest >> 1;
 		if (rest == 0) return raiserInt(int64Bits(result));
-		if (base != 0 && base > max / base) return _powOverflow();
-		base = base * base;
+		base = (base * base) & mask;
 	}
 }
 
