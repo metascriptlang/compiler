@@ -3923,7 +3923,7 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node, na
 	return validateOverloadSigs(ctx, set, impl, callNode) ? impl : winner;
 }
 
-function fitCallToImplementation(callNode: Node, impl: Symbol, takesReceiver: boolean): void {
+function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symbol, takesReceiver: boolean): void {
 	const implParams = impl.symbolType != null ? impl.symbolType.typeChildren : [];
 	const d = callNode.data as CallExprData;
 	const offset = takesReceiver ? 1 : 0;
@@ -3937,8 +3937,7 @@ function fitCallToImplementation(callNode: Node, impl: Symbol, takesReceiver: bo
 	for (let ai = 0; ai < d.arguments.length && ai + offset < implParams.length; ai += 1) {
 		const argType = d.arguments[ai].nodeType;
 		if (argType == null || hasGenericParams(implParams[ai + offset])) continue;
-		const fitted = widenVariantToUnion(d.arguments[ai], implParams[ai + offset], argType);
-		if (fitted != null as unknown as Node) d.arguments[ai] = fitted;
+		d.arguments[ai] = fitNode(ctx, d.arguments[ai], peelSink(implParams[ai + offset]), argType);
 	}
 }
 
@@ -4534,8 +4533,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// per-variant sigs (`data: TypeUnionData`) all redirect to one impl taking
 	// the union (`data: NodeData`), and handing it a bare variant struct
 	// corrupts memory — clang only warns on the pointer mismatch.
-	const emitted = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) ? impl : winnerSymFinal;
-	if (emitted != null) fitCallToImplementation(callNode, emitted, false);
+	if (impl != null && hasFlag(winnerSymFinal, SymbolFlag.OverloadSig)) fitCallToImplementation(ctx, callNode, impl, false);
 	if (d.callee != null && d.callee.kind == NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType != null) d.callee.nodeType = sym.symbolType;
@@ -4974,7 +4972,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
 	}
 	if (extWinnerSym != null && callNode.resolvedSym != extWinnerSym && hasFlag(extWinnerSym, SymbolFlag.OverloadSig)) {
-		fitCallToImplementation(callNode, callNode.resolvedSym!, !exts[idx].isStatic);
+		fitCallToImplementation(ctx, callNode, callNode.resolvedSym!, !exts[idx].isStatic);
 	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
