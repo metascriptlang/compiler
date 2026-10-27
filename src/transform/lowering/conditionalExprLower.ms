@@ -586,19 +586,21 @@ function ownExpressionsNeedPass(stmt: Node): boolean {
 	let found = false;
 	forEachChild(stmt, (child: Node): void => {
 		if (found || isCompoundStmt(child)) return;
-		found = expressionNeedsPass(child, false);
+		found = expressionNeedsPass(child, false, false);
 	});
 	return found;
 }
 
-function expressionNeedsPass(n: Node, inCall: boolean): boolean {
+function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): boolean {
 	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr) return true;
 	if (isFunctionNode(n)) return false;
 	if (inCall && n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=") return true;
+	if (inLiteral && callMayRaiseValue(n)) return true;
 	const call = inCall || n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr;
+	const literal = inLiteral || n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral;
 	let found = false;
 	forEachChild(n, (child: Node): void => {
-		if (!found) found = expressionNeedsPass(child, call);
+		if (!found) found = expressionNeedsPass(child, call, literal);
 	});
 	return found;
 }
