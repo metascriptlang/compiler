@@ -5,8 +5,9 @@
 1	_msWorkerLoopPump
 10	_msActorRunJobs
 10	_msCancelTimer
+11	_msPidTableFull
 11	_msPoolWorkerLoop
-11	_run__M40945await83truct65ctor83pawnOms_u0
+11	_run__SsrcZtestZcorpusZprogramsZ40945await83truct65ctor83pawnOms_u0
 14	_msActorProcess
 14	_msActorVisitEnd
 14	_msPoolRunEdge
@@ -30,7 +31,7 @@
 4	_msActorJobsFree
 4	_msChannelDrain
 4	_msPoolSubmit
-5	_Svc_dispatch__M40945await83truct65ctor83pawnOms_u0
+5	_Svc_dispatch__SsrcZtestZcorpusZprogramsZ40945await83truct65ctor83pawnOms_u0
 5	_msActorReapLocalQueue
 5	_msFutureAddCallback
 52	_msCDDispatch

@@ -7,11 +7,11 @@
 10	_msCancelTimer
 11	_msPidTableFull
 11	_msPoolWorkerLoop
+13	_msPoolRunQueued
 14	_msActorProcess
 14	_msActorVisitEnd
 14	_msPoolRunEdge
 16	_msPoolCompensate
-16	_msPoolRunQueued
 16	_msProcessTimers
 17	_msActorPostJob
 17	_msWaitForReady
@@ -22,6 +22,7 @@
 2	_msPoolShutdown
 29	_msActorPollLocal
 3	_msActorJobFire
+3	_msChannelPostOne
 3	_msCompletionQueuePushReleaseBatch
 3	_msPoolWakeWorker
 31	_msActorDestroyWithReason
