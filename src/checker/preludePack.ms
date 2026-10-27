@@ -29,7 +29,7 @@ import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, 
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId, identName } from "./idents";
-import { emptyType, noneType, createGenericParam, createKeyOfType } from "./types";
+import { emptyType, noneType, createGenericParam, createKeyOfType, createReadonlyView } from "./types";
 import { makeSymbolState, setFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -40,7 +40,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK7";
+const PACK_MAGIC = "MSPK8";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -683,6 +683,8 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		}
 		enqType(t.typeReturn);
 		enqType(t.typeExtra);
+		enqType(t.readonlyView);
+		enqType(t.mutableView);
 		enqSym(t.sym, false);
 		for (const op of t.attachedOps) enqSym(op, false);
 	}
@@ -704,7 +706,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
 		const ops: int32[] = [];
 		for (const o of t.attachedOps) ops.push(idxSym(o));
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${idxType(t.readonlyView)}\t${idxType(t.mutableView)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1244,6 +1246,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const typeExtraIdx: int32[] = [];
 	const typeSymIdx: int32[] = [];
 	const typeOpsIdx: int32[][] = [];
+	const typeReadonlyIdx: int32[] = [];
+	const typeMutableIdx: int32[] = [];
 	const symTypeIdx: int32[] = [];
 	const symOverloadIdx: int32[][] = [];
 	const symStaticIdx: int32[][] = [];
@@ -1306,6 +1310,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			const optional = rd.str();
 			if (optional != "-") t.optionalFields = splitCsv(optional);
 			typeOpsIdx.push(rd.ints());
+			typeReadonlyIdx.push(rd.int() as int32);
+			typeMutableIdx.push(rd.int() as int32);
 			types.push(t);
 			rd.endRow();
 		} else if (tag == 78) {
@@ -1433,6 +1439,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		t.typeReturn = typeReturnIdx[i] >= 0 && typeReturnIdx[i] < types.length ? types[typeReturnIdx[i]] : null as unknown as Type;
 		t.typeExtra = typeExtraIdx[i] >= 0 && typeExtraIdx[i] < types.length ? types[typeExtraIdx[i]] : null as unknown as Type;
 		t.sym = typeSymIdx[i] >= 0 && typeSymIdx[i] < syms.length ? syms[typeSymIdx[i]] : null as unknown as Symbol;
+		t.readonlyView = typeReadonlyIdx[i] >= 0 && typeReadonlyIdx[i] < types.length ? types[typeReadonlyIdx[i]] : null;
+		t.mutableView = typeMutableIdx[i] >= 0 && typeMutableIdx[i] < types.length ? types[typeMutableIdx[i]] : null;
 		for (const k of typeOpsIdx[i]) {
 			if (k >= syms.length) return null;
 			t.attachedOps.push(k >= 0 ? syms[k] : null);
@@ -1742,6 +1750,31 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		const md = got.declNode.data as MacroDeclData;
 		assert md.macroDeclName == "pkMacro";
 		assert md.macroDeclParams.length == 1;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
+test "preludePack: a read-only view keeps the type it views, so a generic parameter seen through it binds to the declared one" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const t = createGenericParam("T");
+		const view = createReadonlyView(t);
+		const sym = makeSymbolState("pkView", SymbolKind.TypeAlias, view, false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		sym.typeParams = [t];
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const key = preludePackKey("readonly-view", ".test");
+		writePreludePack(key, PK_STAMP, ctx);
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkView"));
+		assert got != null;
+		assert got.symbolType.mutableView == got.typeParams[0];
+		assert got.typeParams[0].readonlyView == got.symbolType;
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);
