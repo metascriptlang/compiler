@@ -27,9 +27,10 @@
 
 import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
-import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
+import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords } from "./context";
+import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
-import { emptyType, noneType, createGenericParam, createKeyOfType } from "./types";
+import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
 import { makeSymbolState, setFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -40,7 +41,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK7";
+const PACK_MAGIC = "MSPK8";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -507,6 +508,23 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 	atomicWritePack(`${root}/${key}.deps`, lines.join("\n"));
 }
 
+// What a prelude check registers in the per-build tables beside its context.
+export interface PreludeTables {
+	duVariants: Type[];
+	ctorRoutines: CtorRow[];
+	dispatch: DispatchRecords;
+}
+
+function emptyPreludeTables(): PreludeTables {
+	return { duVariants: [], ctorRoutines: [], dispatch: { classSyms: [], methodNames: [], methodSyms: [] } };
+}
+
+export function replayPreludeTables(tables: PreludeTables): void {
+	replayDuVariants(tables.duVariants);
+	replayCtorRoutines(tables.ctorRoutines);
+	replayDispatchRecords(tables.dispatch);
+}
+
 // ===== Writer =====
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
@@ -522,8 +540,11 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 //   D includeDirectives
 //   F compilerFlags
 //   X compileDirectives
+//   Q duVariantTypesCsv
+//   R classSymIdx methodName methodSymIdx
+//   A ownerSymIdx routineSymIdx
 
-export function writePreludePack(key: string, stamp: string, ctx: CheckerContext): void {
+export function writePreludePack(key: string, stamp: string, ctx: CheckerContext, tables: PreludeTables): void {
 	const _w0 = performance.now();
 	if (packDisabled()) return;
 	const root = packRoot();
@@ -639,6 +660,15 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	}
 	for (const members of ctx.preludeModuleScopes.values()) {
 		for (const m of members) enqSym(m, false);
+	}
+	for (const v of tables.duVariants) enqType(v);
+	for (let i = 0; i < tables.dispatch.methodSyms.length; i += 1) {
+		enqSym(tables.dispatch.classSyms[i], false);
+		enqSym(tables.dispatch.methodSyms[i], false);
+	}
+	for (const row of tables.ctorRoutines) {
+		enqSym(row.owner, false);
+		enqSym(row.routine, false);
 	}
 	while (symCursor < syms.length || typeCursor < types.length || nodeCursor < nodes.length) {
 		if (symCursor < syms.length) {
@@ -790,6 +820,13 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
 	lines.push(`F\t${escapeP(ctx.compilerFlags)}`);
 	lines.push(`X\t${escapeP(ctx.compileDirectives)}`);
+	const variants: int32[] = [];
+	for (const v of tables.duVariants) variants.push(idxType(v));
+	lines.push(`Q\t${intsCsv(variants)}`);
+	for (let i = 0; i < tables.dispatch.methodSyms.length; i += 1) {
+		lines.push(`R\t${idxSym(tables.dispatch.classSyms[i])}\t${escapeP(tables.dispatch.methodNames[i])}\t${idxSym(tables.dispatch.methodSyms[i])}`);
+	}
+	for (const row of tables.ctorRoutines) lines.push(`A\t${idxSym(row.owner)}\t${idxSym(row.routine)}`);
 
 	if (packDebug) console.log(`[pack] rows=${lines.length} joining at ms=${performance.now() - _w0}`);
 	const blob = lines.join("\n");
@@ -1283,6 +1320,12 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	let includeDirectives = "";
 	let compilerFlags = "";
 	let compileDirectives = "";
+	let variantIdx: int32[] = [];
+	const dispClassIdx: int32[] = [];
+	const dispNames: string[] = [];
+	const dispMethodIdx: int32[] = [];
+	const ctorOwnerIdx: int32[] = [];
+	const ctorRoutineIdx: int32[] = [];
 
 	while (true) {
 		const tag = rd.startRow();
@@ -1411,6 +1454,18 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			rd.endRow();
 		} else if (tag == 88) {
 			compileDirectives = unescapeP(rd.str());
+			rd.endRow();
+		} else if (tag == 81) {
+			variantIdx = rd.ints();
+			rd.endRow();
+		} else if (tag == 82) {
+			dispClassIdx.push(rd.int() as int32);
+			dispNames.push(unescapeP(rd.str()));
+			dispMethodIdx.push(rd.int() as int32);
+			rd.endRow();
+		} else if (tag == 65) {
+			ctorOwnerIdx.push(rd.int() as int32);
+			ctorRoutineIdx.push(rd.int() as int32);
 			rd.endRow();
 		} else {
 			return null;
@@ -1553,6 +1608,27 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	ctx.compilerFlags = compilerFlags;
 	ctx.compileDirectives = compileDirectives;
 
+	const tables = emptyPreludeTables();
+	for (const k of variantIdx) {
+		if (k < 0 || k >= types.length) return null;
+		tables.duVariants.push(types[k]);
+	}
+	for (let i = 0; i < dispMethodIdx.length; i += 1) {
+		const ci = dispClassIdx[i];
+		const mi = dispMethodIdx[i];
+		if (ci < 0 || ci >= syms.length || mi < 0 || mi >= syms.length) return null;
+		tables.dispatch.classSyms.push(syms[ci]);
+		tables.dispatch.methodNames.push(dispNames[i]);
+		tables.dispatch.methodSyms.push(syms[mi]);
+	}
+	for (let i = 0; i < ctorOwnerIdx.length; i += 1) {
+		const oi = ctorOwnerIdx[i];
+		const ri = ctorRoutineIdx[i];
+		if (oi < 0 || oi >= syms.length || ri < 0 || ri >= syms.length) return null;
+		tables.ctorRoutines.push({ owner: syms[oi], routine: syms[ri] });
+	}
+	replayPreludeTables(tables);
+
 	if (packDebug) console.log(`[pack:r] done ms=${performance.now() - _r0}`);
 	return ctx;
 }
@@ -1671,7 +1747,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
 		assert packRoot().startsWith("out/test/"), `a pack test reached the machine-wide cache: ${packRoot()}`;
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkTestFn"));
@@ -1732,7 +1808,7 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: noStmts } as NodeData, makeLoc(3, 1));
 		sym.declNode = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
 		const key = preludePackKey("macro-decl", ".test");
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkMacro"));
@@ -1761,7 +1837,7 @@ test "preludePack: a generic type keeps its declared parameters and their constr
 		k.typeExtra = createKeyOfType(t);
 		sym.typeParams = [t, k];
 		const key = preludePackKey("type-params", ".test");
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkAt"));
@@ -1798,7 +1874,7 @@ test "preludePack: a generic instance keeps the generic it was instantiated from
 		reachedOnlyByLink.nameId = getIdentId(ctx.table.identCache, reachedOnlyByLink.name);
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(reachedOnlyByLink.nameId, reachedOnlyByLink);
 		const key = preludePackKey("instantiated-from", ".test");
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const gotGeneric = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkPop"));
@@ -1842,7 +1918,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const program = createNodeAt(NodeKind.Program, { programStmts: samples } as NodeData, makeLoc(1, 1));
 		sym.declNode = program;
 		const key = preludePackKey("kind-roundtrip", ".test");
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkKindFn"));
@@ -1891,7 +1967,7 @@ test "preludePack: escaped and unicode names, negative and large int fields surv
 
 		const key = preludePackKey("escape-and-range-probe", ".test");
 		assert packRoot().startsWith("out/test/"), `a pack test reached the machine-wide cache: ${packRoot()}`;
-		writePreludePack(key, PK_STAMP, ctx);
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, name));
@@ -2045,14 +2121,14 @@ test "preludePack: interleaved compilers keep their typed preludes" {
 		_toolStamp = "compiler-a";
 		firstKey = preludePackKey("stamp-probe", ".test");
 		const firstStamp = preludePackStamp("stamp-probe");
-		writePreludePack(firstKey, firstStamp, pkCtxWithOneSym());
+		writePreludePack(firstKey, firstStamp, pkCtxWithOneSym(), emptyPreludeTables());
 		_toolStamp = "compiler-b";
 		secondKey = preludePackKey("stamp-probe", ".test");
 		const secondStamp = preludePackStamp("stamp-probe");
 		const second = pkCtxWithOneSym();
 		const secondSym = second.table.current.symbols.get(getIdentId(second.table.identCache, "pkStampFn"));
 		if (secondSym != null) secondSym.symbolType.kind = TypeKind.String;
-		writePreludePack(secondKey, secondStamp, second);
+		writePreludePack(secondKey, secondStamp, second, emptyPreludeTables());
 		assert tryLoadPreludePack(firstKey, secondStamp) == null;
 		_toolStamp = "compiler-a";
 		const first = tryLoadPreludePack(preludePackKey("stamp-probe", ".test"), preludePackStamp("stamp-probe"));
@@ -2145,7 +2221,7 @@ test "preludePack: a format keeps a peer's pack and in-flight write" {
 		writeFile(peer, "peer-owned pack");
 		writeFile(pending, "peer-owned in-flight write");
 		const key = preludePackKey("format-probe", ".test");
-		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
+		writePreludePack(key, PK_STAMP, pkCtxWithOneSym(), emptyPreludeTables());
 		assert tryLoadPreludePack(key, PK_STAMP) != null;
 		const own = packRoot();
 		for (const foreign of ["MSPK2", "MSPK9"]) {
@@ -2153,7 +2229,7 @@ test "preludePack: a format keeps a peer's pack and in-flight write" {
 			writeFile(`${base}/${foreign}/${key}.pk`, "another compiler's pack");
 		}
 		assert tryLoadPreludePack(key, PK_STAMP) != null;
-		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
+		writePreludePack(key, PK_STAMP, pkCtxWithOneSym(), emptyPreludeTables());
 		assert exists(`${own}/${key}.pk`);
 		for (const foreign of ["MSPK2", "MSPK9"]) {
 			assert exists(`${base}/${foreign}/${key}.pk`), `${foreign} lost its pack`;

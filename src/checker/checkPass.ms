@@ -6,10 +6,10 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol } from "./symbol";
-import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -26,7 +26,7 @@ import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveRetur
 import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
-import { CtorRow, startCtorCapture, endCtorCapture, replayCtorRoutines } from "./ctorRoutine";
+import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
@@ -45,7 +45,7 @@ import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
 import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
-import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
+import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
@@ -4014,29 +4014,36 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
-	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt));
+	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt)).ctx;
 }
 
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	return asPreludeBuild(backendExt, () => checkPreludeSource(stdPath, backendExt));
 }
 
-function asPreludeBuild(backendExt: string, check: () => CheckerContext): CheckerContext {
+function asPreludeBuild<T>(backendExt: string, check: () => T): T {
 	return parseAsBuildOf(backendName(backendOfExtension(backendExt)), check);
 }
 
-function buildPreludeUnderDefines(stdPath: string, backendExt: string): CheckerContext {
+function buildPreludeUnderDefines(stdPath: string, backendExt: string): SharedPrelude {
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packStamp = preludePackStamp(stdPath);
+	const duMark = duVariantMark();
+	const outerCtors = startCtorCapture();
+	const outerDispatch = startDispatchCapture();
 	const packed = tryLoadPreludePack(packKey, packStamp);
-	if (packed != null) return packed;
-	const ctx = checkPreludeSource(stdPath, backendExt);
+	const ctx = packed ?? checkPreludeSource(stdPath, backendExt);
+	const tables: PreludeTables = {
+		duVariants: duVariantsFrom(duMark),
+		ctorRoutines: endCtorCapture(outerCtors),
+		dispatch: endDispatchCapture(outerDispatch),
+	};
 	// Always write (best-effort): the pack captures whatever scope the fresh
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
-	writePreludePack(packKey, packStamp, ctx);
-	return ctx;
+	if (packed == null) writePreludePack(packKey, packStamp, ctx, tables);
+	return { ctx, tables, owned: null };
 }
 
 export function createGraphPreludeContext(): CheckerContext {
@@ -4322,9 +4329,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 
 interface SharedPrelude {
 	ctx: CheckerContext;
-	duVariants: Type[];
-	ctorRoutines: CtorRow[];
-	dispatch: DispatchRecords;
+	tables: PreludeTables;
 	owned: HashSet<string> | null;
 }
 
@@ -4334,34 +4339,14 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 	const key = backendExt + "|" + stdPath;
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
-		shared = buildSharedPrelude(stdPath, backendExt);
-		_preludeCtxByKey.set(key, shared);
+		const built = asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt));
+		_preludeCtxByKey.set(key, built);
+		shared = built;
 	}
-	replayPreludeContributions(shared);
+	replayPreludeTables(shared.tables);
 	const view = packContentView(shared.ctx);
 	view.stdRoot = stdPath;
 	return view;
-}
-
-function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
-	const duMark = duVariantMark();
-	const outerCtors = startCtorCapture();
-	const outerDispatch = startDispatchCapture();
-	const ctx = buildPreludeContext(stdPath, backendExt);
-	return {
-		ctx,
-
-		duVariants: duVariantsFrom(duMark),
-		ctorRoutines: endCtorCapture(outerCtors),
-		dispatch: endDispatchCapture(outerDispatch),
-		owned: null,
-	};
-}
-
-function replayPreludeContributions(shared: SharedPrelude): void {
-	replayDuVariants(shared.duVariants);
-	replayCtorRoutines(shared.ctorRoutines);
-	replayDispatchRecords(shared.dispatch);
 }
 
 // The modules the prelude every build shares loaded as default global imports, which a build
