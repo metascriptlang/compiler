@@ -521,7 +521,6 @@ function enterRefs(vm: RaiserVM, base: int64, caller: RaiserFunction, site: int3
 			}
 		}
 	}
-	zeroOwnRefs(slots, base, callee);
 }
 
 function zeroOwnRefs(slots: Ptr<int64>, base: int64, callee: RaiserFunction): void {
@@ -2499,6 +2498,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
 						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
+					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = ib;
 					func = callee;
 					code = callee.packed;
@@ -2533,6 +2533,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
 						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
+					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -2576,6 +2577,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
 						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
+					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
@@ -3855,6 +3857,7 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 	frame.refTop = frameRefTop(vm, depth, vm.base, caller);
 	vm.callStack.depth = depth + 1;
 	enterBelow(vm, depth, newBase as int64, callee, frame);
+	zeroOwnRefs(vm.regs.slots, newBase as int64, callee);
 
 	vm.base = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
@@ -4114,7 +4117,6 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	const newBase = vm.base + caller.frameSize;
 	ensureSlots(vm.regs, newBase + callee.frameSize);
-	zeroOwnRefs(vm.regs.slots, newBase as int64, callee);
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
 		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, base: 0, spBase: 0, refTop: 0 });
@@ -4128,6 +4130,7 @@ function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	frame.refTop = frameRefTop(vm, depth, vm.base, caller);
 	vm.callStack.depth = depth + 1;
 	enterBelow(vm, depth, newBase as int64, callee, frame);
+	zeroOwnRefs(vm.regs.slots, newBase as int64, callee);
 	vm.base = newBase;
 	vm.funcIdx = fn;
 	vm.ip = 0;
