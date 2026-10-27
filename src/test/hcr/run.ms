@@ -623,6 +623,30 @@ function initThrowMessage(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function reloadRejectedMessage(): void {
+	const tag = "hcrReloadRejectedMessage";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const dir = `${TMP}/reloadRejected`;
+	const child = startEvents(tag, "reloadRejected", "events.jsonl");
+	const seen = [""];
+	need(tag, readUntil(child, seen, "EVENTS start 7 1", 120000), "the program did not start on the first build");
+	copy(`${dir}/logicRejected.ms`, `${dir}/logic.ms`);
+	const deadline = performance.now() + 60000;
+	while (performance.now() < deadline && !read(`${dir}/events.jsonl`).contains("\"kind\":\"rejected\"")) {
+		child.read(ChildStream.Stdout, 200);
+	}
+	child.write("q\n", 5000);
+	child.wait(30000);
+	child.close();
+	const ev = eventsOf(`${dir}/events.jsonl`);
+	const rejected = eventAt(ev, 0, "\"event\":\"reload\",\"source\":\"runtime\",\"kind\":\"rejected\"");
+	need(tag, rejected >= 0, "the throwing edit was not rejected");
+	need(tag, ev[rejected].contains("threw: an uncaught exception: boom: edit rejected"), `the rejected reason does not carry the thrown message: ${ev[rejected]}`);
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
 function runBound(): void {
 	const tag = "hcrRunBound";
 	const cases = [
@@ -2423,6 +2447,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRunKeys", run: runKeys },
 	{ name: "hcrRunEvents", run: runEvents },
 	{ name: "hcrInitThrowMessage", run: initThrowMessage },
+	{ name: "hcrReloadRejectedMessage", run: reloadRejectedMessage },
 	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
