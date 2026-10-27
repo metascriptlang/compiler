@@ -882,6 +882,13 @@ test "typeExpr parenthesized atoms retain array suffixes" {
 	assert typeExprKind("((() => int32)[])[]") == NodeKind.TypeArray;
 }
 
+test "tuple array annotations skip to the initializer" {
+	assert skipsType("[string, int32][]");
+	assert skipsType("[A, [B, C]][]");
+	assert skipsType("[A, B][][]");
+	assert skipsType("Array<[A, B][]>");
+}
+
 test "generic call lookahead consumes tuple array type arguments" {
 	const lr = lex("<[int32, string][]>(values)");
 	assert lr.ok;
