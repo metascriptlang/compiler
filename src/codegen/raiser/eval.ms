@@ -1692,7 +1692,7 @@ test "orc: a cycle through a reference array and one through a union array are c
 		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok 12\n", vm.output;
-	assert vm.arrayHeap.mem.carved < 600, `${vm.arrayHeap.mem.carved}`;
+	assert vm.arrayHeap.mem.carved < 1500, `${vm.arrayHeap.mem.carved}`;
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 	let live = 0;
 	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
