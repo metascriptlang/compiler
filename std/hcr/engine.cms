@@ -336,12 +336,12 @@ function loadAndInitialize(): void {
 	const mismatch = bindingMismatch([]);
 	if (mismatch != "") fatal(mismatch);
 	for (const item of order) {
-		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) fatal(`data initialization of module '${item.module.moduleId}' threw`);
+		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) fatal(`data initialization of module '${item.module.moduleId}' threw: ${msHcrGuardText()}`);
 	}
 	for (const item of order) bindDeferred(item.module);
 	for (const item of order) {
 		if (awaitsFirstImport(item.module)) continue;
-		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw`);
+		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw: ${msHcrGuardText()}`);
 	}
 }
 
@@ -638,9 +638,11 @@ function performReload(): ReloadResult {
 	const reset = resetVariables(candidates);
 	msHcrStageBegin();
 	let dataFailed = "";
+	let dataReason = "";
 	for (const item of candidates) {
 		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) {
 			dataFailed = item.module.moduleId;
+			dataReason = msHcrGuardText();
 			break;
 		}
 	}
@@ -653,7 +655,7 @@ function performReload(): ReloadResult {
 		release(candidates);
 		forgetAfter(known);
 		bundleIdentity = bundle;
-		return resumeLoaded(known, result(ReloadKind.Rejected, [dataFailed], `data initialization of module '${dataFailed}' threw`));
+		return resumeLoaded(known, result(ReloadKind.Rejected, [dataFailed], `data initialization of module '${dataFailed}' threw: ${dataReason}`));
 	}
 	const names: string[] = [];
 	const previousImages: HcrImage[] = [];
@@ -669,10 +671,12 @@ function performReload(): ReloadResult {
 		names.push(item.module.moduleId);
 	}
 	let initFailed = "";
+	let initReason = "";
 	for (const item of initializationOrder(candidates)) {
 		if (awaitsFirstImport(item.module)) continue;
 		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) {
 			initFailed = item.module.moduleId;
+			initReason = msHcrGuardText();
 			break;
 		}
 	}
@@ -697,5 +701,5 @@ function performReload(): ReloadResult {
 	}
 	forgetAfter(known);
 	return resumeLoaded(known, result(ReloadKind.Rejected, [resumeFailed],
-		`the ${initFailed != "" ? "initializer" : "after-reload handler"} of module '${resumeFailed}' threw; rolled back ${names.join(",")}`));
+		`the ${initFailed != "" ? "initializer" : "after-reload handler"} of module '${resumeFailed}' threw${initFailed != "" ? ": " + initReason : ""}; rolled back ${names.join(",")}`));
 }
