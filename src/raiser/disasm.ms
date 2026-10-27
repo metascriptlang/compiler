@@ -129,7 +129,6 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.LitConv => "LitConv",
 		RaiserOpcode.UnionConv => "UnionConv",
 		RaiserOpcode.FutureThen => "FutureThen",
-		RaiserOpcode.TimerCtl => "TimerCtl",
 		RaiserOpcode.FutureRead => "FutureRead",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
