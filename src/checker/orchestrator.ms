@@ -2,7 +2,7 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
+import { Node, NodeKind, VariableDeclData, Symbol, ClassDeclData } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym, moduleItemId } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
@@ -277,7 +277,7 @@ import { setExtraGlobalImports } from "./prelude";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { writeFile, ensureDir } from "std/fs";
-import { lookupSymbol } from "./symbol";
+import { lookupSymbol, symbolKey } from "./symbol";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { stringType } from "./types";
@@ -556,6 +556,39 @@ test "a module's item id is interned by its path, not by its place in the load o
 	const alone = fooModuleIdWith("b");
 	assert alone >= 0;
 	assert fooModuleIdWith("z") == alone, `${fooModuleIdWith("z")} vs ${alone}`;
+}
+
+const KEYED_B = "export function foo(n: number): number { return n; }\nexport const k = 2;\nfunction helper(): number { return 1; }\nexport class Box<T> { v: T; constructor(v: T) { this.v = v; } show(): T { return this.v; } }\nexport function g<A, B>(a: A, b: B): A { return a; }";
+
+function keysOfB(bSource: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: bSource });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo, Box } from \"./b\"; const x = foo(1) + new Box<number>(2).show();" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	let out = "";
+	for (const name of ["foo", "k", "helper", "Box", "g"]) {
+		const sym = scopeSymbolOf("/src/b.ms", name);
+		if (sym == null) return "no " + name;
+		out = out + symbolKey(sym) + " ";
+		for (const tp of sym.typeParams) out = out + (tp.sym != null ? symbolKey(tp.sym) : "unbound") + " ";
+	}
+	const box = scopeSymbolOf("/src/b.ms", "Box");
+	for (const member of (box!.declNode.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.MethodDecl && member.resolvedSym != null) out = out + symbolKey(member.resolvedSym) + " ";
+	}
+	return out;
+}
+
+test "a declaration's key is its name, per-name ordinal and module, unmoved by comments, unrelated declarations and a later overload" {
+	const cold = keysOfB(KEYED_B);
+	assert cold.startsWith("foo.0./src/b.ms k.0./src/b.ms helper.0./src/b.ms Box.0./src/b.ms Box.0./src/b.ms#0 g.0./src/b.ms g.0./src/b.ms#0 g.0./src/b.ms#1 "), cold;
+	assert keysOfB(KEYED_B) == cold;
+	assert keysOfB("// a comment\n" + KEYED_B) == cold;
+	assert keysOfB("function other(): number { return 0; }\nclass Zed {}\n" + KEYED_B) == cold;
+	assert keysOfB(KEYED_B + "\nexport function foo(s: string): string { return s; }") == cold;
+	const foo = scopeSymbolOf("/src/b.ms", "foo");
+	assert foo != null && foo.overloads.length == 1 && symbolKey(foo.overloads[0]) == "foo.1./src/b.ms", foo != null && foo.overloads.length > 0 ? symbolKey(foo.overloads[0]) : "no overload";
 }
 
 function showCallOwners(generic: boolean): string {

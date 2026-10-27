@@ -63,7 +63,7 @@ function copySymbol(s: Symbol): Symbol {
 		overloadIdx: s.overloadIdx, disamb: s.disamb, mutatedParams: s.mutatedParams, staticFields: s.staticFields,
 		fieldDecoratorNames: s.fieldDecoratorNames, fieldDecorators: s.fieldDecorators, metaKeys: s.metaKeys, metaValues: s.metaValues,
 		nonisolatedFields: s.nonisolatedFields, duVariantSlot: s.duVariantSlot, itemModule: s.itemModule, item: s.item,
-		instantiatedFrom: s.instantiatedFrom, borrowedFrom: s.borrowedFrom, staticOwner: s.staticOwner, typeParams: s.typeParams,
+		instantiatedFrom: s.instantiatedFrom, borrowedFrom: s.borrowedFrom, staticOwner: s.staticOwner, typeParamOwner: s.typeParamOwner, typeParams: s.typeParams,
 	};
 }
 

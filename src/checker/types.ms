@@ -3676,11 +3676,17 @@ function typeKeyIn(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string 
 	return typeKeyInner(t, keying);
 }
 
+function genericParamKey(name: string, sym: Readonly<Symbol>): string {
+	const owner = sym.typeParamOwner;
+	if (owner != null && owner.modulePath != "") return `${name}@${symbolKey(sym)}`;
+	return `${name}#${sym.itemModule}.${sym.item}`;
+}
+
 function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
-	if (t.kind == TypeKind.GenericParam && t.sym != null) return `${t.typeName}#${t.sym.itemModule}.${t.sym.item}`;
+	if (t.kind == TypeKind.GenericParam && t.sym != null) return genericParamKey(t.typeName, t.sym);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Set) return t.typeName;
 	return match (t.kind) {
@@ -6659,7 +6665,7 @@ test "a defaulted binding sheds null" {
 	assert destrDefaultedType(null) == null;
 }
 
-import { makeSymbol } from "./symbol";
+import { makeSymbol, symbolKey } from "./symbol";
 
 test "a tuple names its nominal members by declaring symbol" {
 	const a = createStruct("TupleCell", ["text"], [stringType()], false);
@@ -6734,4 +6740,27 @@ test "a unification bounds its depth by the bindings it is given, not by another
 	unifyTypeUnprofiled(formal, concrete, fresh);
 	assert fresh.names.length == 1 && fresh.types[0].kind == TypeKind.Number, "a fresh unification beside a deep one binds T";
 	assert fresh.depth == 0 && deep.depth == 3, "each unification leaves its own depth where it found it";
+}
+
+function declaredParam(owner: Symbol, index: int32, itemModule: int32, item: int32): Type {
+	const gp = createGenericParam("T");
+	const sym = makeSymbol("T", SymbolKind.TypeAlias, gp, false);
+	sym.modulePath = owner.modulePath;
+	sym.typeParamOwner = owner;
+	sym.disamb = index;
+	sym.itemModule = itemModule;
+	sym.item = item;
+	gp.sym = sym;
+	return gp;
+}
+
+test "a declared generic parameter is keyed by its declaration and position, never by the process-local item pair" {
+	const g = makeSymbol("g", SymbolKind.Function, null, false);
+	g.modulePath = "/src/b.ms";
+	const box = makeSymbol("Box", SymbolKind.Class, null, false);
+	box.modulePath = "/src/b.ms";
+	const ofG = declaredParam(g, 0, 3, 7);
+	assert typeKey(ofG) != typeKey(declaredParam(box, 0, 3, 8));
+	assert typeKey(ofG) != typeKey(declaredParam(g, 1, 3, 9));
+	assert typeKey(ofG) == typeKey(declaredParam(g, 0, 5, 2)), `${typeKey(ofG)} vs ${typeKey(declaredParam(g, 0, 5, 2))}`;
 }

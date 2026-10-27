@@ -290,6 +290,7 @@ export class Symbol {
 	ctorRoutine: Symbol | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
+	typeParamOwner: Symbol | null;
 	typeParams: Type[];
 }
 

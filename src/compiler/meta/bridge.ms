@@ -4209,6 +4209,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		ctorRoutine: null,
 		borrowedFrom: null,
 		staticOwner: null,
+		typeParamOwner: null,
 		typeParams: [],
 	};
 }

@@ -506,7 +506,18 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.instantiatedFrom = null;
 	sym.borrowedFrom = null;
 	sym.staticOwner = null;
+	sym.typeParamOwner = null;
 	sym.typeParams = [];
+}
+
+export function symbolKey(sym: Readonly<Symbol>): string {
+	if (sym.typeParamOwner != null) return `${symbolKey(sym.typeParamOwner)}#${sym.disamb}`;
+	const local = hasFlag(sym, SymbolFlag.Anon) || hasFlag(sym, SymbolFlag.StaticLocal)
+		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Temp
+		|| (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global))
+		|| (sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam);
+	if (local || sym.modulePath == "") throw new Error(`internal: ${sym.symbolKind} '${sym.name}' of '${sym.modulePath}' is local to its module and has no key another module can name`);
+	return `${sym.name}.${sym.instantiatedFrom != null ? 0 : sym.disamb}.${sym.modulePath}`;
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for

@@ -1975,14 +1975,17 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" -> ["T", "U"]
 // Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
-function typeParamSym(ctx: CheckerContext, gp: Type): Symbol {
+function typeParamSym(ctx: CheckerContext, gp: Type, owner: Symbol | null = null, index: int32 = 0): Symbol {
 	const sym = makeSymbol(gp.typeName, SymbolKind.TypeAlias, gp, false);
+	sym.modulePath = owner != null ? owner.modulePath : ctx.modulePath;
+	sym.typeParamOwner = owner;
+	sym.disamb = index;
 	stampItem(ctx, sym);
 	gp.sym = sym;
 	return sym;
 }
 
-export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type {
+export function defineGenericParam(ctx: CheckerContext, paramStr: string, owner: Symbol | null = null, index: int32 = 0): Type {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
 		// Has constraint: "T:Comparable" -> name="T", constraint="Comparable"
@@ -1991,12 +1994,12 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type 
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
 		gp.typeExtra = resolveTypeTest(constraintStr, ctx, 0, 0);
-		defineSymbol(ctx.table, typeParamSym(ctx, gp));
+		defineSymbol(ctx.table, typeParamSym(ctx, gp, owner, index));
 		return gp;
 	}
 	// No constraint: "T"
 	const gp = createGenericParam(paramStr);
-	defineSymbol(ctx.table, typeParamSym(ctx, gp));
+	defineSymbol(ctx.table, typeParamSym(ctx, gp, owner, index));
 	return gp;
 }
 
@@ -2012,7 +2015,7 @@ export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: strin
 		const trimmed = param.trim();
 		if (trimmed == "") continue;
 		const colonPos = findChar(trimmed, ":");
-		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed));
+		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed, sym, declared.length as int32));
 		constraints.push(colonPos > 0 ? trimmed.slice(colonPos + 1, trimmed.length) : "");
 	}
 	for (let i = 0; i < declared.length; i += 1) {

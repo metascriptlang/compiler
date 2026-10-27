@@ -679,6 +679,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 				for (const ov of s.overloads) enqSym(ov, false);
 			}
 			if (s.staticOwner != null) enqSym(s.staticOwner, false);
+			if (s.typeParamOwner != null) enqSym(s.typeParamOwner, false);
 			if (s.instantiatedFrom != null) enqSym(s.instantiatedFrom, false);
 			if (s.staticFields != null) {
 				for (const sf of s.staticFields) enqSym(sf, false);
@@ -770,7 +771,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const dp = idxs(s.defaultParams);
 		const tps: int32[] = [];
 		for (const tp of s.typeParams) tps.push(idxType(tp));
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}\t${idxSym(s.typeParamOwner)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1294,6 +1295,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const symOwnerIdx: int32[] = [];
 	const symTypeParamsIdx: int32[][] = [];
 	const symOriginIdx: int32[] = [];
+	const symParamOwnerIdx: int32[] = [];
 	const symDpRaw: string[] = [];
 	const inScopeFlags: int32[] = [];
 	const nodeTypeRef: int32[] = [];
@@ -1417,6 +1419,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			symOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 			symTypeParamsIdx.push(rd.last == 9 ? rd.ints() : []);
 			symOriginIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
+			symParamOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 			syms.push(s);
 			rd.endRow();
 		} else if (tag == 69) {
@@ -1529,6 +1532,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		s.typeParams = tps;
 		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
 		s.instantiatedFrom = symOriginIdx[i] >= 0 && symOriginIdx[i] < syms.length ? syms[symOriginIdx[i]] : null;
+		s.typeParamOwner = symParamOwnerIdx[i] >= 0 && symParamOwnerIdx[i] < syms.length ? syms[symParamOwnerIdx[i]] : null;
 		s.declNode = symDeclIdx[i] >= 0 && symDeclIdx[i] < nodes.length ? nodes[symDeclIdx[i]] : null as unknown as Node;
 		s.defaultParams = parseNodeArr(symDpRaw[i], nodes);
 	}
