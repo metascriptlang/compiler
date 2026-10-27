@@ -1438,7 +1438,9 @@ function unwindStep(vm: RaiserVM): void {
 // Every Try emits a Finally marker, so the innermost safepoint is the only one
 // that can own the next finally to run; re-executing the Ret finds the next.
 function cleanUpOnReturn(vm: RaiserVM): number {
-	while (vm.safePoints.length > safePointBase(vm) && vm.safePoints[vm.safePoints.length - 1] < 0) dropSafePoints(vm, vm.safePoints.length - 1);
+	const depth = vm.callStack.depth;
+	while (vm.callStack.depth == depth && vm.safePoints.length > safePointBase(vm) && vm.safePoints[vm.safePoints.length - 1] < 0) dropSafePoints(vm, vm.safePoints.length - 1);
+	if (vm.callStack.depth != depth) return -2;
 	const n = vm.safePoints.length;
 	if (n == safePointBase(vm)) return -1;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -3888,7 +3890,13 @@ function vmHandleCall(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 // True when this Ret was handled here, false when it pops an ordinary frame.
 function vmRetSpecial(vm: RaiserVM, ia: int32): boolean {
 	// Leaving a guarded region: its finally runs first and comes back here.
+	const depth = vm.callStack.depth;
+	const retIp = vm.ip - 1;
 	const finIp = cleanUpOnReturn(vm);
+	if (finIp == -2) {
+		vm.callStack.items[depth].returnIp = retIp;
+		return true;
+	}
 	if (finIp >= 0) {
 		vm.ip = finIp as int32;
 		return true;
