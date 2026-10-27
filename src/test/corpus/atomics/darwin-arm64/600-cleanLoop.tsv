@@ -2,13 +2,14 @@
 1	_msPoolInit
 1	_msThreadChannel
 1	_msWorkerLoopPump
-16	_msPoolRunQueued
+13	_msPoolRunQueued
 16	_msProcessTimers
 2	_msActorJobAbandon
 2	_msActorJobTick
 2	_msDrainUntilIdle
 2	_msPoolShutdown
 3	_msActorJobFire
+3	_msChannelPostOne
 3	_msCompletionQueuePushReleaseBatch
 3	_msPoolWakeWorker
 4	_msChannelDrain
