@@ -11,11 +11,11 @@ test "E2E C: string concat" {
 	assert c.value.contains("msStringConcat");
 }
 
-test "E2E C: string equality" {
+test "E2E C: string === calls the std string == routine" {
 	const src = "function eq(a: string, b: string): boolean { return a === b; }\nconst r = eq(\"a\", \"b\");";
-	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms", true);
+	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms");
 	assert !c.startsWith("ERROR"), c;
-	assert c.contains("static inline MS_BOOL msStringEquals"), c;
+	assert c.contains("return eqeq___") && c.contains("ZstdZcoreZstringZindexOcms_u0(a_p0, b_p1);"), c;
 }
 
 test "E2E C: string literal pool" {
@@ -32,11 +32,11 @@ test "E2E C: string length remapping" {
 	assert c.value.contains(".len");
 }
 
-test "E2E C: string inequality" {
+test "E2E C: string !== negates the std string == routine" {
 	const src = "function neq(a: string, b: string): boolean { return a !== b; }\nconst r = neq(\"a\", \"b\");";
-	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms", true);
+	const c = compileProjectToCWithStd([{ entryPath: "test/e2e.ms", entrySource: src }], "test/e2e.ms");
 	assert !c.startsWith("ERROR"), c;
-	assert c.contains("static inline MS_BOOL msStringEquals"), c;
+	assert c.contains(" = eqeq___") && c.contains("return (!(__call_"), c;
 }
 
 test "E2E C: string param and return" {

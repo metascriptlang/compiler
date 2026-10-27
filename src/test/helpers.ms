@@ -547,7 +547,7 @@ export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string):
 	return messages;
 }
 
-export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string, lowerStd: boolean = false): string {
+export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string): string {
 	resetBuildState();
 	const canonEntries: MapEntry[] = [];
 	for (const e of entries) {
@@ -579,7 +579,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string,
 
 	const units: CheckedUnit[] = [];
 	for (const modPath of graph.loadOrder) {
-		if (!lowerStd && !isEntryPath(canonEntries, modPath)) continue;
+		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 		const unit = checkedUnit(modPath);
@@ -627,7 +627,6 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string,
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
-		if (!isEntryPath(canonEntries, emissionPaths[i])) continue;
 		const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
 		combined = combined + output.code;
 		output.code = "";
