@@ -18,7 +18,7 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, stringHandleRc, heapSeqHandles, heapArrayIsView, heapArrayClass, raiserToFloat, raiserToBool, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, stringHandleRc, heapSeqHandles, heapObjectCellHandles, heapArrayIsView, heapArrayClass, raiserToFloat, raiserToBool, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -813,13 +813,23 @@ test "engine: instanceof reads the class display through a 3-level chain, a sibl
 	assert ctx.output == "true true true true false false\nfalse true true false true false true\nfalse true false false false\n", ctx.output;
 }
 
+function moduleClassTypes(mod: RaiserModule): RaiserClassType[] {
+	const all: RaiserClassType[] = [];
+	for (const f of mod.functions) for (const t of f.classTypes) all.push(t);
+	return all;
+}
+
+function moduleClassNamed(mod: RaiserModule, name: string): RaiserClassType | null {
+	for (const t of moduleClassTypes(mod)) if (t.name == name) return t;
+	return null;
+}
+
 test "engine: a class's display holds the ids of its ancestors by depth, and a layout without a class holds none" {
 	const ctx = evalVM("class A { a: int32 = 1; } class B extends A { } class C extends B { } const c = new C(); const b = new B(); const o = { a: 1 }; console.log('ok');");
 	assert ctx.error == "", ctx.error;
 	let seenC = false;
 	let seenB = false;
-	for (const obj of ctx.objectHeap.objects) {
-		const t = obj.classType;
+	for (const t of moduleClassTypes(ctx.mod)) {
 		if (t.name == "C") {
 			seenC = true;
 			assert t.depth == 2 && t.display.length == 3, `${t.depth} ${t.display.length}`;
@@ -831,12 +841,8 @@ test "engine: a class's display holds the ids of its ancestors by depth, and a l
 		if (t.name == "") assert t.depth == -1 && t.display.length == 0;
 	}
 	assert seenC && seenB;
-	let c: RaiserClassType | null = null;
-	let b: RaiserClassType | null = null;
-	for (const obj of ctx.objectHeap.objects) {
-		if (obj.classType.name == "C") c = obj.classType;
-		if (obj.classType.name == "B") b = obj.classType;
-	}
+	const c = moduleClassNamed(ctx.mod, "C");
+	const b = moduleClassNamed(ctx.mod, "B");
 	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1] && c!.display[2] != b!.display[1];
 }
 
@@ -855,14 +861,8 @@ test "engine: a class appended to the live image after its ancestors keeps their
 	const noArgs: RaiserValue[] = [];
 	assert callWithComptimeHostPolicy(r2.vm, r1.funcIdx, noArgs, "").intVal == 1;
 	assert callWithComptimeHostPolicy(r2.vm, r2.funcIdx, noArgs, "").intVal == 19;
-	let b: RaiserClassType | null = null;
-	let c: RaiserClassType | null = null;
-	for (const func of r2.vm.mod.functions) {
-		for (const ct of func.classTypes) {
-			if (ct.name == "B") b = ct;
-			if (ct.name == "C") c = ct;
-		}
-	}
+	const b = moduleClassNamed(r2.vm.mod, "B");
+	const c = moduleClassNamed(r2.vm.mod, "C");
 	assert b != null && c != null;
 	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1];
 }
@@ -1464,8 +1464,7 @@ test "orc: dead objects in loop are reclaimed (free-list grows)" {
 	const vm = evalVM("function mk(): { x: number } { return { x: 1 }; } let i = 0; let s = 0; while (i < 40) { const o = mk(); s = s + o.x; i = i + 1; } return s;");
 	assert vm.error == "", vm.error;
 	assert unboxFloat(vm.exitValue) == 40;
-	// arena would grow objectHeap ~40 with empty free-list; orc recycles dead objects
-	assert vm.objectHeap.freeList.length > 0;
+	assert heapObjectCellHandles(vm.arrayHeap).length == 0;
 }
 
 test "orc: heap stays bounded under long alloc loop" {
@@ -1473,7 +1472,7 @@ test "orc: heap stays bounded under long alloc loop" {
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 500;
 	// arena would grow objectHeap to ~500; orc recycles dead objects → bounded
-	assert vm.objectHeap.objects.length < 50;
+	assert vm.arrayHeap.mem.carved < 50, `${vm.arrayHeap.mem.carved}`;
 }
 
 test "orc: reference cycles are collected (bounded heap)" {
@@ -1483,7 +1482,7 @@ test "orc: reference cycles are collected (bounded heap)" {
 	const vm = evalVM(src);
 	assert vm.error == "", vm.error;
 	// without cycle collection objectHeap would hold ~4000 leaked objects
-	assert vm.objectHeap.objects.length < 1000;
+	assert vm.arrayHeap.mem.carved < 1000, `${vm.arrayHeap.mem.carved}`;
 }
 
 test "orc: shared ref survives (stored in array)" {
@@ -1512,10 +1511,9 @@ test "untag: an object holds its scalar fields as raw words, a reference as its 
 }
 
 function classNamed(vm: RaiserVM, name: string): RaiserClassType {
-	for (const obj of vm.objectHeap.objects) {
-		if (obj.classType.name == name) return obj.classType;
-	}
-	throw new Error(`internal: no object of class ${name}`);
+	const t = moduleClassNamed(vm.mod, name);
+	if (t == null) throw new Error(`internal: no class ${name} in the module`);
+	return t;
 }
 
 test "template: an object of word fields starts from the class's zero slots and word mask" {
@@ -1551,7 +1549,7 @@ test "template: an object reused from the free list holds no field of its last l
 		+ " let total = 0; for (let i = 0; i < 50; i++) total += churn(i); console.log(total);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "0\n", vm.output;
-	assert vm.objectHeap.objects.length < 10, `${vm.objectHeap.objects.length}`;
+	assert vm.arrayHeap.mem.carved < 10, `${vm.arrayHeap.mem.carved}`;
 }
 
 test "untag: a typed slot opcode reads a slot of another class by name" {
@@ -1606,8 +1604,8 @@ test "orc: a cycle through a reference field and one through a union field are c
 		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
-	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
-	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.mem.carved < 600, `${vm.arrayHeap.mem.carved}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 }
 
 test "orc: a ring through one of two array fields frees each array once" {
@@ -1617,7 +1615,7 @@ test "orc: a ring through one of two array fields frees each array once" {
 		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
-	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
 }
 
@@ -1627,7 +1625,7 @@ test "orc: a ring through three plain array fields frees each array once" {
 		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
-	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
 }
 
@@ -1692,8 +1690,8 @@ test "orc: a cycle through a reference array and one through a union array are c
 		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok 12\n", vm.output;
-	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
-	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.mem.carved < 600, `${vm.arrayHeap.mem.carved}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 	let live = 0;
 	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
 		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
