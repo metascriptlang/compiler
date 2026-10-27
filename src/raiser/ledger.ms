@@ -5,7 +5,7 @@
 
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
-	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
+	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
 	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
 	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
 } from "./value";
@@ -16,7 +16,7 @@ interface LedgerTally {
 	strings: HashMap<int64, int32>;
 	seqs: HashMap<int64, int32>;
 	objects: int32[];
-	boxes: int32[];
+	boxes: HashMap<int64, int32>;
 }
 
 function zeros(count: int32): int32[] {
@@ -32,7 +32,7 @@ function tallyRef(tally: LedgerTally, v: RaiserValue): void {
 		RaiserHeapKind.String => { const held = tally.strings.get(v.intVal); tally.strings.set(v.intVal, (held != null ? held : 0) + 1); },
 		RaiserHeapKind.Seq => { const held = tally.seqs.get(v.intVal); tally.seqs.set(v.intVal, (held != null ? held : 0) + 1); },
 		RaiserHeapKind.Object => { tally.objects[index] += 1; },
-		RaiserHeapKind.Box => { tally.boxes[index] += 1; },
+		RaiserHeapKind.Box => { const held = tally.boxes.get(v.intVal); tally.boxes.set(v.intVal, (held != null ? held : 0) + 1); },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 		_ => { throw new Error(`internal: handle ${v.intVal} names no heap kind`); },
 	}
@@ -50,10 +50,10 @@ function freeFlags(count: int32, freeList: int64[]): boolean[] {
 export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string): string {
 	const tally: LedgerTally = {
 		strings: new HashMap<int64, int32>(), seqs: new HashMap<int64, int32>(),
-		objects: zeros(obj.objects.length), boxes: zeros(arr.boxes.items.length),
+		objects: zeros(obj.objects.length), boxes: new HashMap<int64, int32>(),
 	};
 	const freeObjects = freeFlags(obj.objects.length, obj.freeList);
-	const freeBoxes = freeFlags(arr.boxes.items.length, arr.boxes.freeList);
+	const boxHandles = heapBoxHandles(arr);
 	const stringBytes = stringBytesHandles(arr);
 	for (const root of roots) {
 		if (root.kind == RaiserValueKind.Array && stringBytes.includes(root.intVal)) continue;
@@ -83,9 +83,7 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		const count = objectFieldCount(obj.objects[i]);
 		for (let f = 0; f < count; f += 1) tallyRef(tally, fieldValueAt(obj.objects[i], f));
 	}
-	for (let i = 0; i < arr.boxes.items.length; i += 1) {
-		if (!freeBoxes[i]) tallyRef(tally, arr.boxes.items[i].value);
-	}
+	for (const handle of boxHandles) tallyRef(tally, heapBoxValue(arr, handle));
 	let leakedStrings = 0;
 	let leakedArrays = 0;
 	let leakedObjects = 0;
@@ -117,10 +115,12 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		if (obj.objects[i].rc < tally.objects[i]) return `internal: object ${i} counts ${obj.objects[i].rc} holders but ${tally.objects[i]} hold it at ${where} end`;
 		if (obj.objects[i].rc > tally.objects[i]) leakedObjects += 1;
 	}
-	for (let i = 0; i < tally.boxes.length; i += 1) {
-		if (freeBoxes[i]) continue;
-		if (arr.boxes.items[i].rc < tally.boxes[i]) return `internal: box ${i} counts ${arr.boxes.items[i].rc} holders but ${tally.boxes[i]} hold it at ${where} end`;
-		if (arr.boxes.items[i].rc > tally.boxes[i]) leakedBoxes += 1;
+	for (const handle of boxHandles) {
+		const held = tally.boxes.get(handle);
+		const holders = held != null ? held : 0;
+		const counted = heapBoxRc(handle);
+		if (counted < holders) return `internal: box ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
+		if (counted > holders) leakedBoxes += 1;
 	}
 	if (leakedStrings > 0) return `internal: ${leakedStrings} string items live after ${where} end`;
 	if (leakedArrays > 0) return `internal: ${leakedArrays} array items live after ${where} end`;

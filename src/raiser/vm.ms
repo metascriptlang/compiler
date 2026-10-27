@@ -8,7 +8,7 @@ import {
 	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot
 } from "./bytecode";
 import {
-	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
+	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
@@ -411,8 +411,10 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 // --- Box shells: the shell around a value in a register belongs to the VM, so it is held when a register or slot
 // takes it and released when it is overwritten or its frame exits; every other count is the bytecode's own ---
 
+const FIRST_CELL_ADDRESS: int64 = 4096;
+
 function isShell(h: int64): boolean {
-	return handleTag(h) == (RaiserHeapKind.Box as int64);
+	return handleTag(h) == (RaiserHeapKind.Box as int64) && h >= FIRST_CELL_ADDRESS;
 }
 
 function holdShell(vm: RaiserVM, h: int64): void {
@@ -421,22 +423,20 @@ function holdShell(vm: RaiserVM, h: int64): void {
 
 function releaseShell(vm: RaiserVM, h: int64): void {
 	if (h == 0 || !isShell(h)) return;
-	const data = vm.arrayHeap.boxes.items[handleIndex(h)];
-	if (data.rc <= 1) data.value = raiserNil();
+	if (heapBoxRc(h) <= 1) heapBoxSetValue(h, raiserNil());
 	rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
 function innerHandle(vm: RaiserVM, h: int64): int64 {
 	if (h == 0 || !isShell(h)) return h;
-	const inner = vm.arrayHeap.boxes.items[handleIndex(h)].value;
+	const inner = heapBoxValue(vm.arrayHeap, h);
 	return inner.kind == RaiserValueKind.String || inner.kind == RaiserValueKind.Array || inner.kind == RaiserValueKind.Object ? inner.intVal : 0;
 }
 
 function unshell(vm: RaiserVM, abs: int64): void {
 	const h = vm.regs.slots[abs];
 	if (h == 0 || !isShell(h)) return;
-	const data = vm.arrayHeap.boxes.items[handleIndex(h)];
-	if (data.rc <= 1) data.value = raiserNil();
+	if (heapBoxRc(h) <= 1) heapBoxSetValue(h, raiserNil());
 }
 
 function vmIncref(vm: RaiserVM, val: RaiserValue): void {
@@ -593,7 +593,7 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs as int64, 0); return; }
 		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs as int64, val.intVal); return; }
 		const box = heapAllocBox(vm.arrayHeap, val);
-		vm.arrayHeap.boxes.items[handleIndex(box)].rc = 0;
+		heapBoxSetRc(box, 0);
 		writeRef(vm, abs as int64, box);
 		return;
 	}
@@ -884,7 +884,7 @@ function thenWriteArg(t: RaiserThen, regs: RaiserRegFile, tag: int32, val: Raise
 			return;
 		}
 		const box = heapAllocBox(t.arrayHeap, val);
-		t.arrayHeap.boxes.items[handleIndex(box)].rc = 0;
+		heapBoxSetRc(box, 0);
 		rcIncrefHandle(t.arrayHeap, t.objectHeap, box);
 		t.shell = box;
 		regs.slots[at] = box;
@@ -943,8 +943,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 function thenRelease(t: RaiserThen): void {
 	rcDecref(t.arrayHeap, t.objectHeap, t.arg);
 	if (t.shell != 0) {
-		const data = t.arrayHeap.boxes.items[handleIndex(t.shell)];
-		if (data.rc <= 1) data.value = raiserNil();
+		if (heapBoxRc(t.shell) <= 1) heapBoxSetValue(t.shell, raiserNil());
 		rcDecrefHandle(t.arrayHeap, t.objectHeap, t.shell);
 	}
 	rcDecref(t.arrayHeap, t.objectHeap, t.fulfilled);
@@ -4078,7 +4077,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 			}
 		},
 		RaiserHeapKind.Box => {
-			const held = vm.arrayHeap.boxes.items[index].value;
+			const held = heapBoxValue(vm.arrayHeap, handle);
 			if (held.kind >= RaiserValueKind.String) vmReleaseChild(vm, held.intVal, false);
 		},
 		RaiserHeapKind.String => {},
@@ -4151,7 +4150,7 @@ function vmFinishDestroy(vm: RaiserVM, depth: int32): void {
 // A user move hook took the contents of a struct cell its source register held alone: the cell is freed as it
 // stands, because the hook decided what became of the fields, as the zeroed source of a move does in the reference.
 function vmFreeMovedCell(vm: RaiserVM, moved: int64): void {
-	const sole = moved == 0 || !isShell(moved) || vm.arrayHeap.boxes.items[handleIndex(moved)].rc <= 1;
+	const sole = moved == 0 || !isShell(moved) || heapBoxRc(moved) <= 1;
 	const inner = innerHandle(vm, moved);
 	releaseShell(vm, moved);
 	if (!sole || inner == 0 || !rcDecIsLast(vm.arrayHeap, vm.objectHeap, inner)) return;
@@ -8822,7 +8821,7 @@ test "placed: a Dyn register overwritten again and again frees the box each over
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 5, `${vm.exitValue.intVal}`;
-	assert heapBoxLive(vm.arrayHeap) == 0 && vm.arrayHeap.boxes.items.length <= 3, `${heapBoxLive(vm.arrayHeap)} ${vm.arrayHeap.boxes.items.length}`;
+	assert heapBoxLive(vm.arrayHeap) == 0, `${heapBoxLive(vm.arrayHeap)}`;
 }
 
 test "placed: overwriting a Dyn register frees the shell around a string and leaves the string to its own RcDec" {

@@ -130,9 +130,9 @@ test "a Dyn slot of a cell holds one box for the cell's lifetime, written in pla
 	assert heapBoxLive(arr) == 0;
 	for (let i = 0; i < 200; i += 1) heapObjectSetField(arr, obj, h, "d", raiserInt(i));
 	assert heapObjectGetField(arr, obj, h, "d").intVal == 199;
-	assert heapBoxLive(arr) == 1 && arr.boxes.items.length == 1;
+	assert heapBoxLive(arr) == 1;
 	heapObjectSetField(arr, obj, h, "d", heapAllocString(arr, "kept"));
-	assert heapBoxLive(arr) == 1 && arr.boxes.items.length == 1;
+	assert heapBoxLive(arr) == 1;
 	assert heapStringText(arr, heapObjectGetField(arr, obj, h, "d")) == "kept";
 	rcDecrefHandle(arr, obj, h);
 	assert heapBoxLive(arr) == 0 && liveCellBlocks(arr.mem).length == 0;
