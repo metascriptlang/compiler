@@ -22,6 +22,7 @@ import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } fr
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
+import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
@@ -204,6 +205,8 @@ let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
 let _buildStartedSeconds: number = 0;
 let _projectInputKey = "";
 let _projectInputHashes: string[] = [];
+let _queryRecordDeps: string[] = [];
+let _queryRecordDepSet: HashSet<string> = new HashSet<string>();
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -216,6 +219,8 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_forceRebuild = forceRebuild;
 	_nativeProjectDeps = [];
 	_nativeProjectDepSet = new HashSet<string>();
+	_queryRecordDeps = [];
+	_queryRecordDepSet = new HashSet<string>();
 	_dirNames = new HashMap<string, HashSet<string>>();
 	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
@@ -485,18 +490,20 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 		registerNativeProjectDep(path);
 		result = result + `:${path}=${hashFile(path)}`;
 	}
-	return result;
+	return `${result}:${trackedQueryPresence(nativeDepFile(srcPath, compileCmd))}`;
 }
 
-export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number): Result<string, string> {
+export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number, argDirs: string[]): Result<string, string> {
 	const dependencies = nativeDependencyPaths(srcPath, compileCmd);
-	let settled = dependencies.length > 0;
+	const queries = recordQueries(nativeDepFile(srcPath, compileCmd), [srcPath], dependencies, argDirs, [dirname(srcPath)], startedSeconds);
+	let settled = dependencies.length > 0 && queries;
 	// cc read these before they are hashed here: one written since the compile started may
 	// not be what cc read (ccache's include-file-too-new rule), so it keeps the first name.
 	for (const path of dependencies) {
 		if (changedSinceBuild(path, startedSeconds)) settled = false;
 	}
-	const resolvedFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
+	const settledFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
+	const resolvedFp = presenceTrusted(settledFp) ? settledFp : `${settledFp}:${hashFile(oFile)}`;
 	if (resolvedFp == fp) {
 		writeCompileCache(oFile, fp);
 		return Result.ok(oFile);
@@ -513,11 +520,12 @@ export function publishNativeObject(srcPath: string, compileCmd: string, oFile: 
 
 // ===== Global Object Store =====
 
-const STORE_FORMAT = "store4";
+const STORE_FORMAT = "store5";
 
 struct StoreHit {
 	object: string;
 	deps: string[];
+	queries: QueryRecord;
 }
 
 let _ccIdentity = "";
@@ -686,6 +694,155 @@ function searchedDirs(argDirs: string[], includers: string[], deps: string[]): s
 	return searched;
 }
 
+const QUERY_RECORD_FORMAT = "queries1";
+const QUERY_ENTRY = "?";
+const HEADER_QUERY_UNBOUNDED = "header-query-unbounded";
+const HEADER_QUERY_UNRECORDED = "header-query-unrecorded";
+
+interface QueryRecord {
+	dirs: string[];
+	rels: string[];
+	paths: string[];
+	bounded: boolean;
+}
+
+const _queriesByHash = new HashMap<string, HeaderQueries>();
+
+function queriesIn(path: string): HeaderQueries {
+	const hash = hashFile(path);
+	const known = _queriesByHash.get(hash);
+	if (known != null) return known;
+	const found = headerQueries(try readFile(path) catch "");
+	_queriesByHash.set(hash, found);
+	return found;
+}
+
+function namedFromDir(name: string): boolean {
+	return name.startsWith("/") || name == "." || name == ".."
+		|| name.startsWith("./") || name.startsWith("../")
+		|| name.indexOf("/./") >= 0 || name.indexOf("/../") >= 0
+		|| name.endsWith("/.") || name.endsWith("/..");
+}
+
+function queryRecord(sources: string[], deps: string[], argDirs: string[], includers: string[]): QueryRecord {
+	const dirs = searchedDirs(argDirs, includers, deps);
+	const names: string[] = [];
+	let bounded = true;
+	const scanned: string[] = [];
+	for (const path of sources) scanned.push(path);
+	for (const path of deps) scanned.push(path);
+	for (const path of scanned) {
+		const queries = queriesIn(path);
+		if (queries.macroForm) bounded = false;
+		if (queries.quoteForm) {
+			const own = dirname(absoluteSlashed(path));
+			if (!dirs.includes(own)) dirs.push(own);
+		}
+		for (const name of queries.names) names.push(name);
+	}
+	const rels: string[] = [];
+	const paths: string[] = [];
+	const seen = new HashSet<string>();
+	for (const path of deps) {
+		for (const rel of headerRels(path, dirs)) {
+			if (seen.has(rel)) continue;
+			seen.add(rel);
+			rels.push(rel);
+		}
+	}
+	for (const name of names) {
+		if (seen.has(name)) continue;
+		seen.add(name);
+		if (!namedFromDir(name)) {
+			rels.push(name);
+		} else if (name.startsWith("/")) {
+			paths.push(normalize(name).replaceAll("\\", "/"));
+		} else {
+			for (const dir of dirs) paths.push(normalize(`${dir}/${name}`).replaceAll("\\", "/"));
+		}
+	}
+	return { dirs, rels, paths, bounded };
+}
+
+function presenceText(record: QueryRecord): string {
+	let text = presenceSignature(record.dirs, record.rels);
+	for (const path of record.paths) text = `${text}e\t${path}\t${exists(path) ? 1 : 0}\n`;
+	return text;
+}
+
+function newestCandidate(record: QueryRecord): number {
+	const tree = relTree(record.rels);
+	const folded = new HashSet<string>();
+	for (const rel of record.rels) folded.add(foldName(rel));
+	let newest: number = -1;
+	for (const dir of record.dirs) {
+		const found: string[] = [];
+		existingCandidates(dir, "", tree, folded, found);
+		for (const rel of found) newest = Math.max(newest, changedTime(`${dir}/${rel}`));
+	}
+	for (const path of record.paths) newest = Math.max(newest, changedTime(path));
+	return newest;
+}
+
+function writeQueryRecord(depFile: string, record: QueryRecord, settled: boolean): void {
+	let text = `${QUERY_RECORD_FORMAT}\n`;
+	if (!record.bounded) text = `${text}unbounded\n`;
+	if (!settled) text = `${text}unsettled\n`;
+	for (const dir of record.dirs) text = `${text}dir\t${dir}\n`;
+	for (const rel of record.rels) text = `${text}rel\t${rel}\n`;
+	for (const path of record.paths) text = `${text}path\t${path}\n`;
+	atomicWriteFile(`${depFile}.q`, text);
+}
+
+function recordQueries(depFile: string, sources: string[], deps: string[], argDirs: string[], includers: string[], startedSeconds: number): boolean {
+	const record = queryRecord(sources, deps, argDirs, includers);
+	const settled = record.bounded && newestCandidate(record) < Math.floor(startedSeconds);
+	writeQueryRecord(depFile, record, settled);
+	trackQueryRecord(depFile);
+	return settled;
+}
+
+function queryPresence(depFile: string): string {
+	const lines = (try readFile(`${depFile}.q`) catch "").split("\n");
+	if (lines[0] != QUERY_RECORD_FORMAT) return HEADER_QUERY_UNRECORDED;
+	const record: QueryRecord = { dirs: [], rels: [], paths: [], bounded: true };
+	for (let i = 1; i < lines.length; i++) {
+		const line = lines[i];
+		const tab = line.indexOf("\t", 0);
+		const kind = tab < 0 ? line : line.slice(0, tab);
+		const value = tab < 0 ? "" : line.slice(tab + 1, line.length);
+		match (kind) {
+			"" => {},
+			"unbounded" => { return HEADER_QUERY_UNBOUNDED; },
+			"dir" => { record.dirs.push(value); },
+			"rel" => { record.rels.push(value); },
+			"path" => { record.paths.push(value); },
+			_ => { return HEADER_QUERY_UNRECORDED; },
+		}
+	}
+	return hashContent(presenceText(record));
+}
+
+function trackQueryRecord(depFile: string): void {
+	if (_queryRecordDepSet.has(depFile)) return;
+	_queryRecordDepSet.add(depFile);
+	_queryRecordDeps.push(depFile);
+}
+
+function trackedQueryPresence(depFile: string): string {
+	trackQueryRecord(depFile);
+	return queryPresence(depFile);
+}
+
+function presenceTrusted(fp: string): boolean {
+	return fp.indexOf(HEADER_QUERY_UNBOUNDED, 0) < 0 && fp.indexOf(HEADER_QUERY_UNRECORDED, 0) < 0;
+}
+
+struct StoreManifest {
+	deps: string[];
+	queries: QueryRecord;
+}
+
 function storeManifest(dependencyFile: string, source: string, argDirs: string[], includers: string[]): string {
 	const own = absoluteSlashed(source);
 	const deps: string[] = [];
@@ -696,44 +853,48 @@ function storeManifest(dependencyFile: string, source: string, argDirs: string[]
 		seen.add(path);
 		deps.push(path);
 	}
+	const record = queryRecord([own], deps, argDirs, includers);
+	if (!record.bounded || newestCandidate(record) >= Math.floor(_buildStartedSeconds)) return "";
 	const searched = searchedDirs(argDirs, includers, deps);
 	let text = `${STORE_FORMAT}\n`;
-	const rels: string[] = [];
-	const relSeen = new HashSet<string>();
-	for (const path of deps) {
-		for (const rel of headerRels(path, searched)) {
-			if (relSeen.has(rel)) continue;
-			relSeen.add(rel);
-			rels.push(rel);
-			text = `${text}r\t${rel}\n`;
-		}
+	for (const rel of record.rels) text = `${text}r\t${rel}\n`;
+	for (const dir of record.dirs) {
+		if (!searched.includes(dir)) text = `${text}q\t${dir}\n`;
 	}
+	for (const path of record.paths) text = `${text}a\t${path}\n`;
 	for (const path of deps) {
 		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
-	return `${text}${presenceSignature(searched, rels)}`;
+	return `${text}${presenceText(record)}`;
 }
 
-function manifestDeps(text: string, argDirs: string[], includers: string[]): string[] | null {
+function readStoreManifest(text: string, argDirs: string[], includers: string[]): StoreManifest | null {
 	const lines = text.split("\n");
 	if (lines[0] != STORE_FORMAT) return null;
 	const rels: string[] = [];
+	const queried: string[] = [];
+	const paths: string[] = [];
 	const deps: string[] = [];
 	let recorded = "";
 	for (let i = 1; i < lines.length; i++) {
 		if (lines[i] == "") continue;
 		const fields = lines[i].split("\t");
 		const width = match (fields[0]) {
-			"r" => 2,
-			"d" => 3,
-			"s" => 3,
+			"r" | "q" | "a" => 2,
+			"d" | "s" | "e" => 3,
 			_ => 0,
 		};
 		if (fields.length != width) return null;
 		match (fields[0]) {
 			"r" => {
 				rels.push(fields[1]);
+			},
+			"q" => {
+				queried.push(fields[1]);
+			},
+			"a" => {
+				paths.push(fields[1]);
 			},
 			"d" => {
 				if (hashFile(fields[1]) != fields[2]) return null;
@@ -744,8 +905,13 @@ function manifestDeps(text: string, argDirs: string[], includers: string[]): str
 			},
 		}
 	}
-	if (presenceSignature(searchedDirs(argDirs, includers, deps), rels) != recorded) return null;
-	return deps;
+	const dirs = searchedDirs(argDirs, includers, deps);
+	for (const dir of queried) {
+		if (!dirs.includes(dir)) dirs.push(dir);
+	}
+	const queries: QueryRecord = { dirs, rels, paths, bounded: true };
+	if (presenceText(queries) != recorded) return null;
+	return { deps, queries };
 }
 
 function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit | null {
@@ -758,10 +924,10 @@ function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit
 		const object = `${dir}/${entry.slice(0, entry.length - 2)}.o`;
 		if (!exists(object)) continue;
 		const text = try readFile(`${dir}/${entry}`) catch "";
-		const deps = manifestDeps(text, argDirs, includers);
-		if (deps != null) {
+		const manifest = readStoreManifest(text, argDirs, includers);
+		if (manifest != null) {
 			markUsed(`${dir}/${entry}`, nowSeconds());
-			return { object, deps };
+			return { object, deps: manifest.deps, queries: manifest.queries };
 		}
 	}
 	return null;
@@ -793,6 +959,7 @@ export function restoreNativeObject(srcPath: string, compileCmd: string, key: st
 	const deps: string[] = [srcPath];
 	for (const dep of hit.deps) deps.push(dep);
 	writeDependencyFile(nativeDepFile(srcPath, compileCmd), deps);
+	writeQueryRecord(nativeDepFile(srcPath, compileCmd), hit.queries, true);
 	const fp = computeFingerprint(srcPath, compileCmd);
 	const oFile = stableOFileFp(srcPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
@@ -804,6 +971,7 @@ export function restoreModuleObject(modPath: string, baseFp: string, key: string
 	const hit = storeHit(key, argDirs, []);
 	if (hit == null) return "";
 	writeDependencyFile(moduleDepFile(modPath, baseFp), hit.deps);
+	writeQueryRecord(moduleDepFile(modPath, baseFp), hit.queries, true);
 	const fp = moduleObjectFp(modPath, baseFp);
 	const oFile = stableOFileFp(modPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
@@ -856,7 +1024,7 @@ function tryRemoveFile(path: string): void {
 // object is published atomically over the stale one by the compile path.
 export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
-	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
+	if (!_forceRebuild && presenceTrusted(fp) && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
 		if (stored == fp) return true;
 	}
@@ -877,7 +1045,7 @@ export function writeCompileCache(oFile: string, fp: string): void {
 // compiler binary hash.
 //
 
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 
 function projectCacheFile(outputFile: string, command: string): string {
 	const key = objectListKey([cwd(), join(cwd(), outputFile), command]);
@@ -1024,6 +1192,10 @@ function readProjectRecord(cacheFile: string, outputFile: string, command: strin
 
 function storedDepCurrent(entry: string): boolean {
 	const path = storedDepPath(entry);
+	if (path.startsWith(QUERY_ENTRY)) {
+		const presence = queryPresence(path.slice(QUERY_ENTRY.length, path.length));
+		return presenceTrusted(presence) && entry == `${path}=${presence}`;
+	}
 	return path != "" && entry == `${path}=${hashFile(path)}`;
 }
 
@@ -1116,6 +1288,11 @@ export function writeProjectCache(
 		if (_buildStartedSeconds > 0 && changedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
+	}
+	for (const depFile of _queryRecordDeps) {
+		const presence = queryPresence(depFile);
+		if (!presenceTrusted(presence)) return dropStaleRecord(record);
+		dependencies = dependencies + `${PRE_DEP}${QUERY_ENTRY}${depFile}=${presence}\n`;
 	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${join(cwd(), outputFile)}\n`;
@@ -1275,11 +1452,13 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 		registerNativeProjectDep(path);
 		result = `${result}:${path}=${hashFile(path)}`;
 	}
-	return result;
+	return `${result}:${trackedQueryPresence(moduleDepFile(modPath, baseFp))}`;
 }
 
-export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string): string {
-	for (const path of moduleHeaderPaths(modPath, baseFp)) {
+export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string, argDirs: string[]): string {
+	const headers = moduleHeaderPaths(modPath, baseFp);
+	if (!recordQueries(moduleDepFile(modPath, baseFp), [stableCFileFp(modPath, baseFp)], headers, argDirs, [], _buildStartedSeconds)) return oFile;
+	for (const path of headers) {
 		if (changedSinceBuild(path, _buildStartedSeconds)) return oFile;
 	}
 	const resolvedFp = moduleObjectFp(modPath, baseFp);
@@ -1305,7 +1484,7 @@ export function publishModuleObject(modPath: string, baseFp: string, oFile: stri
 export function isCCodeCached(modPath: string, fp: string): boolean {
 	const oFile = stableOFileFp(modPath, fp);
 	const fpFile = oFile + ".cfp";
-	if (_forceRebuild) return false;
+	if (_forceRebuild || !presenceTrusted(fp)) return false;
 	if (!exists(oFile) || !exists(fpFile)) return false;
 	const storedFp = try readFile(fpFile) catch "";
 	if (storedFp == fp) return true;

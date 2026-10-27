@@ -1357,7 +1357,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
-		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
+		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds, dirs);
 		if (published.ok) {
 			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles[j.slot] = published.value;
@@ -3881,10 +3881,10 @@ resetLiftedOps();
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile;
+			const dirs = objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
+			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp, dirs) : cj.oFile;
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
 			if (cj.storeKey != "" && !driverPlansOn()) {
-				const dirs = objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
 				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
 			}
 			oSlots[cj.slot] = [published];
@@ -4268,7 +4268,7 @@ resetLiftedOps();
 		const code = cCodes[cji];
 		if (code == 0) {
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
-			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp, objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags)) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printError(`compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
