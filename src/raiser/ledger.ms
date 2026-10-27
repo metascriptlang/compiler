@@ -6,7 +6,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
-	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, stringHandleRc,
+	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
 	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
@@ -79,8 +79,13 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	}
 	const cellHandles = heapObjectCellHandles(arr);
 	for (const handle of cellHandles) {
-		const count = objectCellClass(handle).fields.length;
-		for (let f = 0; f < count; f += 1) tallyRef(tally, objectCellFieldValue(handle, f));
+		const kinds = objectCellClass(handle).kinds;
+		for (let f = 0; f < kinds.length; f += 1) {
+			if (kinds[f] == RaiserRegClass.Dyn) {
+				const box = objectCellRawSlot(handle, f);
+				if (box != 0) tallyRef(tally, { kind: RaiserValueKind.Box, intVal: box, floatVal: 0.0 });
+			} else tallyRef(tally, objectCellFieldValue(arr, handle, f));
+		}
 	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
 		if (freeObjects[i]) continue;

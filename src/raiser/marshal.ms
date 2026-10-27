@@ -143,7 +143,7 @@ export function hostObject(names: string[], values: RaiserHostValue[]): RaiserHo
 	for (let i = 0; i < names.length; i += 1) {
 		const v = values[i];
 		const copied = crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
-		heapObjectSetField(objectHeap, handle, names[i], copied);
+		heapObjectSetField(arrayHeap, objectHeap, handle, names[i], copied);
 	}
 	return { root: raiserObject(handle), arrayHeap, objectHeap };
 }
@@ -168,7 +168,7 @@ export function field(this v: RaiserHostValue, name: string): RaiserHostValue {
 		const kind = v.root.kind.toString();
 		throw new Error(`field '${name}' of a value of kind ${kind}: only an object has fields`);
 	}
-	return part(v, heapObjectGetField(v.objectHeap, v.root.intVal, name));
+	return part(v, heapObjectGetField(v.arrayHeap, v.objectHeap, v.root.intVal, name));
 }
 
 export function length(this v: RaiserHostValue): int32 {
@@ -280,7 +280,7 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	const vmObjects = createStructHeap();
 	const placed = copyToVm(vmArrays, vmObjects, config);
 	assert vmObjects.objects[handleIndex(placed.intVal)].rc == 0;
-	const placedBinds = heapObjectGetField(vmObjects, placed.intVal, "binds");
+	const placedBinds = heapObjectGetField(vmArrays, vmObjects, placed.intVal, "binds");
 	assert vmArrays.arrays[handleIndex(placedBinds.intVal)].rc == 1;
 	assert vmObjects.objects[handleIndex(heapArrayGet(vmArrays, placedBinds.intVal, 1).intVal)].rc == 1;
 	const back = copyToHost(vmArrays, vmObjects, placed);

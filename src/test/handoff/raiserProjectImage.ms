@@ -117,7 +117,7 @@ test "raiserProject: cross-module function with enum" {
 test "raiserProject: entry module export default" {
 	const ctx = runProjectImage(["import { wrap } from \"./b\"; export default wrap(42);", "export interface Wrapped { value: int32; } export function wrap(x: int32): Wrapped { return { value: x }; }"]);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const val = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "value");
+	const val = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "value");
 	assert val.intVal == 42;
 }
 
