@@ -108,7 +108,7 @@ typedef struct msActor {
     _Atomic(bool) stopRequested;
     _Atomic(int32_t) stopReason;  /* written before the stopRequested acq_rel exchange */
     /* The actor's cycle roots: the running thread's while a visit holds processing
-     * (msRootsSwap), so its cells keep their root entries when it changes threads. */
+     * (msRootsEnterActor), so its cells keep their root entries when it changes threads. */
     msCellSeq roots;
     struct msActorJobs* jobs;  /* NULL until the actor first starts code that outlives a visit */
     struct msActor* ctorPrev;  /* the constructing thread's actor, restored when the constructor returns */
@@ -468,7 +468,7 @@ static inline void msActorCtorEnter(int64_t pid) {
             memory_order_acquire, memory_order_relaxed)) {
         expected = false;
     }
-    msRootsSwap(&a->roots);
+    msRootsEnterActor(&a->roots);
     a->ctorPrev = msCurrentActor;
     msActorEnter(a);
     msHazardClear(a);
@@ -478,7 +478,7 @@ static inline void msActorCtorLeave(int64_t pid) {
     msActor* a = msActorFromPid(pid);
     if (a == NULL) return;
     msCurrentActor = a->ctorPrev;
-    msRootsSwap(&a->roots);
+    msRootsLeaveActor(&a->roots);
     atomic_store_explicit(&a->processing, false, memory_order_release);
     msHazardClear(a);
 }
@@ -1080,7 +1080,7 @@ static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
     bool push = work && !atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst);
     int sid = a->schedulerID;
     msCurrentActor = prevActor;
-    msRootsSwap(&a->roots);
+    msRootsLeaveActor(&a->roots);
     atomic_store_explicit(&a->processing, false, memory_order_release);
     if (push && sid >= 0 && sid < msSchedulerCount) {
         msSchedRunPush(&msSchedulers[sid], a);
@@ -1123,7 +1123,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
             if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
-                msRootsSwap(&a->roots);
+                msRootsEnterActor(&a->roots);
                 int ran = a->jobs != NULL ? msActorRunJobs(a, a->jobs, maxBatch) : 0;
                 msActorVisitEnd(a, prevActor);
                 return ran;
@@ -1155,7 +1155,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         return 0;
     }
 
-    msRootsSwap(&a->roots);
+    msRootsEnterActor(&a->roots);
 
     /* Clear BLOCKED — we're actively processing */
     msActorClearFlag(a, MS_ACTOR_BLOCKED);
@@ -1346,7 +1346,7 @@ static inline void msActorDeferRetire(msActor* a) {
 /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
  * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
 static inline void msActorRetireState(msActor* a) {
-    msRootsSwap(&a->roots);
+    msRootsEnterActor(&a->roots);
     if (a->state != NULL) {
         const msTypeInfo* __st = msHeader(a->state)->type;
         MS_DESTROY_DISPATCH(__st, a->state);
@@ -1354,7 +1354,7 @@ static inline void msActorRetireState(msActor* a) {
         a->state = NULL;
     }
     msOrcCollect();
-    msRootsSwap(&a->roots);
+    msRootsLeaveActor(&a->roots);
     msRootsAdopt(&a->roots);
 }
 
@@ -1371,7 +1371,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     /* Guard: prevent double-destroy (re-entrancy from link cascade or supervisor) */
     bool wasAlive = atomic_exchange_explicit(&a->alive, false, memory_order_acq_rel);
     if (!wasAlive) return;
-    msRootsSwap(&a->roots);
+    msRootsEnterActor(&a->roots);
     /* I19: release the pid slot FIRST — no new lookup reaches a dying shell.
      * Sends to this pid from onTerminate onward are cleanly dropped. */
     msPidRelease(a);
@@ -1452,7 +1452,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     if (atomic_load_explicit(&a->stopRequested, memory_order_relaxed)) {
         atomic_fetch_sub(&msActorsStopPending, 1);
     }
-    msRootsSwap(&a->roots);
+    msRootsLeaveActor(&a->roots);
     if (a->state != NULL && msHazardScan(a)) {
         msActorDeferRetire(a);
         return;

@@ -478,8 +478,11 @@ void msCellSeqInit(msCellSeq* s) {
 	s->cap = 0;
 }
 
+static _Thread_local int32_t msActorRootsDepth = 0;
+
 void msCellSeqGrow(msCellSeq* s) {
-	int32_t newCap = s->cap <= 0 ? 16 : s->cap * 2;
+	int32_t start = s == &msRoots && msActorRootsDepth > 0 ? 16 : 1024;
+	int32_t newCap = s->cap <= 0 ? start : s->cap / 2 + s->cap;
 	MS_DRC_STAT_ADD(MS_DS_CELLSEQ_GROW, 1);
 	s->data = (msCell*)msRealloc(s->data, (size_t)s->cap * sizeof(msCell), (size_t)newCap * sizeof(msCell));
 	s->cap = newCap;
@@ -561,10 +564,24 @@ void msUnregisterCycle(void* p) {
 	h->rootIdx = -1;
 }
 
-void msRootsSwap(msCellSeq* other) {
+static void msRootsSwap(msCellSeq* other) {
 	msCellSeq running = msRoots;
 	msRoots = *other;
 	*other = running;
+}
+
+void msRootsEnterActor(msCellSeq* actorRoots) {
+	msRootsSwap(actorRoots);
+	msActorRootsDepth++;
+}
+
+void msRootsLeaveActor(msCellSeq* actorRoots) {
+	if (msActorRootsDepth <= 0) {
+		fprintf(stderr, "msc: internal: msRootsLeaveActor without a matching msRootsEnterActor\n");
+		abort();
+	}
+	msActorRootsDepth--;
+	msRootsSwap(actorRoots);
 }
 
 void msRootsAdopt(msCellSeq* orphan) {
