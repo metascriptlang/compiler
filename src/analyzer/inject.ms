@@ -421,28 +421,36 @@ function readsAnyOf(n: Node, writes: Symbol[]): boolean {
 	return found;
 }
 
+function captureLocationParts(n: Node, captured: Node[], writes: Symbol[], dctx: DrcContext): void {
+	match (n.kind) {
+		NodeKind.MemberExpr => {
+			const md = n.data as MemberExprData;
+			md.object = captureOperand(md.object, captured, writes, dctx);
+		},
+		NodeKind.ArrayAccess => {
+			const ad = n.data as ArrayAccessData;
+			ad.array = captureOperand(ad.array, captured, writes, dctx);
+			ad.index = captureOperand(ad.index, captured, writes, dctx);
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const hd = n.data as HiddenDerefData;
+			hd.expr = captureOperand(hd.expr, captured, writes, dctx);
+		},
+		_ => {},
+	};
+}
+
 function captureOperand(n: Node, captured: Node[], writes: Symbol[], dctx: DrcContext): Node {
 	if (n == null || isFunctionNode(n)) return n;
 	if (!hasEffect(n) && !readsAnyOf(n, writes)) return n;
+	if (n.kind == NodeKind.HiddenAddr) {
+		captureLocationParts((n.data as HiddenDerefData).expr, captured, writes, dctx);
+		return n;
+	}
 	const t = n.nodeType;
 	const rcInfo = t != null ? classifyRc(t, dctx) : noRcInfo();
 	if (rcInfo.needsCleanup && !isFreshExpr(n.kind)) {
-		match (n.kind) {
-			NodeKind.MemberExpr => {
-				const md = n.data as MemberExprData;
-				md.object = captureOperand(md.object, captured, writes, dctx);
-			},
-			NodeKind.ArrayAccess => {
-				const ad = n.data as ArrayAccessData;
-				ad.array = captureOperand(ad.array, captured, writes, dctx);
-				ad.index = captureOperand(ad.index, captured, writes, dctx);
-			},
-			NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
-				const hd = n.data as HiddenDerefData;
-				hd.expr = captureOperand(hd.expr, captured, writes, dctx);
-			},
-			_ => {},
-		};
+		captureLocationParts(n, captured, writes, dctx);
 		return n;
 	}
 	if (t == null) return n;
