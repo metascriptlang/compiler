@@ -225,6 +225,7 @@ export interface RaiserSched {
 	thenRuns: RaiserThen[];
 	nextTimerId: number;
 	readyOrder: number[];
+	idleWait: boolean;
 	ticked: number[];
 }
 
@@ -358,7 +359,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const timerItems: RaiserTimer[] = [];
 	const timers: RaiserTimers = { items: timerItems };
 	const thenRuns: RaiserThen[] = [];
-	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, nextTimerId: 1, readyOrder: [] as number[], ticked: [] as number[] };
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, nextTimerId: 1, readyOrder: [] as number[], idleWait: false, ticked: [] as number[] };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
 }
@@ -716,7 +717,7 @@ function suspendRun(vm: RaiserVM): void {
 	const strandItems: RaiserStrand[] = [];
 	const futureItems: RaiserFuture[] = [];
 	const timerItems: RaiserTimer[] = [];
-	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[], nextTimerId: 1, readyOrder: [] as number[], ticked: [] as number[] };
+	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[], nextTimerId: 1, readyOrder: [] as number[], idleWait: false, ticked: [] as number[] };
 	vm.safePoints = [];
 	vm.currentException = raiserNil();
 }
@@ -1756,6 +1757,46 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 // §6.2 needs three await lowerings on C because its async frames are
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
+// Read out of the future's own storage and into the reader's heap. Non-destructive: the affine rules
+// (R1/R2) make a second await a compile error, so there is no read-once slot to clear here.
+function readSettledFuture(vm: RaiserVM, ia: int32, f: RaiserFuture): void {
+	if (f.failed) {
+		raiseFromFuture(vm, f);
+		return;
+	}
+	const copy = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
+	rcIncref(vm.arrayHeap, vm.objectHeap, copy);
+	setRegConform(vm, ia, copy);
+}
+
+function vmHandleFutureRead(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	const source = getDyn(vm, func.blocks[ic + 3] as int32);
+	if (source.kind != RaiserValueKind.Future) {
+		if (ib == 2) setRegBool(vm, ia, true);
+		else if (ib == 0) setRegConform(vm, ia, source);
+		return;
+	}
+	if (!futureHandleValid(vm, source.intVal)) {
+		vmError(vm, `future handle out of bounds: ${source.intVal}`);
+		return;
+	}
+	const f = vm.sched.futures.items[handleIndex(source.intVal)];
+	if (ib == 2) {
+		setRegBool(vm, ia, f.finished);
+		return;
+	}
+	if (!f.finished) {
+		vmError(vm, "internal: a settled future was read before it settled");
+		return;
+	}
+	if (ib == 1) {
+		if (f.failed) raiseFromFuture(vm, f);
+		return;
+	}
+	readSettledFuture(vm, ia, f);
+}
+
 // An await of a settled future resumes behind the callbacks already queued (msCallSoon), so it yields once
 // and runs again; true means this run yielded.
 function awaitPaysTick(vm: RaiserVM): boolean {
@@ -1784,16 +1825,7 @@ function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const f = vm.sched.futures.items[handleIndex(v.intVal)];
 	if (f.finished) {
 		if (awaitPaysTick(vm)) return;
-		if (f.failed) {
-			raiseFromFuture(vm, f);
-			return;
-		}
-		// Read out of the future's own storage and into the reader's heap.
-		// Non-destructive: the affine rules (R1/R2) make a second await a
-		// compile error, so there is no read-once slot to clear here.
-		const copy = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
-		rcIncref(vm.arrayHeap, vm.objectHeap, copy);
-		setRegConform(vm, ia, copy);
+		readSettledFuture(vm, ia, f);
 		return;
 	}
 	vm.ip = vm.ip - 1;
@@ -2230,6 +2262,12 @@ function execStrandLoop(vm: RaiserVM): void {
 			next = schedulePick(vm);
 		}
 		if (vm.halted) return;
+		if (next < 0 && vm.sched.idleWait) {
+			vm.sched.idleWait = false;
+			vm.sched.strands.items[0].status = RaiserStrandStatus.Ready;
+			vm.sched.readyOrder.push(0);
+			next = schedulePick(vm);
+		}
 		if (next < 0) {
 			// Nothing runnable — the event loop is empty and the program is
 			// over. A strand still parked on a future nobody can complete ends
@@ -3311,7 +3349,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.TimerCtl: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.TimerCtl: case RaiserOpcode.FutureRead: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3588,7 +3626,15 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 	match (op) {
 		RaiserOpcode.Halt => {
 			const haltVal = getDyn(vm, ia);
-			if (ib != 1 && strandFinish(vm, haltVal)) {
+			if (ib == 2) {
+				if (vm.current != 0) throw new Error("internal: the drain halt runs on the main strand");
+				if (vmHasRunnable(vm) || vm.sched.timers.items.length > 0) {
+					vm.exitValue = haltVal;
+					vm.sched.strands.items[0].status = RaiserStrandStatus.Blocked;
+					vm.sched.idleWait = true;
+					vm.yielded = true;
+				}
+			} else if (ib != 1 && strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
 				finishProgram(vm, haltVal, ib == 1);
@@ -3698,6 +3744,10 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.FutureSettle => {
 			futureComplete(vm, getDyn(vm, ia).intVal, getDyn(vm, ib));
+			if (ic == 1) {
+				const consumed = getDyn(vm, ib);
+				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
+			}
 		},
 		RaiserOpcode.FutureFail => {
 			futureFail(vm, getDyn(vm, ia).intVal, vmExceptionText(vm, getDyn(vm, ib)), getDyn(vm, ib));
@@ -3710,6 +3760,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.TimerCtl => {
 			vmHandleTimerCtl(vm, ia, ib, ic);
+		},
+		RaiserOpcode.FutureRead => {
+			vmHandleFutureRead(vm, ia, ib, ic);
 		},
 		RaiserOpcode.Try => {
 			vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));
