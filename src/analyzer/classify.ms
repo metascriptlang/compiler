@@ -398,7 +398,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				const an = anonUnionCName(t);
 				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
-			if (ctx.raiserBackend && t.typeFlags.has(TypeFlag.ValueUnion)) return structCellInfo();
+			if (ctx.raiserBackend && (t.typeFlags.has(TypeFlag.ValueUnion) || storesUnionTag(t))) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {
