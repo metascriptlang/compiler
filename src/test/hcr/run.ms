@@ -1851,6 +1851,25 @@ function coreOp(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreStd(): void {
+	const tag = "hcrCoreStd";
+	const dir = freshDir(`${TMP}/coreStd`);
+	for (const sub of ["app", "lib", "lib/deep"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "lib/lib.ms", "lib/deep/deep.ms"]) {
+		copy(`${FIXTURES}/coreStd/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-STD ")) seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != "HCR-STD 12 -1 -3 4") {
+		console.log(both(ran));
+		failWith(tag, "a module outside the project calling standard-library functions outside the core group did not link");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function coreGenericInit(): void {
 	const tag = "hcrCoreGenericInit";
 	const dir = freshDir(`${TMP}/coreGenericInit`);
@@ -2673,6 +2692,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreStd", run: coreStd },
 	{ name: "hcrCoreGenericInit", run: coreGenericInit },
 	{ name: "hcrMacroHelper", run: macroHelper },
 	{ name: "hcrOverloadCall", run: overloadCall },
