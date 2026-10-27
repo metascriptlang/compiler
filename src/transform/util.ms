@@ -48,33 +48,25 @@ export function isCSwitchableType(t: Type | null): boolean {
 // branch on layout anywhere else. A closure is a two-word value, so it is boxed,
 // and so is a union C holds as a tagged struct: neither a nullable reference nor
 // a union of literals, which C holds as their base type.
-let _valueFutures = false;
-
 // The Raiser holds every value in its future as the value itself: no inline slot, no box, no owner.
-export function setValueFutures(on: boolean): boolean {
-	const prior = _valueFutures;
-	_valueFutures = on;
-	return prior;
+export function inlineInFuture(t: Type | null, raiser: boolean): boolean {
+	return !raiser && t != null && literalBase(t).kind == TypeKind.String;
 }
 
-export function inlineInFuture(t: Type | null): boolean {
-	return !_valueFutures && t != null && literalBase(t).kind == TypeKind.String;
-}
-
-export function boxedInFuture(t: Type | null): boolean {
-	if (t == null || _valueFutures) return false;
+export function boxedInFuture(t: Type | null, raiser: boolean): boolean {
+	if (t == null || raiser) return false;
 	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String)
 		|| (t.kind == TypeKind.Union && unwrapRefNullUnion(t) == null && literalUnionBase(t) == null);
 }
 
-export function refInFuture(t: Type | null): boolean {
-	return !_valueFutures && t != null && t.kind == TypeKind.Ref;
+export function refInFuture(t: Type | null, raiser: boolean): boolean {
+	return !raiser && t != null && t.kind == TypeKind.Ref;
 }
 
 // The future holds a value that has a destructor: the async writer makes it the
 // value's owner and every reader that may not be the last one copies it out.
-export function ownedInFuture(t: Type | null): boolean {
-	return inlineInFuture(t) || boxedInFuture(t) || refInFuture(t);
+export function ownedInFuture(t: Type | null, raiser: boolean): boolean {
+	return inlineInFuture(t, raiser) || boxedInFuture(t, raiser) || refInFuture(t, raiser);
 }
 
 // This await is the only reader the future can have, so it may take the value
@@ -102,8 +94,8 @@ export function isActorCall(e: Node): boolean {
 // A read of an owning future that may not be its last: bind from the value's own
 // location (the slot, or the box it points at), so the binding copies through the
 // type's hook and the future keeps its value for the next reader.
-export function makeFutureCopyRead(fut: Node, t: Type, loc: SourceLocation): Node {
-	const at = makeCall(runtimeRef(boxedInFuture(t) ? "msFutureBoxAt" : "msFutureValueAt", loc), [fut], loc);
+export function makeFutureCopyRead(fut: Node, t: Type, raiser: boolean, loc: SourceLocation): Node {
+	const at = makeCall(runtimeRef(boxedInFuture(t, raiser) ? "msFutureBoxAt" : "msFutureValueAt", loc), [fut], loc);
 	at.nodeType = createPtr(voidType());
 	// Var<T> is T's address in C for every T, a handle's slot included.
 	const slot = makeHiddenDeref(makeHiddenStdConv(at, createVar(t), loc), loc);
@@ -138,10 +130,10 @@ export function makeValueShareFn(t: Type, ctx: TransformContext, loc: SourceLoca
 	const dstSym = mintSym(ctx, SymbolKind.Parameter, "dst", voidPtrType);
 	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
 	const stmts: Node[] = [];
-	if (ownedInFuture(t)) {
+	if (ownedInFuture(t, ctx.raiserBackend)) {
 		const slot = makeHiddenDeref(makeHiddenStdConv(makeTypedIdentResolved(dstSym, voidPtrType, loc), createVar(t), loc), loc);
 		slot.nodeType = t;
-		const copy = makeFutureCopyRead(makeTypedIdentResolved(futSym, voidPtrType, loc), t, loc);
+		const copy = makeFutureCopyRead(makeTypedIdentResolved(futSym, voidPtrType, loc), t, ctx.raiserBackend, loc);
 		stmts.push(makeExprStmt(makeAssign(slot, copy, loc), loc));
 	}
 	const fnNode = makeFnDecl(sym.name, [dstSym, futSym], ["Ptr<void>", "Ptr<void>"], makeBlock(stmts, loc), "", "void", loc);
@@ -168,7 +160,7 @@ export function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocat
 export function makeValueDropStmts(t: Type, futSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const voidPtrType = createPtr(voidType());
 	const stmts: Node[] = [];
-	if (boxedInFuture(t)) {
+	if (boxedInFuture(t, ctx.raiserBackend)) {
 		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
 		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
 		take.nodeType = voidPtrType;
@@ -180,7 +172,7 @@ export function makeValueDropStmts(t: Type, futSym: Symbol, ctx: TransformContex
 		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
 		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
 	} else {
-		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		const take = makeCall(runtimeRef(inlineInFuture(t, ctx.raiserBackend) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
 		take.nodeType = t;
 		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
 		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
@@ -201,7 +193,7 @@ export function makeFutureDropClosure(t: Type | null, ctx: TransformContext, loc
 		lit.nodeType = closureType;
 		return lit;
 	};
-	if (t == null || !ownedInFuture(t)) return pair(makeNull(loc));
+	if (t == null || !ownedInFuture(t, ctx.raiserBackend)) return pair(makeNull(loc));
 	const sym = mintSym(ctx, SymbolKind.Function, "$drop" + _shareFnDecls.length.toString(), null);
 	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
 	const fnNode = makeFnDecl(sym.name, [futSym], ["Ptr<void>"], makeBlock(makeValueDropStmts(t, futSym, ctx, loc), loc), "", "void", loc);
@@ -279,7 +271,7 @@ export function typedFutureReadFn(t: Type | null): string {
 //   struct-like     → msUnboxStruct(voidPtr)     (cast+deref+free — heap-boxed)
 //   pointer-shape   → voidPtr unchanged           (Ref/Ptr — already void*)
 //   void            → voidPtr unchanged           (no value to extract)
-export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
+export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, raiser: boolean, loc: SourceLocation): Node {
 	if (innerType == null || innerType.kind == TypeKind.Void) return voidPtrExpr;
 	const fn = unboxFnNameForType(innerType);
 	if (fn != "") {
@@ -288,7 +280,7 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 		return c;
 	}
 	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
-	if (boxedInFuture(innerType) || innerType.kind == TypeKind.String) {
+	if (boxedInFuture(innerType, raiser) || innerType.kind == TypeKind.String) {
 		const call = makeCall(runtimeRef("msUnboxStruct", loc), [voidPtrExpr], loc);
 		call.nodeType = innerType;
 		return call;

@@ -53,21 +53,19 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
-import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind, setValueFutures } from "./util";
+import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
-	const priorValueFutures = setValueFutures(true);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
-		setValueFutures(priorValueFutures);
 		leaveCompilerFuncs(outer);
 	}
 }

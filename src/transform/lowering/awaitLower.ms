@@ -157,8 +157,8 @@ export function makeTempDecl(ctx: TransformContext, prefix: string, initExpr: No
 // ===== Unboxing =====
 // Thin wrapper around the shared util helper. Kept named for callers below.
 // Dispatch lives in util.ts to stay in sync with promiseLower's waitFor.
-export function makeUnboxCall(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
-	return unboxVoidPtrToTyped(voidPtrExpr, innerType, loc);
+export function makeUnboxCall(voidPtrExpr: Node, innerType: Type | null, raiser: boolean, loc: SourceLocation): Node {
+	return unboxVoidPtrToTyped(voidPtrExpr, innerType, raiser, loc);
 }
 
 // Get the inner type that an await expression should produce.
@@ -215,7 +215,7 @@ export function readGroupSlot(ctx: TransformContext, agIdent: Node, slot: int32,
 	const decl = makeVarDecl(sym.name, makeDefaultValue(innerType, loc), DeclKind.Let, loc);
 	decl.nodeType = innerType;
 	decl.resolvedSym = sym;
-	const value = makeUnboxCall(raw(), innerType, loc);
+	const value = makeUnboxCall(raw(), innerType, ctx.raiserBackend, loc);
 	value.nodeType = innerType;
 	const take = makeExprStmt(makeAssign(makeIdentResolved(sym, loc), value, loc), loc);
 	const present = makeBinary(raw(), "!=", makeDefaultValue(VOID_PTR_TYPE, loc), loc);
@@ -376,7 +376,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 		futIdent = tmp.ident;
 	}
 
-	if (!soleRead && innerType != null && ownedInFuture(innerType)) {
+	if (!soleRead && innerType != null && ownedInFuture(innerType, ctx.raiserBackend)) {
 		return expandSharedAwait(futIdent, stmts, loc, ctx, innerType);
 	}
 
@@ -415,9 +415,9 @@ function expandSharedAwait(futIdent: Node, stmts: Node[], loc: SourceLocation, c
 	} else {
 		const raw = makeCall(runtimeRef("msWaitFor", loc), [fut()], loc);
 		raw.nodeType = VOID_PTR_TYPE;
-		take = makeUnboxCall(raw, innerType, loc);
+		take = makeUnboxCall(raw, innerType, ctx.raiserBackend, loc);
 	}
-	const copy = makeFutureCopyRead(fut(), innerType, loc);
+	const copy = makeFutureCopyRead(fut(), innerType, ctx.raiserBackend, loc);
 	stmts.push(makeIf(makeOwnsValueCheck(fut(), loc),
 		makeBlock([makeExprStmt(makeAssign(makeIdentResolved(res.sym, loc), copy, loc), loc)], loc),
 		makeBlock([makeExprStmt(makeAssign(makeIdentResolved(res.sym, loc), take!, loc), loc)], loc), loc));
@@ -438,7 +438,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 		// Fused path: AwaitGroup → void* results, needs unboxing
 		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx);
 		if (innerType != null) {
-			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
+			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, ctx.raiserBackend, loc);
 		}
 		return expansion;
 	}
@@ -465,7 +465,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 				makeCall(runtimeRef("msAwaitSlotRelease", loc), [cloneIdent(slotEntry.slotIdent, loc)], loc), loc));
 			let resultIdent = agr.ident;
 			if (slotEntry.innerType != null) {
-				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);
+				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, ctx.raiserBackend, loc);
 			}
 			return { stmts, resultIdent };
 		}
@@ -476,7 +476,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	// (no unboxing needed) or fell back to void* msWaitFor (needs unboxing).
 	let expansion = expandDeferredAwait(awaitArg, loc, ctx, innerType);
 	if (!expansion.typed && innerType != null) {
-		expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
+		expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, ctx.raiserBackend, loc);
 	}
 	return { stmts: expansion.stmts, resultIdent: expansion.resultIdent };
 }

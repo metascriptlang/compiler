@@ -79,14 +79,14 @@ function futureCatchFnForInner(t: Type | null): string {
 // (those fall through to legacy generic msPromiseAll). Struct types use their
 // declared typeName which matches codegen's mangle(getTypeDesc(t)) for simple
 // names — genFutureType emits the matching MS_PROMISE_ALL_FOR instance.
-function promiseAllFnForInner(t: Type | null): string {
+function promiseAllFnForInner(t: Type | null, raiser: boolean): string {
 	const suffix = futureTypedSuffix(t);
 	if (suffix != "") return "msPromiseAllFor_msFuture_" + suffix;
 	if (t != null && t.kind == TypeKind.Struct && t.typeName != "") {
 		return "msPromiseAllFor_msFuture_" + t.typeName;
 	}
 	// Codegen names the per-type instance; this name only routes the call there.
-	if (boxedInFuture(t) && t!.kind != TypeKind.Array) return "msPromiseAllFor_msFuture_value";
+	if (boxedInFuture(t, raiser) && t!.kind != TypeKind.Array) return "msPromiseAllFor_msFuture_value";
 	return "";
 }
 
@@ -108,7 +108,7 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 // read input.value via the correct typed struct cast, preserving msString
 // (16B) and primitive widths on pass-through. Struct/array/void/unknown
 // fall back to the legacy tag-dispatch path.
-function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: SourceLocation): Node {
+function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: SourceLocation, raiser: boolean): Node {
 	const cd = node.data as CallExprData;
 	const receiverFirst = cd.callee.kind != NodeKind.MemberExpr;
 	if (cd.arguments.length < (receiverFirst ? 2 : 1)) return node;
@@ -125,7 +125,7 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 				if (onRejected != null) return mkTypedCall(typedFn + "WithRejected", [receiver, cb, onRejected], node.nodeType, loc);
 				return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
 			}
-			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
+			if (boxedInFuture(innerType, raiser) && innerType!.kind != TypeKind.Array) {
 				return mkTypedCall("msFutureThenBoxed", onRejected != null ? [receiver, cb, onRejected] : [receiver, cb], node.nodeType, loc);
 			}
 			const tag = makeNumber(typeTagFor(innerType), loc);
@@ -158,7 +158,7 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformCont
 
 	const valueSym = mintSym(ctx, SymbolKind.Parameter, "value", held);
 	const futSym = mintSym(ctx, SymbolKind.Variable, "$fut", promiseType);
-	const stmts: Node[] = [makeLocalDecl(futSym, makeRetFutAlloc(held, loc), promiseType, loc)];
+	const stmts: Node[] = [makeLocalDecl(futSym, makeRetFutAlloc(held, ctx.raiserBackend, loc), promiseType, loc)];
 	for (const s of ownedCompletion(futSym, held, makeTypedIdentResolved(valueSym, held, loc), promiseType, loc, ctx)) stmts.push(s);
 	stmts.push(makeReturn(makeTypedIdentResolved(futSym, promiseType, loc), loc));
 
@@ -186,14 +186,14 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformCont
 // held variants, which run it under the list's cancel flag and keep a reference.
 // A timed spawn's options object is never such a list: the checker requires a
 // timed spawn to be awaited where it is written, and the await joins it.
-function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
+function lowerPromiseSpawn(node: Node, loc: SourceLocation, raiser: boolean): Node {
 	const cd = node.data as CallExprData;
 	const innerType = awaitedType(node.nodeType);
 	// The list is typed Ptr<void>; a generator frame or a closure env may have
 	// turned its identifier into a field read by now, so its type names it.
 	const last = cd.arguments.length == 2 ? cd.arguments[1] : null;
 	const held = last != null && last.nodeType != null && last.nodeType.kind == TypeKind.Ptr ? last : null;
-	if (inlineInFuture(innerType)) {
+	if (inlineInFuture(innerType, raiser)) {
 		const futAlloc = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		futAlloc.nodeType = node.nodeType;  // Promise<T>
 		const spawnInto = held != null
@@ -213,7 +213,7 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 // which the submit-time completion ref holds back until the task has settled.
 function dropUnreadResult(spawnCall: Node, ctx: TransformContext, loc: SourceLocation): Node {
 	const innerType = awaitedType(spawnCall.nodeType);
-	if (!ownedInFuture(innerType)) return spawnCall;
+	if (!ownedInFuture(innerType, ctx.raiserBackend)) return spawnCall;
 	const call = makeCall(runtimeRef("msFutureDropUnread", loc), [spawnCall, makeFutureDropClosure(innerType, ctx, loc)], loc);
 	call.nodeType = spawnCall.nodeType;
 	return call;
@@ -235,7 +235,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext)
 	// typeReturn is Promise<T>; awaitedType is T.
 	const elementPromise = argArrType.typeReturn;
 	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
-	const typedFn = promiseAllFnForInner(innerT);
+	const typedFn = promiseAllFnForInner(innerT, ctx.raiserBackend);
 	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
 	const typedCallee = makeTypedIdentResolved(generatedProcSym(typedFn), null, loc);
 	const typedSym = typedCallee.resolvedSym;
@@ -277,13 +277,13 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (ctx.jsBackend) return null as unknown as Node;
 	const loc = node.location;
 	if (builtinKind == "PromiseThen" || builtinKind == "PromiseCatch" || builtinKind == "PromiseFinally") {
-		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
+		return lowerPromiseThenCatchFinally(node, builtinKind, loc, ctx.raiserBackend);
 	}
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
-	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc), ctx, loc);
+	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc, ctx.raiserBackend), ctx, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
 	if (builtinKind == "PromiseRace" || builtinKind == "PromiseAny") return lowerPromiseFirst(node, builtinKind, loc, ctx);
-	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
+	if (builtinKind == "PromisePending") return promisePendingAlloc(node, ctx.raiserBackend);
 	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;
 	return null as unknown as Node;
 }

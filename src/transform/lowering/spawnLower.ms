@@ -13,7 +13,7 @@ import { walkNode } from "../walker";
 import { custodyReaches } from "../cycles";
 import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl, makeMoveExpr } from "../util";
 
-function needsBoxing(t: Type): boolean {
+function needsBoxing(t: Type, raiser: boolean): boolean {
 	if (t == null) return false;
 	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => true,
@@ -21,12 +21,12 @@ function needsBoxing(t: Type): boolean {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
 		TypeKind.String => true,
-		_ => boxedInFuture(t),
+		_ => boxedInFuture(t, raiser),
 	};
 }
 
 // Build the boxing call for a given type (doesn't rely on retVal.nodeType)
-export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
+export function boxForType(retVal: Node, retType: Type, raiser: boolean, loc: SourceLocation): Node {
 	if (retVal == null || retType == null) return retVal;
 	return match (literalBase(retType).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [retVal], loc),
@@ -44,7 +44,7 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 			// and readers (msUnboxString copy-out / worker inline memcpy) are unchanged.
 			return boxValue(retVal, retType, loc);
 		},
-		_ => boxedInFuture(retType) ? boxValue(retVal, retType, loc) : retVal,
+		_ => boxedInFuture(retType, raiser) ? boxValue(retVal, retType, loc) : retVal,
 	};
 }
 
@@ -57,38 +57,38 @@ function boxValue(retVal: Node, retType: Type, loc: SourceLocation): Node {
 
 // Recursively wrap ReturnStmt values in boxing calls.
 // Stops at nested function boundaries. Covers all control flow.
-export function boxReturns(node: Node, retType: Type): void {
+export function boxReturns(node: Node, retType: Type, raiser: boolean): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return;
 	match (node.kind) {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
 			if (d.argument != null) {
-				d.argument = boxForType(d.argument, retType, node.location);
+				d.argument = boxForType(d.argument, retType, raiser, node.location);
 			}
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			for (const stmt of d.statements) { boxReturns(stmt, retType); }
+			for (const stmt of d.statements) { boxReturns(stmt, retType, raiser); }
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			boxReturns(d.consequent, retType);
-			boxReturns(d.alternate, retType);
+			boxReturns(d.consequent, retType, raiser);
+			boxReturns(d.alternate, retType, raiser);
 		},
-		NodeKind.WhileStmt => { boxReturns((node.data as WhileStmtData).whileBody, retType); },
-		NodeKind.ForOfStmt => { boxReturns((node.data as ForOfStmtData).forOfBody, retType); },
+		NodeKind.WhileStmt => { boxReturns((node.data as WhileStmtData).whileBody, retType, raiser); },
+		NodeKind.ForOfStmt => { boxReturns((node.data as ForOfStmtData).forOfBody, retType, raiser); },
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			boxReturns(d.tryBody, retType);
-			boxReturns(d.catchBody, retType);
-			boxReturns(d.finallyBody, retType);
+			boxReturns(d.tryBody, retType, raiser);
+			boxReturns(d.catchBody, retType, raiser);
+			boxReturns(d.finallyBody, retType, raiser);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
 			for (const caseNode of d.switchCases) {
 				const sc = caseNode.data as SwitchCaseData;
-				for (const stmt of sc.caseStmts) { boxReturns(stmt, retType); }
+				for (const stmt of sc.caseStmts) { boxReturns(stmt, retType, raiser); }
 			}
 		},
 		_ => {},
@@ -316,7 +316,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		}
 
 		disownResult(boxTarget, closureRetType, ctx);
-		if (closureRetType != null && needsBoxing(closureRetType)) {
+		if (closureRetType != null && needsBoxing(closureRetType, ctx.raiserBackend)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):
 			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
 			if (closureArg.kind == NodeKind.ObjectLiteral && closureArg.flags.has(NodeFlag.Closure)) {
@@ -324,7 +324,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
 				const innerCall = makeCall(fnIdent, [], loc);
 				innerCall.nodeType = closureRetType;
-				cd.arguments[0] = adapterThunk(boxForType(innerCall, closureRetType, loc), createPtr(voidType()), loc);
+				cd.arguments[0] = adapterThunk(boxForType(innerCall, closureRetType, ctx.raiserBackend, loc), createPtr(voidType()), loc);
 				return node;
 			}
 			// Box return values inside the closure body
@@ -332,15 +332,15 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				const ad = boxTarget.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
-						boxReturns(ad.arrowBody, closureRetType);
+						boxReturns(ad.arrowBody, closureRetType, ctx.raiserBackend);
 					} else {
-						ad.arrowBody = boxForType(ad.arrowBody, closureRetType, ad.arrowBody.location);
+						ad.arrowBody = boxForType(ad.arrowBody, closureRetType, ctx.raiserBackend, ad.arrowBody.location);
 					}
 				}
 			} else if (boxTarget.kind == NodeKind.FunctionExpr) {
 				const fd = boxTarget.data as FunctionExprData;
 				if (fd.funcExprBody != null) {
-					boxReturns(fd.funcExprBody, closureRetType);
+					boxReturns(fd.funcExprBody, closureRetType, ctx.raiserBackend);
 				}
 			}
 			// Update closure return type to void* (boxed) so codegen emits correct signature
