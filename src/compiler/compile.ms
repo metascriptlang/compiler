@@ -2886,9 +2886,7 @@ function tailVerdicts(tail: VerdictTail, events: string, errorLabel: string): bo
 	return true;
 }
 
-function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string, events: string): int32 {
-	const tail: VerdictTail = { path: `${dir}/${stem}.reload.jsonl`, offset: 0, line: 0 };
-	remove(tail.path);
+function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string): int32 {
 	const started = spawnChild(host, [dir, stem]);
 	if (!started.ok) {
 		printDiag(`${errorLabel}: cannot start the HCR host ${host}: ${started.error.message}`);
@@ -2905,16 +2903,10 @@ function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, 
 		const waited = child.wait(20);
 		relayHostStream(child, ChildStream.Stdout, 0);
 		relayHostStream(child, ChildStream.Stderr, 0);
-		if (!tailVerdicts(tail, events, errorLabel)) {
-			child.kill();
-			code = 1;
-			break;
-		}
 		if (waited.ok) {
 			code = hostStatusCode(waited.value);
 			while (relayHostStream(child, ChildStream.Stdout, HOST_DRAIN_MS) == 0) {}
 			while (relayHostStream(child, ChildStream.Stderr, HOST_DRAIN_MS) == 0) {}
-			if (!tailVerdicts(tail, events, errorLabel)) code = 1;
 			break;
 		}
 		if (waited.error.kind != ProcessErrorKind.Timeout) {
@@ -2970,10 +2962,18 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	stdinDisableBuffering();
 	const ctl: Locked<HostCtl> = new Locked({ stop: false, done: false, code: 0 });
 	const errorLabel = error("error");
-	let running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel, events));
+	const hostLabel = error("error");
+	const tail: VerdictTail = { path: `${dir}/${stem}.reload.jsonl`, offset: 0, line: 0 };
+	remove(tail.path);
+	let running = spawn((): int32 => runHost(host, dir, stem, ctl, hostLabel));
 	warmHcrSession(opts);
 	const keys: string[] = [""];
+	const relayFailed = [false];
 	const idle = (): boolean => {
+		if (!tailVerdicts(tail, events, errorLabel)) {
+			relayFailed[0] = true;
+			return true;
+		}
 		if (lockedRead(ctl, (v: HostCtl): boolean => v.done)) return true;
 		if (!stdinHasData()) return false;
 		const key = readLine().trim();
@@ -2985,6 +2985,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 		return false;
 	};
 	const rebuild = (): void => {
+		if (!tailVerdicts(tail, events, errorLabel)) relayFailed[0] = true;
 		watchBuild(run);
 		if (hcrRestartReason != "") sayFlushed(`watch: ${hcrRestartReason}; press R to restart`);
 		hcrRestartReason = "";
@@ -2995,6 +2996,10 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 			rebuild();
 			continue;
 		}
+		if (relayFailed[0]) {
+			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
+			break;
+		}
 		if (lockedRead(ctl, (v: HostCtl): boolean => v.done)) break;
 		if (keys[0] == "r") {
 			rebuild();
@@ -3002,16 +3007,21 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 		} else if (keys[0] == "R") {
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
 			await running;
+			if (!tailVerdicts(tail, events, errorLabel)) relayFailed[0] = true;
 			sayFlushed("watch: restarting the program on the last build");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: false, done: false, code: 0 }; });
-			running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel, events));
+			remove(tail.path);
+			tail.offset = 0;
+			tail.line = 0;
+			running = spawn((): int32 => runHost(host, dir, stem, ctl, hostLabel));
 		} else {
 			if (keys[0] == "q") sayFlushed("watch: quit");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
 			break;
 		}
 	}
-	const code = await running;
+	const hostCode = await running;
+	const code: int32 = tailVerdicts(tail, events, errorLabel) && !relayFailed[0] ? hostCode : 1;
 	emitEvent("exit", `,"code":${code}`);
 	exit(code);
 }
