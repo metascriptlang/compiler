@@ -83,48 +83,21 @@ export function takeTrailingDecls(state: ParserState, mark: int32): Node[] {
 	return taken;
 }
 
-// The source text the lexer consumed for a token. Strings keep their raw escapes; a template
-// token's value excludes its delimiters. A number with digit separators or a template with
-// escapes consumed more or fewer bytes than its value holds, so those ends are not exact.
-function tokenText(token: Token): string {
-	return match (token.kind) {
-		TokenKind.String => "\"" + token.rawValue + "\"",
-		TokenKind.TemplateHead => "`" + token.value + "${",
-		TokenKind.TemplateMiddle => token.value + "${",
-		TokenKind.TemplateTail => token.value + "`",
-		TokenKind.TemplateNoSub => "`" + token.value + "`",
-		TokenKind.OperatorIdent => "`" + token.value + "`",
-		_ => token.value,
-	};
-}
-
-// Ends a node where `token` ends, counting columns in bytes and line breaks as the lexer does.
+// Ends a node where the lexer recorded that `token` ends; a node that starts past it is empty and ends where it starts.
 export function finishToken(node: Node, token: Token): Node {
-	const text = tokenText(token);
-	let line = token.line;
-	let column = token.column;
-	for (let i = 0; i < text.byteLength; i += 1) {
-		const byte = text.byteAt(i);
-		if (byte == "\n".code && i > 0 && text.byteAt(i - 1) == "\r".code) {
-			column = 1;
-		} else if (byte == "\n".code || byte == "\r".code) {
-			line += 1;
-			column = 1;
-		} else {
-			column += 1;
-		}
-	}
-	const empty = line < node.location.line || (line == node.location.line && column < node.location.column);
-	node.location.endLine = empty ? node.location.line : line;
-	node.location.endColumn = empty ? node.location.column : column;
+	const empty = token.endLine < node.location.line || (token.endLine == node.location.line && token.endColumn < node.location.column);
+	node.location.endLine = empty ? node.location.line : token.endLine;
+	node.location.endColumn = empty ? node.location.column : token.endColumn;
 	return node;
 }
 
-// Ends a node at the last token consumed; call once the node is fully parsed, and again if it grows.
+// Ends a node at the last token consumed, not counting comments the cursor stepped over; call once the node is fully parsed, and again if it grows.
 // A node that consumed nothing past its own start is empty: it ends where it starts.
 export function finishNode(state: ParserState, node: Node): Node {
-	if (state.position == 0) return finishToken(node, { kind: TokenKind.Eof, value: "", line: node.location.line, column: node.location.column, rawValue: "" });
-	return finishToken(node, state.tokens[state.position - 1]);
+	let last = state.position - 1;
+	while (last >= 0 && state.tokens[last].kind == TokenKind.Comment) last -= 1;
+	if (last < 0) return finishToken(node, { kind: TokenKind.Eof, value: "", line: node.location.line, column: node.location.column, endLine: node.location.line, endColumn: node.location.column, rawValue: "" });
+	return finishToken(node, state.tokens[last]);
 }
 
 // Ends a node its callee left open; a node the callee already ended keeps that end.
@@ -140,7 +113,7 @@ export function finishAfter(node: Node, last: Node): Node {
 }
 
 function eofToken(): Token {
-	return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+	return { kind: TokenKind.Eof, value: "", line: 0, column: 0, endLine: 0, endColumn: 0, rawValue: "" };
 }
 
 // Public helper to get the next non-comment token.

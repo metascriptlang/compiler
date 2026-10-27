@@ -381,7 +381,7 @@ export function parseWhenChain(state: ParserState): NodesResult {
 	const endToken = state.tokens[state.position - 1];
 	const endLine = endToken.line as int32;
 	const endColumn = (endToken.column + 1) as int32;
-	const span: Token = { kind: TokenKind.When, value: "", line: whenToken.line, column: whenToken.column, rawValue: `${endLine}:${endColumn}` };
+	const span: Token = { kind: TokenKind.When, value: "", line: whenToken.line, column: whenToken.column, endLine: endLine, endColumn: endColumn, rawValue: `${endLine}:${endColumn}` };
 	before.push(span);
 	for (const c of takePendingComments(state)) {
 		if (c.line > endLine || (c.line == endLine && c.column >= endColumn)) before.push(c);
