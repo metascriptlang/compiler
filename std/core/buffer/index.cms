@@ -237,11 +237,11 @@ function copyOf(this value: string): Buffer {
 }
 
 function isHex(encoding: string): boolean {
-	return encoding.equalsIgnoreCase("hex");
+	return encoding == "hex" || encoding.equalsIgnoreCase("hex");
 }
 
 function isBase64(encoding: string): boolean {
-	return encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
+	return encoding == "base64" || encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
 }
 
 function decodeText(value: string, base64: boolean): Buffer {
@@ -254,7 +254,13 @@ function decodeText(value: string, base64: boolean): Buffer {
 	return buf;
 }
 
+@inline
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
+	if (value.byteCount() == 0) return "";
+	return decodeString(value, encoding);
+}
+
+function decodeString(value: string, encoding: string): Buffer {
 	if (isHex(encoding)) return decodeText(value, false);
 	if (isBase64(encoding)) return decodeText(value, true);
 	return value.copyOf();
@@ -429,6 +435,7 @@ export function toBase64(this buf: Buffer): string {
 	return encodeBase64(buf.asBytes());
 }
 
+@inline
 export function toStringEncoded(
 	this buf: Buffer,
 	encoding: string,
@@ -442,12 +449,16 @@ export function toStringEncoded(
 	const from = first < 0 ? 0 : first;
 	const to = last < 0 || last > length ? length : last;
 	if (from >= to) return "";
-	const range = data[from..to];
+	return encodeRange(data[from..to], encoding);
+}
+
+function encodeRange(range: Readonly<Span<uint8>>, encoding: string): string {
+	if (encoding == "utf8" || encoding.equalsIgnoreCase("utf8") || encoding.equalsIgnoreCase("utf-8")) return utf8Of(range);
 	if (isHex(encoding)) return encodeHex(range);
-	if (encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
+	if (encoding == "base64" || encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
 	if (encoding.equalsIgnoreCase("base64url")) return encodeBase64Url(range);
 	if (encoding.equalsIgnoreCase("ascii")) return asciiOf(range);
-	if (encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return latin1Of(range);
+	if (encoding == "latin1" || encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return latin1Of(range);
 	return utf8Of(range);
 }
 
@@ -506,44 +517,56 @@ function utf8StepAt(data: Readonly<Span<uint8>>, i: int64): int64 {
 function utf8Of(range: Readonly<Span<uint8>>): string {
 	const length = range.length as int64;
 	let ascii = true;
-	let wellFormed = true;
 	let i: int64 = 0;
-	let size: int64 = 0;
 	while (i < length) {
 		if (range[i] < 0x80) {
 			i += 1;
-			size += 1;
 			continue;
 		}
 		ascii = false;
 		const step = utf8StepAt(range, i);
-		if (step < 0) wellFormed = false;
+		if (step < 0) break;
+		i += step;
+	}
+	if (i == length) {
+		const whole = newBytes(length);
+		copyTo(whole.bytePointer(), 0, range, 0, length);
+		if (ascii) msStringMarkAscii(whole); else msStringMarkNonAscii(whole);
+		return whole;
+	}
+	return repairedUtf8(range, i);
+}
+
+// `range[0..valid)` is well-formed; every ill-formed sequence after it becomes one U+FFFD.
+function repairedUtf8(range: Readonly<Span<uint8>>, valid: int64): string {
+	const length = range.length as int64;
+	let size = valid;
+	let i = valid;
+	while (i < length) {
+		const step = utf8StepAt(range, i);
 		i += step > 0 ? step : -step;
 		size += step > 0 ? step : 3;
 	}
 	const result = newBytes(size);
 	const bytes = result.bytePointer();
-	if (wellFormed) {
-		copyTo(bytes, 0, range, 0, length);
-	} else {
-		let at: int64 = 0;
-		i = 0;
-		while (i < length) {
-			const step = utf8StepAt(range, i);
-			if (step > 0) {
-				copyTo(bytes, at, range, i, step);
-				at += step;
-				i += step;
-			} else {
-				bytes[at] = 0xEF;
-				bytes[at + 1] = 0xBF;
-				bytes[at + 2] = 0xBD;
-				at += 3;
-				i -= step;
-			}
+	copyTo(bytes, 0, range, 0, valid);
+	let at = valid;
+	i = valid;
+	while (i < length) {
+		const step = utf8StepAt(range, i);
+		if (step > 0) {
+			copyTo(bytes, at, range, i, step);
+			at += step;
+			i += step;
+		} else {
+			bytes[at] = 0xEF;
+			bytes[at + 1] = 0xBF;
+			bytes[at + 2] = 0xBD;
+			at += 3;
+			i -= step;
 		}
 	}
-	if (ascii) msStringMarkAscii(result); else msStringMarkNonAscii(result);
+	msStringMarkNonAscii(result);
 	return result;
 }
 
