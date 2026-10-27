@@ -90,3 +90,23 @@ test "the JS backend still builds an instance minted by an importer" {
 	const js = readFile(`${dir}/out.js`);
 	assert js.ok && js.value.contains("twice"), "the instance is in the bundle";
 }
+
+test "one instance minted by two modules is one routine with one static state" {
+	const dir = project("static", "import { counter } from \"./lib\";\nimport { useIt } from \"./other\";\nconsole.log(useIt(), counter<string>(\"b\"), counter<string>(\"c\"));\n");
+	writeFile(`${dir}/lib.ms`, "export function counter<T>(x: T): int32 {\n\tstatic const seen: int32[] = [];\n\tseen.push(1);\n\treturn seen.length;\n}\n");
+	writeFile(`${dir}/other.ms`, "import { counter } from \"./lib\";\nexport function useIt(): int32 { return counter<string>(\"a\"); }\n");
+	const built = execFileResult(msc, ["build", `${dir}/main.ms`, "--output=prog"], dir);
+	assert built.exitCode == 0, `${built.output}${built.errorOutput}`;
+	const ran = execFileResult(`${dir}/prog`, [], dir);
+	assert ran.exitCode == 0 && ran.output.trim() == "1 2 3", ran.output;
+}
+
+test "overloads of one generic keep their own instance over the same type arguments" {
+	const dir = project("overload", "import { twice } from \"./lib\";\nimport { a } from \"./other\";\nconsole.log(twice<int32>(7), a());\n");
+	writeFile(`${dir}/lib.ms`, "export function twice<T>(x: T): T { return x; }\nexport function twice<T>(x: T, n: int32): T { return x; }\n");
+	writeFile(`${dir}/other.ms`, "import { twice } from \"./lib\";\nexport function a(): int32 { return twice<int32>(5, 2) + 1; }\n");
+	const built = execFileResult(msc, ["build", `${dir}/main.ms`, "--output=prog"], dir);
+	assert built.exitCode == 0, `${built.output}${built.errorOutput}`;
+	const ran = execFileResult(`${dir}/prog`, [], dir);
+	assert ran.exitCode == 0 && ran.output.trim() == "7 6", ran.output;
+}
