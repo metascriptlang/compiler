@@ -61,10 +61,11 @@ Measured on exactly this shape (plus a `file:` dep): `msc build` → `Built 11 m
 
 ### Compiler cache
 
-Where build artifacts are cached, what other worktrees and jobs reuse, the variables that move
-or disable the cache, and its measured limits: [BUILD-CACHE.md](BUILD-CACHE.md). `build.ms` has
-no cache field yet. Package downloads under `~/.metascript/cache/extracted` are the package
-manager's and are not affected by those variables.
+`build: { cacheDir, globalCacheDir, globalCache }` choose the project's local cache, its global
+store and whether it shares one; the command line and the environment win over them. Where
+artifacts are cached, what other worktrees and jobs reuse and the measured limits:
+[BUILD-CACHE.md](BUILD-CACHE.md). Package downloads under `~/.metascript/cache/extracted` are the
+package manager's and do not move with these settings.
 
 ### `cc` — C compiler and flags
 
