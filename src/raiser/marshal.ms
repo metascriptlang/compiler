@@ -19,7 +19,7 @@ import {
 	raiserNil, raiserBool, raiserInt, raiserFloat, raiserObject, raiserArray,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
-	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet,
+	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapArrayRc,
 	heapAllocString, heapStringText, handleIndex,
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
@@ -281,7 +281,7 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	const placed = copyToVm(vmArrays, vmObjects, config);
 	assert vmObjects.objects[handleIndex(placed.intVal)].rc == 0;
 	const placedBinds = heapObjectGetField(vmArrays, vmObjects, placed.intVal, "binds");
-	assert vmArrays.arrays[handleIndex(placedBinds.intVal)].rc == 1;
+	assert heapArrayRc(vmArrays, placedBinds.intVal) == 1;
 	assert vmObjects.objects[handleIndex(heapArrayGet(vmArrays, placedBinds.intVal, 1).intVal)].rc == 1;
 	const back = copyToHost(vmArrays, vmObjects, placed);
 	assert back.objectHeap != vmObjects;

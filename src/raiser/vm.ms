@@ -10,7 +10,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
@@ -412,7 +412,7 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 // takes it and released when it is overwritten or its frame exits; every other count is the bytecode's own ---
 
 function isShell(h: int64): boolean {
-	return handleHeapKind(h) == RaiserHeapKind.Box;
+	return handleTag(h) == (RaiserHeapKind.Box as int64);
 }
 
 function holdShell(vm: RaiserVM, h: int64): void {
@@ -3410,7 +3410,7 @@ function fastLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ia & 7;
-	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
+	if ((seqClass(cell) as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
 	if (cls == CLS_REF) writeRef(vm, vm.base + (ia >> 3), seqLoad(cell, idx as number));
 	else vm.regs.slots[vm.base + (ia >> 3)] = seqLoad(cell, idx as number);
 	return true;
@@ -3423,7 +3423,7 @@ function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean 
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ic & 7;
-	if ((seqClass(cell) as int32) != cls || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
+	if ((seqClass(cell) as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= (seqLen(cell) as int64)) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.slots[vm.base + (ic >> 3)];
 		const old = seqLoad(cell, idx as number);
@@ -3453,7 +3453,7 @@ function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 	const cell = seqCellOf(handle);
 	when (mode != "danger") { if (!isLiveCell(cell)) return false; }
 	const cls = ib & 7;
-	if ((seqClass(cell) as int32) != cls || seqBase(cell) != 0) return false;
+	if ((seqClass(cell) as int32) != cls || cls == CLS_DYN || seqBase(cell) != 0) return false;
 	if (cls == CLS_REF) {
 		const held = vm.regs.slots[vm.base + (ib >> 3)];
 		seqPush(vm.arrayHeap.mem, cell, held);
@@ -4067,17 +4067,13 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 					seqStore(c, i, 0);
 					if (child != 0) vmReleaseChild(vm, child, cyclic);
 				}
-			}
-		},
-		RaiserHeapKind.Array => {
-			const data = vm.arrayHeap.arrays[index];
-			if (!data.elemUncounted) {
-				for (let i = 0; i < data.items.length; i += 1) {
-					const held = data.items[i];
-					if (held.kind >= RaiserValueKind.String) {
-						data.items[i] = raiserNil();
-						vmReleaseChild(vm, held.intVal, data.elemCyclic);
-					}
+			} else if (base == 0 && !seqUncounted(c) && seqClass(c) == RaiserRegClass.Dyn) {
+				const cyclic = seqCyclic(c);
+				for (let i = 0; i < seqLen(c); i += 1) {
+					const held = arrayHeldAt(vm.arrayHeap, handle, i);
+					if (held.kind < RaiserValueKind.String) continue;
+					arrayHeldStore(vm.arrayHeap, handle, i, raiserNil());
+					vmReleaseChild(vm, held.intVal, cyclic);
 				}
 			}
 		},
@@ -4194,15 +4190,13 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 				seqStore(c, i, 0);
 				vmReleasePlanned(vm, held, plans, plan.children[0], cyclic);
 			}
-		}
-	} else if (plan.kind == RaiserCopyKind.Array && kind == RaiserHeapKind.Array) {
-		const data = vm.arrayHeap.arrays[index];
-		if (data.elemUncounted) return;
-		for (let i = 0; i < data.items.length; i += 1) {
-			const held = data.items[i];
-			if (held.kind >= RaiserValueKind.String) {
-				data.items[i] = raiserNil();
-				vmReleasePlanned(vm, held.intVal, plans, plan.children[0], data.elemCyclic);
+		} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Dyn) {
+			const cyclic = seqCyclic(c);
+			for (let i = 0; i < seqLen(c); i += 1) {
+				const held = arrayHeldAt(vm.arrayHeap, handle, i);
+				if (held.kind < RaiserValueKind.String) continue;
+				arrayHeldStore(vm.arrayHeap, handle, i, raiserNil());
+				vmReleasePlanned(vm, held.intVal, plans, plan.children[0], cyclic);
 			}
 		}
 	} else if (plan.kind == RaiserCopyKind.Object && kind == RaiserHeapKind.Object) {
@@ -4264,7 +4258,7 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 	const source = innerHandle(vm, sourceShell);
 	if (dest == source) return;
 	const kind = handleHeapKind(dest);
-	if (dest == 0 || source == 0 || kind != handleHeapKind(source) || (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object)) {
+	if (dest == 0 || source == 0 || kind != handleHeapKind(source) || (kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object)) {
 		vmError(vm, "internal: AssignInPlace needs two cells of one aggregate kind");
 		return;
 	}
@@ -4294,14 +4288,6 @@ function vmAssignInPlace(vm: RaiserVM, ia: int32, ib: int32, plans: RaiserCopyPl
 		if (views != null) for (const view of views) offsets.push(seqViewOffset(seqCellOf(view)));
 		seqSwapContents(dc, sc);
 		if (views != null) for (let v = 0; v < views.length; v += 1) seqPointViewInto(seqCellOf(views[v]), offsets[v]);
-	} else if (kind == RaiserHeapKind.Array) {
-		const to = vm.arrayHeap.arrays[d];
-		const from = vm.arrayHeap.arrays[s];
-		const items = to.items; to.items = from.items; from.items = items;
-		const viewOff = to.viewOff; to.viewOff = from.viewOff; from.viewOff = viewOff;
-		const viewLen = to.viewLen; to.viewLen = from.viewLen; from.viewLen = viewLen;
-		const elemCyclic = to.elemCyclic; to.elemCyclic = from.elemCyclic; from.elemCyclic = elemCyclic;
-		const elemUncounted = to.elemUncounted; to.elemUncounted = from.elemUncounted; from.elemUncounted = elemUncounted;
 	} else {
 		const to: Cursor<RaiserObjectData> = vm.objectHeap.objects[d];
 		const from: Cursor<RaiserObjectData> = vm.objectHeap.objects[s];
@@ -4385,7 +4371,7 @@ function vmElemRefused(vm: RaiserVM, handle: int64, val: RaiserValue): boolean {
 }
 
 function vmArrayHandleOk(vm: RaiserVM, handle: int64): boolean {
-	if (isSeqHandle(handle) ? isLiveCell(seqCellOf(handle)) : handleIndex(handle) < vm.arrayHeap.arrays.length) return true;
+	if (isSeqHandle(handle) && isLiveCell(seqCellOf(handle))) return true;
 	vmError(vm, `array handle out of bounds: ${handle}`);
 	return false;
 }
@@ -4404,18 +4390,10 @@ function vmHandleAddrIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (vm.halted) return;
 	const idx = getDyn(vm, ic).intVal;
 	if (!vmElemIndex(vm, handle, idx)) return;
-	if (isSeqHandle(handle)) {
-		const cell = seqCellOf(handle);
-		if (seqBase(cell) != 0) {
-			setRegConform(vm, ia, raiserElemAddr(seqBase(cell), seqViewOffset(cell) + idx));
-			return;
-		}
-	} else {
-		const data = vm.arrayHeap.arrays[handleIndex(handle)];
-		if (data.viewOff >= 0) {
-			setRegConform(vm, ia, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
-			return;
-		}
+	const cell = seqCellOf(handle);
+	if (seqBase(cell) != 0) {
+		setRegConform(vm, ia, raiserElemAddr(seqBase(cell), seqViewOffset(cell) + idx));
+		return;
 	}
 	setRegConform(vm, ia, raiserElemAddr(handle, idx));
 }
@@ -4726,18 +4704,10 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	}
 	let base = srcVal;
 	let off = start;
-	if (isSeqHandle(handle)) {
-		const cell = seqCellOf(handle);
-		if (seqBase(cell) != 0) {
-			base = handleValue(seqBase(cell));
-			off = seqViewOffset(cell) + start;
-		}
-	} else {
-		const data = vm.arrayHeap.arrays[handleIndex(handle)];
-		if (data.viewOff >= 0) {
-			base = data.items[0];
-			off = data.viewOff + start;
-		}
+	const cell = seqCellOf(handle);
+	if (seqBase(cell) != 0) {
+		base = handleValue(seqBase(cell));
+		off = seqViewOffset(cell) + start;
 	}
 	const view = heapAllocView(vm.arrayHeap, base, off, (end - start) as int32);
 	vmIncref(vm, base);
@@ -5376,7 +5346,7 @@ test "bits converted to a float are the IEEE pattern, not the integer's value" {
 
 test "a reference converted to its identity bits is its handle, and nil is zero" {
 	assert execConv(raiserObject(makeHandle(7, RaiserHeapKind.Object)), RaiserConvClass.HandleBits).exitValue.intVal == makeHandle(7, RaiserHeapKind.Object);
-	assert execConv(raiserArray(makeHandle(3, RaiserHeapKind.Array)), RaiserConvClass.HandleBits).exitValue.intVal == makeHandle(3, RaiserHeapKind.Array);
+	assert execConv(raiserArray(makeHandle(3, RaiserHeapKind.Object)), RaiserConvClass.HandleBits).exitValue.intVal == makeHandle(3, RaiserHeapKind.Object);
 	assert execConv(raiserNil(), RaiserConvClass.HandleBits).exitValue.intVal == 0;
 	assert execConv(raiserConstString("k"), RaiserConvClass.HandleBits).error.startsWith("no identity bits");
 }
@@ -7940,7 +7910,7 @@ function slotted(inst: RaiserInstruction, slot: number): RaiserInstruction {
 
 function vmLiveCount(vm: RaiserVM): number {
 	return (vm.objectHeap.objects.length - vm.objectHeap.freeList.length)
-		+ (vm.arrayHeap.arrays.length - vm.arrayHeap.freeList.length) + heapSeqHandles(vm.arrayHeap).length + heapObjectCellHandles(vm.arrayHeap).length;
+		+ heapSeqHandles(vm.arrayHeap).length + heapObjectCellHandles(vm.arrayHeap).length;
 }
 
 function objectRcAt(vm: RaiserVM, k: number): number {
@@ -8715,7 +8685,7 @@ test "placed: AssignInPlace gives an array behind a pointer the source's element
 	assert vm.regs.slots[0] == vm.regs.slots[2] && vm.regs.slots[3] == 0, `${vm.regs.slots[0]} ${vm.regs.slots[2]} ${vm.regs.slots[3]}`;
 	const dest = vm.regs.slots[0];
 	assert heapArrayLen(vm.arrayHeap, dest) == 2 && heapArrayRc(vm.arrayHeap, dest) == 2, `${heapArrayLen(vm.arrayHeap, dest)} ${heapArrayRc(vm.arrayHeap, dest)}`;
-	assert vmLiveCount(vm) == 3 && vm.arrayHeap.freeList.length == 0, `${vmLiveCount(vm)}`;
+	assert vmLiveCount(vm) == 3, `${vmLiveCount(vm)}`;
 }
 
 test "placed: AssignInPlace gives a union behind a pointer the source's tag and payload, releases the old payload and frees the source cell" {
