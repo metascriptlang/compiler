@@ -29,6 +29,8 @@ static _Atomic(msActorPollFn) msActorPollHook = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
+static _Atomic(msIoPollFn) msIoPollHook = NULL;
+void msSetIoPollHook(msIoPollFn hook) { atomic_store_explicit(&msIoPollHook, hook, memory_order_release); }
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -1015,8 +1017,14 @@ static bool msRunOnceIn(int timeoutMs) {
 	int wakeFd = msThreadChannel()->wake[0];
 	if (msCompletionQueueDrain()) didWork = true;  /* pre-poll: process without blocking */
 	if (d->selector != NULL) {
+		int waitMs = didWork ? 0 : adj;
+		msIoPollFn ioPoll = !msIsPoolWorker && msMainIoOps != 0 ? atomic_load_explicit(&msIoPollHook, memory_order_acquire) : NULL;
+		if (ioPoll != NULL) {
+			if (ioPoll(waitMs, wakeFd) > 0) didWork = true;
+			waitMs = 0;
+		}
 		msReadyEvent readyBuf[64];
-		int nready = msSelectorPoll(d->selector, didWork ? 0 : adj, readyBuf, 64);
+		int nready = msSelectorPoll(d->selector, waitMs, readyBuf, 64);
 		for (int i = 0; i < nready; i++) {
 			didWork = true;
 			/* Wake pipe: drain bytes, actual data is in MPSC queue */
@@ -1044,9 +1052,6 @@ static bool msRunOnceIn(int timeoutMs) {
 	msProcessCallbacks(d, &didWork);
 	msProcessTimers(d, &didWork);
 	msProcessCallbacks(d, &didWork);
-
-	/* Step 5: I/O engine poll is driven by std/net event loops, not here.
-	 * Programs that don't use networking don't compile the engine. */
 
 	/* Step 6: Actor poll moved to step 1b (before selector). */
 

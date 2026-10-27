@@ -47,6 +47,7 @@ static int io_uring_enter(int fd, unsigned to_submit, unsigned min_complete, uns
  * distinguish + re-arm the wake instead of dispatching it as a completion. */
 #define MS_URING_WAKE_UD ((uint64_t)0xACC0DE17EFD1ULL)
 #define MS_URING_TIMEOUT_UD ((uint64_t)0xACC0DE17EFD3ULL)
+#define MS_URING_WATCHED_UD ((uint64_t)0xACC0DE17EFD5ULL)
 
 struct msUring {
 	int fd;
@@ -139,6 +140,8 @@ struct msIoEngine {
 	msIoRequest* freeList;
 	int freeCount;
 	int wakeFd;   /* eventfd for targeted cross-thread actor wake (Amendment B / I16); -1 = none */
+	int watchedFd;
+	bool watchedArmed;
 };
 
 /* ===== Request Pool ===== */
@@ -176,6 +179,18 @@ static void uringArmWake(msIoEngine* e) {
 	uringSubmit(&e->ring);
 }
 
+static void uringArmWatched(msIoEngine* e) {
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) return;
+	sqe->opcode = IORING_OP_POLL_ADD;
+	sqe->fd = e->watchedFd;
+	sqe->poll_events = POLLIN;
+	sqe->user_data = MS_URING_WATCHED_UD;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
+	e->watchedArmed = true;
+}
+
 /* ===== Create / Destroy ===== */
 
 msIoEngine* msIoEngineCreate(void) {
@@ -185,6 +200,7 @@ msIoEngine* msIoEngineCreate(void) {
 		return NULL;
 	}
 	e->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  /* armed only on serve engines, in AddWakeFd */
+	e->watchedFd = -1;
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 		r->next = e->freeList;
@@ -615,8 +631,14 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 }
 
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
-	(void)fd;  /* external-fd chained-poll is PR-2's concern; the actor wake uses the eventfd below */
 	if (e == NULL) return;
+	if (fd >= 0 && e->watchedFd != fd) {
+		if (e->watchedFd >= 0) {
+			fprintf(stderr, "internal: an io_uring engine already watches fd %d and was asked to watch fd %d\n", e->watchedFd, fd);
+			abort();
+		}
+		e->watchedFd = fd;
+	}
 	/* Amendment B / I16: register this engine as its scheduler's targeted cross-thread actor-wake
 	 * target, and arm the wake eventfd so msIoEngineWake can break io_uring_enter. Runs once per
 	 * serve thread as it wires up — mirrors the readiness backend's msSchedWakeRegister. */
@@ -638,6 +660,7 @@ void msIoEngineWake(msIoEngine* e) {
 
 int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	struct msUring* ring = &e->ring;
+	if (e->watchedFd >= 0 && !e->watchedArmed) uringArmWatched(e);
 
 	/* Check for available CQEs */
 	unsigned cqHead = atomic_load_explicit((_Atomic unsigned*)ring->cqHead, memory_order_acquire);
@@ -669,6 +692,13 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 
 		if (cqe->user_data == MS_URING_TIMEOUT_UD) {
 			cqHead++;
+			continue;
+		}
+
+		if (cqe->user_data == MS_URING_WATCHED_UD) {
+			e->watchedArmed = false;
+			cqHead++;
+			count++;
 			continue;
 		}
 

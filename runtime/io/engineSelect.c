@@ -18,3 +18,21 @@
 #else
   #include "engineReadiness.c"
 #endif
+
+#if MS_IO_HAS_ENGINE && !defined(_WIN32)
+#include "runtime/promise/dispatch.h"
+
+static _Thread_local int tlEngineWatchedFd = -1;
+
+static int msIoPollThreadEngine(int timeoutMs, int wakeFd) {
+	msIoEngine* e = msGetIoEngineIfExists();
+	if (e == NULL) return 0;
+	if (tlEngineWatchedFd != wakeFd) {
+		msIoEngineAddWakeFd(e, wakeFd);
+		tlEngineWatchedFd = wakeFd;
+	}
+	return msIoEnginePoll(e, timeoutMs);
+}
+
+__attribute__((constructor)) static void msIoInstallPollHook(void) { msSetIoPollHook(msIoPollThreadEngine); }
+#endif
