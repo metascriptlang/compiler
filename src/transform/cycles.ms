@@ -20,12 +20,22 @@
 // themselves stays acyclic.
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
-import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
+import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
 import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
-function typeIdentity(t: Type): string {
+// The holder keeps a type's identity for its own lifetime: a pass that rewrites a type's
+// fields in place between two classifications of it must use a fresh cache.
+function typeIdentity(t: Type, holder: NameSet): string {
+	const known = nameSetTypeKey(holder, t);
+	if (known != null) return known;
+	const key = identityOf(t);
+	nameSetRememberTypeKey(holder, t, key);
+	return key;
+}
+
+function identityOf(t: Type): string {
 	if (t.kind == TypeKind.GenericInstance) {
 		if (t.typeName != "") return monoInstanceName(t);
 		return "";
@@ -39,9 +49,9 @@ function typeIdentity(t: Type): string {
 	return "";
 }
 
-function heldKey(held: Type): string {
+function heldKey(held: Type, holder: NameSet): string {
 	const named = held.typeName != "" && !isAnonTypeName(held.typeName);
-	return hasGenericParams(held) || (named && !hasTypeIdentity(held)) ? "" : typeIdentity(held);
+	return hasGenericParams(held) || (named && !hasTypeIdentity(held)) ? "" : typeIdentity(held, holder);
 }
 
 function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
@@ -60,7 +70,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			// field inheritance; BOTH apply).
 			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
 			if (t.typeFlags.has(TypeFlag.OpenClass)) return true;
-			const key = typeIdentity(t);
+			const key = typeIdentity(t, marker);
 			if (withRef && key != "" && key == origKey) return true;
 			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
@@ -69,7 +79,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			return cfaStructFields(t, origKey, withRef, marker);
 		},
 		TypeKind.Union => {
-			const key = typeIdentity(t);
+			const key = typeIdentity(t, marker);
 			if (withRef && key != "" && key == origKey) return true;
 			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
@@ -92,7 +102,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 				const params = genericParamsOf(t);
 				if (params != "") instantiateGenericBody(t, params);
 			}
-			const key = typeIdentity(t);
+			const key = typeIdentity(t, marker);
 			if (withRef && key != "" && key == origKey) return true;
 			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
@@ -101,7 +111,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			return cfaInstanceBody(t.typeReturn, origKey, withRef, marker);
 		},
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => {
-			const key = typeIdentity(t);
+			const key = typeIdentity(t, marker);
 			if (withRef && key == origKey) return true;
 			if (nameSetContains(marker, key)) return false;
 			nameSetAdd(marker, key);
@@ -152,7 +162,7 @@ function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: Nam
 // closing one.
 function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
 	for (const held of heldBeyond(t)) {
-		if (heldKey(held) == "" || cfaAux(held, origKey, withRef, marker)) return true;
+		if (heldKey(held, marker) == "" || cfaAux(held, origKey, withRef, marker)) return true;
 	}
 	return false;
 }
@@ -192,12 +202,12 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 	}
 	if (subject == null) return false;
 	if (subject.typeFlags.has(TypeFlag.Acyclic)) return false;
-	const key = typeIdentity(subject);
+	const key = typeIdentity(subject, cyclicCache);
 	if (key != "") {
 		if (nameSetContains(cyclicCache, key)) return true;
 		if (nameSetContains(acyclicCache, key)) return false;
 	}
-	const marker = createNameSet();
+	const marker = createSharingNameSet(cyclicCache);
 	const result = cfaAux(subject, key, false, marker) || implementerCanFormAcycle(subject, cyclicCache);
 	if (key != "") {
 		if (result) { nameSetAdd(cyclicCache, key); } else { nameSetAdd(acyclicCache, key); }
@@ -216,11 +226,11 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
 		if (body == null || body.kind != TypeKind.Struct) continue;
 		for (const held of heldBeyond(body)) {
-			const key = heldKey(held);
+			const key = heldKey(held, cyclicCache);
 			if (key == "") return true;
 			if (nameSetContains(seen, key)) continue;
 			nameSetAdd(seen, key);
-			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createNameSet())) return true;
+			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createSharingNameSet(cyclicCache))) return true;
 			slots.push(held);
 		}
 	}
@@ -241,13 +251,13 @@ export function traceReachesCycle(t: Type | null, cyclicCache: NameSet, acyclicC
 	if (canFormAcycle(t, cyclicCache, acyclicCache)) return true;
 	if (t == null) return false;
 	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
-	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createSharingNameSet(cyclicCache));
 }
 
 export function cellTraceHasEdge(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
 	if (t == null) return false;
 	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
-	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createSharingNameSet(cyclicCache));
 }
 
 function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
@@ -260,14 +270,14 @@ function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acycli
 	}
 	return match (t.kind) {
 		TypeKind.Function | TypeKind.Unknown => true,
-		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t), marker) && traceEdgeFields(t, cyclicCache, acyclicCache, marker),
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t, marker), marker) && traceEdgeFields(t, cyclicCache, acyclicCache, marker),
 		TypeKind.GenericInstance => {
 			if (isAwaitable(t)) return false;
 			if (t.typeReturn == null) {
 				const params = genericParamsOf(t);
 				if (params != "") instantiateGenericBody(t, params);
 			}
-			if (!firstVisit(typeIdentity(t), marker)) return false;
+			if (!firstVisit(typeIdentity(t, marker), marker)) return false;
 			const body = t.typeReturn;
 			if (body == null) return false;
 			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return traceEdgeFields(body, cyclicCache, acyclicCache, marker);
@@ -302,7 +312,7 @@ export function custodyReaches(t: Type | null, cyclicCache: NameSet, acyclicCach
 	if (canFormAcycle(t, cyclicCache, acyclicCache)) return true;
 	if (t == null) return false;
 	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
-	return custodyEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+	return custodyEdgeAux(subject, true, cyclicCache, acyclicCache, createSharingNameSet(cyclicCache));
 }
 
 function countedRefOf(t: Type): Type | null {
@@ -325,10 +335,10 @@ function custodyEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyc
 	}
 	return match (t.kind) {
 		TypeKind.Function | TypeKind.Unknown => true,
-		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t), marker) && custodyEdgeFields(t, cyclicCache, acyclicCache, marker),
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t, marker), marker) && custodyEdgeFields(t, cyclicCache, acyclicCache, marker),
 		TypeKind.GenericInstance => {
 			const body = instanceBody(t);
-			if (body == null || !firstVisit(typeIdentity(t), marker)) return false;
+			if (body == null || !firstVisit(typeIdentity(t, marker), marker)) return false;
 			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return custodyEdgeFields(body, cyclicCache, acyclicCache, marker);
 			return custodyEdgeAux(body, top, cyclicCache, acyclicCache, marker);
 		},
@@ -345,7 +355,7 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (heldKey(held) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
+		if (heldKey(held, marker) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
@@ -369,7 +379,7 @@ function isActorRef(ref: Type): boolean {
 // walked when it reaches one, an array element looped when it can form a cycle — so a type
 // without a difference keeps its trace as its custody walk.
 export function custodyAddsEdge(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
-	return addsAux(t, true, cyclicCache, acyclicCache, createNameSet());
+	return addsAux(t, true, cyclicCache, acyclicCache, createSharingNameSet(cyclicCache));
 }
 
 function addsAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
@@ -383,14 +393,14 @@ function addsAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCach
 		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => {
 			if (!top && !custodyReaches(t, cyclicCache, acyclicCache)) return false;
 			if (!top && !traceReachesCycle(t, cyclicCache, acyclicCache)) return true;
-			return firstVisit(typeIdentity(t), marker) && addsFields(t, cyclicCache, acyclicCache, marker);
+			return firstVisit(typeIdentity(t, marker), marker) && addsFields(t, cyclicCache, acyclicCache, marker);
 		},
 		TypeKind.GenericInstance => {
 			const body = instanceBody(t);
 			if (body == null) return false;
 			if (!top && !custodyReaches(t, cyclicCache, acyclicCache)) return false;
 			if (!top && !traceReachesCycle(t, cyclicCache, acyclicCache)) return true;
-			if (!firstVisit(typeIdentity(t), marker)) return false;
+			if (!firstVisit(typeIdentity(t, marker), marker)) return false;
 			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return addsFields(body, cyclicCache, acyclicCache, marker);
 			return addsAux(body, top, cyclicCache, acyclicCache, marker);
 		},
@@ -419,7 +429,7 @@ function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker
 		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (heldKey(held) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
+		if (heldKey(held, marker) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
