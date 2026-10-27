@@ -36,6 +36,7 @@ import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, ca
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
+import { recordBodyRead } from "../../checker/bodyReads";
 
 // --- Full Pipeline API ---
 
@@ -412,6 +413,7 @@ export function engineRecheckCount(): int32 {
 
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
+	recordBodyRead(sym.modulePath);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;

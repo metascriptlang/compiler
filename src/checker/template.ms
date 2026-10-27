@@ -28,6 +28,7 @@ import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePa
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
 import { forEachChild, mapChildren } from "../ast/visitor";
+import { recordBodyRead } from "./bodyReads";
 
 // Check if a function symbol is a template (has "template" in fnFlags).
 export function isTemplateSym(sym: Symbol): boolean {
@@ -66,6 +67,7 @@ export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node,
 			callNode.location.line, callNode.location.column);
 		return errorType();
 	}
+	recordBodyRead(sym.modulePath);
 	_templateDepth = _templateDepth + 1;
 	const result = expandTemplateInner(ctx, sym, callNode, callData, expectedType);
 	_templateDepth = _templateDepth - 1;

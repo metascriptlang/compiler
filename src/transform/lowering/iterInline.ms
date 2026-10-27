@@ -26,6 +26,7 @@ import {
 } from "../util";
 import { parseInput, getStmts, makeCtx, makeJsCtx } from "../testUtil";
 import { checkProgram, checkProgramJs } from "../../checker/checkPass";
+import { recordBodyRead } from "../../checker/bodyReads";
 
 interface InlineState {
 	ctx: TransformContext;
@@ -465,6 +466,7 @@ function inlinable(decl: Node, target: CallTarget, fromCaller: boolean, st: Inli
 }
 
 function foreignBody(sym: Symbol, kept: HashMap<Symbol, Node>, st: InlineState): Node | null {
+	recordBodyRead(sym.modulePath);
 	if (st.ctx.reloadableModules.indexOf(sym.modulePath) >= 0) return null;
 	const decl = kept.get(sym);
 	if (decl == null || writesModuleState(decl)) return null;

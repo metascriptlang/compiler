@@ -1844,6 +1844,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 }
 
 function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, hasTypeArg: boolean): CompiledMacro | null {
+	recordBodyRead(macroSym.modulePath);
 	enterMacroBuildsCompilation(ctx);
 	const known = _macroBuilds.get(decl.macroDeclBody);
 	const builds: MacroBuild[] = known != null ? known : [];
@@ -2422,6 +2423,7 @@ registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { recordBodyRead } from "../../checker/bodyReads";
 
 function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
 	const ctx = createContext();

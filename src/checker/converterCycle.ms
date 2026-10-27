@@ -1,6 +1,7 @@
 import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, CallExprData, FunctionDeclData, MethodDeclData } from "../ast/node";
 import { CheckerContext, addError } from "./context";
 import { forEachChild } from "../ast/visitor";
+import { recordBodyRead } from "./bodyReads";
 
 interface CycleWalk {
 	conv: Symbol;
@@ -10,6 +11,7 @@ interface CycleWalk {
 }
 
 function routineBody(sym: Symbol): Node | null {
+	recordBodyRead(sym.modulePath);
 	const decl = sym.declNode;
 	if (decl == null) return null;
 	return match (decl.kind) {

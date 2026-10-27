@@ -29,6 +29,7 @@ import { bindFunctionFlow } from "../binder/index";
 import { CheckedInstantiation } from "./context";
 import { TypeFlag, AttachedOp } from "../ast/node";
 import { sameType } from "./compat";
+import { recordBodyRead } from "./bodyReads";
 
 // ===== Module-Path → CheckerContext Registry =====
 // When a generic body (function or class constructor) is cloned and re-checked
@@ -106,6 +107,7 @@ export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: 
 // exports. `null` when neither holds it; the caller's scope is never a substitute.
 export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
 	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
+	recordBodyRead(sym.modulePath);
 	const defining = lookupModuleCtx(sym.modulePath);
 	if (defining != null) return defining;
 	const own = preludeModuleCtx(ctx, sym.modulePath);
@@ -138,8 +140,9 @@ export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): Check
 	return view;
 }
 
-export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
+export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null, readsBody: boolean = true): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
+	if (readsBody) recordBodyRead(definingModulePath);
 	if (isEngineCheckMode()) {
 		const engineCtx = _engineBodyCtxFn(definingModulePath, owner);
 		if (engineCtx != null) return engineCtx;
@@ -244,7 +247,7 @@ export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 		if (lookupInstanceHook(t, lifecycleHookOp(hookName)) != null) return true;
 	}
 	const owner = nominalTypeSym(t);
-	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner), owner);
+	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner, false), owner);
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {

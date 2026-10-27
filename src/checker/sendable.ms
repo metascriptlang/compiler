@@ -9,6 +9,7 @@ import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { recordBodyRead } from "./bodyReads";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -419,6 +420,7 @@ function refuseSentClosureBorrow(ctx: CheckerContext, argNode: Node, at: Node): 
 
 function routineParts(sym: Symbol | null): Node | null {
 	if (sym == null) return null;
+	recordBodyRead(sym.modulePath);
 	let dn = sym.declNode;
 	if (dn != null && dn.kind == NodeKind.DecoratedDecl) dn = (dn.data as DecoratedDeclData).decoratedNode;
 	return dn != null && (dn.kind == NodeKind.MethodDecl || dn.kind == NodeKind.FunctionDecl) ? dn : null;
