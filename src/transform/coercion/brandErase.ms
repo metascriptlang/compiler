@@ -2,7 +2,7 @@
 // Distinct is erased to its base before any lowering runs.
 
 import { Node, Type, TypeKind, TypeFlag, ProgramData, ExprStmtData, BinaryExprData } from "../../ast/node";
-import { mapChildren } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext, ModuleFact } from "../context";
 import { factsOf } from "../moduleFacts";
 import { parseInput, makeCtx } from "../testUtil";
@@ -32,22 +32,20 @@ function eraseBrandType(t: Type | null, depth: int32): Type | null {
 
 let seenFacts = 0 as BitSet<ModuleFact>;
 
-function walkErase(node: Node): Node {
-	if (node == null) return node;
+function walkErase(node: Node): void {
 	if (node.nodeType != null) {
 		node.nodeType = eraseBrandType(node.nodeType, 0) as Type;
 	}
-	mapChildren(node, walkErase);
+	forEachChild(node, walkErase);
 	seenFacts = seenFacts.union(factsOf(node));
-	return node;
 }
 
 export function eraseBrandTypes(program: Node, ctx: TransformContext): Node {
 	seenFacts = 0 as BitSet<ModuleFact>;
-	const erased = walkErase(program);
+	walkErase(program);
 	ctx.facts = ctx.facts.union(seenFacts);
 	ctx.factsCollected = true;
-	return erased;
+	return program;
 }
 
 function scannedFacts(src: string): BitSet<ModuleFact> {
