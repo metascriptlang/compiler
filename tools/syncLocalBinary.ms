@@ -389,6 +389,29 @@ function bundleIdentity(root: string): string {
 	return text.ok ? text.value.trim() : "";
 }
 
+function probeBundle(bundle: string, scratch: string): string {
+	const dir = `${scratch}/probe`;
+	if (!ensureDir(dir).ok) die(`cannot create ${dir}`);
+	if (!writeFile(`${dir}/probe.ms`, "console.log(42);\n").ok) die(`cannot write ${dir}/probe.ms`);
+	const previous = env.get("MSC_NATIVE_TOOLCHAIN");
+	env.set("MSC_NATIVE_TOOLCHAIN", `${bundle}/absent`);
+	const absent = execFileResult(`${DEST}/bin/msc${EXE}`, ["build", "probe.ms", "--no-color"], dir);
+	env.set("MSC_NATIVE_TOOLCHAIN", bundle);
+	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "probe.ms", "--no-color"], dir);
+	if (previous != "") env.set("MSC_NATIVE_TOOLCHAIN", previous);
+	else env.delete("MSC_NATIVE_TOOLCHAIN");
+	removeAll(dir);
+	if (absent.started && absent.exitCode == 0) return `${DEST}/bin/msc${EXE} builds without the toolchain it was given, so it does not select prepared bundles; sync a binary that does`;
+	if (!run.started || run.exitCode != 0 || run.output.trim().split("\n").pop() != "42") return `${DEST}/bin/msc${EXE} refused ${bundle}:\n${run.output}${run.errorOutput}`;
+	return "";
+}
+
+function renameNoReplace(from: string, to: string): string {
+	const code = "import sys; sys.path.insert(0, sys.argv[1]); import prepareRuntime as pr; pr.renameNoReplace(sys.argv[2], sys.argv[3])";
+	const r = execFileResult("python3", ["-I", "-c", code, `${SRC}/tools/managedToolchain`, from, to]);
+	return r.started && r.exitCode == 0 ? "" : `${r.output}${r.errorOutput}`;
+}
+
 function syncToolchain(): void {
 	const from = `${SRC}/msc-toolchain`;
 	if (!isDir(from)) {
@@ -398,41 +421,37 @@ function syncToolchain(): void {
 	const to = `${DEST}/msc-toolchain`;
 	const identity = bundleIdentity(from);
 	if (identity == "") die(`${from} has no IDENTITY; prepare it with tools/managedToolchain/prepareBundle.py`);
-	if (bundleIdentity(to) == identity) {
-		console.log(`msc-toolchain/: ${identity.slice(0, 12)} already installed`);
-		return;
-	}
+	const installed = exists(to) ? bundleIdentity(to) : "";
+	if (exists(to) && installed != identity) die(`${to} holds bundle ${installed == "" ? "without IDENTITY" : installed.slice(0, 12)}, not ${identity.slice(0, 12)}; replacing an installed bundle is not supported yet`);
 	if (check) {
-		console.log(`would: publish msc-toolchain ${identity.slice(0, 12)} → ${to}`);
+		console.log(installed == identity ? `msc-toolchain/: ${identity.slice(0, 12)} installed, would verify it` : `would: publish msc-toolchain ${identity.slice(0, 12)} → ${to}`);
 		return;
 	}
-	if (windows) die(`publishing ${from} is not supported on Windows yet; move it aside to sync`);
-	const next = `${to}.next`;
-	removeAll(next);
-	const copied = execFileResult("cp", ["-a", from, next]);
-	if (!copied.started || copied.exitCode != 0) die(`cannot stage ${from} at ${next}: ${copied.errorOutput}`);
-	const probe = `${DEST}/out/toolchainProbe`;
-	removeAll(probe);
-	ensureDir(probe);
-	writeFile(`${probe}/probe.ms`, "console.log(42);\n");
-	const previous = env.get("MSC_NATIVE_TOOLCHAIN");
-	env.set("MSC_NATIVE_TOOLCHAIN", next);
-	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "probe.ms", "--no-color"], probe);
-	if (previous != "") env.set("MSC_NATIVE_TOOLCHAIN", previous);
-	else env.delete("MSC_NATIVE_TOOLCHAIN");
-	removeAll(probe);
-	if (!run.started || run.exitCode != 0 || run.output.trim().split("\n").pop() != "42") {
-		removeAll(next);
-		die(`the installed msc refused the staged bundle ${identity.slice(0, 12)}:\n${run.output}${run.errorOutput}`);
+	if (windows) die(`publishing ${from} is not supported on Windows yet`);
+	const made = execFileResult("mktemp", ["-d", `${DEST}/.msc-toolchain.stage.XXXXXX`]);
+	if (!made.started || made.exitCode != 0) die(`cannot create a stage under ${DEST}: ${made.errorOutput}`);
+	const scratch = made.output.trim();
+	if (installed == identity) {
+		const refused = probeBundle(to, scratch);
+		removeAll(scratch);
+		if (refused != "") die(refused);
+		console.log(`msc-toolchain/: ${identity.slice(0, 12)} already installed, verified by a build through it`);
+		return;
 	}
-	const old = `${to}.old`;
-	removeAll(old);
-	if (exists(to) && !rename(to, old).ok) die(`cannot move ${to} aside to ${old}`);
-	if (!rename(next, to).ok) {
-		if (exists(old)) rename(old, to);
-		die(`cannot publish ${next} as ${to}`);
+	const staged = `${scratch}/msc-toolchain`;
+	const copied = execFileResult("cp", ["-a", from, staged]);
+	if (!copied.started || copied.exitCode != 0) {
+		removeAll(scratch);
+		die(`cannot stage ${from} at ${staged}: ${copied.errorOutput}`);
 	}
-	removeAll(old);
+	const refused = probeBundle(staged, scratch);
+	if (refused != "") {
+		removeAll(scratch);
+		die(refused);
+	}
+	const moved = renameNoReplace(staged, to);
+	removeAll(scratch);
+	if (moved != "") die(`cannot publish ${staged} as ${to}: ${moved}`);
 	console.log(`synced msc-toolchain ${identity.slice(0, 12)} → ${to}`);
 }
 
