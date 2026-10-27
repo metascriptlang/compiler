@@ -57,6 +57,7 @@ export function max<T>(this typeof Math, a: T, b: T): T {
 	return a > b ? a : b;
 }
 
+@include("time.h");
 extern function time(slot: int64): int64 from "time";
 
 let randState: uint64 = 0;
