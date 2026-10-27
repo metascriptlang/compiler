@@ -170,7 +170,10 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// value; a byte-view conv only makes the RESULT a borrow, not the inner call.
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
 		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx),
-		_ => node,
+		NodeKind.OutExpr => processOutArg(node, dctx),
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.SizeofExpr | NodeKind.MacroInvocation => node,
+		_ => { throw new Error("internal: processNode: unhandled kind " + NodeKind[node.kind]); },
 	};
 	// ONE place (Reference parity: Nim's p() calls ensureDestruction from the central processor in
 	// normal mode — injectdestructors:889/939). A fresh owned producer — CallExpr / ObjectLiteral /
@@ -266,6 +269,12 @@ function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function processUnaryWrapper(node: Node, dctx: DrcContext): Node {
 	const u = node.data as UnaryExprData;
 	u.operand = processNode(u.operand, dctx, DrcMode.Normal);
+	return node;
+}
+
+function processOutArg(node: Node, dctx: DrcContext): Node {
+	const o = node.data as OutExprData;
+	o.outArg = processNode(o.outArg, dctx, DrcMode.Normal);
 	return node;
 }
 
