@@ -411,10 +411,8 @@ function getDyn(vm: RaiserVM, t: int32): RaiserValue {
 // --- Box shells: the shell around a value in a register belongs to the VM, so it is held when a register or slot
 // takes it and released when it is overwritten or its frame exits; every other count is the bytecode's own ---
 
-const FIRST_CELL_ADDRESS: int64 = 4096;
-
 function isShell(h: int64): boolean {
-	return handleTag(h) == (RaiserHeapKind.Box as int64) && h >= FIRST_CELL_ADDRESS;
+	return handleTag(h) == (RaiserHeapKind.Box as int64);
 }
 
 function holdShell(vm: RaiserVM, h: int64): void {
@@ -489,9 +487,14 @@ function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction, frame: Curs
 			releaseShell(vm, h);
 		}
 	}
-	const held = getModuleFunc(vm.mod, frame.funcIdx).ownRefs;
+	const caller = getModuleFunc(vm.mod, frame.funcIdx);
+	const held = caller.ownRefs;
 	if (held.length == 0) return;
-	const from = (base - frame.base) as int32 + func.arity;
+	const window = (base - frame.base) as int32;
+	for (let i = 0; i < func.arity; i += 1) {
+		if (window + i < caller.frameSize && inRefFile(caller.regClasses[window + i]) && !inRefFile(func.regClasses[i])) slots[base + i] = 0;
+	}
+	const from = window + func.arity;
 	const to = (base - frame.base) as int32 + func.frameSize;
 	for (let i = held.length - 1; i >= 0 && held[i] >= from; i -= 1) {
 		if (held[i] < to) slots[frame.base + held[i]] = 0;
@@ -3857,7 +3860,12 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
 	if (args != null) {
-		for (let i = 0; i < argc && i < callee.regOps.length; i += 1) setRegConform(vm, callee.regOps[i], args[i]);
+		const first = blocks[site] as int32;
+		for (let i = 0; i < argc && i < callee.regOps.length; i += 1) {
+			const cls = callee.regOps[i] & 7;
+			if ((cls == CLS_REF || cls == CLS_DYN) && (first + i >= caller.frameSize || !inRefFile(caller.regClasses[first + i]))) vm.regs.slots[newBase + i] = 0;
+			setRegConform(vm, callee.regOps[i], args[i]);
+		}
 	}
 }
 
