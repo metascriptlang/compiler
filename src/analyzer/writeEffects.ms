@@ -50,6 +50,8 @@ class WriteSummary {
 	refParamWrites: int32;
 	returnsFresh: boolean;
 	unknown: boolean;
+	paramCalls: Symbol[];
+	paramsAssigned: HashSet<Symbol>;
 	edges: Edge[];
 	forwards: Symbol[];
 	linked: HashSet<Cursor<WriteSummary>>;
@@ -92,6 +94,7 @@ export interface WriteSummaries {
 	unitContracts: CallbackContract[];
 	reusedClones: HashMap<Symbol, Symbol>;
 	lending: Lending;
+	envStores: HashMap<string, HashMap<Type, HashMap<string, Node[]>>>;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
@@ -103,6 +106,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null },
+		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(),
 	};
 }
 
@@ -116,6 +120,7 @@ export interface WriteEffects {
 
 export function noteRoutineDecls(w: WriteEffects, program: Node): void {
 	const decls = w.tables.routineDecls;
+	w.tables.envStores.delete(w.unit);
 	const previous = decls.unitRoutines.get(w.unit);
 	if (previous != null) {
 		for (const sym of previous) {
@@ -148,7 +153,7 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
-		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
+		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false, paramCalls: [], paramsAssigned: new HashSet<Symbol>(),
 		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
@@ -511,6 +516,65 @@ function constructionsOf(w: WriteEffects, n: Node): WriteSummary[] {
 	return out;
 }
 
+// A call through a function a lifted closure captured from its frame's parameter: the one store into
+// that environment field is the parameter itself, so the callee is the function each caller of the
+// frame passes, whose writes those callers already count.
+function capturedParamCalled(w: WriteEffects, s: WriteSummary, callee: Node): Symbol | null {
+	const t = skipConvDfa(callee);
+	if (t.kind != NodeKind.MemberExpr) return null;
+	const md = t.data as MemberExprData;
+	const env = holderType(md.object.nodeType);
+	if (env == null || env.sym == null || !env.sym.name.startsWith(ENV_STRUCT_PREFIX)) return null;
+	const stores = envStoresOf(w, unitOf(w, s), env).get(md.property);
+	if (stores == null || stores.length != 1) return null;
+	const stored = skipConvDfa(stores[0].kind == NodeKind.MoveExpr ? (stores[0].data as MoveExprData).moveArg : stores[0]);
+	const sym = stored.kind == NodeKind.Identifier ? stored.resolvedSym : null;
+	if (sym == null || sym.symbolKind != SymbolKind.Parameter || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return null;
+	return sym;
+}
+
+const ENV_STRUCT_PREFIX = "$Env_";
+
+function envStoresOf(w: WriteEffects, unit: string, env: Type): HashMap<string, Node[]> {
+	let byEnv = w.tables.envStores.get(unit);
+	if (byEnv == null) {
+		const found = new HashMap<Type, HashMap<string, Node[]>>();
+		byEnv = found;
+		const note = (envType: Type | null, field: string, value: Node): void => {
+			const held = holderType(envType);
+			if (held == null || held.sym == null || !held.sym.name.startsWith(ENV_STRUCT_PREFIX)) return;
+			let fields = found.get(held);
+			if (fields == null) {
+				fields = new HashMap<string, Node[]>();
+				found.set(held, fields);
+			}
+			const values = fields.get(field);
+			if (values == null) fields.set(field, [value]);
+			else values.push(value);
+		};
+		const scan = (n: Node): void => {
+			if (n.kind == NodeKind.BinaryExpr) {
+				const bd = n.data as BinaryExprData;
+				const left = skipConvDfa(bd.left);
+				if (isAssign(bd.operator) && left.kind == NodeKind.MemberExpr) {
+					const md = left.data as MemberExprData;
+					note(md.object.nodeType, md.property, bd.operator == "=" ? bd.right : n);
+				}
+			} else if (n.kind == NodeKind.ObjectLiteral) {
+				const od = n.data as ObjectLiteralData;
+				for (let i = 0; i < od.keys.length; i += 1) note(n.nodeType, od.keys[i], od.properties[i]);
+			}
+			forEachChild(n, scan);
+		};
+		for (const sym of w.tables.routineDecls.unitRoutines.get(unit) ?? []) {
+			const decl = w.tables.routineDecls.decls.get(sym);
+			if (decl != null) scan(decl);
+		}
+		w.tables.envStores.set(unit, byEnv);
+	}
+	return byEnv.get(env) ?? new HashMap<string, Node[]>();
+}
+
 function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] | null, own: OwnCalls | null, defs: LocalDefs | null): WriteSummary[] {
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym)) {
@@ -526,6 +590,11 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 		if (own == null && sym != null && w.tables.lending.callbacks.includes(sym)) return [];
 		const known: WriteSummary[] = [];
 		if (defs != null && callee != null && routinesOf(w, callee, null, null, defs, 0, known)) return known;
+		const captured = own != null && callee != null ? capturedParamCalled(w, s, callee) : null;
+		if (captured != null) {
+			if (!s.paramCalls.includes(captured)) s.paramCalls.push(captured);
+			return [];
+		}
 		if (callee == null || !sendableWritesNothingHeld(callee.nodeType)) markUnknown(s);
 		return [];
 	}
@@ -667,6 +736,9 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 	};
 	step(body);
 	const assigned = assignedParams(targets, params);
+	if (params != null) {
+		for (const p of params) { if (assigned.has(p)) s.paramsAssigned.add(p); }
+	}
 	for (const p of own.called) {
 		if (assigned.has(p)) markUnknown(s);
 	}
@@ -1004,6 +1076,15 @@ function absorb(w: WriteEffects, s: WriteSummary, e: Edge): boolean {
 	const c = e.callee;
 	let changed = false;
 	if (c.unknown && markUnknown(s)) changed = true;
+	for (const p of c.paramCalls) {
+		const decl = (s.kind == SummaryKind.Routine || s.kind == SummaryKind.Closure) && (s.sym != null || s.literal != null) ? summaryDecl(w, s) : null;
+		if (decl != null && decl.paramSyms != null && decl.paramSyms!.includes(p)) {
+			if (s.paramsAssigned.has(p) && markUnknown(s)) changed = true;
+		} else if (!s.paramCalls.includes(p)) {
+			s.paramCalls.push(p);
+			changed = true;
+		}
+	}
 	for (const slot of c.slots) {
 		if (addSlot(s, slot)) changed = true;
 	}
@@ -1274,7 +1355,7 @@ export function callsPlainRoutine(call: Node): boolean {
 
 export function reachesModuleState(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
 	for (const writes of callWriteParts(w, call, defs)) {
-		if (writes.unknown) return true;
+		if (writes.unknown || writes.paramCalls.length > 0) return true;
 		for (const slot of writes.slots) {
 			if (slot.startsWith("G:")) return true;
 		}
@@ -1287,7 +1368,7 @@ export function runsHooks(w: WriteEffects, target: Node): boolean {
 }
 
 function mayWriteAny(w: WriteEffects, writes: WriteSummary, slots: string[]): boolean {
-	if (writes.unknown) return true;
+	if (writes.unknown || writes.paramCalls.length > 0) return true;
 	for (const slot of slots) {
 		if (slot == ANY_HEAP_SLOT ? writes.slots.length > 0 : writes.slotSet.has(slot)) return true;
 		if (slot == ANY_HEAP_SLOT) continue;
