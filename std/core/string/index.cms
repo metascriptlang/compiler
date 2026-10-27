@@ -25,13 +25,16 @@ extern function msMemMismatch(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>
 function stringCompare(a: string, b: string): int32 {
 	const x = a.asBytes();
 	const y = b.asBytes();
-	const i = msMemMismatch(x, y);
-	if (i < x.length && i < y.length) {
-		const p = x[i];
-		const q = y[i];
-		if (p >= 0xF0 && (q == 0xEE || q == 0xEF)) return -1;
-		if (q >= 0xF0 && (p == 0xEE || p == 0xEF)) return 1;
-		return p < q ? -1 : 1;
+	const n = x.length < y.length ? x.length : y.length;
+	if (n > 0) {
+		const i = msMemMismatch(x, y);
+		if (i < n) {
+			const p = x[i];
+			const q = y[i];
+			if (p >= 0xF0 && (q == 0xEE || q == 0xEF)) return -1;
+			if (q >= 0xF0 && (p == 0xEE || p == 0xEF)) return 1;
+			return p < q ? -1 : 1;
+		}
 	}
 	return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
 }
@@ -40,8 +43,11 @@ function stringCompare(a: string, b: string): int32 {
 function stringCompareBytes(a: string, b: string): int32 {
 	const x = a.asBytes();
 	const y = b.asBytes();
-	const i = msMemMismatch(x, y);
-	if (i < x.length && i < y.length) return x[i] < y[i] ? -1 : 1;
+	const n = x.length < y.length ? x.length : y.length;
+	if (n > 0) {
+		const i = msMemMismatch(x, y);
+		if (i < n) return x[i] < y[i] ? -1 : 1;
+	}
 	return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
 }
 
