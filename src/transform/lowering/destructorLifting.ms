@@ -811,6 +811,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (walksValue(hook, elem, lctx)) {
 					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
 				}
+			} else if (lctx.raiserBackend && hook == "copy") {
+				genCall("msArrayCopy", hook, xf, yf, buf, loc);
 			} else {
 				defaultOp(hook, xf, yf, buf, loc);
 			}
