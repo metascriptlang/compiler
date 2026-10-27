@@ -270,6 +270,12 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, d
 		hookedPayloadError(ctx, "Locked<T> payload", payload, line, column);
 		return;
 	}
+	const address = rawAddressIn(payload, []);
+	if (address != null) {
+		addError(ctx, `Locked<T> payload must be plain data — '${typeDisplayName(payload)}' holds the raw address '${typeDisplayName(address)}'\nits bits copy and its pointee does not, so it crosses threads only when it points at storage that lives for the whole program (ULTRALOCK V1)`,
+			line, column);
+		return;
+	}
 	addError(ctx, `Locked<T> payload must be plain data — '${typeDisplayName(payload)}' owns memory (string, array or reference)\nthe cell's payload is stored under the lock by value; an owning payload has no destroy-on-store (PARALOCK I22)`,
 		line, column);
 }
@@ -1221,6 +1227,23 @@ function walkHandleUses(f: HandleFrame, node: Node | null): void {
 		_ => {},
 	};
 	forEachChild(node, (child: Node): void => { walkHandleUses(f, child); });
+}
+
+function rawAddressIn(t: Type | null, seen: Type[]): Type | null {
+	if (t == null || seen.includes(t)) return null;
+	if (t.kind == TypeKind.Ptr || t.kind == TypeKind.CString) return t;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.Set | TypeKind.SizedArray | TypeKind.Distinct | TypeKind.Alias => rawAddressIn(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance => {
+			for (const c of t.typeChildren) {
+				const found = rawAddressIn(c, seen);
+				if (found != null) return found;
+			}
+			return null;
+		},
+		_ => null,
+	};
 }
 
 function holdsView(t: Type | null, seen: Type[]): boolean {
