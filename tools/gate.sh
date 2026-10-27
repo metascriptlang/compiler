@@ -521,6 +521,9 @@ bounded() {
 
 hash_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
+EMIT_VMEM_KB=${GATE_EMIT_VMEM_KB:-16777216}
+cap_emit_memory_on_linux() { ulimit -v "$EMIT_VMEM_KB" 2>/dev/null || [ "$(uname -s)" != Linux ]; }
+
 emit_many() {
   local bin=$1 root=$GATE_EMIT_DIR work i n h p c_rc js_rc text
   local -a args dirs files
@@ -528,6 +531,7 @@ emit_many() {
   shift; args=("$@")
   for ((i = 0; i < ${#args[@]}; i += 3)); do dirs+=("$root/${args[i]}"); done
   work="$root/.sig.$$"
+  cap_emit_memory_on_linux || { echo "emit: cannot cap the address space at ${EMIT_VMEM_KB} KB" >&2; exit 1; }
   rm -rf "${dirs[@]}" "$work"; mkdir -p "${dirs[@]}" "$work" || exit 1
   for ((i = 0; i < ${#args[@]}; i += 3)); do
     n=${args[i]}
@@ -1613,6 +1617,8 @@ FAKE
   mkdir "$d/other"; printf 'x\n' >"$d/other/broken.ms"
   [ "$(emit_one "$d/fake" 3 broken "$d/other/broken.ms" | cut -f2)" != "$(sed -n 3p <<<"$both" | cut -f2)" ] \
     || { printf 'FAIL emit batch: two different failures shared a signature\n'; bad=1; }
+  [ "$(uname -s)" != Linux ] || [ "$(cap_emit_memory_on_linux; ulimit -v)" = "$EMIT_VMEM_KB" ] \
+    || { printf 'FAIL emit batch: a program emit runs without the %s KB address-space cap\n' "$EMIT_VMEM_KB"; bad=1; }
   rm -rf "$d"
   return $bad
 )
