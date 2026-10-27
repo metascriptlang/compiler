@@ -37,7 +37,7 @@ Every run belongs to one of three flows, chosen by when it runs:
 
 | flow | when | what runs | wall |
 |---|---|---|---|
-| **edit loop** | while a slice is in work, including before each commit | `./msc check src/index.ms`, then one check per changed contract, red on the old compiler and green on the candidate | candidate build 2–2.5 min, then under 60 s per check |
+| **edit loop** | while a slice is in work, including before each commit; ends at ready | `./msc check src/index.ms`, then one check per changed contract, red on the old compiler and green on the candidate; last, the ready check | candidate build 2–2.5 min, then under 60 s per check; ready check 10–20 min on Linux |
 | **land gate** | once, when something outside the worktree needs the commits (root `CLAUDE.md` §Git Rules) | `tools/gate.sh` on the gate train: lanes picked from the diff, compared with `known-red.json` | 30–50 min, not waited on |
 | **release ladder** | cutting a release (`docs/GIT-FLOW.md`) | `tools/gate.sh --release` plus the fixpoint check | hours |
 
@@ -50,7 +50,7 @@ fresh `HOME` (or `MSC_NO_GLOBAL_CACHE=1`) as [BUILD-CACHE.md](../../docs/BUILD-C
 describes, because a fresh working directory alone still inherits an exported `MSC_CACHE_DIR`
 and the shared global store. Keep the perf runner's cold controls cold.
 
-**Check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff, and a wrong choice is accepted, because the land gate runs every lane once and catches what the choice missed. When the smallest consumer cannot finish in 60 s, run it once and add it with its measurement to the over-budget list below.
+**Check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff. The loop ends with the ready check: the slice merged onto current `main`, built as a Linux candidate, every test of its own green on every cell it runs in (words: `~/metascript/docs/GLOSSARY.md`). The land gate catches interactions between slices, not what the loop skipped, because a slice's own red found there costs every slice aboard a full gate. When the smallest consumer cannot finish in 60 s, run it once and add it with its measurement to the over-budget list below.
 
 Build the candidate once per compiler edit: `msc build src/index.ms --danger --lto=off --output=msc`. It takes 2–2.5 min on 8 cores and is the only step allowed over the budget. Then run one check per changed contract:
 
@@ -87,9 +87,9 @@ Build the candidate once per compiler edit: `msc build src/index.ms --danger --l
 
 ### Land gate
 
-**When the slice is ready, `./msc check src/index.ms` is clean and its own checks are green, send the session named `merge-train` the slice name and tip** (workspace `CLAUDE.md` §Worktrees). Land with `~/nerdtools/claude/tools/wt.sh land <name>` once its keyed verdict is GREEN. Use the Mac land queue (`land <name> --async`, then `--wait` in the background) only when `.gate-host/gate-item.sh` says the changed lines are macOS-only or no `merge-train` is live. Do not run a separate gate first, because that duplicates the land gate. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract.
+**When the slice is ready, send the session named `merge-train` the slice name and tip** (workspace `CLAUDE.md` §Worktrees). Land with `~/nerdtools/claude/tools/wt.sh land <name>` once its keyed verdict is GREEN. Use the Mac land queue (`land <name> --async`, then `--wait` in the background) only when `.gate-host/gate-item.sh` says the changed lines are macOS-only or no `merge-train` is live. Do not run a separate gate first, because that duplicates the land gate. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract.
 
-**After a RED land, return to the edit loop: rerun the named failures in the owning worktree, then send the new tip.** The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
+**After a RED land, return to the edit loop: rerun the named failures in the owning worktree, redo the ready check, then send the new tip.** The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
 
 ### Traps
 

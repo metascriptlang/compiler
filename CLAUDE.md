@@ -129,7 +129,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 Three flows, chosen by when they run. Read [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running before you test, run or measure anything: it owns which flow applies, the check for each kind of change and its measured cost.
 
-- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build.
+- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build; it ends with the ready check (`~/metascript/docs/GLOSSARY.md`).
 - **Land gate**: once per land, `tools/gate.sh` on the gate train; lanes run only here and in the release ladder.
 - **Release ladder**: `tools/gate.sh --release` and the fixpoint check when cutting a release per `docs/GIT-FLOW.md`. Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for it.
 
@@ -163,7 +163,7 @@ How the land gate works:
 ## Commits
 
 - **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `~/nerdtools/claude/tools/wt.sh land`, and nothing is pushed without a yes.
-- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own guard has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
+- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own pin has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
 
 IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 
