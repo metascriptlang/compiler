@@ -3848,7 +3848,7 @@ function publishPreludeModuleExports(ctx: CheckerContext, moduleScope: Scope): v
 // suffixes (`/index.ms`) must precede shorter ones (`.ms`) so the
 // `/index` form isn't misread as a bare `.ms`.
 function stripModuleExtension(path: string): string {
-	for (const suffix of ["/index.ms", "/index.cms", ".ms", ".cms"]) {
+	for (const suffix of ["/index.ms", "/index.cms", "/index.jms", "/index.rms", ".ms", ".cms", ".jms", ".rms"]) {
 		if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
 	}
 	return path;
@@ -6498,6 +6498,24 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 		assert fresh.gensymLeft == 41;
 		assert fresh.ctx.generatedInstances.length == 0;
 		assert fresh.ctx.procInstCache.size == 0 && fresh.ctx.typeInstCache.size == 0;
+	}
+}
+
+test "a prelude module's named import binds the exporting backend file's function on every backend" {
+	for (const ext of [".cms", ".rms"]) {
+		const prelude = freshPreludeOf(join(resolveRuntimeDir(), "std"), ext).ctx;
+		let search: Symbol[] | null = null;
+		for (const path of prelude.preludeModuleScopes.keys()) {
+			if (path.endsWith("/string/search.ms")) search = prelude.preludeModuleScopes.get(path) ?? null;
+		}
+		assert search != null, ext;
+		let bound = 0;
+		for (const s of search!) {
+			if (s.name != "byteIsAscii" && s.name != "byteEqAt") continue;
+			assert s.declNode != null && s.declNode.kind != NodeKind.ImportDecl, `${ext} ${s.name}`;
+			bound += 1;
+		}
+		assert bound == 2, `${ext} ${search!.map((s) => s.name).join(",")}`;
 	}
 }
 
