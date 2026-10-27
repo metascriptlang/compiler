@@ -1,9 +1,9 @@
 // Match Expression Parser
 // Uses callback injection to avoid circular imports with expression.ms
 
-import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
+import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, takePendingComments, finishNode, finishToken } from "../cursor";
+import { ParserState, current, advance, isAtEnd, finishNode, finishToken } from "../cursor";
 import { parseMemberChain, tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";
@@ -43,13 +43,9 @@ export function parseMatchExpr(
 	advance(state);
 
 	const cases: Node[] = [];
-	let prevEndLine: int32 = 0;
 
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-		const leading = claimCaseComments(state, cases, prevEndLine);
 		const caseNode = try parseMatchCase(state, exprParser, blockParser);
-		for (const c of caseNode.comments) leading.push(c);
-		caseNode.comments = leading;
 		cases.push(caseNode);
 
 		// Optional comma between cases
@@ -57,11 +53,6 @@ export function parseMatchExpr(
 			caseNode.flags = caseNode.flags.incl(NodeFlag.CommaWritten);
 			advance(state);
 		}
-		prevEndLine = state.tokens[state.position - 1].line as int32;
-	}
-	const rest = claimCaseComments(state, cases, prevEndLine);
-	if (cases.length > 0) {
-		for (const c of rest) cases[cases.length - 1].comments.push(c);
 	}
 
 	if (current(state).kind != TokenKind.RBrace) {
@@ -73,18 +64,6 @@ export function parseMatchExpr(
 		matchDisc: disc,
 		matchCases: cases,
 	}, matchToken));
-}
-
-function claimCaseComments(state: ParserState, cases: Node[], prevEndLine: int32): Token[] {
-	const leading: Token[] = [];
-	for (const c of takePendingComments(state)) {
-		if (cases.length > 0 && c.line <= prevEndLine) {
-			cases[cases.length - 1].comments.push(c);
-		} else {
-			leading.push(c);
-		}
-	}
-	return leading;
 }
 
 // ===== Single Match Case =====

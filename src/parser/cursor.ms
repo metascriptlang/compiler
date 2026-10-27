@@ -11,7 +11,6 @@ export class ParserState {
 	position: int32;
 	errors: string[];
 	panicMode: boolean;
-	pendingComments: Token[];
 	pendingTypeArg: string; // Captured <T> type arg waiting to be consumed by next CallExpr
 	// Restricted production (like JS's NoIn): >0 while parsing a match-case
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
@@ -32,14 +31,13 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
 }
 
 export interface ParserMark {
 	position: int32;
 	errorCount: int32;
 	panicMode: boolean;
-	pendingComments: Token[];
 	pendingTypeArg: string;
 	noBareArrow: int32;
 	noArrowReturnType: int32;
@@ -52,7 +50,6 @@ export function markState(state: ParserState): ParserMark {
 		position: state.position,
 		errorCount: state.errors.length,
 		panicMode: state.panicMode,
-		pendingComments: state.pendingComments.slice(0),
 		pendingTypeArg: state.pendingTypeArg,
 		noBareArrow: state.noBareArrow,
 		noArrowReturnType: state.noArrowReturnType,
@@ -65,7 +62,6 @@ export function rewindState(state: ParserState, mark: ParserMark): void {
 	state.position = mark.position;
 	while (state.errors.length > mark.errorCount) state.errors.pop();
 	state.panicMode = mark.panicMode;
-	state.pendingComments = mark.pendingComments;
 	state.pendingTypeArg = mark.pendingTypeArg;
 	state.noBareArrow = mark.noBareArrow;
 	state.noArrowReturnType = mark.noArrowReturnType;
@@ -122,40 +118,20 @@ export function current(state: ParserState): Token {
 	return tokenAt(state, skipComments(state, state.position));
 }
 
-// Comments are attached to the NEXT non-comment token (leading comments).
-function collectLeadingComments(state: ParserState): void {
+function skipLeadingComments(state: ParserState): void {
 	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
-		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
 }
 
 export function advance(state: ParserState): Token {
-	collectLeadingComments(state);
+	skipLeadingComments(state);
 	if (state.position >= state.tokens.length) return eofToken();
 	const token = state.tokens[state.position];
 	if (token.kind != TokenKind.Eof) {
 		state.position += 1;
 	}
 	return token;
-}
-
-// Helper to take and clear pending comments (the "Harvest")
-// Also collects any comment tokens at the current position that haven't been
-// advanced over yet. This ensures comments immediately before a construct
-// are attached to it (e.g., leading comments before a function parameter).
-export function takePendingComments(state: ParserState): Token[] {
-	collectLeadingComments(state);
-	const comments: Token[] = [];
-	for (const c of state.pendingComments) {
-		let seen = false;
-		for (const k of comments) {
-			if (k.line == c.line && k.column == c.column) seen = true;
-		}
-		if (!seen) comments.push(c);
-	}
-	state.pendingComments = [];
-	return comments;
 }
 
 export function isAtEnd(state: ParserState): boolean {

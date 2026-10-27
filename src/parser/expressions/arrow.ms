@@ -1,7 +1,7 @@
 // Arrow Function Parser
 // Extracted from expression.ms with callback injection
 
-import { Token, TokenKind } from "../../lexer/token";
+import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, matchingParenIndex, markState, rewindState } from "../cursor";
 import { angleCloserWidth } from "../generics";
@@ -169,7 +169,6 @@ function parseArrowCore(
 	const hasReturnColon = !isAtEnd(state) && current(state).kind == TokenKind.Colon;
 	const arrowReturnType = captureOptionalType(state);
 	const arrowRetTypeExpr = getLastTypeExpr();
-	const headerComments = takeHeaderComments(state, arrowToken);
 
 	if (isAtEnd(state) || current(state).kind != TokenKind.Arrow) {
 		if (speculative) return rejected;
@@ -193,7 +192,6 @@ function parseArrowCore(
 		arrowNode1.typeExpr = arrowRetTypeExpr;
 		arrowNode1.typeExprs = arrowParamTypeExprs;
 		arrowNode1.paramLocations = arrowParamLocs;
-		for (const c of headerComments) arrowNode1.comments.push(c);
 		return Result.ok(arrowNode1);
 	}
 
@@ -212,21 +210,7 @@ function parseArrowCore(
 	arrowNode2.typeExpr = arrowRetTypeExpr;
 	arrowNode2.typeExprs = arrowParamTypeExprs;
 	arrowNode2.paramLocations = arrowParamLocs;
-	for (const c of headerComments) arrowNode2.comments.push(c);
 	return Result.ok(arrowNode2);
-}
-
-// A comment the return type's capture skipped sits inside this arrow's header, so the arrow keeps it
-// instead of the statement around it; one written before the arrow stays pending for that statement.
-function takeHeaderComments(state: ParserState, arrowToken: Token): Token[] {
-	const inside: Token[] = [];
-	const before: Token[] = [];
-	for (const c of state.pendingComments) {
-		if (c.line > arrowToken.line || (c.line == arrowToken.line && c.column > arrowToken.column)) inside.push(c);
-		else before.push(c);
-	}
-	state.pendingComments = before;
-	return inside;
 }
 
 // ===== Bare-Ident Arrow =====

@@ -652,7 +652,6 @@ export class Node {
 	resolvedSym: Symbol | null;
 	flags: BitSet<NodeFlag>;
 	variantSlot: int32;
-	comments: Token[]; // Added for comment preservation
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
@@ -806,7 +805,6 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		resolvedSym: null,
 		flags: 0 as BitSet<NodeFlag>,
 		variantSlot: 0,
-		comments: [],
 		typeExpr: null,
 		typeExprs: null,
 		baseExprs: null,
@@ -948,7 +946,6 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		resolvedSym: null,
 		flags: 0 as BitSet<NodeFlag>,
 		variantSlot: 0,
-		comments: [],
 		typeExpr: null,
 		typeExprs: null,
 		baseExprs: null,

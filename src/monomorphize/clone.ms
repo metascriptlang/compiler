@@ -100,7 +100,7 @@ export function bindsSignatureTypes(node: Node): boolean {
 //   - Skips nodeType (checker will re-populate during resolvePass + checkPass).
 //   - Skips resolvedSym (checker will re-populate).
 //   - Copies typeExpr/typeExprs (resolvePass reads them for type-position annotation).
-//   - Copies typeArg, paramLocations, comments (parser-time side channels the
+//   - Copies typeArg, paramLocations (parser-time side channels the
 //     checker reads during re-check).
 //
 // The mode distinction ensures that dbTypeCheck can safely mutate the clone without
@@ -117,7 +117,6 @@ function copyNodeMeta(src: Node, dst: Node): void {
 		dst.typeExprs = src.typeExprs;
 		dst.paramLocations = src.paramLocations;
 		dst.paramSyms = src.paramSyms;
-		dst.comments = src.comments;
 		return;
 	}
 	// Clear Sem flag on mono clones so monoCheckInstantiatedBody can actually
@@ -144,14 +143,13 @@ function copyNodeMeta(src: Node, dst: Node): void {
 	} else {
 		// Check mode: preserve all parse-time side channels the checker reads
 		// (typeExpr/typeExprs for resolvePass, paramLocations for function
-		// declarations, comments for LSP hover doc strings, typeArg for
+		// declarations, typeArg for
 		// explicit generic type arguments).
 		// nodeType/resolvedSym are intentionally NOT copied — the checker
 		// populates them fresh during check.
 		dst.typeExpr = src.typeExpr;
 		dst.typeExprs = src.typeExprs;
 		dst.paramLocations = src.paramLocations;
-		dst.comments = src.comments;
 		dst.typeArg = src.typeArg;
 	}
 	// Enum member access was rewritten by the checker from `E.M` (MemberExpr)

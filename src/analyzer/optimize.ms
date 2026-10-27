@@ -211,7 +211,7 @@ function makeOtherStmt(): Node {
 
 function makeIfElse(cons: Node[], alt: Node[] | null, loc: SourceLocation): Node {
 	return {
-		kind: NodeKind.IfStmt, location: loc, comments: [],
+		kind: NodeKind.IfStmt, location: loc,
 		data: {
 			condition: makeIdentResolved(testVarSym("cond"), loc), consequent: makeBlock(cons, loc),
 			alternate: alt != null ? makeBlock(alt, loc) : null as unknown as Node,

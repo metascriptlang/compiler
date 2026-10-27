@@ -243,7 +243,6 @@ export function isGenericCallAhead(state: ParserState): boolean {
 	const saved = state.position;
 	const errorCount = state.errors.length;
 	const panic = state.panicMode;
-	const commentCount = state.pendingComments.length;
 	advance(state); // consume <
 	while (!isAtEnd(state)) {
 		const before = state.position;
@@ -258,7 +257,6 @@ export function isGenericCallAhead(state: ParserState): boolean {
 	state.position = saved;
 	while (state.errors.length > errorCount) state.errors.pop();
 	state.panicMode = panic;
-	while (state.pendingComments.length > commentCount) state.pendingComments.pop();
 	return ok;
 }
 

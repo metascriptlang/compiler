@@ -3,7 +3,7 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, IfStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, finishNode, finishOnce, finishAfter, finishToken, takePendingComments, parenGroupThen, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, finishNode, finishOnce, finishAfter, finishToken, parenGroupThen, takeTrailingDecls } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
@@ -14,7 +14,7 @@ import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinu
 import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStateProgramParser } from "./callbacks";
-import { attachComments, isIdentLike, continuesIdentifier } from "../util";
+import { isIdentLike, continuesIdentifier } from "../util";
 
 
 // Type aliases
@@ -28,16 +28,6 @@ type NodesResult = Result<Node[], string>;
 //              | doWhile | switchStmt | deferStmt | unreachableStmt | matchStmt | exprStmt
 
 export function parseStatement(state: ParserState): NodeResult {
-	const leading: Token[] = takePendingComments(state);
-	const node = try parseStatementCore(state);
-	if (leading.length > 0) {
-		for (const c of node.comments) leading.push(c);
-		node.comments = leading;
-	}
-	return Result.ok(node);
-}
-
-function parseStatementCore(state: ParserState): NodeResult {
 	const token = current(state);
 
 	// Async function declaration — before match to avoid try-in-match-arm limitation
@@ -45,11 +35,11 @@ function parseStatementCore(state: ParserState): NodeResult {
 		if (peek(state, 1).kind == TokenKind.Function) {
 			const asyncFn = try parseFunctionDecl(state);
 			finishNode(state, asyncFn);
-			return Result.ok(attachComments(state, asyncFn));
+			return Result.ok(asyncFn);
 		}
 		const asyncExpr = try parseExprStmt(state);
 		finishNode(state, asyncExpr);
-		return Result.ok(attachComments(state, asyncExpr));
+		return Result.ok(asyncExpr);
 	}
 
 	// @comptime { ... } — intercept before decorator loop
@@ -61,7 +51,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			const comptimeBody = try parseBlockStmt(state);
 			const node = createNode(NodeKind.ComptimeBlock, { comptimeBody }, token);
 			finishNode(state, node);
-			return Result.ok(attachComments(state, node));
+			return Result.ok(node);
 		}
 	}
 
@@ -72,7 +62,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		const fd = fn.data as FunctionDeclData;
 		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
 		finishNode(state, fn);
-		return Result.ok(attachComments(state, fn));
+		return Result.ok(fn);
 	}
 
 	// Decorator / directive handling — before match to avoid try-in-match-arm limitation
@@ -87,7 +77,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			consumeSemicolon(state);
 			const node = createNode(NodeKind.ExprStmt, { expr: decorators[0] }, token);
 			finishNode(state, node);
-			return Result.ok(attachComments(state, node));
+			return Result.ok(node);
 		}
 		const decl = try parseStatement(state);
 		const node = createNode(NodeKind.DecoratedDecl, {
@@ -95,13 +85,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			decoratedNode: decl,
 		}, token);
 		finishNode(state, node);
-		const inside: Token[] = [];
-		for (const comment of decl.comments) {
-			if (comment.line > decl.location.endLine) node.comments.push(comment);
-			else inside.push(comment);
-		}
-		decl.comments = inside;
-		return Result.ok(attachComments(state, node));
+		return Result.ok(node);
 	}
 
 	const res = match (token.kind) {
@@ -141,7 +125,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 
 	if (!res.ok) return res;
 	finishOnce(state, res.value);
-	return Result.ok(attachComments(state, res.value));
+	return Result.ok(res.value);
 }
 
 
@@ -359,7 +343,6 @@ function pickWhenBranch(conds: Node[], blocks: Node[], elseBlock: Node | null, a
 // the same) but only the first true one is selected; later conditions are parsed for
 // their tokens and not consulted, mirroring semWhen's early return.
 export function parseWhenChain(state: ParserState): NodesResult {
-	const before = takePendingComments(state);
 	const whenToken = current(state);
 	advance(state); // consume 'when'
 	const conds: Node[] = [try parseWhenHead(state)];
@@ -378,15 +361,6 @@ export function parseWhenChain(state: ParserState): NodesResult {
 		}
 	}
 	const chosen = pickWhenBranch(conds, blocks, elseBlock, whenToken);
-	const endToken = state.tokens[state.position - 1];
-	const endLine = endToken.line as int32;
-	const endColumn = (endToken.column + 1) as int32;
-	const span: Token = { kind: TokenKind.When, value: "", line: whenToken.line, column: whenToken.column, endLine: endLine, endColumn: endColumn, rawValue: `${endLine}:${endColumn}` };
-	before.push(span);
-	for (const c of takePendingComments(state)) {
-		if (c.line > endLine || (c.line == endLine && c.column >= endColumn)) before.push(c);
-	}
-	state.pendingComments = before;
 	for (const s of chosen) s.flags = s.flags.incl(NodeFlag.WhenPicked);
 	return Result.ok(chosen);
 }
@@ -414,7 +388,6 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 		for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
 	}
 
-	const dangling = takePendingComments(state);
 	const closeToken = current(state);
 	if (closeToken.kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' at line ${closeToken.line}`);
@@ -422,7 +395,6 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 	advance(state); // consume '}'
 
 	const block = createNode(NodeKind.BlockStmt, { statements: stmts }, token);
-	block.comments = dangling;
 	finishNode(state, block);
 	return Result.ok(block);
 }
@@ -473,7 +445,7 @@ export function parseProgram(state: ParserState): NodeResult {
 		}
 	}
 	const node = finishToken(createNode(NodeKind.Program, { programStmts: stmts }, token), current(state));
-	return Result.ok(attachComments(state, node));
+	return Result.ok(node);
 }
 
 // Register real implementations for callbacks

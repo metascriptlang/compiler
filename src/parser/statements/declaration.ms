@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
+import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -1155,9 +1155,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	const members: Node[] = [];
-	const bodyComments: Token[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-		for (const c of takePendingComments(state)) bodyComments.push(c);
 		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
@@ -1180,7 +1178,6 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		classImplements: implementsNames,
 	}, classToken);
 	classNode.typeArg = classGenerics;
-	classNode.comments = bodyComments;
 	if (isAbstract) classNode.flags = classNode.flags.incl(NodeFlag.Abstract);
 	return Result.ok(classNode);
 }
@@ -1213,9 +1210,7 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	const members: Node[] = [];
-	const bodyComments: Token[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-		for (const c of takePendingComments(state)) bodyComments.push(c);
 		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
@@ -1237,7 +1232,6 @@ export function parseActorDecl(state: ParserState): NodeResult {
 		nameLocation: makeLocFromToken(nameToken),
 	}, actorToken);
 	actorNode.typeArg = actorGenerics;
-	actorNode.comments = bodyComments;
 	return Result.ok(actorNode);
 }
 

@@ -1,8 +1,8 @@
 // Control Flow Statements - if, while, for, break, continue, return
 
-import { Token, TokenKind } from "../../lexer/token";
+import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, finishNode, finishAfter, takePendingComments, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, finishNode, finishAfter, takeTrailingDecls } from "../cursor";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { parseBlockStmt, parseStatement } from "./core";
 import { parseExpressionFromState } from "../expressions/core";
@@ -29,13 +29,6 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 // ===== If Statement =====
 // syntax: 'if' '(' expr ')' (block | stmt) ('else' (ifStmt | block | stmt))?
 
-function withLeading(node: Node, leading: Token[]): Node {
-	if (leading.length == 0) return node;
-	for (const c of node.comments) leading.push(c);
-	node.comments = leading;
-	return node;
-}
-
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
 	advance(state);
@@ -53,14 +46,13 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
-		const beforeElse = takePendingComments(state);
 		advance(state);
 		if (current(state).kind == TokenKind.If) {
 			const elseIf = finishNode(state, try parseIfStmt(state));
 			return Result.ok(createNode(NodeKind.IfStmt, {
 				condition,
 				consequent,
-				alternate: withLeading(elseIf, beforeElse),
+				alternate: elseIf,
 			}, ifToken));
 		}
 
@@ -68,7 +60,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.IfStmt, {
 			condition,
 			consequent,
-			alternate: withLeading(elseBody, beforeElse),
+			alternate: elseBody,
 		}, ifToken));
 	}
 
