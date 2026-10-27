@@ -255,7 +255,8 @@ static void msDsPrintRows(FILE* f, const char* flow, const msDsTypeRow* rows, si
 
 static const char* msDsFlowNames[MS_DS_COUNT] = {
 	"alloc", "alloc", "free", "rc.inc", "rc.dec", "rc.incAtomic", "rc.decAtomic", "rc.incCyclic",
-	"orc.decLast", "orc.decLast.true", "cycle.register", "collect", "collect.traced", "collect.freed"
+	"orc.decLast", "orc.decLast.true", "cycle.register", "collect", "collect.traced", "collect.freed",
+	"collect.bufferGrow"
 };
 
 /* Runs from atexit, registered before the pool's, so it runs after the pool joined its workers. */
@@ -479,6 +480,7 @@ void msCellSeqInit(msCellSeq* s) {
 
 void msCellSeqGrow(msCellSeq* s) {
 	int32_t newCap = s->cap <= 0 ? 16 : s->cap * 2;
+	MS_DRC_STAT_ADD(MS_DS_CELLSEQ_GROW, 1);
 	s->data = (msCell*)msRealloc(s->data, (size_t)s->cap * sizeof(msCell), (size_t)newCap * sizeof(msCell));
 	s->cap = newCap;
 }

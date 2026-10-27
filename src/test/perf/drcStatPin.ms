@@ -1,8 +1,9 @@
 // Standalone driver, not an inline test: the claim is about a runtime built with -DMS_DRC_STAT, which needs a
 // child `msc build` and a child run. Siblings: src/test/guard/run.ms (same build-and-run shape).
 // Run from the repo root: msc run src/test/perf/drcStatPin.ms   (MSC=<path> names the subject; default ./msc)
-// Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes, and a
-// ledger-only build of the runtime still compiles and runs.
+// Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes, a
+// collection allocates each of its buffers at most once, and a ledger-only build of the runtime still
+// compiles and runs.
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, remove, ensureDir, exists } from "std/fs";
 
@@ -44,6 +45,17 @@ function delta(a: Map<string, int64>, b: Map<string, int64>, key: string): int64
 	return a.has(key) && b.has(key) ? b.get(key)! - a.get(key)! : -1;
 }
 
+function expectGrowPerCollect(program: string, small: Map<string, int64>, big: Map<string, int64>): void {
+	const grows = delta(small, big, "collect.bufferGrow.count");
+	const collects = delta(small, big, "collect.count");
+	if (collects <= 0 || grows < 0 || grows > 3 * collects) {
+		console.log(`FAIL ${program} collect.bufferGrow.count: delta ${grows} over ${collects} collections, want at most 3 per collection`);
+		fails++;
+	} else {
+		console.log(`ok   ${program} collect.bufferGrow.count +${grows} over ${collects} collections`);
+	}
+}
+
 function expect(program: string, small: Map<string, int64>, big: Map<string, int64>, key: string, want: int64): void {
 	const got = delta(small, big, key);
 	if (got != want) {
@@ -55,7 +67,7 @@ function expect(program: string, small: Map<string, int64>, big: Map<string, int
 }
 
 ensureDir(OUT);
-for (const program of ["collectGraph", "cycleRegister", "closureVisit"]) {
+for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureVisit"]) {
 	const exe = `${OUT}/${program}`;
 	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
 	if (!ok(b)) {
@@ -71,8 +83,15 @@ for (const program of ["collectGraph", "cycleRegister", "closureVisit"]) {
 		expect(program, small, big, "cycle.register.count", 0);
 		continue;
 	}
+	if (program == "collectRing") {
+		expect(program, small, big, "alloc.count", n);
+		expect(program, small, big, "collect.freed.count", n);
+		expectGrowPerCollect(program, small, big);
+		continue;
+	}
 	expect(program, small, big, "alloc.count", 2 * n);
 	if (program == "collectGraph") {
+		expectGrowPerCollect(program, small, big);
 		expect(program, small, big, "cycle.register.count", 2 * n);
 		expect(program, small, big, "collect.freed.count", 2 * n);
 	} else {
