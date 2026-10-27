@@ -788,9 +788,9 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // apart rests on isNodeWireMetaField (wire.ms). childAt returns the live heap ref, not a
 // copy — mutations through it stick — and holds it for the caller, as a call result is owned.
 
-function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
+function _isNodeShaped(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	if (v.kind != RaiserValueKind.Object) return false;
-	const kindField = wireGet(objHeap, v.intVal, "kind");
+	const kindField = wireGet(arrHeap, objHeap, v.intVal, "kind");
 	return kindField.kind == RaiserValueKind.Int || kindField.kind == RaiserValueKind.Float;
 }
 
@@ -798,7 +798,7 @@ function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHea
 	const len = heapArrayLen(arrHeap, arrHandle);
 	for (let j = 0; j < len; j = j + 1) {
 		const el = heapArrayGet(arrHeap, arrHandle, j);
-		if (_isNodeShaped(objHeap, el)) {
+		if (_isNodeShaped(arrHeap, objHeap, el)) {
 			out.push(el);
 		} else if (el.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, el.intVal, out);
@@ -817,7 +817,7 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	for (let i = 0; i < n; i = i + 1) {
 		if (isNodeWireMetaField(heapObjectFieldNameAt(objHeap, h, i))) continue;
 		const v = heapObjectFieldValueAt(arrHeap, objHeap, h, i);
-		if (_isNodeShaped(objHeap, v)) {
+		if (_isNodeShaped(arrHeap, objHeap, v)) {
 			out.push(v);
 		} else if (v.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, v.intVal, out);
@@ -1059,14 +1059,14 @@ function _bridgeMsTimeNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(Date.now());
 }
 
-function isWireNode(objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
+function isWireNode(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
 	if (n.kind != RaiserValueKind.Object) return false;
-	const k = wireGet(objHeap, n.intVal, "kind");
+	const k = wireGet(arrHeap, objHeap, n.intVal, "kind");
 	return k.kind == RaiserValueKind.Int && k.intVal == (kind as int64);
 }
 
-function isTypedAsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
-	const t = boundTypeOfObject(objHeap, h);
+function isTypedAsFloat(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): boolean {
+	const t = boundTypeOfObject(arrHeap, objHeap, h);
 	const repr = distinctNumericBase(t) ?? t;
 	return repr != null && (repr.kind == TypeKind.Float32 || repr.kind == TypeKind.Float64 || repr.kind == TypeKind.Number);
 }
@@ -1076,17 +1076,20 @@ function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxBool(isWireNode(objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(objHeap, args[0].intVal) || isTypedAsFloat(objHeap, args[0].intVal)));
+	const arrHeapOrNull = activeHostArrayHeap();
+	if (arrHeapOrNull == null) return boxBool(false);
+	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+	return boxBool(isWireNode(arrHeap, objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(arrHeap, objHeap, args[0].intVal) || isTypedAsFloat(arrHeap, objHeap, args[0].intVal)));
 }
 
-function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
+function wireNodeKindText(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue): string {
 	if (n.kind != RaiserValueKind.Object) return "null";
-	const kind = wireGet(objHeap, n.intVal, "kind");
+	const kind = wireGet(arrHeap, objHeap, n.intVal, "kind");
 	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
 }
 
-function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
-	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(objHeap, n.intVal) : null;
+function enumMemberOrdinal(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
+	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(arrHeap, objHeap, n.intVal) : null;
 	if (sym == null || sym.symbolKind != SymbolKind.EnumMember || sym.symbolType == null) return raiserNil();
 	const enumType = sym.symbolType.kind == TypeKind.EnumLiteral && sym.symbolType.typeReturn != null ? sym.symbolType.typeReturn : sym.symbolType;
 	const index: int32 = enumType.kind == TypeKind.Enum ? enumType.typeNames.indexOf(sym.name) as int32 : -1;
@@ -1095,64 +1098,67 @@ function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserVal
 
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("intValue needs an integer literal node", true);
 		return raiserInt(0);
 	}
 	const n = args[0];
-	const ordinal = enumMemberOrdinal(objHeap, n);
+	const ordinal = enumMemberOrdinal(arrHeap, objHeap, n);
 	if (ordinal.kind == RaiserValueKind.Int) return ordinal;
-	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
-		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return raiserInt(0);
 	}
-	if (wireLiteralIsFloat(objHeap, n.intVal)) {
+	if (wireLiteralIsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("intValue needs an integer literal, got a float literal; read it with floatValue", true);
 		return raiserInt(0);
 	}
-	const refusal = wireLiteralIntegerRefusal(objHeap, n.intVal);
+	const refusal = wireLiteralIntegerRefusal(arrHeap, objHeap, n.intVal);
 	if (refusal != "") {
 		raiseFromHost("intValue: " + refusal, true);
 		return raiserInt(0);
 	}
-	return raiserInt(wireLiteralInteger(objHeap, n.intVal));
+	return raiserInt(wireLiteralInteger(arrHeap, objHeap, n.intVal));
 }
 
 function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("floatValue needs a float literal node", true);
 		return boxFloat(0.0);
 	}
 	const n = args[0];
-	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
-		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return boxFloat(0.0);
 	}
-	if (!wireLiteralIsFloat(objHeap, n.intVal) && !isTypedAsFloat(objHeap, n.intVal)) {
+	if (!wireLiteralIsFloat(arrHeap, objHeap, n.intVal) && !isTypedAsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("floatValue needs a float literal, got an integer literal; read it with intValue", true);
 		return boxFloat(0.0);
 	}
-	return boxFloat(wireLiteralFloat(objHeap, n.intVal));
+	return boxFloat(wireLiteralFloat(arrHeap, objHeap, n.intVal));
 }
 
 function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("stringValue needs a string literal node", true);
 		return boxString("");
 	}
 	const n = args[0];
-	if (isWireNode(objHeap, n, NodeKind.Identifier)) {
-		const sym = boundSymOfObject(objHeap, n.intVal);
+	if (isWireNode(arrHeap, objHeap, n, NodeKind.Identifier)) {
+		const sym = boundSymOfObject(arrHeap, objHeap, n.intVal);
 		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
-		return boxString(unboxString(wireGet(objHeap, n.intVal, "name")));
+		return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "name")));
 	}
-	if (!isWireNode(objHeap, n, NodeKind.StringLiteral)) {
-		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.StringLiteral)) {
+		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return boxString("");
 	}
-	return boxString(unboxString(wireGet(objHeap, n.intVal, "value")));
+	return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "value")));
 }
 
 function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
@@ -1461,13 +1467,13 @@ function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
 	if (objHeap == null || arrHeap == null) return raiserNil();
 	const u = args[0];
 	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
-	const tag = wireGet(objHeap, u.intVal, "$tag").intVal;
+	const tag = wireGet(arrHeap, objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
 		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
 		raiseFromHost(unboxString(args[2]) + unboxString(label) + "'", true);
 		return raiserNil();
 	}
-	return wireGet(objHeap, u.intVal, "$v");
+	return wireGet(arrHeap, objHeap, u.intVal, "$v");
 }
 
 function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
@@ -1530,14 +1536,13 @@ function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
-	const handle = allocWireObject(objHeap, WIRE_UNION);
-	wireSet(objHeap, handle, "$tag", args[1]);
-	wireSet(objHeap, handle, "$v", args[0]);
 	const arrHeap = activeHostArrayHeap();
-	if (arrHeap != null) {
-		rcIncref(arrHeap, objHeap, args[0]);
-		rcIncref(arrHeap, objHeap, args[1]);
-	}
+	if (arrHeap == null) throw new Error("internal: msUnionWrapMaybe called with no active host array heap");
+	const handle = allocWireObject(objHeap, WIRE_UNION);
+	wireSet(arrHeap, objHeap, handle, "$tag", args[1]);
+	wireSet(arrHeap, objHeap, handle, "$v", args[0]);
+	rcIncref(arrHeap, objHeap, args[0]);
+	rcIncref(arrHeap, objHeap, args[1]);
 	return raiserObject(handle);
 }
 
