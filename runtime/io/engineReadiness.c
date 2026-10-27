@@ -107,7 +107,10 @@ static void msIoEngineThreadDestroy(void) {
 msIoEngine* msGetIoEngine(void) {
 	if (_tlEngine == NULL) {
 		_tlEngine = msIoEngineCreate();
-		if (_tlEngine != NULL) msOnThreadDestruction(msIoEngineThreadDestroy);
+		if (_tlEngine != NULL) {
+			msOnThreadDestruction(msIoEngineThreadDestroy);
+			msIoEngineCreated();
+		}
 	}
 	return _tlEngine;
 }

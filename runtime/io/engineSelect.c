@@ -10,15 +10,6 @@
 #include "engine.h"
 #include "runtime/promise/pool.h"
 
-#if !MS_IO_HAS_ENGINE
-#elif defined(__linux__) && !defined(MS_USE_EPOLL)
-  #include "engineUring.c"
-#elif defined(_WIN32)
-  #include "engineIOCP.c"
-#else
-  #include "engineReadiness.c"
-#endif
-
 #if MS_IO_HAS_ENGINE && !defined(_WIN32)
 #include "runtime/promise/dispatch.h"
 
@@ -34,5 +25,15 @@ static int msIoPollThreadEngine(int timeoutMs, int wakeFd) {
 	return msIoEnginePoll(e, timeoutMs);
 }
 
-__attribute__((constructor)) static void msIoInstallPollHook(void) { msSetIoPollHook(msIoPollThreadEngine); }
+static void msIoEngineCreated(void) { msSetIoPollHook(msIoPollThreadEngine); }
+#endif
+
+
+#if !MS_IO_HAS_ENGINE
+#elif defined(__linux__) && !defined(MS_USE_EPOLL)
+  #include "engineUring.c"
+#elif defined(_WIN32)
+  #include "engineIOCP.c"
+#else
+  #include "engineReadiness.c"
 #endif
