@@ -26,12 +26,15 @@ export function pushFuncBoundary(ss: ScopeStack): void {
 	ss.funcMarkers.push(ss.syms.length);
 }
 
-export function popFuncBoundary(ss: ScopeStack): void {
-	const marker = ss.funcMarkers[ss.funcMarkers.length - 1];
-	while (ss.syms.length > marker) {
+export function truncateScopeStack(ss: ScopeStack, length: number): void {
+	while (ss.syms.length > length) {
 		ss.syms.pop();
 		ss.spellings.pop();
 	}
+}
+
+export function popFuncBoundary(ss: ScopeStack): void {
+	truncateScopeStack(ss, ss.funcMarkers[ss.funcMarkers.length - 1]);
 	ss.funcMarkers.pop();
 }
 
@@ -63,8 +66,8 @@ export function popLoopBoundary(ss: ScopeStack): void {
 }
 
 // Deep copy of the scope stack — every array cloned so the source remains
-// independent of subsequent mutations. Used by the detection pass to fork a
-// fresh frame for each function body without aliasing the parent walk's stack.
+// independent of subsequent mutations. Used by the lift pass to probe a
+// closure body's captures without defining its locals on the live stack.
 export function cloneScopeStack(ss: ScopeStack): ScopeStack {
 	const syms: Symbol[] = [];
 	for (const s of ss.syms) syms.push(s);
