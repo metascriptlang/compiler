@@ -32,7 +32,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const index = s.copyPlans.length;
 	s.copyTypes.push(valueType);
 	s.copyPlans.push(plan);
-	if (valueType.kind == TypeKind.Array) {
+	if (valueType.kind == TypeKind.Array || valueType.kind == TypeKind.SizedArray) {
 		plan.kind = RaiserCopyKind.Array;
 		plan.children.push(copyPlan(s, valueType.typeReturn));
 	} else if (valueType.kind == TypeKind.Struct) {
@@ -167,7 +167,7 @@ export function isInPlaceCell(s: RaiserCompState, valueType: Type | null): boole
 export function aggregateAssignPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const t = valueShape(valueType);
 	if (t == null) return -1;
-	if (t.kind == TypeKind.Array) return copyPlan(s, t);
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return copyPlan(s, t);
 	if (t.kind == TypeKind.Union && isUnionCell(t) && userHookOf(t, AttachedOp.AttachedDestructor) == null) return copyPlan(s, t);
 	return -1;
 }
