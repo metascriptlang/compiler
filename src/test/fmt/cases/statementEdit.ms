@@ -2,7 +2,7 @@ import { parseSource } from "../../../parser/statements/validation";
 import "../../../parser/statements/core";
 import { NodeKind } from "../../../ast/node";
 import { defaultFormatOptions } from "../../../compiler/fmt/options";
-import { formatStatementsEdit, rangeStatements, applyEdit, StatementRun } from "../../../compiler/fmt/edit";
+import { formatRunEdits, rangeStatements, StatementRun } from "../../../compiler/fmt/edit";
 
 function runAt(source: string, line: int32, column: int32): StatementRun | null {
 	const parsed = parseSource(source);
@@ -15,15 +15,20 @@ function runAt(source: string, line: int32, column: int32): StatementRun | null 
 function reformatAt(source: string, line: int32, column: int32): string {
 	const run = runAt(source, line, column);
 	if (run == null) return "NO STATEMENT";
-	const edit = formatStatementsEdit(run, source, defaultFormatOptions());
-	if (!edit.ok) return "FMT ERROR: " + edit.error;
-	return applyEdit(source, edit.value);
+	const edits = formatRunEdits(run, source, defaultFormatOptions());
+	if (!edits.ok) return "FMT ERROR: " + edits.error;
+	let result = source;
+	for (let i = edits.value.length - 1; i >= 0; i -= 1) {
+		const e = edits.value[i];
+		result = result.byteSlice(0, e.start) + e.newText + result.byteSlice(e.end, result.byteLength);
+	}
+	return result;
 }
 
 function stmtKindAt(source: string, line: int32, column: int32): string {
 	const run = runAt(source, line, column);
 	if (run == null) return "none";
-	return NodeKind[run.stmts[0].kind];
+	return NodeKind[run.first.kind];
 }
 
 const MIXED = "const xs = [\n\t1,\n\t2,\n];\nfunction f(): void {\n\tlet   x=1;\n\tconst y = [3,\n\t\t4];\n}\n";

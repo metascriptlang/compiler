@@ -1,9 +1,10 @@
-import { Node, NodeKind, ProgramData, BlockStmtData, ClassDeclData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData } from "../../ast/node";
 import { Token } from "../../lexer/token";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions } from "./options";
 import { formatNodeAt } from "./printer/index";
 import { LineIndex, lineOffset } from "../../utils/sourceLines";
+import { ByteEdit, diffTextEdits } from "./textEdit";
 
 export { lineOffset } from "../../utils/sourceLines";
 
@@ -60,33 +61,44 @@ export function statementSpan(stmt: Node): Result<FmtEdit, string> {
 }
 
 export interface StatementRun {
-	stmts: Node[];
-	keepsBlankLines: boolean;
+	first: Node;
+	last: Node;
+	root: Node;
 }
 
-export function formatStatementsEdit(run: StatementRun, source: string, options: FormatOptions): Result<FmtEdit, string> {
-	const stmts = run.stmts;
+function byteOffset(lines: LineIndex, pos: FmtPos): int32 {
+	return lines.lineStart(pos.line) + pos.column - 1;
+}
+
+export function formatRunEdits(run: StatementRun, source: string, options: FormatOptions): Result<ByteEdit[], string> {
 	options.source = source;
-	const first = try statementSpan(stmts[0]);
-	const indent = leadingWhitespace(source, first.start.line);
-	let text = "";
-	let end = first.end;
-	for (let i = 0; i < stmts.length; i += 1) {
-		const span = try statementSpan(stmts[i]);
-		if (i > 0) text += try gapBetween(source, end, span.start, indent, run.keepsBlankLines);
-		const printed = try formatNodeAt(stmts[i], options, indent);
-		text += printed.endsWith("\n") ? printed.byteSlice(0, printed.byteLength - 1) : printed;
-		end = span.end;
-	}
-	return Result.ok({ start: first.start, end, newText: text });
-}
-
-function gapBetween(source: string, from: FmtPos, to: FmtPos, indent: string, keepsBlankLines: boolean): Result<string, string> {
 	const lines = LineIndex.build(source);
-	const gap = source.byteSlice(lines.lineStart(from.line) + from.column - 1, lines.lineStart(to.line) + to.column - 1);
-	if (gap.trim() != "") return Result.err(`range formatting: unattached text "${gap.trim()}" between statements at ${from.line}:${from.column} and ${to.line}:${to.column}`);
-	if (to.line == from.line) return Result.ok(gap);
-	return Result.ok(keepsBlankLines && to.line - from.line > 1 ? "\n\n" + indent : "\n" + indent);
+	const firstSpan = try statementSpan(run.first);
+	const lastSpan = try statementSpan(run.last);
+	let runStart = lineOffset(source, firstSpan.start.line);
+	if (source.byteSlice(runStart, byteOffset(lines, firstSpan.start)).trim() != "") runStart = byteOffset(lines, firstSpan.start);
+	const runEnd = byteOffset(lines, lastSpan.end);
+
+	let rootStart = 0;
+	let rootEnd = source.byteLength;
+	let indent = "";
+	if (run.root.kind != NodeKind.Program) {
+		const span = try statementSpan(run.root);
+		rootStart = byteOffset(lines, span.start);
+		rootEnd = byteOffset(lines, span.end);
+		indent = leadingWhitespace(source, span.start.line);
+	}
+	const printed = try formatNodeAt(run.root, options, indent);
+	const newText = run.root.kind != NodeKind.Program && printed.endsWith("\n") ? printed.byteSlice(0, printed.byteLength - 1) : printed;
+
+	const kept: ByteEdit[] = [];
+	for (const edit of diffTextEdits(source.byteSlice(rootStart, rootEnd), newText)) {
+		const start = rootStart + edit.start;
+		const end = rootStart + edit.end;
+		const inside = start == end ? start >= runStart && start <= runEnd : start < runEnd && end > runStart;
+		if (inside) kept.push({ start, end, newText: edit.newText });
+	}
+	return Result.ok(kept);
 }
 
 export function applyEdit(source: string, edit: FmtEdit): string {
@@ -97,13 +109,11 @@ export function applyEdit(source: string, edit: FmtEdit): string {
 }
 
 function isStatementList(node: Node): boolean {
-	return node.kind == NodeKind.Program || node.kind == NodeKind.BlockStmt || node.kind == NodeKind.ClassDecl;
+	return node.kind == NodeKind.Program || node.kind == NodeKind.BlockStmt;
 }
 
 function statementsOf(node: Node): Node[] {
-	if (node.kind == NodeKind.Program) return (node.data as ProgramData).programStmts;
-	if (node.kind == NodeKind.ClassDecl) return (node.data as ClassDeclData).classBody;
-	return (node.data as BlockStmtData).statements;
+	return node.kind == NodeKind.Program ? (node.data as ProgramData).programStmts : (node.data as BlockStmtData).statements;
 }
 
 function touches(stmt: Node, from: FmtPos, to: FmtPos): Result<boolean, string> {
@@ -127,7 +137,8 @@ function runIn(node: Node, from: FmtPos, to: FmtPos): Result<StatementRun | null
 			if (try touches(s, from, to)) touched.push(s);
 		}
 		if (touched.length == 0) return Result.ok(null);
-		const own: StatementRun = { stmts: touched, keepsBlankLines: node.kind == NodeKind.Program };
+		const last = touched[touched.length - 1];
+		const own: StatementRun = { first: touched[0], last, root: touched.length == 1 ? last : node };
 		if (touched.length != 1 || !contains(touched[0], from, to)) return Result.ok(own);
 		const inner = try runInChildren(touched[0], from, to);
 		return Result.ok(inner != null ? inner : own);
