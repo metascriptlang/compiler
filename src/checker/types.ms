@@ -3529,45 +3529,88 @@ class HeldBeyond {
 }
 
 let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
-let _heldByName: HashMap<string, HeldBeyond> = new HashMap<string, HeldBeyond>();
+let _heldByFieldNames: HashMap<string, HashMap<Type, HeldBeyond>> = new HashMap<string, HashMap<Type, HeldBeyond>>();
+let _speculationDepth: int32 = 0;
 
 export function resetHeldBeyond(): void {
 	_heldBySym = new HashMap<Symbol, HeldBeyond>();
-	_heldByName = new HashMap<string, HeldBeyond>();
+	_heldByFieldNames = new HashMap<string, HashMap<Type, HeldBeyond>>();
+	_speculationDepth = 0;
 }
 
-function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
+export function enterSpeculation(): void {
+	_speculationDepth += 1;
+}
+
+export function leaveSpeculation(): void {
+	if (_speculationDepth == 0) throw new Error("internal: leaveSpeculation without a matching enterSpeculation");
+	_speculationDepth -= 1;
+}
+
+function newHeldBeyond(): HeldBeyond {
+	return { held: [], seen: new HashSet<Type>() };
+}
+
+function heldEntry(slot: Type): HeldBeyond {
 	if (slot.sym != null) {
 		const known = _heldBySym.get(slot.sym);
-		if (known != null || !create) return known;
-		const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
+		if (known != null) return known;
+		const made = newHeldBeyond();
 		_heldBySym.set(slot.sym, made);
 		return made;
 	}
-	const key = "{" + slot.typeNames.join(",") + "}";
-	const known = _heldByName.get(key);
-	if (known != null || !create) return known;
-	const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
-	_heldByName.set(key, made);
+	const fieldNames = slot.typeNames.join(",");
+	let bucket = _heldByFieldNames.get(fieldNames);
+	if (bucket == null) {
+		bucket = new HashMap<Type, HeldBeyond>();
+		_heldByFieldNames.set(fieldNames, bucket);
+	}
+	const known = bucket.get(slot);
+	if (known != null) return known;
+	const made = newHeldBeyond();
+	bucket.set(slot, made);
 	return made;
+}
+
+function opensToHeld(slot: Type): boolean {
+	return slot.kind == TypeKind.Struct && (slot.sym == null || slot.sym.symbolKind == SymbolKind.Interface);
 }
 
 // A slot typed by an interface or an unnamed record takes any object whose leading fields fit
 // (objectLayoutFits), so a cycle can close through it by way of that object. The checker notes
-// each such type here and the cycle classification walks them, as the reference walks the
-// subtypes of a non-final object; a slot nothing else was accepted into stays closed.
+// each such type here, except while it only tries a relation (an overload candidate it ranks),
+// and the cycle classification walks them, as the reference walks the subtypes of a non-final
+// object; a slot nothing else was accepted into stays closed.
 export function noteHeldBeyond(slot: Type, held: Type): void {
-	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return;
-	const entry = heldEntry(slot, true)!;
+	if (_speculationDepth > 0 || !opensToHeld(slot)) return;
+	const entry = heldEntry(slot);
 	if (entry.seen.has(held)) return;
 	entry.seen.add(held);
 	entry.held.push(held);
 }
 
+// An unnamed record is one type wherever it is spelled, so the types held beyond it are those
+// noted under every slot with its identity (field names and field types).
 export function heldBeyond(slot: Type): Type[] {
-	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return [];
-	const entry = heldEntry(slot, false);
-	return entry != null ? entry.held : [];
+	if (!opensToHeld(slot)) return [];
+	if (slot.sym != null) {
+		const entry = _heldBySym.get(slot.sym);
+		return entry != null ? entry.held : [];
+	}
+	const bucket = _heldByFieldNames.get(slot.typeNames.join(","));
+	if (bucket == null) return [];
+	const identity = anonStructName(slot.typeNames, slot.typeChildren);
+	const held: Type[] = [];
+	const seen = new HashSet<Type>();
+	for (const noted of bucket.keys()) {
+		if (anonStructName(noted.typeNames, noted.typeChildren) != identity) continue;
+		for (const t of bucket.get(noted)!.held) {
+			if (seen.has(t)) continue;
+			seen.add(t);
+			held.push(t);
+		}
+	}
+	return held;
 }
 
 export function nominalTypeKey(t: Readonly<Type>): string {

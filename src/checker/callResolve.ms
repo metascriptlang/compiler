@@ -29,7 +29,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
+import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -4091,6 +4091,13 @@ interface ContextPick {
 	tie: boolean;
 }
 
+function trialScore(candidate: Type, args: Node[], argTypes: Type[], skipMask: boolean[]): CandidateScore {
+	enterSpeculation();
+	const score = scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
+	leaveSpeculation();
+	return score;
+}
+
 // The reference's `chooseOverload`: a context-sensitive argument is checked against each
 // candidate's own parameter, and every candidate it fits is ranked with the type it took
 // there, so the most specific fitting overload wins and a tie is an error.
@@ -4107,7 +4114,7 @@ function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[]
 		const formals = winnerFormals(ctx, callNode, candSyms[ci], c, args, argTypes, skipMask, expectedType);
 		if (!contextArgsFit(ctx, args, skipMask, formals.checked)) continue;
 		const typed = typedContextArgs(args, argTypes, skipMask);
-		const score = scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), scored, literalRelations(c.typeChildren, args, typed));
+		const score = trialScore(c, args, typed, scored);
 		while (fitScores.length < ci) fitScores.push(noMatchScore());
 		fitScores.push(score);
 		if (isNoMatch(score)) continue;
@@ -4344,7 +4351,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const score = candType == null || candType.kind != TypeKind.Function || (!implAsFallback && isHiddenImplementation(candSyms[ci], ci < ownCount ? sym : gathered!))
 			? noMatchScore()
 			: spreadAt >= 0 && !spreadFitsCandidate(candType, spreadAt, argTypes[spreadAt], getMinArity(candType)) ? noMatchScore()
-			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
+			: trialScore(candType, args, argTypes, skipMask);
 		scores.push(score);
 		const cmp = score.exactMatches < 0 ? -1 : bestIdx < 0 ? 1 : cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
 		if (cmp > 0) {
@@ -5093,7 +5100,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 	while (i < candidates.length) {
 		if (candidates[i].kind != TypeKind.Function || rejected[i]) { i = i + 1; continue; }
 		const at = typedPer != null ? typedPer[i] : argTypes;
-		const score = scoreCandidateWithSkip(candidates[i].typeChildren, at, getMinArity(candidates[i]), skipMask, literalRelations(candidates[i].typeChildren, args, at));
+		const score = trialScore(candidates[i], args, at, skipMask);
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
