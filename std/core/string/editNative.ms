@@ -121,17 +121,23 @@ function replaceFirst(s: string, search: string, replacement: string): string {
 	const at = xb.length == 0 ? 0 : findFrom(sb, xb, 0);
 	if (at < 0) return s;
 	const end = at + xb.length;
-	const patterned = hasDollar(rb);
-	if (!patterned && xb.length == 0) return replacement + s;
-	const width = patterned ? substitutedLength(rb, sb, at, end, end, 0) : rb.length;
-	const out = newBytes(sb.length - xb.length + width);
+	if (hasDollar(rb)) return replaceFirstPatterned(sb, rb, at, end);
+	if (xb.length == 0) return replacement + s;
+	const out = newBytes(sb.length - xb.length + rb.length);
 	const dst = writable(out);
 	copyTo(dst, 0, sb, 0, at);
-	if (patterned) {
-		substituteInto(dst, at, rb, sb, at, end, end, 0, 0);
-	} else {
-		copyTo(dst, at, rb, 0, rb.length);
-	}
+	copyTo(dst, at, rb, 0, rb.length);
+	copyTo(dst, at + rb.length, sb, end, sb.length - end);
+	return out;
+}
+
+@noinline
+function replaceFirstPatterned(sb: Readonly<Span<uint8>>, rb: Readonly<Span<uint8>>, at: int64, end: int64): string {
+	const width = substitutedLength(rb, sb, at, end, end, 0);
+	const out = newBytes(sb.length - (end - at) + width);
+	const dst = writable(out);
+	copyTo(dst, 0, sb, 0, at);
+	substituteInto(dst, at, rb, sb, at, end, end, 0, 0);
 	copyTo(dst, at + width, sb, end, sb.length - end);
 	return out;
 }
@@ -227,7 +233,35 @@ function replaceEvery(s: string, search: string, replacement: string): string {
 	const xb = search.asBytes();
 	const rb = replacement.asBytes();
 	if (xb.length == 0) return hasDollar(rb) ? interleavePatterned(sb, rb) : interleaveUnits(sb, rb);
-	const patterned = hasDollar(rb);
+	if (hasDollar(rb)) return replaceEveryPatterned(s, sb, xb, rb);
+	let count: int64 = 0;
+	let pos: int64 = 0;
+	while (true) {
+		const found = findFrom(sb, xb, pos);
+		if (found < 0) break;
+		count += 1;
+		pos = found + xb.length;
+	}
+	if (count == 0) return s;
+	const out = newBytes(sb.length + count * (rb.length - xb.length));
+	const dst = writable(out);
+	let src: int64 = 0;
+	let at: int64 = 0;
+	while (true) {
+		const found = findFrom(sb, xb, src);
+		if (found < 0) break;
+		copyTo(dst, at, sb, src, found - src);
+		at += found - src;
+		src = found + xb.length;
+		copyTo(dst, at, rb, 0, rb.length);
+		at += rb.length;
+	}
+	copyTo(dst, at, sb, src, sb.length - src);
+	return out;
+}
+
+@noinline
+function replaceEveryPatterned(s: string, sb: Readonly<Span<uint8>>, xb: Readonly<Span<uint8>>, rb: Readonly<Span<uint8>>): string {
 	let count: int64 = 0;
 	let length: int64 = sb.length;
 	let pos: int64 = 0;
@@ -236,7 +270,7 @@ function replaceEvery(s: string, search: string, replacement: string): string {
 		if (found < 0) break;
 		count += 1;
 		pos = found + xb.length;
-		length += (patterned ? substitutedLength(rb, sb, found, pos, pos, 0) : rb.length) - xb.length;
+		length += substitutedLength(rb, sb, found, pos, pos, 0) - xb.length;
 	}
 	if (count == 0) return s;
 	const out = newBytes(length);
@@ -249,12 +283,7 @@ function replaceEvery(s: string, search: string, replacement: string): string {
 		copyTo(dst, at, sb, src, found - src);
 		at += found - src;
 		src = found + xb.length;
-		if (patterned) {
-			at = substituteInto(dst, at, rb, sb, found, src, src, 0, 0);
-		} else {
-			copyTo(dst, at, rb, 0, rb.length);
-			at += rb.length;
-		}
+		at = substituteInto(dst, at, rb, sb, found, src, src, 0, 0);
 	}
 	copyTo(dst, at, sb, src, sb.length - src);
 	return out;
