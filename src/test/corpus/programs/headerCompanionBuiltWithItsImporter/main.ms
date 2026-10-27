@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: twice
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — the companion `.c` of an imported C header is built whenever the module
 // that imports the header is, even when no MetaScript code reaches the header's functions.
 // Axes: a function of the header called through an `extern function` of another module, and one

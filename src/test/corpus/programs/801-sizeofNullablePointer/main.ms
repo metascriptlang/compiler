@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus801Mixed
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — `Ptr<T> | null` and `Ref<T> | null` are emitted as a bare C pointer, so the
 // compile-time `sizeof` folds them to one pointer too; counting them as a tagged union made a
 // struct holding one disagree with the C layout it is passed to.

@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @skip-raiser: std/http/server has no Raiser module; the server runs on C
 // @stdout: stop twice 4 threads: HTTP/1.1 200 OK /q0 | HTTP/1.1 200 OK /q1 | HTTP/1.1 200 OK /q2 | HTTP/1.1 200 OK /q3
 // @stdout: stop twice 4 threads: served=4 running=false
 // @stdout: stop twice async 4 threads: HTTP/1.1 200 OK /q0 | HTTP/1.1 200 OK /q1 | HTTP/1.1 200 OK /q2 | HTTP/1.1 200 OK /q3

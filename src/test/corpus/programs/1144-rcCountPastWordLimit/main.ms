@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus1144NearWrap
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — a live object's reference count keeps counting past the width of a 32-bit
 // word. The helper moves the count to 4 below 2^32 in place of four billion real references;
 // eight real references then cross that boundary, plain and atomic, and leaving them must not
