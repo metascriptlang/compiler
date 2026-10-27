@@ -10,8 +10,9 @@ import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../form
 import { formatNode } from "../../fmt/printer";
 import { FmtPos, formatStatementEdit, innermostStatement, applyEdit } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
-import { lspByteColumn, lspCharacterIn } from "../position";
+import { lspByteColumn, lspByteColumnIn, lspCharacterIn } from "../position";
 import { checkLossless } from "../../fmt/lossless";
+import { ByteEdit, diffTextEdits } from "../../fmt/textEdit";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource, lspDocumentUri } from "./shared";
@@ -118,14 +119,36 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 
+	const edits = textEditsJson(source, diffTextEdits(source, formatted), 0);
+	if (!edits.ok) return lspErrorResponse(id, -32603, edits.error);
+	writeStderr(`[LSP-FMT] total=${performance.now() - t0}ms\n`);
+	return lspResponse(id, "[" + edits.value + "]");
+}
+
+interface LspPosition {
+	line: int32;
+	character: int32;
+}
+
+function lspPositionAt(lines: LineIndex, source: string, offset: int32): Result<LspPosition, string> {
+	if (offset < 0 || offset > source.byteLength) return Result.err(`Formatting edit offset ${offset} is outside the document`);
+	const line = lines.lineOf(offset);
+	const column = offset - lines.lineStart(line) + 1;
+	const character = lspCharacterIn(lines, source, line, column);
+	if (lspByteColumnIn(lines, source, line, character) != column) return Result.err(`Formatting edit offset ${offset} has no UTF-16 position`);
+	return Result.ok({ line: line - 1, character });
+}
+
+// Edits are byte offsets into a slice of `source` starting at `base`.
+function textEditsJson(source: string, edits: ByteEdit[], base: int32): Result<string, string> {
 	const lines = LineIndex.build(source);
-	const lineCount = lines.starts.length - 1;
-	const lastLineLen = source.byteSlice(lines.lineStart(lineCount + 1), source.byteLength).length;
-	const t5 = performance.now();
-	const edit = lspFmtMultiLineTextEdit(0, 0, lineCount, lastLineLen, formatted);
-	const t6 = performance.now();
-	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
-	return lspResponse(id, "[" + edit + "]");
+	const items: string[] = [];
+	for (const edit of edits) {
+		const from = try lspPositionAt(lines, source, base + edit.start);
+		const to = try lspPositionAt(lines, source, base + edit.end);
+		items.push(lspFmtMultiLineTextEdit(from.line, from.character, to.line, to.character, edit.newText));
+	}
+	return Result.ok(items.join(","));
 }
 
 function formattingBytePosition(source: string, position: string): Result<FmtPos, string> {
@@ -166,11 +189,9 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const lines = LineIndex.build(source);
 	const startOffset = lines.lineStart(e.start.line) + e.start.column - 1;
 	const endOffset = lines.lineStart(e.end.line) + e.end.column - 1;
-	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
-
-	const startCharacter = lspCharacterIn(lines, source, e.start.line, e.start.column);
-	const endCharacter = lspCharacterIn(lines, source, e.end.line, e.end.column);
-	return lspResponse(id, "[" + lspFmtMultiLineTextEdit(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter, e.newText) + "]");
+	const edits = textEditsJson(source, diffTextEdits(source.byteSlice(startOffset, endOffset), e.newText), startOffset);
+	if (!edits.ok) return lspErrorResponse(id, -32603, edits.error);
+	return lspResponse(id, "[" + edits.value + "]");
 }
 
 function formattingDb(source: string): TransAmDb {
@@ -262,15 +283,24 @@ function applyClientUtf16Edit(source: string, edit: string): string {
 	return source.slice(0, from) + lspGetField(edit, "newText") + source.slice(to, source.length);
 }
 
+function editCharacter(edit: string, side: string, field: string): int32 {
+	return lspGetNumberField(lspGetObjectField(lspGetObjectField(edit, "range"), side), field) as int32;
+}
+
+function assertEditsWithin(edits: string[], line: int32, from: int32, to: int32): void {
+	if (edits.length == 0) throw new Error("Expected at least one edit");
+	for (const edit of edits) {
+		const inside = editCharacter(edit, "start", "line") == line && editCharacter(edit, "end", "line") == line;
+		if (!inside || editCharacter(edit, "start", "character") < from || editCharacter(edit, "end", "character") > to) throw new Error("Edit leaves the formatted span: " + edit);
+	}
+}
+
 function assertDocumentUtf16(text: string, endCharacter: int32): void {
 	const source = "export const s=\"" + text + "\";";
 	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
-	if (edits.length != 1) throw new Error("Expected one document edit");
-	const range = lspGetObjectField(edits[0], "range");
-	const start = lspGetObjectField(range, "start");
-	const end = lspGetObjectField(range, "end");
-	if (lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong document UTF-16 range: " + edits[0]);
-	const result = applyClientUtf16Edit(source, edits[0]);
+	const last = edits[edits.length - 1];
+	if (editCharacter(last, "end", "line") != 0 || editCharacter(last, "end", "character") != endCharacter) throw new Error("Wrong document UTF-16 end: " + last);
+	const result = applyClientUtf16Edits(source, edits);
 	if (result != "export const s = \"" + text + "\";\n") throw new Error("Wrong formatted document: " + result);
 	if (!parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Formatted document must parse and check");
 }
@@ -281,12 +311,8 @@ function assertRangeUtf16(text: string, startCharacter: int32, endCharacter: int
 	const character = startCharacter + 1;
 	const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"range":{"start":{"line":0,"character":${character}},"end":{"line":0,"character":${character}}}}`;
 	const edits = formattingItems(handleRangeFormatting("1", params, formattingDb(source)));
-	if (edits.length != 1) throw new Error("Expected one range edit for " + text);
-	const range = lspGetObjectField(edits[0], "range");
-	const start = lspGetObjectField(range, "start");
-	const end = lspGetObjectField(range, "end");
-	if (lspGetNumberField(start, "character") != startCharacter || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong selected statement or UTF-16 range: " + edits[0]);
-	const result = applyClientUtf16Edit(source, edits[0]);
+	assertEditsWithin(edits, 0, startCharacter, endCharacter);
+	const result = applyClientUtf16Edits(source, edits);
 	if (result != prefix + "export const n = 2;") throw new Error("Range edit changed surrounding text: " + result);
 	if (!checkLossless(source, result).ok || !parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Range edit must preserve tokens, parse and check");
 }
@@ -352,12 +378,9 @@ function assertFormattedBuffer(source: string, result: string): void {
 function assertMultilineDocument(eol: string): void {
 	const source = "export const first=\"é😀\";" + eol + "export const last=\"日😀\";";
 	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
-	if (edits.length != 1) throw new Error("Expected multiline document edit");
-	const range = lspGetObjectField(edits[0], "range");
-	const start = lspGetObjectField(range, "start");
-	const end = lspGetObjectField(range, "end");
-	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "line") != 1 || lspGetNumberField(end, "character") != 24) throw new Error("Wrong multiline document range: " + edits[0]);
-	const result = applyClientUtf16Edit(source, edits[0]);
+	const last = edits[edits.length - 1];
+	if (editCharacter(last, "end", "line") != 1 || editCharacter(last, "end", "character") != 24) throw new Error("Wrong multiline document end: " + last);
+	const result = applyClientUtf16Edits(source, edits);
 	if (!result.contains("export const first = \"é😀\";") || !result.contains("export const last = \"日😀\";")) throw new Error("Missing formatted declarations");
 	assertFormattedBuffer(source, result);
 	if (formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(result))).length != 0) throw new Error("Document formatting is not idempotent");
@@ -369,12 +392,8 @@ function assertMultilineRange(eol: string): void {
 	const source = prefix + "export const   n=2;" + suffix;
 	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":27},\"end\":{\"line\":1,\"character\":27}}}";
 	const edits = formattingItems(handleRangeFormatting("1", params, formattingDb(source)));
-	if (edits.length != 1) throw new Error("Expected multiline range edit");
-	const range = lspGetObjectField(edits[0], "range");
-	const start = lspGetObjectField(range, "start");
-	const end = lspGetObjectField(range, "end");
-	if (lspGetNumberField(start, "line") != 1 || lspGetNumberField(start, "character") != 26 || lspGetNumberField(end, "line") != 1 || lspGetNumberField(end, "character") != 45) throw new Error("Wrong multiline statement range: " + edits[0]);
-	const result = applyClientUtf16Edit(source, edits[0]);
+	assertEditsWithin(edits, 1, 26, 45);
+	const result = applyClientUtf16Edits(source, edits);
 	if (result != prefix + "export const n = 2;" + suffix) throw new Error("Multiline range edit changed surrounding text");
 	assertFormattedBuffer(source, result);
 	if (formattingItems(handleRangeFormatting("1", params, formattingDb(result))).length != 0) throw new Error("Range formatting is not idempotent");
@@ -456,4 +475,42 @@ test "indent quickfix reads its own buffer after another document was formatted"
 	const source = "export function f(): string {\n \tconst x = \"a\";\n\treturn x;\n}\n";
 	handleFormatting("1", FORMAT_PARAMS, formattingDb("export const a = 1;\nconst x12 = 'zzzz';\n"));
 	assert quickfixText(source) == "  const x = \"a\";";
+}
+
+function applyClientUtf16Edits(source: string, edits: string[]): string {
+	let result = source;
+	for (let i = edits.length - 1; i >= 0; i -= 1) result = applyClientUtf16Edit(result, edits[i]);
+	return result;
+}
+
+function assertOneLineChange(eol: string, value: string): void {
+	const head = "export const a = \"é😀\";" + eol;
+	const tail = "export const last = 3;" + eol;
+	const source = head + "export const   b = " + value + ";" + eol + tail;
+	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
+	assertEditsWithin(edits, 1, 0, 1000);
+	if (applyClientUtf16Edits(source, edits) != head + "export const b = " + value + ";" + eol + tail) throw new Error("Edits do not reproduce the formatted text");
+}
+
+test "document formatting edits only the line that changes" {
+	assertOneLineChange("\n", "2");
+}
+
+test "document formatting edits only the changed line holding non-ASCII text" {
+	assertOneLineChange("\n", "\"é😀\"");
+}
+
+test "document formatting turns CRLF into LF with one edit per line break and one edit for the changed line" {
+	const source = "export const a = \"é😀\";\r\nexport const   b = \"日😀\";\r\nexport const last = 3;\r\n";
+	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
+	if (applyClientUtf16Edits(source, edits) != "export const a = \"é😀\";\nexport const b = \"日😀\";\nexport const last = 3;\n") throw new Error("Edits do not reproduce the formatted text");
+	let inline = 0;
+	for (const edit of edits) {
+		if (lspGetField(edit, "newText") != "\n") {
+			assertEditsWithin([edit], 1, 0, 1000);
+			inline += 1;
+		}
+	}
+	assert inline == 1;
+	assert edits.length == 4;
 }
