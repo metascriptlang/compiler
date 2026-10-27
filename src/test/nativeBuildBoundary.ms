@@ -650,6 +650,19 @@ function runCompileCache(): void {
 		record(`a ${name} that appears after its absence settled`, "22", builtValue(remembered, build(remembered, "appeared")));
 	}
 
+	runSearchChanges("local");
+
+	const shadowed = fixture("relative include dirs", "@compile(\"./native.c\");", "#include \"shadow.h\"\nint probeValue(void) { return VALUE; }\n");
+	ensureDir(`${shadowed}/inc1`);
+	ensureDir(`${shadowed}/inc2`);
+	put(`${shadowed}/inc2/shadow.h`, "#define VALUE 11\n");
+	const searched = ["--passC=-Iinc1 -Iinc2"];
+	waitForNextSecond();
+	need(build(shadowed, "baseline", "probe", searched) == 0, "relative include dirs baseline");
+	need(value(shadowed) == "11", "relative include dirs baseline value");
+	put(`${shadowed}/inc1/shadow.h`, "#define VALUE 33\n");
+	record("a header that appears in an earlier relative include dir", "33", builtValue(shadowed, build(shadowed, "shadow", "probe", searched)));
+
 	const relative = fixture("appeared relative", "@compile(\"./src/native.c\");", "", "", "unused.c");
 	ensureDir(`${relative}/src`);
 	put(`${relative}/src/native.c`, lateQuery("\"../late/late.h\""));
@@ -674,6 +687,51 @@ function runCompileCache(): void {
 	ensureDir(`${moduleAppeared}/sub`);
 	put(`${moduleAppeared}/sub/late.h`, "#define VALUE 22\n");
 	record("a header a module include queries that appears after the build", "22", builtValue(moduleAppeared, build(moduleAppeared, "appeared")));
+}
+
+function searchChange(layer: string, name: string, native: string, before: (dir: string) => void, change: (dir: string) => string, unchangedRebuilds: string = "0"): void {
+	const dir = fixture(`${layer} ${name}`, "@compile(\"./native.c\");", native);
+	before(dir);
+	waitForNextSecond();
+	need(build(dir, "baseline") == 0, `${layer} ${name} baseline`);
+	need(value(dir) == "11", `${layer} ${name} baseline value`);
+	waitForNextSecond();
+	waitForNextSecond();
+	if (layer == "store") removeAll(`${dir}/out`);
+	need(build(dir, "settled", "probe", ["--verbose"]) == 0, `${layer} ${name} settled`);
+	record(`${layer}: ${name}, unchanged, rebuilds ${unchangedRebuilds}`, unchangedRebuilds, recompiledObjects(dir, "settled"));
+	if (layer == "store") removeAll(`${dir}/out`);
+	const expected = change(dir);
+	record(`${layer}: ${name}`, expected, builtValue(dir, build(dir, "changed")));
+	env.delete("C_INCLUDE_PATH");
+}
+
+function runSearchChanges(layer: string): void {
+	searchChange(layer, "a header that appears in a C_INCLUDE_PATH dir", lateQuery("<late.h>"), (dir) => {
+		ensureDir(`${dir}/envinc`);
+		env.set("C_INCLUDE_PATH", `${dir}/envinc`);
+	}, (dir) => {
+		put(`${dir}/envinc/late.h`, "#define VALUE 22\n");
+		return "22";
+	});
+	searchChange(layer, "C_INCLUDE_PATH switched to a dir with another header", "#include <switched.h>\nint probeValue(void) { return VALUE; }\n", (dir) => {
+		ensureDir(`${dir}/a`);
+		ensureDir(`${dir}/b`);
+		put(`${dir}/a/switched.h`, "#define VALUE 11\n");
+		put(`${dir}/b/switched.h`, "#define VALUE 22\n");
+		env.set("C_INCLUDE_PATH", `${dir}/a`);
+	}, (dir) => {
+		env.set("C_INCLUDE_PATH", `${dir}/b`);
+		return "22";
+	});
+	searchChange(layer, "a header that appears spelled in another case", lateQuery("\"late.h\""), (dir) => {}, (dir) => {
+		put(`${dir}/Late.h`, "#define VALUE 22\n");
+		return exists(`${dir}/late.h`) ? "22" : "11";
+	});
+	searchChange(layer, "a header that appears in another Unicode normal form", lateQuery("\"\u00e9.h\""), (dir) => {}, (dir) => {
+		put(`${dir}/e\u0301.h`, "#define VALUE 22\n");
+		return exists(`${dir}/\u00e9.h`) ? "22" : "11";
+	}, "1");
 }
 
 function lateQuery(name: string): string {
@@ -1169,7 +1227,8 @@ function runObjectStore(): void {
 	record("a stored object with an absent queried header rebuilds nothing", "0", recompiledObjects(late, "stored"));
 	removeAll(`${late}/out`);
 	put(`${late}/inc/late.h`, "#define VALUE 22\n");
-	record("a stored object after a queried header appeared", "22", builtValue(late, build(late, "appeared")));
+		record("a stored object after a queried header appeared", "22", builtValue(late, build(late, "appeared")));
+	runSearchChanges("store");
 
 	const tool = fixture("store-toolchain", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
 	const firstTool = writeWrapper(tool, 57);
