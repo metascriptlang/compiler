@@ -456,8 +456,7 @@ function ensureLocalSchema(): void {
 }
 
 export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string, isCpp: boolean = false): string {
-	const implicit = implicitSearch(ccOption, ccBinary, isCpp, mode, extraFlags);
-	return `${getCompilerHash(ccOption, ccBinary)} ${objectCompileKey(ccOption, ccBinary, isCpp, mode, extraFlags)} ${implicit.key}`;
+	return `${getCompilerHash(ccOption, ccBinary)} ${objectCompileKey(ccOption, ccBinary, isCpp, mode, extraFlags)} ${implicitSearchKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`;
 }
 
 // Fingerprint folds in VERSION and objectStamp(): the stamp content-hashes
@@ -594,8 +593,7 @@ function developerToolchain(): string {
 export function objectStoreKey(source: string, ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
 	if (storeRoot() == "") return "";
 	const args = objectCompileArgsKey(ccOption, ccBinary, isCpp, mode, extraFlags);
-	const implicit = implicitSearch(ccOption, ccBinary, isCpp, mode, extraFlags);
-	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}\n${implicit.key}`);
+	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}\n${implicitSearchKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`);
 }
 
 export function nativeStoreSource(srcPath: string): string {
@@ -819,15 +817,32 @@ export function headerSearch(ccOption: number, ccBinary: string, isCpp: boolean,
 	return { dirs, frameworks: implicit.frameworks, complete: implicit.complete };
 }
 
-function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): ImplicitSearch {
+struct SearchProbe {
+	path: string;
+	args: string[];
+	key: string;
+}
+
+function searchProbe(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): SearchProbe | null {
 	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
-	if (!parts.ok) return { dirs: [], frameworks: [], complete: false, key: "search-unresolved" };
+	if (!parts.ok) return null;
 	const args = withoutSearchDirs(parts.value.lead);
 	for (const arg of withoutSearchDirs(parts.value.trail)) args.push(arg);
 	let inputs = `${SEARCH_FORMAT}\n${ccContentIdentity(ccOption, ccBinary)}\n${parts.value.command.path}\n${isCpp}\n${args.join("\n")}`;
 	for (const name of SEARCH_ENV) inputs = `${inputs}\n${name}=${env.get(name)}`;
 	inputs = `${inputs}${developerToolchain()}`;
-	const key = hashContent(inputs);
+	return { path: parts.value.command.path, args, key: hashContent(inputs) };
+}
+
+function implicitSearchKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	return searchProbe(ccOption, ccBinary, isCpp, mode, extraFlags)?.key ?? "search-unresolved";
+}
+
+function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): ImplicitSearch {
+	const probe = searchProbe(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (probe == null) return { dirs: [], frameworks: [], complete: false, key: "search-unresolved" };
+	const args = probe.args;
+	const key = probe.key;
 	const known = _implicitByKey.get(key);
 	if (known != null) return known;
 	const memo = `${getCacheDir()}/search.${key}`;
@@ -835,7 +850,7 @@ function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode
 	if (!found.complete) {
 		const devNull = platform == "windows" ? "NUL" : "/dev/null";
 		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", devNull, "-o", devNull]) args.push(arg);
-		const run = execFileResult(parts.value.command.path, args);
+		const run = execFileResult(probe.path, args);
 		found = parseImplicitSearch(run.started && run.pipeOk && run.exitCode == 0 ? run.errorOutput : "", key);
 		if (found.complete) writeSealed(memo, searchLines(found));
 	}
@@ -1342,9 +1357,9 @@ export function compilerIdentity(name: string, path: string, size: number, modif
 }
 
 function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
-	const c = implicitSearch(ccOption, ccBinary, false, mode, compileFlags);
-	const cpp = implicitSearch(ccOption, ccBinary, true, mode, compileFlags);
-	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}:${c.key}:${cpp.key}`;
+	const c = implicitSearchKey(ccOption, ccBinary, false, mode, compileFlags);
+	const cpp = implicitSearchKey(ccOption, ccBinary, true, mode, compileFlags);
+	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}:${c}:${cpp}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.
