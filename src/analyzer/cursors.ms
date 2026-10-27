@@ -35,7 +35,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isAwaitable, isReadonlyView, withoutReadonlyView, ownedEdgeOf, isSinkTypeForParam } from "../checker/types";
@@ -1128,7 +1128,8 @@ function computeCursorDecisions(w: WriteEffects, p: Partitions, defs: LocalDefs)
 			const g = p.graphs[p.vars[r].con.target];
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
-		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
+		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i].slice(0);
+		if (borrowedSlots[i].length > 0) valueFieldSlots(w, v.sym != null ? v.sym.symbolType : null, slots);
 		if (writtenWhileAlive(w, p, i, slots, defs)) { i += 1; continue; }
 
 		result.push(v.sym);
