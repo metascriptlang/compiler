@@ -1,4 +1,4 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
 import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
@@ -50,6 +50,10 @@ function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 		return DeclaredVisibility.NotDeclared;
 	}
 	const decl = unwrapDecl(sym.declNode);
+	if (decl != null && decl.kind == NodeKind.TypeAliasDecl) {
+		const body = aliasObjectBody(decl);
+		return body != null && (body.data as TypeObjectData).typExprFieldNames.indexOf(field) >= 0 ? DeclaredVisibility.Public : DeclaredVisibility.NotDeclared;
+	}
 	if (decl == null || (decl.kind != NodeKind.StructDecl && decl.kind != NodeKind.InterfaceDecl)) return DeclaredVisibility.NotDeclared;
 	const d = decl.data as InterfaceDeclData;
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
@@ -58,6 +62,10 @@ function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 		return vis != null && i < vis.length && hasFieldModifier(vis[i], "private") ? DeclaredVisibility.Private : DeclaredVisibility.Public;
 	}
 	return DeclaredVisibility.NotDeclared;
+}
+
+export function aliasObjectBody(decl: Node): Node | null {
+	return decl.typeExpr != null && decl.typeExpr.kind == NodeKind.TypeObject ? decl.typeExpr : null;
 }
 
 // A struct or interface field's modifiers, as written before its name.

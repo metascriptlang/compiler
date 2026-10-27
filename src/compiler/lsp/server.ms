@@ -780,6 +780,26 @@ test "replay: a build.ms module pass still applies after the session checked ano
 	assert runMemoryScenario("a build.ms module pass still applies after the session checked another project") == "";
 }
 
+test "replay: member completion lists exactly the members, fields as Field and methods as Method" {
+	assert runMemoryScenario("member completion lists exactly the members, fields as Field and methods as Method") == "";
+}
+
+test "replay: signature help after a nested call counts only the outer call's arguments" {
+	assert runMemoryScenario("signature help after a nested call counts only the outer call's arguments") == "";
+}
+
+test "replay: scope completion lists the function's locals and sorts the file's names before keywords" {
+	assert runMemoryScenario("scope completion lists the function's locals and sorts the file's names before keywords") == "";
+}
+
+test "replay: hover inside an identifier answers the range of the whole identifier" {
+	assert runMemoryScenario("hover inside an identifier answers the range of the whole identifier") == "";
+}
+
+test "replay: completion after . on a generic instance and after ?. on an optional value" {
+	assert runMemoryScenario("completion after . on a generic instance and after ?. on an optional value") == "";
+}
+
 // ===== Exports a top-level macro statement splices =====
 // lib.ms gets `export interface Foo` only from the macro statement `fooBody(0);`, so an
 // importer checked before lib.ms sees Foo only if the macro statement was expanded.

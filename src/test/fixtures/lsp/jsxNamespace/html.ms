@@ -10,3 +10,7 @@ export interface IntrinsicElements {
 	/** The anchor element. https://developer.mozilla.org/docs/Web/HTML/Element/a */
 	a: AnchorAttrs;
 }
+export type Point = {
+	/** The y coordinate. */
+	y: number;
+};

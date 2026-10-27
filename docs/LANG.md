@@ -911,8 +911,8 @@ captured by a closure`), as the reference refuses capturing a `var` parameter (l
 compiled on JS and failed in clang on C; copy the value into a local, or pass it as an argument.
 
 `move` is not a parameter modifier: it is written at the call site, `f(move v)` (see Move
-Semantics). A `sink` parameter is only for an `extern` declaration; on a MetaScript function it is
-refused (`'sink' parameter on 'f': only an extern declaration can take ownership of an argument`).
+Semantics). A `sink` parameter (`function f(sink v: T)`) takes ownership of the argument; see
+Sink Parameters.
 
 #### When to use what
 
@@ -4614,7 +4614,7 @@ function parse(input: string, out result: AST): boolean {
 }
 ```
 
-### Sink Parameters (extern declarations only)
+### Sink Parameters
 ```typescript
 extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
 ```
@@ -4624,13 +4624,15 @@ consumed and does not destroy it afterwards. It is a contextual modifier like `o
 scoring, literal fitting and generic binding look through it, so `a.push(0)` on a
 `uint8[]` picks the same overload as without the modifier.
 
-Measured 2026-09-18 (`src/test/handoff/sinkParam.ms`, 4/4): literal into a sink
-overload compiles and calls `msUint8ArrayPush`; a generic `sink value: T` binds `T`;
-`sink` as a parameter name compiles; and **a `sink` parameter on a function WITH a
-body is a compile error** — `'sink' parameter on 'eat': only an extern declaration can
-take ownership of an argument`. The callee-owns half (destroy at scope exit unless
-moved on) is not implemented, so accepting it there would leak every argument.
-NOT verified: `sink` on class methods and constructors, and the JS backend.
+A function, method or constructor with a body takes `sink` too: the callee owns the
+parameter and destroys it at scope exit unless it moved it on, and a caller that still
+uses its value afterwards passes a copy. Measured 2026-10-27: `function add(n: Node,
+sink k: Node) { n.kids.push(k); }` prints the same on C and `--target=js`; corpus
+`1129-sinkParamOwnership` (functions, methods, constructors, generics, under `@maxrss`)
+and `1130-sinkParamSuspend` (async and generator routines) pin it. A function type or an
+override whose `sink` positions differ from the one it is matched against is an error. An
+actor method refuses `sink`, `ref` and `out`. Literal fitting, generic binding and `sink`
+as a parameter name: `src/test/handoff/sinkParam.ms`.
 
 ## Proxy
 

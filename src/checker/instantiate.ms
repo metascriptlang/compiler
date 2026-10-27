@@ -842,6 +842,8 @@ function unwrapToFunctionDecl(node: Node): Node {
 		};
 		const synth = createNodeAt(NodeKind.FunctionDecl, fnData, n.location);
 		synth.nodeType = n.nodeType;
+		synth.typeExpr = n.typeExpr;
+		synth.typeExprs = n.typeExprs;
 		return synth;
 	}
 	return null as unknown as Node;

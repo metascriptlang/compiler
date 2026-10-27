@@ -59,7 +59,7 @@ import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType, genericParamNamesOf } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag, isTypeSymbol } from "../../checker/symbol";
 import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
@@ -75,7 +75,7 @@ import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
 import { takeWireRefusals, nodeToValue, builtNodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
-import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
+import { ensureShaped, resolveAnnotation, predicateTextOf } from "../../checker/resolvePass";
 import { parseIntStr, splitTopLevel } from "../../utils/string";
 import { ModuleGraph } from "../../module/graph";
 import { addWarning } from "../../checker/context";
@@ -291,38 +291,83 @@ function scopeQuoteTypeLocals(n: Node | null, outer: string[]): void {
 	forEachChild(n, (c: Node): void => { scopeQuoteTypeLocals(c, visible); });
 }
 
-function namesAnyOf(text: string, names: string[]): boolean {
+function isNameStart(ch: string): boolean {
+	return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_" || ch == "$";
+}
+
+function isNamePart(ch: string): boolean {
+	return isNameStart(ch) || (ch >= "0" && ch <= "9");
+}
+
+struct TypeTextName {
+	name: string;
+	namesValue: boolean;
+}
+
+// The names a type text refers to by itself, each marked when it names a value (the operand
+// of `typeof`). A member name after `.` and the text of a string literal type name nothing.
+function referencedTypeNames(text: string): TypeTextName[] {
+	const out: TypeTextName[] = [];
 	let i = 0;
+	let afterDot = false;
+	let afterTypeof = false;
 	while (i < text.length) {
 		const ch = text.charAt(i);
-		const starts = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_" || ch == "$";
-		if (!starts) { i += 1; continue; }
-		let end = i + 1;
-		while (end < text.length) {
-			const c = text.charAt(end);
-			if (!((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_" || c == "$")) break;
-			end += 1;
+		if (ch == "\"" || ch == "'" || ch == "`") {
+			let end = i + 1;
+			while (end < text.length && text.charAt(end) != ch) end += text.charAt(end) == "\\" ? 2 : 1;
+			i = end + 1;
+			afterDot = false;
+			afterTypeof = false;
+			continue;
 		}
-		if (names.includes(text.slice(i, end))) return true;
+		if (!isNameStart(ch)) {
+			if (ch != " ") { afterDot = ch == "."; afterTypeof = false; }
+			i += 1;
+			continue;
+		}
+		let end = i + 1;
+		while (end < text.length && isNamePart(text.charAt(end))) end += 1;
+		const name = text.slice(i, end);
+		if (name == "typeof") {
+			afterTypeof = true;
+		} else if (!afterDot) {
+			const seen = out.findIndex((n: TypeTextName): boolean => n.name == name);
+			if (seen < 0) out.push({ name, namesValue: afterTypeof });
+			else if (afterTypeof) out[seen].namesValue = true;
+		}
+		if (name != "typeof") afterTypeof = false;
+		afterDot = false;
 		i = end;
 	}
+	return out;
+}
+
+function namesAnyOf(text: string, names: string[]): boolean {
+	for (const n of referencedTypeNames(text)) { if (names.includes(n.name)) return true; }
 	return false;
 }
 
-// The Type a quote's type text names where the quote is written, as an operand node that
-// carries it. A text that names a quote-local type, or a name nothing declares there, stays
-// text and is resolved where the quote expands.
+// A quote's type text binds where the quote is written. When the whole text resolves there,
+// the operand carries its Type. When it also names the quote's own types, or a name only the
+// expansion site declares, the operand carries each other name bound to the declaration it
+// names where the quote is written, and the text resolves where the quote expands.
 function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation): Node | null {
-	if (text == "" || _metaScope == null || _metaDefiner == "" || text.indexOf("typeof") >= 0) return null;
-	if (namesAnyOf(text, locals)) return null;
+	if (text == "" || _metaScope == null || _metaDefiner == "") return null;
 	const ctx = _metaScope!;
 	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
 	if (home == null) return null;
 	const here = ctx.table.current;
 	ctx.table.current = home;
+	const whole = text.indexOf("typeof") < 0 && !namesAnyOf(text, locals) ? wholeTypeOperand(text, ctx, loc) : null;
+	const operand = whole ?? typeNameBindings(text, locals, ctx, loc);
+	ctx.table.current = here;
+	return operand;
+}
+
+function wholeTypeOperand(text: string, ctx: CheckerContext, loc: SourceLocation): Node | null {
 	const mark = ctx.errors.length;
 	const t = resolveAnnotation(text, ctx, loc.line, loc.column);
-	ctx.table.current = here;
 	const failed = ctx.errors.length > mark || isUnresolvedType(t);
 	while (ctx.errors.length > mark) { ctx.errors.pop(); }
 	if (failed) return null;
@@ -331,11 +376,41 @@ function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation):
 	return operand;
 }
 
+function typeNameBindings(text: string, locals: string[], ctx: CheckerContext, loc: SourceLocation): Node | null {
+	const bindings: Node[] = [];
+	for (const n of referencedTypeNames(text)) {
+		const name = n.name;
+		if (locals.includes(name)) continue;
+		const sym = lookupSymbol(ctx.table, name);
+		if (sym == null || !(n.namesValue || isTypeSymbol(sym) || sym.symbolKind == SymbolKind.Module)) continue;
+		if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, ctx);
+		const binding = createNodeAt(NodeKind.Identifier, { name } as IdentifierData, loc);
+		binding.resolvedSym = sym;
+		binding.flags = binding.flags.incl(NodeFlag.BoundSym);
+		bindings.push(binding);
+	}
+	if (bindings.length == 0) return null;
+	const operand = createNodeAt(NodeKind.Identifier, { name: text } as IdentifierData, loc);
+	operand.typeExprs = bindings;
+	return operand;
+}
+
+function typeOperandLiteral(operand: Node | null, loc: SourceLocation): Node {
+	const literal = nodeToASTLiteral(operand, loc, false);
+	if (operand == null || operand.typeExprs == null) return literal;
+	const elements: Node[] = [];
+	for (const binding of operand.typeExprs) elements.push(nodeToASTLiteral(binding, loc, false));
+	const d = literal.data as ObjectLiteralData;
+	d.keys.push("boundTypeNames");
+	d.properties.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
+	return literal;
+}
+
 function addQuotedTypeOperand(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
 	const operand = quotedTypeOperand(text, locals, loc);
 	if (operand == null) return;
 	keys.push("boundTypeExpr");
-	values.push(nodeToASTLiteral(operand, loc, false));
+	values.push(typeOperandLiteral(operand, loc));
 }
 
 function addQuotedTypeOperands(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
@@ -344,7 +419,7 @@ function addQuotedTypeOperands(keys: string[], values: Node[], text: string, loc
 	for (const part of splitTopLevel(text, ",")) {
 		const operand = quotedTypeOperand(part.trim(), locals, loc);
 		if (operand == null) return;
-		elements.push(nodeToASTLiteral(operand, loc, false));
+		elements.push(typeOperandLiteral(operand, loc));
 	}
 	keys.push("boundTypeExprs");
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
@@ -356,13 +431,15 @@ function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[]
 	for (const text of paramTypes) {
 		const operand = quotedTypeOperand(text.trim(), locals, loc);
 		anyBound = anyBound || operand != null;
-		elements.push(nodeToASTLiteral(operand, loc, false));
+		elements.push(typeOperandLiteral(operand, loc));
 	}
 	if (anyBound) {
 		keys.push("boundTypeExprs");
 		values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
 	}
-	if (returnType != "void" && returnType.indexOf(" is ") < 0 && !returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, locals, loc);
+	if (returnType == "void") return;
+	const predicate = predicateTextOf(returnType);
+	addQuotedTypeOperand(keys, values, predicate != null ? predicate.target : returnType, locals, loc);
 }
 
 function typeLocalsAt(node: Node): string[] {
@@ -376,6 +453,10 @@ function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: Sou
 		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; addQuotedSignature(keys, values, d.fnParamTypes, d.fnReturnType, typeLocalsAt(node), loc); },
 		NodeKind.ArrowFunction => { const d = node.data as ArrowFunctionData; addQuotedSignature(keys, values, d.arrowParamTypes, d.arrowReturnType, typeLocalsAt(node), loc); },
 		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, typeLocalsAt(node), loc); },
+		NodeKind.MethodDecl => { const d = node.data as MethodDeclData; addQuotedSignature(keys, values, d.methodParamTypes, d.methodReturnType, typeLocalsAt(node), loc); },
+		NodeKind.ConstructorDecl => addQuotedSignature(keys, values, (node.data as ConstructorDeclData).ctorParamTypes, "", typeLocalsAt(node), loc),
+		NodeKind.PropertyDecl => addQuotedTypeOperand(keys, values, (node.data as PropertyDeclData).propType, typeLocalsAt(node), loc),
+		NodeKind.SizeofExpr => addQuotedTypeOperand(keys, values, (node.data as SizeofExprData).sizeofType, typeLocalsAt(node), loc),
 		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
 		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, typeLocalsAt(node), loc),
 		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, typeLocalsAt(node), loc),

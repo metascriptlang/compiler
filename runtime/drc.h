@@ -66,11 +66,14 @@ enum {
 };
 void msDrcStatAdd(int id, uint64_t n);
 void msDrcStatCycle(const msTypeInfo* type);
+void msDrcStatTraced(const void* p, const msTypeInfo* type);
 #define MS_DRC_STAT_ADD(id, n) msDrcStatAdd((id), (uint64_t)(n))
 #define MS_DRC_STAT_CYCLE(t) msDrcStatCycle(t)
+#define MS_DRC_STAT_TRACED(p, t) msDrcStatTraced((p), (t))
 #else
 #define MS_DRC_STAT_ADD(id, n) ((void)0)
 #define MS_DRC_STAT_CYCLE(t) ((void)0)
+#define MS_DRC_STAT_TRACED(p, t) ((void)0)
 #endif
 
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */
@@ -490,7 +493,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	msRefHeader* h = msHeader(p);
-	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
+	bool isLast = (h->rc & ~MS_RC_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
@@ -526,7 +529,9 @@ typedef struct {
 static inline void msOrcTraceRef(void* slotAddr, void* env) {
 	void* child = *(void**)slotAddr;
 	if (child == NULL) return;
-	msCell cell = { slotAddr, msHeader(child)->type };
+	const msTypeInfo* type = msHeader(child)->type;
+	if (type != NULL && (type->flags & MS_TYPE_FLAG_ARRAY_CELL) && *(const int64_t*)child == 0) return;
+	msCell cell = { slotAddr, type };
 	msCellSeqPush(&((msGcEnv*)env)->traceStack, cell);
 }
 

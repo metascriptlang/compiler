@@ -9,7 +9,7 @@
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
+import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
@@ -275,7 +275,8 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	if (afterParen.charAt(0) != "=" || afterParen.charAt(1) != ">") return inferredType();
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
-	const returnType = (retStr != "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
+	const predicate = predicateReturnOf(retStr, ctx, line, col);
+	const returnType = predicate != null ? predicate.returnType : (retStr != "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
 
 	// Standard reference parity: procedure type literals default to closure calling convention
 	if (paramsStr == "") return createClosureType([], [], returnType);
@@ -306,6 +307,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 		}
 	}
 	const fnType = createClosureType(paramTypes, paramNames, returnType);
+	if (predicate != null) fnType.typeExtra = predicate.sentinel;
 	if (requiredCount < paramParts.length) setMinArity(fnType, requiredCount);
 	return fnType;
 }
@@ -453,13 +455,17 @@ export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: S
 }
 
 // The Types a macro bound into a call's `base<operands>` callee: they travel on the call
-// as `typeExprs` (operands that already carry their `nodeType`), never as spelling.
-export function suppliedTypeArgs(node: Node): Type[] | null {
+// as `typeExprs` operands bound where they were written, never as spelling alone.
+export function suppliedTypeArgs(node: Node, ctx: CheckerContext): Type[] | null {
 	if (node.typeExprs == null) return null;
 	const out: Type[] = [];
 	for (const operand of node.typeExprs) {
-		if (operand.nodeType == null) throw new Error("internal: a call's supplied type argument carries no bound type");
-		out.push(operand.nodeType);
+		if (operand.nodeType != null) {
+			out.push(operand.nodeType);
+			continue;
+		}
+		if (!operand.flags.has(NodeFlag.BoundSym)) throw new Error("internal: a call's supplied type argument carries neither its Type nor its bound names");
+		out.push(annotatedType((operand.data as IdentifierData).name, operand, ctx, operand.location.line, operand.location.column));
 	}
 	return out;
 }
@@ -470,7 +476,7 @@ export function hasExplicitTypeArgs(node: Node): boolean {
 
 export function explicitTypeArgs(node: Node, ctx: CheckerContext, limit: int32): (Type | null)[] {
 	const out: (Type | null)[] = [];
-	const supplied = suppliedTypeArgs(node);
+	const supplied = suppliedTypeArgs(node, ctx);
 	if (supplied != null) {
 		for (let i = 0; i < limit && i < supplied.length; i += 1) out.push(isUnresolvedType(supplied[i]) ? null : supplied[i]);
 		return out;
@@ -500,7 +506,7 @@ export function bindFromExplicitTypeArgs(node: Node, params: Type[], ctx: Checke
 export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, paramNames: string[], calleeName: string): boolean {
 	if (!hasExplicitTypeArgs(node)) return true;
 	let given: int32 = 0;
-	const supplied = suppliedTypeArgs(node);
+	const supplied = suppliedTypeArgs(node, ctx);
 	if (supplied != null) {
 		given = supplied.length;
 	} else {
@@ -1596,17 +1602,22 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 	return inferredType();
 }
 
-export function boundAnnotationType(node: Node | null): Type | null {
-	if (node == null || !node.flags.has(NodeFlag.BoundSym)) return null;
-	if (node.nodeType == null) {
-		throw new Error("internal: a bound type annotation has no checked type");
-	}
-	return node.nodeType;
-}
-
+// A quote's type text binds where the quote is written: as one Type when the whole text
+// resolves there, or name by name when it also names the quote's own types, whose bound
+// names are then visible while the text resolves where the quote expands.
 export function annotatedType(text: string, operand: Node | null, ctx: CheckerContext, line: int32, col: int32): Type {
-	const bound = boundAnnotationType(operand);
-	return bound != null ? bound : resolveAnnotation(text, ctx, line, col);
+	if (operand == null || !operand.flags.has(NodeFlag.BoundSym)) return resolveAnnotation(text, ctx, line, col);
+	if (operand.nodeType != null) return operand.nodeType;
+	if (operand.typeExprs == null) throw new Error("internal: a bound type annotation carries neither its Type nor its bound names");
+	openScope(ctx.table, ScopeKind.Block);
+	for (const name of operand.typeExprs) {
+		if (name.resolvedSym == null) throw new Error("internal: a bound name of a quote's type text has no symbol");
+		const defined = defineSymbolAs(ctx.table, (name.data as IdentifierData).name, name.resolvedSym);
+		if (!defined.ok) throw new Error(`internal: a quote's type text binds '${(name.data as IdentifierData).name}' twice`);
+	}
+	const t = resolveAnnotation(text, ctx, line, col);
+	closeScope(ctx.table);
+	return t;
 }
 
 export function operandAt(operands: Node[] | null, index: int32): Node | null {
@@ -1869,11 +1880,8 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32, annotations: Node[] | null = null): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
-		const bound = annotations != null && i < annotations.length ? boundAnnotationType(annotations[i]) : null;
-		if (bound != null) {
-			types.push(bound);
-		} else if (i < typeStrs.length && typeStrs[i] != "") {
-			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
+		if (i < typeStrs.length && typeStrs[i] != "") {
+			types.push(annotatedType(typeStrs[i], operandAt(annotations, i), ctx, line, col));
 		} else {
 			types.push(inferredType());
 		}
@@ -1950,7 +1958,7 @@ export function resolveAttachedStatics(ctx: CheckerContext, sym: Symbol): void {
 		if (member == null) continue;
 		const pd = member.data as PropertyDeclData;
 		const staticType = pd.propType != ""
-			? resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column)
+			? annotatedType(pd.propType, member.typeExpr, ctx, member.location.line, member.location.column)
 			: createPrimitive(TypeKind.Float64);
 		member.nodeType = staticType;
 		sf.symbolType = staticType;
@@ -2004,6 +2012,39 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 }
 
 // getDeclName imported from collectPass (single canonical copy)
+
+export struct PredicateText {
+	param: string;
+	target: string;
+	isAssertion: boolean;
+}
+
+// A return written `x is T` or `asserts x is T`, split into the parameter it narrows and the
+// target type text.
+export function predicateTextOf(text: string): PredicateText | null {
+	const isAssertion = text.startsWith("asserts ");
+	const source = isAssertion ? text.slice(8, text.length) : text;
+	const at = findPredicateInfix(source);
+	if (at <= 0) return null;
+	return { param: source.slice(0, at - 1).trim(), target: source.slice(at + 3, source.length).trim(), isAssertion };
+}
+
+export struct PredicateReturn {
+	returnType: Type;
+	sentinel: Type;
+}
+
+// A predicate return makes the routine return boolean, or void for an assertion, and its
+// function Type carries the sentinel flow.ms narrows a call's argument by.
+export function predicateReturnOf(text: string, ctx: CheckerContext, line: int32, col: int32, target: Node | null = null): PredicateReturn | null {
+	const predicate = predicateTextOf(text);
+	if (predicate == null) return null;
+	const sentinel = emptyType();
+	sentinel.kind = TypeKind.None;
+	sentinel.typeName = predicate.isAssertion ? `asserts:${predicate.param}` : predicate.param;
+	sentinel.typeReturn = annotatedType(predicate.target, target, ctx, line, col);
+	return { returnType: predicate.isAssertion ? voidType() : booleanType(), sentinel };
+}
 
 // findPredicateInfix — locate the ` is ` keyword in a function return
 // annotation so we can split the parameter name from the predicate target
@@ -2115,45 +2156,14 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
-	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
-	// (see captureOptionalType in parser/util.ms). Split once, resolve the
-	// target type, set the function's actual return type to `boolean`, and
-	// stash a sentinel on the function Type's `typeExtra` slot — flow.ms
-	// narrowType reads this to narrow callers in conditions.
 	let returnType: Type;
 	let predicateSentinel: Type | null = null;
-	const boundReturn = boundAnnotationType(node.typeExpr);
-	if (boundReturn != null) {
-		returnType = sym.builtinKind != "" ? boundReturn : resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column, node.typeExpr);
+	const predicate = predicateReturnOf(d.fnReturnType, ctx, retLoc.line, retLoc.column, node.typeExpr);
+	if (predicate != null) {
+		returnType = predicate.returnType;
+		predicateSentinel = predicate.sentinel;
 	} else if (d.fnReturnType != "") {
-		// Assertion function: `asserts paramName is Type` — strip `asserts `
-		// prefix and handle as a predicate with void return type and a distinct
-		// sentinel marker ("asserts:" prefix on typeName).
-		let predSource = d.fnReturnType;
-		let isAssertion = false;
-		if (predSource.length > 8 && predSource.slice(0, 8) == "asserts ") {
-			predSource = predSource.slice(8, predSource.length);
-			isAssertion = true;
-		}
-		const predIdx = findPredicateInfix(predSource);
-		if (predIdx > 0) {
-			const paramName = predSource.slice(0, predIdx - 1).trim();
-			const targetText = predSource.slice(predIdx + 3, predSource.length).trim();
-			const targetType = resolveAnnotation(targetText, ctx, retLoc.line, retLoc.column);
-			// Predicates return boolean; assertions return void (they throw on failure).
-			returnType = isAssertion ? voidType() : booleanType();
-			// Sentinel: kind=None marker on Function.typeExtra. typeName holds the
-			// parameter name (prefixed with "asserts:" for assertion functions).
-			// typeReturn holds the narrowing target type.
-			predicateSentinel = emptyType();
-			predicateSentinel.kind = TypeKind.None;
-			predicateSentinel.typeName = isAssertion ? `asserts:${paramName}` : paramName;
-			predicateSentinel.typeReturn = targetType;
-		} else if (sym.builtinKind != "") {
-			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
-		} else {
-			returnType = resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
-		}
+		returnType = sym.builtinKind != "" ? annotatedType(d.fnReturnType, node.typeExpr, ctx, retLoc.line, retLoc.column) : resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column, node.typeExpr);
 	} else {
 		returnType = inferredType();
 	}
@@ -2916,7 +2926,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	for (const p of cd.ctorParams) {
 		if (p.slice(0, 4) == "out:" || p.slice(0, 4) == "ref:") addError(ctx, "a constructor parameter cannot be 'out' or 'ref': '" + p.slice(4, p.length) + "'", member.location.line, member.location.column);
 	}
-	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
+	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column, member.typeExprs);
 	wrapModifierTypes(liftParamModifiers(cd.ctorParams, ""), paramTypes);
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
@@ -3026,14 +3036,14 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			md.methodFlags = liftParamModifiers(md.methodParams, md.methodFlags);
 			const receiver = hasMethodGenerics && !md.methodIsStatic && md.methodParams.length > 0 && md.methodParams[0] == "this"
-				? resolveTypeStrings(md.methodParamTypes, 1, ctx, member.location.line, member.location.column)[0]
+				? resolveTypeStrings(md.methodParamTypes, 1, ctx, member.location.line, member.location.column, member.typeExprs)[0]
 				: null;
 			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.classBody[mi]), methodGenericNames.join(","));
-			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
+			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column, member.typeExprs);
 			if (receiver != null) paramTypes[0] = receiver;
 			wrapModifierTypes(md.methodFlags, paramTypes);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column, member.typeExpr) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -3064,7 +3074,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					const savedBoundary = ctx.staticInitBoundary;
 					ctx.staticInitBoundary = ctx.table.current;
-					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					staticType = annotatedType(pd.propType, member.typeExpr, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
@@ -3081,7 +3091,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				memberNames.push(pd.propName);
 				if (member.flags.has(NodeFlag.Optional)) ownOptional.push(pd.propName);
 				if (pd.propType != "") {
-					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					const propType = annotatedType(pd.propType, member.typeExpr, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 					member.nodeType = propType;
 					memberTypes.push(propType);
@@ -3251,9 +3261,9 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.actorBody[mi]), methodGenericNames.join(","));
-			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
+			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column, member.typeExprs);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column, member.typeExpr) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -3278,7 +3288,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					const savedBoundary = ctx.staticInitBoundary;
 					ctx.staticInitBoundary = ctx.table.current;
-					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					staticType = annotatedType(pd.propType, member.typeExpr, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
@@ -3296,7 +3306,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			refuseActorHandleName(ctx, d.actorName, pd.propName, member);
 			memberNames.push(pd.propName);
 			if (pd.propType != "") {
-				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+				const propType = annotatedType(pd.propType, member.typeExpr, ctx, member.location.line, member.location.column);
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);

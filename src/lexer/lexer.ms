@@ -692,6 +692,19 @@ test "jsx in statement resumes normal lexing after close" {
 	assert lexValAt("const x = <a/>; const y = b;", 9) == "y";
 }
 
+test "jsx tag left open returns to normal lexing at a character no tag holds" {
+	// f ( < d ) ; const
+	assert lexKindAt("f(<d); const y = 1;", 4) == TokenKind.RParen;
+	assert lexKindAt("f(<d); const y = 1;", 6) == TokenKind.Const;
+}
+
+test "jsx comment inside a tag keeps the tag open" {
+	// < a /* c */ x = "1" / >
+	assert lexKindAt("<a /* c */ x=\"1\"/>", 2) == TokenKind.Comment;
+	assert lexKindAt("<a /* c */ x=\"1\"/>", 3) == TokenKind.Ident;
+	assert lexKindAt("<a /* c */ x=\"1\"/>", 6) == TokenKind.Slash;
+}
+
 test "jsx stray brace in text does not hang" {
 	assert lexOk("<p>a}b</p>");
 	assert lexValAt("<p>a}b</p>", 3) == "a}b";

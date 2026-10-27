@@ -9,11 +9,12 @@
 //                             if (arr.length != $len) throw "..." } }
 
 import {
-	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
+	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 	ArrayAccessData, NumberLiteralData, TryCatchStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
+import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { appendLoopTail, bodySuspends } from "./forLoopLower";
 import { int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
@@ -174,12 +175,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const iterable = d.forOfIterable;
 	const readsLocation = !isRefArray && (iterable.kind == NodeKind.Identifier
 		|| ((iterable.kind == NodeKind.MemberExpr || iterable.kind == NodeKind.ArrayAccess) && isSymbolPath(iterable)));
+	const heldByConst = isRefArray && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym);
 
 	const preamble: Node[] = [];
 	if (readsLocation) hoistIndices(iterable, ctx, preamble, loc);
 
 	let iterExpr: Node = d.forOfIterable;
-	if (!readsLocation) {
+	if (!readsLocation && !heldByConst) {
 		const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
@@ -270,6 +272,11 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	(loop.data as WhileStmtData).whileLabel = whileLabel;
 	preamble.push(loop);
 	return makeBlock(preamble, loc);
+}
+
+function cannotRebind(sym: Symbol | null): boolean {
+	return sym != null && sym.symbolKind == SymbolKind.Variable
+		&& !hasFlag(sym, SymbolFlag.Mutable) && !hasFlag(sym, SymbolFlag.ForVar);
 }
 
 function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
@@ -394,6 +401,36 @@ test "a reference array is read once into a temp" {
 	assert (stmts[0].data as VariableDeclData).initializer.kind == NodeKind.Identifier;
 	const len = (stmts[2].data as VariableDeclData).initializer;
 	assert ((len.data as MemberExprData).object.data as IdentifierData).name != "arr";
+}
+
+function refArrayHeldBy(sym: Symbol): Node[] {
+	const parsed = parseInput("for (const x of arr) { use(x); }");
+	if (!parsed.ok) throw new Error(parsed.error);
+	const iter = (getStmts(parsed.value)[0].data as ForOfStmtData).forOfIterable;
+	iter.nodeType = createRef(createArray(int32Type()));
+	iter.resolvedSym = sym;
+	return (getStmts(lowerForOf(parsed.value, makeCtx()))[0].data as BlockStmtData).statements;
+}
+
+test "a reference array held by a const is read through the const, with no temp" {
+	const stmts = refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, false));
+	assert stmts.length == 3;
+	const len = (stmts[1].data as VariableDeclData).initializer;
+	assert ((len.data as MemberExprData).object.data as IdentifierData).name == "arr";
+}
+
+test "a reference array held by a let is read once into a temp" {
+	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, true)).length == 4;
+}
+
+test "a reference array held by a parameter is read once into a temp" {
+	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Parameter, null, false)).length == 4;
+}
+
+test "a reference array held by an outer loop binding is read once into a temp" {
+	const sym = makeSymbol("arr", SymbolKind.Variable, null, false);
+	setFlag(sym, SymbolFlag.ForVar);
+	assert refArrayHeldBy(sym).length == 4;
 }
 
 test "an index in a value path is evaluated once, before the loop" {

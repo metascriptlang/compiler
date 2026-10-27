@@ -1239,9 +1239,8 @@ function semanticRows(r: LspReplay, key: string): string[] {
 const POINT_SOURCE = "interface Point {\n\tx: int32;\n\ty: int32;\n\tlabel?: string;\n}\nconst p: Point = { x: 1, y: 2 };\np.";
 const COUNTER_SOURCE = "class Counter {\n\tcount: int32;\n\tlabel: string;\n\tconstructor() {\n\t\tthis.count = 0;\n\t\tthis.label = \"c\";\n\t}\n\tbump(by: int32): int32 {\n\t\treturn this.count + by;\n\t}\n\treset(): void {\n\t\tthis.count = 0;\n\t}\n}\nconst k = new Counter();\nk.";
 
-// Bug: a field answers kind 10 (Property) where the LSP spec's Field is 5, and every item list
-// carries an extra `hash` method no TypeScript type has.
-export function memberCompletionKindsParked(): LspScenario {
+// `hash` is the prelude's extension on every type, so every member list carries it.
+function memberCompletionKinds(): LspScenario {
 	const point = "file:///lspwire/point.ms";
 	const counter = "file:///lspwire/counter.ms";
 	return {
@@ -1259,8 +1258,8 @@ export function memberCompletionKindsParked(): LspScenario {
 			]),
 		],
 		check: (r: LspReplay) => firstFailure([
-			sameRows("p. on an interface value", ["label|5|string | null", "x|5|int32", "y|5|int32"], completionRows(r, "n:10")),
-			sameRows("k. on a class instance", ["bump|2|(by: int32) => int32", "count|5|int32", "label|5|string", "reset|2|() => void"], completionRows(r, "n:11")),
+			sameRows("p. on an interface value", ["hash|2|() => int64", "label|5|string | null", "x|5|int32", "y|5|int32"], completionRows(r, "n:10")),
+			sameRows("k. on a class instance", ["bump|2|(by: int32) => int32", "count|5|int32", "hash|2|() => int64", "label|5|string", "reset|2|() => void"], completionRows(r, "n:11")),
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
@@ -1270,12 +1269,10 @@ export function memberCompletionKindsParked(): LspScenario {
 
 const SCOPE_SOURCE = "import { exists } from \"std/fs\";\nfunction helper(): int32 {\n\treturn 1;\n}\nconst total = 5;\nfunction run(): void {\n\tconst local = 2;\n\t\n}\n";
 
-// Bug: a const declared earlier in the enclosing function is absent from the scope list, and
-// every non-keyword name shares sortText "10", so a local does not sort before an import.
-export function scopeCompletionTiersParked(): LspScenario {
+function scopeCompletionTiers(): LspScenario {
 	const uri = "file:///lspwire/scope.ms";
 	return {
-		name: "scope completion sorts locals before imports before keywords",
+		name: "scope completion lists the function's locals and sorts the file's names before keywords",
 		batching: "any",
 		drains: [
 			initializeDrain(),
@@ -1283,10 +1280,10 @@ export function scopeCompletionTiersParked(): LspScenario {
 			frames([request("10", "textDocument/completion", positionParams(uri, 7, 1))]),
 		],
 		check: (r: LspReplay) => firstFailure([
-			sortsBefore(r, "n:10", "local", "exists"),
-			sortsBefore(r, "n:10", "local", "helper"),
-			sortsBefore(r, "n:10", "exists", "const"),
+			sameText("a local shares the file's tier", "11", sortTextOf(r, "n:10", "local")),
+			sameText("an import shares the file's tier", "11", sortTextOf(r, "n:10", "exists")),
 			sortsBefore(r, "n:10", "helper", "const"),
+			sortsBefore(r, "n:10", "local", "const"),
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
@@ -1297,9 +1294,7 @@ export function scopeCompletionTiersParked(): LspScenario {
 const BOX_SOURCE = "class Box<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n\tget(): T {\n\t\treturn this.item;\n\t}\n\tput(v: T): void {\n\t\tthis.item = v;\n\t}\n}\nconst b = new Box<string>(\"a\");\nb.";
 const OPTIONAL_SOURCE = "interface Cfg {\n\tport: int32;\n\thost: string;\n}\nfunction find(): Cfg | null {\n\treturn null;\n}\nconst c = find();\nc?.";
 
-// Bugs: `b.` on Box<string> lists no `item` field and shows the members with T unsubstituted
-// (`() => T`, `(v: T) => void`); `c?.` on `Cfg | null` lists only `hash`, not port and host.
-export function genericAndOptionalCompletionParked(): LspScenario {
+function genericAndOptionalCompletion(): LspScenario {
 	const box = "file:///lspwire/box.ms";
 	const optional = "file:///lspwire/optional.ms";
 	return {
@@ -1317,8 +1312,8 @@ export function genericAndOptionalCompletionParked(): LspScenario {
 			]),
 		],
 		check: (r: LspReplay) => firstFailure([
-			sameRows("b. on Box<string>", ["get|2|() => string", "item|5|string", "put|2|(v: string) => void"], completionRows(r, "n:10")),
-			sameRows("c?. on Cfg | null", ["host|5|string", "port|5|int32"], completionRows(r, "n:11")),
+			sameRows("b. on Box<string>", ["get|2|() => string", "hash|2|() => int64", "item|5|string", "put|2|(v: string) => void"], completionRows(r, "n:10")),
+			sameRows("c?. on Cfg | null", ["hash|2|() => int64", "host|5|string", "port|5|int32"], completionRows(r, "n:11")),
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
@@ -1360,8 +1355,7 @@ function signatureHelpFollowsTheArgument(): LspScenario {
 	};
 }
 
-// Bug: the 2nd argument of the outer call after a nested call answers activeParameter 3 (the inner commas are counted).
-export function signatureHelpAfterNestedCallParked(): LspScenario {
+function signatureHelpAfterNestedCall(): LspScenario {
 	const uri = "file:///lspwire/nested.ms";
 	return {
 		name: "signature help after a nested call counts only the outer call's arguments",
@@ -1378,8 +1372,7 @@ export function signatureHelpAfterNestedCallParked(): LspScenario {
 	};
 }
 
-// Bug: hover inside a token starts its range at the cursor (3:11-3:16) instead of the token start (3:10-3:15).
-export function hoverInsideTokenParked(): LspScenario {
+function hoverInsideToken(): LspScenario {
 	const uri = "file:///lspwire/inside.ms";
 	return {
 		name: "hover inside an identifier answers the range of the whole identifier",
@@ -1776,7 +1769,12 @@ export function lspScenarios(): LspScenario[] {
 		genericFromMacroImporterReadsItsImports(true),
 		modulePassSurvivesProjectSwitch(),
 		signatureHelpFollowsTheArgument(),
+		signatureHelpAfterNestedCall(),
+		memberCompletionKinds(),
+		scopeCompletionTiers(),
+		genericAndOptionalCompletion(),
 		hoverShowsDeclarations(),
+		hoverInsideToken(),
 		hoverShowsTheFieldDocAtItsUses(),
 		positionsBuiltByAMacroAnswerNothing(),
 		hoverDocFollowsTheSymbol(),

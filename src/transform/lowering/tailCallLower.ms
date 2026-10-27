@@ -174,6 +174,7 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	for (let i = 0; i < bodyStmts.length; i += 1) {
 		newStmts.push(transformStmt(bodyStmts[i], name, sym, params, localSyms, forwarded, ctx));
 	}
+	if (returnsVoid(sym)) newStmts.push(makeReturn(null, loc));
 
 	const whileBody = makeBlock(newStmts, loc);
 	const whileNode = makeWhile(makeBool(true, loc), whileBody, loc);
@@ -184,6 +185,12 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	}
 	outerStmts.push(whileNode);
 	return makeBlock(outerStmts, loc);
+}
+
+// A void routine also returns by running off its body's end, which the loop must not turn into another iteration.
+function returnsVoid(sym: Symbol | null): boolean {
+	const t = sym != null ? sym.symbolType : null;
+	return t != null && t.kind == TypeKind.Function && t.typeReturn != null && t.typeReturn.kind == TypeKind.Void;
 }
 
 // A var parameter is the caller's location, never a value the loop can carry.
@@ -501,4 +508,24 @@ test "a value parameter a tail call replaces or the body assigns keeps its loop-
 
 test "a tail call that passes another location to a ref parameter stays recursive" {
 	assert !lowersToLoop("function f(ref a: int32, ref b: int32, n: int32): void { if (n == 0) return; a = a + n; return f(b, a, n - 1); }");
+}
+
+function loopEndsInReturn(input: string): boolean {
+	const result = parseInput(input);
+	if (!result.ok) return false;
+	checkProgram(result.value);
+	for (const stmt of getStmts(lowerTailCall(result.value, makeCtx()))) {
+		if (stmt.kind != NodeKind.FunctionDecl) continue;
+		for (const s of ((stmt.data as FunctionDeclData).fnBody.data as BlockStmtData).statements) {
+			if (s.kind != NodeKind.WhileStmt) continue;
+			const loop = ((s.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+			return loop.length > 0 && loop[loop.length - 1].kind == NodeKind.ReturnStmt;
+		}
+	}
+	return false;
+}
+
+test "a void routine that runs off its body's end leaves the loop instead of iterating again" {
+	assert loopEndsInReturn("function f(k: int32): void { if (k < 0) return f(0); console.log(k); }");
+	assert !loopEndsInReturn("function g(n: int32, acc: int32): int32 { if (n == 0) return acc; return g(n - 1, acc + n); }");
 }

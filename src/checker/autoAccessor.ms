@@ -22,7 +22,7 @@ export function expandAutoAccessor(field: Node): Node[] {
 		methodIsStatic: false, methodFlags: "", methodVisibility: pd.propVisibility, methodReturnType: pd.propType,
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, loc);
-	getter.typeExpr = field.typeExpr == null ? null : cloneNodeForCheck(field.typeExpr);
+	getter.typeExpr = typeExprCopy(field.typeExpr);
 	getter.flags = getter.flags.incl(NodeFlag.Accessor);
 	const setter = createNodeAt(NodeKind.MethodDecl, {
 		methodName: `set_${pd.propName}`, methodParams: ["value"], methodParamTypes: [pd.propType],
@@ -34,10 +34,17 @@ export function expandAutoAccessor(field: Node): Node[] {
 		methodIsStatic: false, methodFlags: "", methodVisibility: pd.propVisibility, methodReturnType: "",
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, loc);
-	setter.typeExprs = field.typeExpr == null ? [] : [cloneNodeForCheck(field.typeExpr)];
+	setter.typeExprs = field.typeExpr == null ? [] : [typeExprCopy(field.typeExpr)!];
 	setter.paramLocations = [loc];
 	setter.flags = setter.flags.incl(NodeFlag.Accessor);
 	return [storage, getter, setter];
+}
+
+// A type a quote bound where it was written is shared: it carries its Type, which a check
+// clone drops.
+function typeExprCopy(typeExpr: Node | null): Node | null {
+	if (typeExpr == null || typeExpr.flags.has(NodeFlag.BoundSym)) return typeExpr;
+	return cloneNodeForCheck(typeExpr);
 }
 
 function storageRead(storageName: string, loc: SourceLocation): Node {

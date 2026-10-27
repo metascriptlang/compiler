@@ -20,7 +20,7 @@ import {
 	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgQueryAtPosition, sgQueryBySym,
-	sgFindCallExprByCalleeLocation, sgFieldDeclLine, FIELD_NO_CONTAINER,
+	sgFindCallExprByCalleeLocation, sgFieldDeclLine, FIELD_NO_CONTAINER, sgGetLineOffset, sgIsIdentByte,
 	SgDocumentSymbol,
 	SgSignatureInfo,
 	SgSymbolRef,
@@ -109,8 +109,15 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const fileSource = dbGetSource(db, path);
 	const hoverLine = pos.line - 1;
 	const lines = LineIndex.build(fileSource);
-	const hoverCol = lspCharacterIn(lines, fileSource, pos.line, pos.col1);
-	const hoverEndCol = lspCharacterIn(lines, fileSource, pos.line, pos.col1 + suggest.name.byteLength);
+	// The range is the identifier under the cursor, wherever inside it the cursor sits.
+	const lineStart = sgGetLineOffset(fileSource, pos.line) - 1;
+	let startCol = pos.col1;
+	while (startCol > 1 && sgIsIdentByte(fileSource.byteAt(lineStart + startCol - 1))) startCol -= 1;
+	let endCol = startCol;
+	while (lineStart + endCol < fileSource.byteLength && sgIsIdentByte(fileSource.byteAt(lineStart + endCol))) endCol += 1;
+	if (endCol == startCol) endCol = startCol + suggest.name.byteLength;
+	const hoverCol = lspCharacterIn(lines, fileSource, pos.line, startCol);
+	const hoverEndCol = lspCharacterIn(lines, fileSource, pos.line, endCol);
 	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
 }
 

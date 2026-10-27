@@ -1058,6 +1058,12 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	return lowered;
 }
 
+export function dbStoreLowered(db: TransAmDb, filePath: string, lowered: Node): void {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) throw new Error(`internal: no file id for lowered module ${filePath}`);
+	db.trees.set(lowerNodeKey(fileId), lowered);
+}
+
 // Execute full pipeline: parse → check → transform → analyze
 export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);

@@ -382,6 +382,36 @@ test "unknown notification" {
 	assert r == "";
 }
 
+// line 4 is inside the if block, line 6 after it, both inside run
+const LOCALS = "function run(count: int32): void {\n\tconst outer = 1;\n\tif (count > 0) {\n\t\tconst inner = 2;\n\t\t\n\t}\n\t\n}\nconst after = 3;\n";
+
+// As a session does after each check, the file-wide list is prebuilt before the request.
+function localsComplete(source: string, line: int32, character: int32): string {
+	const db = testDb("file:///locals.ms", source);
+	prebuildCompletionCache(db, lspUriToPath("file:///locals.ms"), "file:///locals.ms");
+	const params = `{"textDocument":{"uri":"file:///locals.ms"},"position":{"line":${line},"character":${character}}}`;
+	return handleCompletion("12", params, db, testCache());
+}
+
+test "completion lists the parameters and locals of every scope around the cursor" {
+	const r = localsComplete(LOCALS, 4, 2);
+	assert r.indexOf("\"label\":\"inner\"") >= 0;
+	assert r.indexOf("\"label\":\"outer\"") >= 0;
+	assert r.indexOf("\"label\":\"count\"") >= 0;
+}
+
+test "completion of a typed prefix lists the matching locals" {
+	const r = localsComplete(LOCALS.replace("\t\t\n", "\t\tout\n"), 4, 5);
+	assert r.indexOf("\"label\":\"outer\"") >= 0;
+	assert r.indexOf("\"label\":\"count\"") < 0;
+}
+
+test "completion after a block no longer lists the block's locals" {
+	const r = localsComplete(LOCALS, 6, 1);
+	assert r.indexOf("\"label\":\"outer\"") >= 0;
+	assert r.indexOf("\"label\":\"inner\"") < 0;
+}
+
 test "completion dispatch" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
@@ -543,6 +573,7 @@ test "definition on JSX tag with attributes resolves" {
 // Fixture modules on disk: html.ms declares IntrinsicElements, ui.ms is a JSX consumer with
 // `export * as JSX` beside it, uiPlain.ms the same consumer without it, uiAlias.ms one whose
 // JSX names `IntrinsicElements` as an alias of htmlNamed.ms's HtmlElements.
+// cards.ms exports a component that a member tag `<Ui.Card>` names through `import * as Ui`.
 const JSX_DIR = "src/test/fixtures/lsp/jsxNamespace";
 
 // Opened as a client opens it, so the imports it names are recorded before the check.
@@ -622,6 +653,32 @@ test "hover on an inherited field read through a member access shows its declari
 	assert jsxQuery(db, 1, 46, false).indexOf("Unique id of the element.") >= 0;
 }
 
+// line 5: `function f(p: P): number { return p.x; }` — x at 36
+const ALIAS_BODY = "import { view } from \"./uiPlain\";\ntype P = {\n\t/** The x coordinate. */\n\tx: number;\n};\nfunction f(p: P): number { return p.x; }";
+
+test "hover on a field declared in a type alias's object body shows its doc" {
+	assert jsxQuery(jsxDb(ALIAS_BODY), 5, 36, false).indexOf("The x coordinate.") >= 0;
+}
+
+test "definition on a field declared in a type alias's object body jumps to the field" {
+	assert jsxQuery(jsxDb(ALIAS_BODY), 5, 36, true).indexOf("\"line\":3") >= 0;
+}
+
+test "a field of an alias body declared in another module shows its doc and jumps there" {
+	// line 1: `function f(p: Point): number { return p.y; }` — y at 40; html.ms declares it on line 14
+	const db = jsxDb("import { Point } from \"./html\";\nfunction f(p: Point): number { return p.y; }");
+	assert jsxQuery(db, 1, 40, false).indexOf("The y coordinate.") >= 0;
+	const r = jsxQuery(db, 1, 40, true);
+	assert r.indexOf("html.ms") >= 0;
+	assert r.indexOf("\"line\":14") >= 0;
+}
+
+test "hover on a function component's JSX attribute typed by an alias body shows its doc" {
+	// line 6: `const v: number = <Card title="x"/>;` — title at 24
+	const main = "import { view } from \"./uiPlain\";\ntype CardProps = {\n\t/** The heading the card shows. */\n\ttitle: string;\n};\nfunction Card(props: CardProps): number { return 0; }\nconst v: number = <Card title=\"x\"/>;";
+	assert jsxQuery(jsxDb(main), 6, 24, false).indexOf("The heading the card shows.") >= 0;
+}
+
 function jsxComplete(main: string, line: int32, character: int32): string {
 	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
 	return handleCompletion("72", params, jsxDb(main), testCache());
@@ -659,6 +716,55 @@ test "completion among an explicit macro call's JSX attributes reads the macro m
 
 test "completion on a function component's JSX attribute offers its props fields" {
 	assert jsxComplete(JSX_COMPONENT, 6, 29).indexOf("The heading the card shows.") >= 0;
+}
+
+test "completion on a JSX tag not closed yet offers the IntrinsicElements fields" {
+	const r = jsxComplete("import { view } from \"./ui\";\nconst v: number = <a\nconst w = 1;", 1, 20);
+	assert r.indexOf("The anchor element.") >= 0;
+}
+
+test "completion on an attribute of a JSX tag not closed yet offers the props fields" {
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a hr\nconst w = 1;", 1, 23).indexOf("The URL the link points to.") >= 0;
+	assert jsxComplete("import { view } from \"./ui\";\nconst v: number = <a ", 1, 21).indexOf("Unique id of the element.") >= 0;
+}
+
+// line 3: `const v: number = <Ui.Card title="x" {...base} />;` — Ui at 19, Card at 22, title at 27, `/` at 47
+const JSX_MEMBER = "import { view } from \"./uiPlain\";\nimport * as Ui from \"./cards\";\nconst base = { tone: \"x\" };\nconst v: number = <Ui.Card title=\"x\" {...base} />;";
+
+test "a member JSX tag resolves to the namespace export it names" {
+	const r = jsxQuery(jsxDb(JSX_MEMBER), 3, 23, true);
+	assert r.indexOf("cards.ms") >= 0;
+	assert r.indexOf("\"line\":6") >= 0;
+}
+
+test "an attribute of a member JSX tag shows the doc of the component's props field" {
+	assert jsxQuery(jsxDb(JSX_MEMBER), 3, 28, false).indexOf("The heading the card shows.") >= 0;
+}
+
+test "completion among JSX attributes ranks optional fields and fields a spread gives after the rest" {
+	const r = jsxComplete(JSX_MEMBER, 3, 46);
+	assert r.indexOf("\"label\":\"title\"") < 0;
+	assert completionItemOf(r, "size").indexOf("\"sortText\":\"12\"") >= 0;
+	assert completionItemOf(r, "tone").indexOf("\"sortText\":\"13\"") >= 0;
+}
+
+function completionItemOf(response: string, label: string): string {
+	const start = response.indexOf(`"label":"${label}"`);
+	if (start < 0) return "";
+	const next = response.indexOf("\"label\":", start + 1);
+	return response.substring(start, next < 0 ? response.length : next);
+}
+
+test "completion after the dot of a member JSX tag offers the namespace's exports, not attributes" {
+	const r = jsxComplete(JSX_MEMBER + "\nconst w: number = <Ui.", 4, 22);
+	assert r.indexOf("\"label\":\"Card\"") >= 0;
+	assert r.indexOf("\"label\":\"tone\"") < 0;
+}
+
+test "completion after the dot of a namespace import offers the module's exports" {
+	const r = jsxComplete("import * as Ui from \"./cards\";\nconst f = Ui.", 1, 13);
+	assert r.indexOf("\"label\":\"Card\"") >= 0;
+	assert r.indexOf("\"label\":\"hash\"") < 0;
 }
 
 test "completion among JSX attributes with no JSX namespace anywhere offers nothing" {
@@ -872,6 +978,47 @@ test "phase 5: sig help on src/test/fixtures/lsp/phase5Overloads.ms narrows to S
 //
 // Position coordinates are 0-indexed LSP — the phase5Overloads.ms source
 // uses tabs so `area` starts at column 11 (tab + "const s = " = 11 chars).
+
+// line 1: `const n = g(1);` — g at 10, inside the call at 12; line 3: `const h: F = ...` — F at 9
+const OPTIONAL_PARAMS = "function g(a: int32, xs?: string[]): int32 { return xs != null ? xs.length : a; }\nconst n = g(1);\ntype F = (x?: int32) => int32;\nconst h: F = (x?: int32): int32 => 0;\n";
+
+function optionalQuery(method: string, line: int32, character: int32): string {
+	const db = testDb("file:///optional.ms", OPTIONAL_PARAMS);
+	const params = `{"textDocument":{"uri":"file:///optional.ms"},"position":{"line":${line},"character":${character}}}`;
+	return method == "hover" ? handleHover("80", params, db) : handleSignatureHelp("81", params, db);
+}
+
+test "hover writes an optional parameter as optional, not as nullable" {
+	const r = optionalQuery("hover", 1, 10);
+	assert r.indexOf("xs?: string[]") >= 0;
+	assert r.indexOf("| null") < 0;
+}
+
+test "signature help writes an optional parameter as optional" {
+	assert optionalQuery("signatureHelp", 1, 12).indexOf("xs?: string[]") >= 0;
+}
+
+test "hover on a function type alias writes its optional parameter as optional" {
+	const r = optionalQuery("hover", 3, 9);
+	assert r.indexOf("x?: int32") >= 0;
+	assert r.indexOf("| null") < 0;
+}
+
+const CLASS_VARS = "class Box { n: int32 = 1; }\nfunction makeBox(): Box { return new Box(); }\nconst b = makeBox();\nconst c = new Box();\nconst o = { n: 1 };\n";
+
+function classVarHover(line: int32, character: int32): string {
+	const db = testDb("file:///classVars.ms", CLASS_VARS);
+	return handleHover("82", `{"textDocument":{"uri":"file:///classVars.ms"},"position":{"line":${line},"character":${character}}}`, db);
+}
+
+test "hover on a class instance names the class, from a call and from new alike" {
+	assert classVarHover(2, 6).indexOf("const b: Box") >= 0;
+	assert classVarHover(3, 6).indexOf("const c: Box") >= 0;
+}
+
+test "hover on an object literal variable still lists its fields" {
+	assert classVarHover(4, 6).indexOf("const o: {") >= 0;
+}
 
 test "phase 5 hover: Kind.Circle call shows Circle overload" {
 	const src = loadExample("src/test/fixtures/lsp/phase5Overloads.ms");
@@ -1136,6 +1283,27 @@ function didOpenParams(uri: string, text: string): string {
 
 function didChangeParams(uri: string, text: string): string {
 	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(text)}}]}`;
+}
+
+// core.ms holds `const Scope` typed only by its initializer and exports no macro, so the db binds it
+// without checking it; probe.ms's macro reads the type of the name it is given through getType.
+const MACRO_CONST_DIR = "src/test/fixtures/lsp/macroForeignConst";
+
+function macroConstDiagnostics(main: string): string {
+	const uri = `file://${cwd()}/${MACRO_CONST_DIR}/main.ms`;
+	const db = createTransAmDb(100);
+	handleDidOpen(didOpenParams(uri, main), db);
+	return buildDiagnosticsJson(uri, db, lspUriToPath(uri));
+}
+
+test "a macro reads the inferred type of a module const the db only binds, in a generic instance" {
+	const diags = macroConstDiagnostics("import { view } from \"./lib\";\nconsole.log(view<string>(\"x\"));\n");
+	assert diags.indexOf("has no inferred type") < 0, diags;
+}
+
+test "a macro reads the inferred type of a module const the db only binds, called from the open file" {
+	const diags = macroConstDiagnostics("import { scopeType } from \"./probe\";\nimport { Scope } from \"./core\";\nconsole.log(scopeType(\"Scope\"));\n");
+	assert diags.indexOf("has no inferred type") < 0, diags;
 }
 
 test "didChange publishes diagnostics post-drain" {

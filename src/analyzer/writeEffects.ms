@@ -1653,3 +1653,5 @@ test "a callback forwarded through a sync wrapper into a suspending routine is r
 	const wrap = callbackRoutine("wrap", "", callbackRoutine("later", "async", null, loc), loc);
 	assert retainsParam(w, wrap, 0);
 }
+
+

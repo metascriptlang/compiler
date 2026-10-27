@@ -9,8 +9,8 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { TokenKind, isIdentLikeKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError } from "./cursor";
+import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, stampEnd } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
 
@@ -37,6 +37,14 @@ function skipUnionType(state: ParserState, leavesQuestion: boolean): void {
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state);
 		skipIntersectionType(state, leavesQuestion);
+	}
+}
+
+// A function type returns a predicate as a declaration does: `x is T` or `asserts x is T`.
+function skipReturnPredicateHead(state: ParserState): void {
+	const asserts = current(state).kind == TokenKind.Asserts ? 1 : 0;
+	if (isIdentLikeKind(peek(state, asserts).kind) && peek(state, asserts + 1).kind == TokenKind.Is) {
+		for (let i = 0; i < asserts + 2; i += 1) advance(state);
 	}
 }
 
@@ -70,6 +78,7 @@ export function captureType(state: ParserState): CapturedType {
 	state.position = start;
 	const expr = parseTypeExpr(state);
 	state.position = end;
+	stampEnd(state, expr);
 	return { text, expr };
 }
 
@@ -331,6 +340,7 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	// Arrow => return type
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
+		skipReturnPredicateHead(state);
 		const returnType = parseTypeAtom(state);
 		return createNode(NodeKind.TypeFunction, {
 			typExprParams: paramTypes,
@@ -358,6 +368,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	advance(state); // consume {
 
 	const fieldNames: string[] = [];
+	const fieldLocations: SourceLocation[] = [];
 	const optionalFields: string[] = [];
 	const fieldTypes: Node[] = [];
 	let indexKey: Node = null as unknown as Node;
@@ -412,6 +423,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
 			const fieldName = current(state).value;
 			fieldNames.push(fieldName);
+			fieldLocations.push(makeLoc(current(state).line, current(state).column));
 			advance(state); // consume field name
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 				optionalFields.push(fieldName);
@@ -439,7 +451,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	// only sourced from `class` declarations (see bridge.ms collectFieldDecorators).
 	const emptyDecorators: Node[][] = [];
 	for (let i = 0; i < fieldNames.length; i = i + 1) emptyDecorators.push([]);
-	return createNode(NodeKind.TypeObject, {
+	const objectNode = createNode(NodeKind.TypeObject, {
 		typExprFieldNames: fieldNames,
 		typExprFieldTypes: fieldTypes,
 		typExprIndexKey: indexKey,
@@ -448,6 +460,8 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		typExprTypeName: "",
 		typExprOptionalFields: optionalFields,
 	}, braceToken);
+	objectNode.paramLocations = fieldLocations;
+	return objectNode;
 }
 
 // Tier 3: skip a type atom WITHOUT consuming the trailing '?' (needed for conditional types
@@ -477,6 +491,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
+			skipReturnPredicateHead(state);
 			skipTypeAtomNoOptional(state);
 		}
 		// Array type suffix: ((T) => U)[] or (T)[]
@@ -554,6 +569,7 @@ function skipTypeAtom(state: ParserState): void {
 		// Arrow function type: (...) => R
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
+			skipReturnPredicateHead(state);
 			skipTypeAtom(state);
 		}
 		// Array type suffix on parenthesized/function type: ((n) => T)[] or (T)[]
@@ -740,8 +756,8 @@ test "generic type text" { assert annotationText("Result<Node, string>") != ""; 
 test "union type text" { assert annotationText("string | number") != ""; }
 
 test "a type operator keeps its space before a bracketed operand" {
-	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[]?");
-	assert annotationText("T extends [int32, string] ? 1 : 2").startsWith("T extends [int32, string]?");
+	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[] ?");
+	assert annotationText("T extends [int32, string] ? 1 : 2").startsWith("T extends [int32, string] ?");
 	assert annotationText("keyof (Pair)") == "keyof (Pair)";
 	assert annotationText("Array<T>[]") == "Array<T>[]";
 }

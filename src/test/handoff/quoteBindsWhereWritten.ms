@@ -26,6 +26,7 @@ const libDecls = `
 export const LIMIT: int32 = 100;
 export function helper(): int32 { return 100; }
 export class Box { v: int32 = 100; }
+export struct Pair { a: int64; b: int64; }
 `;
 
 function libWith(quoted: string): string {
@@ -40,6 +41,7 @@ const callerNamesakes = `
 const LIMIT: string = "caller";
 function helper(): string { return "caller"; }
 class Box { w: string = "caller"; }
+class Pair { w: string = "caller"; }
 `;
 
 function callerOf(decls: string, use: string, type: string = "int32"): MapEntry {
@@ -180,6 +182,31 @@ test "quoteBindsWhereWritten: a type written in a quote names the macro module's
 		typeCases("((): Box => new Box())().v", "m(0)", "int32", "arrow return"),
 		typeCases("(function (b: Box): int32 { return b.v; })(new Box())", "m(0)", "int32", "function expression parameter"),
 		typeCases("((f: (b: Box, n: int32) => int32) => f(new Box(), 1))((b: Box, n) => b.v + n)", "m(0)", "int32", "mixed bound and contextually typed parameters"),
+	].filter((r: string): boolean => r != "").join("\n");
+	assert bad == "", bad;
+}
+
+test "quoteBindsWhereWritten: a type on a member of a class declared in a quote names the macro module's declaration" {
+	const bad = [
+		typeCases("(() => { class P { b: Box = new Box(); } return new P().b.v; })()", "m(0)", "int32", "property"),
+		typeCases("(() => { class P { pass(b: Box): Box { return b; } } return new P().pass(new Box()).v; })()", "m(0)", "int32", "method parameter and return"),
+		typeCases("(() => { class P { v: int32 = 0; constructor(b: Box) { this.v = b.v; } } return new P(new Box()).v; })()", "m(0)", "int32", "constructor parameter"),
+	].filter((r: string): boolean => r != "").join("\n");
+	assert bad == "", bad;
+}
+
+test "quoteBindsWhereWritten: a type text naming a quote's own type binds its other names where the quote is written" {
+	const bad = [
+		typeCases("(() => { function at<K>(m: Map<K, Box>, k: K): int32 { return m.get(k)!.v; } const mm = new Map<string, Box>(); mm.set(\"a\", new Box()); return at(mm, \"a\"); })()", "m(0)", "int32", "generic parameter beside a bound name"),
+		typeCases("(() => { class Q { n: int32 = 1; } const t: [Q, Box] = [new Q(), new Box()]; return t[0].n + t[1].v - 1; })()", "m(0)", "int32", "quote class beside a bound name"),
+	].filter((r: string): boolean => r != "").join("\n");
+	assert bad == "", bad;
+}
+
+test "quoteBindsWhereWritten: a predicate target and a sizeof operand in a quote name the macro module's declarations" {
+	const bad = [
+		typeCases("(() => { function isBox(x: Box | string): x is Box { return typeof x != \"string\"; } const u: Box | string = new Box(); return isBox(u) ? u.v : 0; })()", "m(0)", "int32", "predicate target"),
+		typeCases("(() => { const n: int32 = sizeof Pair; return n; })()", "m(0)", "int32", "sizeof"),
 	].filter((r: string): boolean => r != "").join("\n");
 	assert bad == "", bad;
 }

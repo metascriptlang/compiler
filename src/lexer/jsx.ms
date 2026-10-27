@@ -112,6 +112,8 @@ function scanJsxTag(s: LexerState): boolean {
 	if (ch == ".".code) { emitSimple(s, TokenKind.Dot, "."); return true; }
 	if (ch == "\"".code || ch == "'".code) { scanString(s, ch); return true; }
 	if (isLetter(ch)) { scanJsxIdentifier(s); return true; }
+	const opensComment = ch == "/".code && (peekAt(s, 1) == "/".code || peekAt(s, 1) == "*".code);
+	if (!opensComment) s.jsxStack.pop();
 	return false;
 }
 

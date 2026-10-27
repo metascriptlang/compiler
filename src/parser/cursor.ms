@@ -219,22 +219,45 @@ function isTypeOperatorKeyword(kind: TokenKind): boolean {
 export function collectTokenText(state: ParserState, start: int32, end: int32): string {
 	let text = "";
 	let previous = TokenKind.Eof;
+	let depth = 0;
+	const extendsDepths: int32[] = [];
+	const conditionalDepths: int32[] = [];
+	let conditionalOperand = false;
 	for (let i = start; i < end; i += 1) {
 		const tok = state.tokens[i];
 		if (tok.kind == TokenKind.Comment) continue;
+		const v = tok.value;
+		const opens = v == "(" || v == "[" || v == "{" || v == "<";
+		const closes = v == ")" || v == "]" || v == "}" ? 1 : v == ">" ? 1 : v == ">>" ? 2 : v == ">>>" ? 3 : 0;
+		if (closes > 0) {
+			depth -= closes;
+			while (extendsDepths.length > 0 && extendsDepths[extendsDepths.length - 1] > depth) extendsDepths.pop();
+			while (conditionalDepths.length > 0 && conditionalDepths[conditionalDepths.length - 1] > depth) conditionalDepths.pop();
+		}
+		let conditionalOperator = false;
+		if (v == "?" && extendsDepths.length > 0 && extendsDepths[extendsDepths.length - 1] == depth) {
+			extendsDepths.pop();
+			conditionalDepths.push(depth);
+			conditionalOperator = true;
+		} else if (v == ":" && conditionalDepths.length > 0 && conditionalDepths[conditionalDepths.length - 1] == depth) {
+			conditionalDepths.pop();
+			conditionalOperator = true;
+		}
 		// Smart spacing: reproduce original token adjacency for type annotations.
 		// No space around brackets [], angles <>, parens (), commas, colons, dots.
 		if (text != "") {
 			const lastCh = text.byteAt(text.byteLength - 1);
-			const v = tok.value;
-			const noSpaceBefore = v == "[" || v == "]" || v == ">" || v == ">>" || v == ">>>"
+			const noSpaceBefore = !conditionalOperator && !conditionalOperand && (v == "[" || v == "]" || v == ">" || v == ">>" || v == ">>>"
 				|| v == ")" || v == "," || v == "." || v == "?" || v == ":"
-				|| v == "<" || v == "(";
-			const noSpaceAfter = lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
-				|| lastCh == ".".code || lastCh == "?".code;
+				|| v == "<" || (v == "(" && previous != TokenKind.Colon));
+			const noSpaceAfter = !conditionalOperand && (lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
+				|| lastCh == ".".code || lastCh == "?".code);
 			const operandOfKeyword = isTypeOperatorKeyword(previous) && (v == "(" || v == "[");
 			if (operandOfKeyword || (!noSpaceBefore && !noSpaceAfter)) text = text + " ";
 		}
+		if (tok.kind == TokenKind.Extends) extendsDepths.push(depth);
+		if (opens) depth += 1;
+		conditionalOperand = conditionalOperator;
 		previous = tok.kind;
 		// Preserve quotes on string literal tokens so resolveAnnotation can
 		// distinguish string literal union members ("r8unorm") from type names.
@@ -247,7 +270,7 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 	return text;
 }
 
-function hasPrecedingLineBreak(state: ParserState): boolean {
+export function hasPrecedingLineBreak(state: ParserState): boolean {
 	let pos = state.position - 1;
 	while (pos >= 0 && state.tokens[pos].kind == TokenKind.Comment) pos -= 1;
 	return pos < 0 || current(state).line > state.tokens[pos].line;

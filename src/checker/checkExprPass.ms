@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { annotatedType, operandAt, boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -484,22 +484,48 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 // tag is a component reference (binds to the function symbol); a lowercase tag is a platform
 // string (no binding). node.typeExpr is the positioned Identifier the parser stored for the tag.
 export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null {
-	if (node.typeExpr == null) return null;
+	const path = jsxTagPath(ctx, node);
+	const segments = (node.data as JSXElementData).jsxTag.split(".").length;
+	return path.length == segments ? path[path.length - 1] : null;
+}
+
+// The symbols a component tag names, one per resolved segment: TS reads `<Ui.Card>` as the value
+// `Ui.Card` and a simple tag as a value only when it is capitalised. A segment that does not
+// resolve ends the path quietly, because the consuming macro decides what an unbound tag means.
+export function jsxTagPath(ctx: CheckerContext, node: Node): Symbol[] {
+	const path: Symbol[] = [];
+	if (node.typeExpr == null) return path;
+	const segments = (node.data as JSXElementData).jsxTag.split(".");
 	const base = (node.typeExpr.data as IdentifierData).name;
-	if (base.byteLength == 0 || base.byteAt(0) < "A".code || base.byteAt(0) > "Z".code) return null;
-	return lookupSymbol(ctx.table, base);
+	const capitalised = base.byteLength > 0 && base.byteAt(0) >= "A".code && base.byteAt(0) <= "Z".code;
+	if (segments.length == 1 && !capitalised) return path;
+	let sym: Symbol | null = lookupSymbol(ctx.table, base);
+	let i = 1;
+	while (sym != null) {
+		path.push(sym);
+		if (i >= segments.length || sym.symbolKind != SymbolKind.Module || sym.modulePath == "") break;
+		const member = findExportedSymbol(ctx.exportRegistry, sym.modulePath, segments[i]);
+		sym = member != null ? member.sym : null;
+		i += 1;
+	}
+	return path;
 }
 
 function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 	if (node.typeExpr == null) return;
 	const tag = node.typeExpr;
 	const base = (tag.data as IdentifierData).name;
-	const intrinsics = ctx.jsxMacroArgDepth > 0 ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
+	const dotted = (node.data as JSXElementData).jsxTag.indexOf(".") >= 0;
+	const intrinsics = ctx.jsxMacroArgDepth > 0 && !dotted ? jsxNamespaceMember(ctx, "IntrinsicElements") : null;
 	if (intrinsics != null) ensureShaped(intrinsics, ctx);
+	const path = jsxTagPath(ctx, node);
+	for (let i = 0; i < path.length && tag.paramLocations != null && i < tag.paramLocations.length; i += 1) {
+		const at = tag.paramLocations[i];
+		sgRecordSym(ctx, at.line, at.column, at.column + path[i].name.byteLength, path[i], path[i].symbolType, path[i].symbolKind, path[i].name, "", false);
+	}
 	const sym = jsxComponentSym(ctx, node);
 	if (sym != null) {
 		tag.resolvedSym = sym;
-		sgRecordSym(ctx, tag.location.line, tag.location.column, tag.location.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
 		const fn = sym.symbolType;
 		if (ctx.jsxMacroArgDepth > 0 && fn != null && fn.kind == TypeKind.Function && fn.typeChildren != null && fn.typeChildren.length > 0) recordJsxAttrs(ctx, node, fn.typeChildren[0]);
 	} else if (intrinsics != null) {
@@ -1231,7 +1257,7 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 
 function checkSizeofExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as SizeofExprData;
-	const resolved = resolveAnnotation(d.sizeofType, ctx, 0, 0);
+	const resolved = annotatedType(d.sizeofType, node.typeExpr, ctx, 0, 0);
 	resolveTypeExpr(node.typeExpr, ctx);
 	// Generic operand: leave unfolded so mono substitutes sizeofType→concrete, then the instance re-check folds the real size.
 	if (resolved.kind == TypeKind.GenericParam || hasGenericParams(resolved)) { node.nodeType = int32Type(); return; }
@@ -2433,8 +2459,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		return;
 	}
 	const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
-			const boundTarget = boundAnnotationType(node.typeExpr);
-			const targetType = boundTarget != null ? boundTarget : (d.asType != "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
+			const targetType = (d.asType != "") ? annotatedType(d.asType, node.typeExpr, ctx, asLoc.line, asLoc.column) : inferredType();
 	// TS parity: `expr as T` propagates T as contextual type to expr.
 	// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
 	// (not an anonymous struct that codegen then can't cast to Foo).
@@ -3861,8 +3886,11 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// "body-expected return" past this point (drives ReturnStmt check via
 	// ctx.currentFunction.symType.typeReturn at line ~4297 below).
 	let explicitReturnType: Type = null as unknown as Type;
+	const predicate = predicateReturnOf(returnTypeAnnotation, ctx, fnNode.location.line, fnNode.location.column, fnNode.typeExpr);
 	// Source 1: semProcAux parity — annotation takes precedence.
-	if (returnTypeAnnotation != "" && returnTypeAnnotation != "void") {
+	if (predicate != null) {
+		explicitReturnType = predicate.returnType;
+	} else if (returnTypeAnnotation != "" && returnTypeAnnotation != "void") {
 		explicitReturnType = annotatedType(returnTypeAnnotation, fnNode.typeExpr, ctx, 0, 0);
 	}
 	// Source 2: Bug G — contextual return-type fallback. When the user writes
@@ -4023,7 +4051,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// so it doesn't catch this case for inline expression-form functions.
 	if (explicitReturnType != null) {
 		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, name, name == "<arrow>" ? "async " : "async function", body.location);
-		return createClosureType(types, params, explicitReturnType);
+		const closure = createClosureType(types, params, explicitReturnType);
+		if (predicate != null) closure.typeExtra = predicate.sentinel;
+		return closure;
 	}
 	if (returnTypeAnnotation == "void") {
 		return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());

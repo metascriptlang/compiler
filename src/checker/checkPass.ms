@@ -22,7 +22,7 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
@@ -38,7 +38,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -707,7 +707,10 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 		if (paramTypeStrs[i] == "") return null;
 		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
 	}
-	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	const predicate = predicateReturnOf(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr);
+	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	if (predicate != null) closure.typeExtra = predicate.sentinel;
+	return closure;
 }
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
@@ -943,8 +946,7 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 		if (sym != null) markUsedIn(ctx, sym);
 	}
 	if (body.kind == NodeKind.JSXElement) {
-		const tag = jsxComponentSym(ctx, body);
-		if (tag != null) markUsedIn(ctx, tag);
+		for (const named of jsxTagPath(ctx, body)) markUsedIn(ctx, named);
 	}
 	for (const text of writtenTypes(body)) markTypeNamesUsed(ctx, text);
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
