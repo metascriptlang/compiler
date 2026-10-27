@@ -204,16 +204,17 @@ test "declaration boundaries: match coverage depends on selector domain and sour
 	assert strictErrorCount("function f(command: string): int32 { let hits: int32 = 0; match (command) { \"list\" => { hits += 1; }, \"show\" => { hits += 100; }, } return hits; }") == 0;
 }
 
-test "declaration boundaries: match arm returns follow the nearest value context" {
+test "declaration boundaries: a match arm value is its last expression and return leaves the function" {
 	const pre = "enum Failure { Rejected, TooBig } class Box { n: uint64 = 0; } ";
 	const cases = [
 		{ name: "ok payload in a returned block arm", source: "function f(value: uint32): Result<uint64, Failure> { return match (value) { 0 => { const result: uint64 = 7; return Result.ok(result); }, _ => Result.err(Failure.Rejected), }; }", accepted: true },
 		{ name: "error payload in a returned block arm", source: "function f(value: uint32): Result<uint64, Failure> { return match (value) { 0 => Result.ok(5), _ => { return Result.err(Failure.TooBig); }, }; }", accepted: true },
 		{ name: "nested return inherits the match value context", source: "function f(value: uint32): Result<uint64, Failure> { return match (value) { 0 => Result.err(Failure.Rejected), _ => { if (value > 10) { return Result.err(Failure.TooBig); } return Result.ok(2); }, }; }", accepted: true },
-		{ name: "nested match arms use the inner declared context", source: "function f(value: uint32, flag: boolean): Result<uint64, Failure> { const outer: Result<uint64, Failure> = match (value) { 0 => { const inner: Result<uint64, Failure> = match (flag) { true => { return Result.ok(1); }, false => Result.err(Failure.Rejected), }; return inner; }, _ => Result.ok(9), }; return outer; }", accepted: true },
+		{ name: "nested match arms use the inner declared context", source: "function f(value: uint32, flag: boolean): Result<uint64, Failure> { const outer: Result<uint64, Failure> = match (value) { 0 => { const inner: Result<uint64, Failure> = match (flag) { true => { Result.ok(1) }, false => Result.err(Failure.Rejected), }; inner }, _ => Result.ok(9), }; return outer; }", accepted: true },
+		{ name: "a valued return in a bound match arm is refused", source: "function f(value: uint32, flag: boolean): Result<uint64, Failure> { const outer: Result<uint64, Failure> = match (value) { 0 => { return Result.ok(1); }, _ => Result.ok(9), }; return outer; }", accepted: false },
 		{ name: "statement match returns leave the surrounding function", source: "function f(value: uint32): Result<uint64, Failure> { match (value) { 0 => { return Result.ok(3); }, _ => {}, }; return Result.err(Failure.Rejected); }", accepted: true },
 		{ name: "statement match refuses a return outside the function relation", source: "function f(value: uint32): uint64 { match (value) { 0 => { return \"s\"; }, _ => {}, }; return 1; }", accepted: false },
-		{ name: "match value nullability is independent of the function return", source: "function f(value: uint32): uint64 { const box: Box | null = match (value) { 0 => { return null; }, _ => new Box(), }; return box == null ? 0 : 1; }", accepted: true },
+		{ name: "match value nullability is independent of the function return", source: "function f(value: uint32): uint64 { const box: Box | null = match (value) { 0 => { null }, _ => new Box(), }; return box == null ? 0 : 1; }", accepted: true },
 		{ name: "nested functions keep their own return context", source: "function f(value: uint32): string { return match (value) { 0 => { const next = (n: uint64): uint64 => { return n + 1; }; return `next ${next(41)}`; }, _ => \"other\", }; }", accepted: true },
 	];
 	for (const item of cases) {
