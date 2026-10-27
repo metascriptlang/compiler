@@ -492,6 +492,10 @@ function nativeEffect(w: WriteEffects, s: WriteSummary, call: Node, sym: Symbol,
 	}
 	const recv = receiverOf(call);
 	const args = (call.data as CallExprData).arguments;
+	if (recv != null && hasFlag(sym, SymbolFlag.ImportC) && isArrayStorage(recv.nodeType)) {
+		if (appendsTo(call)) addSlot(s, heldSlot(w, APPEND_SLOT, recv.nodeType));
+		else elementWrite(w, s, recv, stores);
+	}
 	for (let i = 0; i < args.length; i += 1) {
 		if (args[i] == null || !isArrayStorage(args[i].nodeType)) continue;
 		if (i == 0 && appendsTo(call)) addSlot(s, heldSlot(w, APPEND_SLOT, args[i].nodeType));
