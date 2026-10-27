@@ -242,12 +242,24 @@ function copyOf(value: Readonly<Span<uint8>>): Buffer {
 	return buf;
 }
 
-function isHex(encoding: string): boolean {
-	return encoding == "hex" || encoding.equalsIgnoreCase("hex");
+const plainCodec: int32 = 0;
+const hexCodec: int32 = 1;
+const base64Codec: int32 = 2;
+const asciiCodec: int32 = 3;
+
+function textCodec(encoding: string): int32 {
+	if (encoding == "utf8" || encoding == "utf-8" || encoding == "latin1" || encoding == "binary") return plainCodec;
+	if (encoding == "hex") return hexCodec;
+	if (encoding == "base64" || encoding == "base64url") return base64Codec;
+	if (encoding == "ascii") return asciiCodec;
+	return textCodecIgnoringCase(encoding);
 }
 
-function isBase64(encoding: string): boolean {
-	return encoding == "base64" || encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
+function textCodecIgnoringCase(encoding: string): int32 {
+	if (encoding.equalsIgnoreCase("hex")) return hexCodec;
+	if (encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url")) return base64Codec;
+	if (encoding.equalsIgnoreCase("ascii")) return asciiCodec;
+	return plainCodec;
 }
 
 function decodeText(value: string, base64: boolean): Buffer {
@@ -265,8 +277,9 @@ export function fromString(this typeof Buffer, value: string, encoding: string):
 }
 
 function decodeString(value: string, encoding: string): Buffer {
-	if (isHex(encoding)) return decodeText(value, false);
-	if (isBase64(encoding)) return decodeText(value, true);
+	const codec = textCodec(encoding);
+	if (codec == hexCodec) return decodeText(value, false);
+	if (codec == base64Codec) return decodeText(value, true);
 	return copyOf(value.asBytes());
 }
 
@@ -456,12 +469,21 @@ export function toStringEncoded(
 }
 
 function encodeRange(range: Readonly<Span<uint8>>, encoding: string): string {
-	if (encoding == "utf8" || encoding.equalsIgnoreCase("utf8") || encoding.equalsIgnoreCase("utf-8")) return utf8String(range, false);
-	if (isHex(encoding)) return encodeHex(range);
-	if (encoding == "base64" || encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
+	if (encoding == "utf8" || encoding == "utf-8") return utf8String(range, false);
+	if (encoding == "hex") return encodeHex(range);
+	if (encoding == "base64") return encodeBase64(range);
+	if (encoding == "base64url") return encodeBase64Url(range);
+	if (encoding == "ascii") return asciiOf(range);
+	if (encoding == "latin1" || encoding == "binary") return latin1Of(range);
+	return encodeRangeIgnoringCase(range, encoding);
+}
+
+function encodeRangeIgnoringCase(range: Readonly<Span<uint8>>, encoding: string): string {
+	if (encoding.equalsIgnoreCase("hex")) return encodeHex(range);
+	if (encoding.equalsIgnoreCase("base64")) return encodeBase64(range);
 	if (encoding.equalsIgnoreCase("base64url")) return encodeBase64Url(range);
 	if (encoding.equalsIgnoreCase("ascii")) return asciiOf(range);
-	if (encoding == "latin1" || encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return latin1Of(range);
+	if (encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) return latin1Of(range);
 	return utf8String(range, false);
 }
 
@@ -623,12 +645,13 @@ export function write(
 	if (size == 0 || at < 0 || at >= total) return 0;
 	const limit = length as int64;
 	const room = limit < 0 || limit > total - at ? total - at : limit;
-	if (isHex(encoding)) return writeHex(str.asBytes(), buf.bytePointer(), at, room) as number;
-	if (isBase64(encoding)) return writeBase64(str.asBytes(), buf.bytePointer(), at, room) as number;
+	const codec = textCodec(encoding);
+	if (codec == hexCodec) return writeHex(str.asBytes(), buf.bytePointer(), at, room) as number;
+	if (codec == base64Codec) return writeBase64(str.asBytes(), buf.bytePointer(), at, room) as number;
 	const count = size < room ? size : room;
 	const to = buf.bytePointer() + at;
 	const from = str.textPointer();
-	if (encoding.equalsIgnoreCase("ascii")) {
+	if (codec == asciiCodec) {
 		for (let i: int64 = 0; i < count; i++) to[i] = from[i] & 0x7F;
 	} else {
 		cMemcpy(to, from, count as uint64);
@@ -667,10 +690,11 @@ export function fillString(
 	if (from >= to) return;
 	// The plain path holds no string temporary: binding the text to a `let` copied a literal to the
 	// heap, and a temporary costs a destroy call on every fill.
-	if (isHex(encoding)) {
+	const codec = textCodec(encoding);
+	if (codec == hexCodec) {
 		buf.fillDecoded(from, to, value, decodeText(value, false));
 	}
-	else if (isBase64(encoding)) {
+	else if (codec == base64Codec) {
 		buf.fillDecoded(from, to, value, decodeText(value, true));
 	}
 	else buf.fillRepeated(from, to, value.textPointer(), value.byteCount());
