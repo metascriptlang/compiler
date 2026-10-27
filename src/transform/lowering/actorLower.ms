@@ -27,7 +27,7 @@ import {
 	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
-import { genericParamsOf, literalBase } from "../../checker/types";
+import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 import { peelHidden } from "../../checker/sendable";
 
@@ -53,10 +53,11 @@ function typeMsgKind(t: Type | null): string {
 	if (isValueLayoutType(t)) return "struct";
 	if (t.kind == TypeKind.Union && unwrapRefNullUnion(t) != null) return "ptr";
 	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) return typeMsgKind(t.typeReturn);
+	if (t.kind == TypeKind.Set) return typeMsgKind(setRepr(t));
 	if (literalBase(t) != t) return typeMsgKind(literalBase(t));
 	const result = match (t.kind) {
 		TypeKind.String => "string",
-		TypeKind.Array => "array",
+		TypeKind.Array | TypeKind.SizedArray => "array",
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32
