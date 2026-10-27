@@ -95,7 +95,13 @@ function concatParts(parts: Readonly<Span<string>>): string {
  * @param search A string to search for.
  * @param replacement A string containing the text to replace.
  */
+@inline
 export function replace(this s: string, search: string, replacement: string): string {
+	if (search.asBytes().length > s.asBytes().length) return s;
+	return replaceFirst(s, search, replacement);
+}
+
+function replaceFirst(s: string, search: string, replacement: string): string {
 	const sb = s.asBytes();
 	const xb = search.asBytes();
 	const rb = replacement.asBytes();
@@ -197,12 +203,17 @@ function substituteInto(dst: Ptr<uint8>, at: int64, rb: Readonly<Span<uint8>>, s
  * @param search A string to search for.
  * @param replacement A string containing the text to replace.
  */
+@inline
 export function replaceAll(this s: string, search: string, replacement: string): string {
+	if (search.asBytes().length > s.asBytes().length) return s;
+	return replaceEvery(s, search, replacement);
+}
+
+function replaceEvery(s: string, search: string, replacement: string): string {
 	const sb = s.asBytes();
 	const xb = search.asBytes();
 	const rb = replacement.asBytes();
 	if (xb.length == 0) return hasDollar(rb) ? interleavePatterned(sb, rb) : interleaveUnits(sb, rb);
-	if (xb.length > sb.length) return s;
 	const patterned = hasDollar(rb);
 	let count: int64 = 0;
 	let length: int64 = sb.length;
