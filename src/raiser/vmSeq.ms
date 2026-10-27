@@ -18,6 +18,7 @@ const WIDTH_SHIFT: int64 = 3;
 const CYCLIC_BIT: int64 = 64;
 const UNCOUNTED_BIT: int64 = 128;
 const SHIFT_SHIFT: int64 = 8;
+const DYN_SHIFT: int64 = 4;
 
 function widthShift(width: ElemWidth): int64 {
 	return match (width) {
@@ -32,7 +33,7 @@ export function seqNew(mem: VmMemory, cls: RaiserRegClass, width: ElemWidth, cyc
 	const cell = newCell(mem, SEQ_CELL_SIZE, 8, SEQ_TYPE_INDEX, true);
 	setCellRc(cell, rc);
 	setCellRootIdx(cell, 0);
-	const meta: int64 = (cls as int64) | ((width as int64) << WIDTH_SHIFT) | (cyclic ? CYCLIC_BIT : 0) | (uncounted ? UNCOUNTED_BIT : 0) | (widthShift(width) << SHIFT_SHIFT);
+	const meta: int64 = (cls as int64) | ((width as int64) << WIDTH_SHIFT) | (cyclic ? CYCLIC_BIT : 0) | (uncounted ? UNCOUNTED_BIT : 0) | ((cls == RaiserRegClass.Dyn ? DYN_SHIFT : widthShift(width)) << SHIFT_SHIFT);
 	st64(cell + 16, meta);
 	return cell;
 }
@@ -93,7 +94,7 @@ function narrowStore(at: int64, width: ElemWidth, v: int64): void {
 
 @inline
 function elemAt(c: int64, meta: int64, i: number): int64 {
-	return ld64(c + 8) + PAYLOAD_DATA + ((i as int64) << ((meta >> SHIFT_SHIFT) & 3));
+	return ld64(c + 8) + PAYLOAD_DATA + ((i as int64) << ((meta >> SHIFT_SHIFT) & 7));
 }
 
 // The element at `i` as the word its register class holds; the index is the caller's to have checked.
@@ -118,11 +119,26 @@ export function seqStore(c: int64, i: number, v: int64): void {
 	narrowStore(at, width as ElemWidth, v);
 }
 
+// A Dyn array's element is 16 bytes: the value's kind, then its payload bits (a float's bits, otherwise the integer word).
+export function seqDynKind(c: int64, i: number): int64 {
+	return ld64(elemAt(c, ld64(c + 16), i));
+}
+
+export function seqDynBits(c: int64, i: number): int64 {
+	return ld64(elemAt(c, ld64(c + 16), i) + 8);
+}
+
+export function seqDynStore(c: int64, i: number, kind: int64, bits: int64): void {
+	const at = elemAt(c, ld64(c + 16), i);
+	st64(at, kind);
+	st64(at + 8, bits);
+}
+
 function reserve(mem: VmMemory, c: int64, newLen: int64): void {
 	const p = ld64(c + 8);
 	const cap = p == 0 ? 0 : ld64(p);
 	if (newLen <= cap) return;
-	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 3;
+	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 7;
 	const grown = Math.max(Math.max(newLen, MIN_CAP), cap * 3 / 2);
 	const fresh = heapAllocUninit(mem, PAYLOAD_DATA + (grown << shift));
 	st64(fresh, grown);
@@ -131,6 +147,13 @@ function reserve(mem: VmMemory, c: int64, newLen: int64): void {
 		heapDealloc(mem, p);
 	}
 	st64(c + 8, fresh);
+}
+
+export function seqPushDyn(mem: VmMemory, c: int64, kind: int64, bits: int64): void {
+	const n = ld64(c);
+	reserve(mem, c, n + 1);
+	st64(c, n + 1);
+	seqDynStore(c, n as number, kind, bits);
 }
 
 export function seqPush(mem: VmMemory, c: int64, v: int64): void {
@@ -145,7 +168,7 @@ export function seqSetLen(mem: VmMemory, c: int64, n: int64): void {
 	const len = ld64(c);
 	if (n > len) {
 		reserve(mem, c, n);
-		const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 3;
+		const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 7;
 		const at = ld64(c + 8) + PAYLOAD_DATA + (len << shift);
 		const bytes = (n - len) << shift;
 		zeroRange(at, bytes);
@@ -155,7 +178,7 @@ export function seqSetLen(mem: VmMemory, c: int64, n: int64): void {
 
 export function seqRemove(c: int64, start: number, count: number): void {
 	const len = ld64(c);
-	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 3;
+	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 7;
 	const data = ld64(c + 8) + PAYLOAD_DATA;
 	copyBytes(data + ((start as int64) << shift), data + (((start + count) as int64) << shift), (len - ((start + count) as int64)) << shift);
 	st64(c, len - (count as int64));
@@ -164,14 +187,34 @@ export function seqRemove(c: int64, start: number, count: number): void {
 export function seqInsert(mem: VmMemory, c: int64, index: number, v: int64): void {
 	const len = ld64(c);
 	reserve(mem, c, len + 1);
-	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 3;
+	const shift = (ld64(c + 16) >> SHIFT_SHIFT) & 7;
 	const data = ld64(c + 8) + PAYLOAD_DATA;
 	copyBytes(data + (((index + 1) as int64) << shift), data + ((index as int64) << shift), (len - (index as int64)) << shift);
 	st64(c, len + 1);
 	seqStore(c, index, v);
 }
 
+export function seqInsertDyn(mem: VmMemory, c: int64, index: number, kind: int64, bits: int64): void {
+	const len = ld64(c);
+	reserve(mem, c, len + 1);
+	const data = ld64(c + 8) + PAYLOAD_DATA;
+	copyBytes(data + (((index + 1) as int64) << DYN_SHIFT), data + ((index as int64) << DYN_SHIFT), (len - (index as int64)) << DYN_SHIFT);
+	st64(c, len + 1);
+	seqDynStore(c, index, kind, bits);
+}
+
 export function seqReverse(c: int64): void {
+	if (seqClass(c) == RaiserRegClass.Dyn) {
+		let k = seqLen(c) - 1;
+		for (let i = 0; i < k; i += 1) {
+			const kind = seqDynKind(c, i);
+			const bits = seqDynBits(c, i);
+			seqDynStore(c, i, seqDynKind(c, k), seqDynBits(c, k));
+			seqDynStore(c, k, kind, bits);
+			k -= 1;
+		}
+		return;
+	}
 	let j = seqLen(c) - 1;
 	for (let i = 0; i < j; i += 1) {
 		const kept = seqLoad(c, i);
@@ -190,7 +233,7 @@ export function seqNewView(mem: VmMemory, base: int64, baseHandle: int64, off: i
 	st64(view + 16, meta);
 	st64(view, len);
 	const p = ld64(base + 8);
-	st64(view + 8, p == 0 ? 0 : p + (off << ((meta >> SHIFT_SHIFT) & 3)));
+	st64(view + 8, p == 0 ? 0 : p + (off << ((meta >> SHIFT_SHIFT) & 7)));
 	st64(view + 24, baseHandle);
 	return view;
 }
@@ -199,14 +242,14 @@ export function seqNewView(mem: VmMemory, base: int64, baseHandle: int64, off: i
 export function seqViewOffset(view: int64): int64 {
 	const base = (ld64(view + 24) >> 3) << 3;
 	const p = ld64(view + 8);
-	return p == 0 ? 0 : (p - ld64(base + 8)) >> ((ld64(view + 16) >> SHIFT_SHIFT) & 3);
+	return p == 0 ? 0 : (p - ld64(base + 8)) >> ((ld64(view + 16) >> SHIFT_SHIFT) & 7);
 }
 
 // Points a view at `off` elements into the payload its base has now.
 export function seqPointViewInto(view: int64, off: int64): void {
 	const base = (ld64(view + 24) >> 3) << 3;
 	const p = ld64(base + 8);
-	st64(view + 8, p == 0 ? 0 : p + (off << ((ld64(view + 16) >> SHIFT_SHIFT) & 3)));
+	st64(view + 8, p == 0 ? 0 : p + (off << ((ld64(view + 16) >> SHIFT_SHIFT) & 7)));
 }
 
 export function seqSwapContents(a: int64, b: int64): void {

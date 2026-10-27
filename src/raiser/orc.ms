@@ -9,7 +9,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
-	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
+	createArrayHeap, createStructHeap, heapSeqHandles, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
 	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
 	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, objectCellFieldValue, objectCellStoreField, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
@@ -32,7 +32,6 @@ const NEVER_COLLECT = 2147483647;
 function colorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): int32 {
 	const kind = handleHeapKind(h);
 	if (kind == RaiserHeapKind.Seq) return cellRootIdx(seqCellOf(h)) as int32;
-	if (kind == RaiserHeapKind.Array) return arrHeap.arrays[handleIndex(h)].color;
 	if (kind == RaiserHeapKind.Object) return objHeap.objects[handleIndex(h)].color;
 	throw new Error(`internal: handle ${h} is no collectable cell`);
 }
@@ -40,7 +39,6 @@ function colorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int6
 function setColorField(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, field: int32): void {
 	const kind = handleHeapKind(h);
 	if (kind == RaiserHeapKind.Seq) { setCellRootIdx(seqCellOf(h), field as int64); }
-	else if (kind == RaiserHeapKind.Array) { arrHeap.arrays[handleIndex(h)].color = field; }
 	else { objHeap.objects[handleIndex(h)].color = field; }
 }
 
@@ -58,19 +56,19 @@ function registered(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int6
 
 function countAt(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): int32 {
 	const kind = handleHeapKind(h);
-	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) return heapArrayRc(arrHeap, h);
+	if (kind == RaiserHeapKind.Seq) return heapArrayRc(arrHeap, h);
 	return objHeap.objects[handleIndex(h)].rc;
 }
 
 function addCount(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, delta: int32): void {
 	const kind = handleHeapKind(h);
-	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) { heapArraySetRc(arrHeap, h, heapArrayRc(arrHeap, h) + delta); }
+	if (kind == RaiserHeapKind.Seq) { heapArraySetRc(arrHeap, h, heapArrayRc(arrHeap, h) + delta); }
 	else { objHeap.objects[handleIndex(h)].rc += delta; }
 }
 
 function setCount(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64, count: int32): void {
 	const kind = handleHeapKind(h);
-	if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) { heapArraySetRc(arrHeap, h, count); }
+	if (kind == RaiserHeapKind.Seq) { heapArraySetRc(arrHeap, h, count); }
 	else { objHeap.objects[handleIndex(h)].rc = count; }
 }
 
@@ -106,7 +104,7 @@ function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: Orc
 			if (!t.cyclic[i]) continue;
 			pushSlot(env, h, i as int32, t.kinds[i] == RaiserRegClass.Dyn ? objectCellFieldValue(arrHeap, h, i) : handleValue(objectCellSlot(seqCellOf(h), i)));
 		}
-	} else if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) {
+	} else if (kind == RaiserHeapKind.Seq) {
 		if (!heapArrayCyclic(arrHeap, h) || !arrayHoldsHandles(arrHeap, h)) return;
 		const count = arrayHeldCount(arrHeap, h);
 		for (let i = 0; i < count; i += 1) pushSlot(env, h, i as int32, arrayHeldAt(arrHeap, h, i));
@@ -127,10 +125,6 @@ function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: i
 	}
 	if (isSeqHandle(owner)) {
 		arrayHeldStore(arrHeap, owner, index, raiserNil());
-		return;
-	}
-	if (handleHeapKind(owner) == RaiserHeapKind.Array) {
-		arrHeap.arrays[handleIndex(owner)].items[index] = raiserNil();
 		return;
 	}
 	const obj = objHeap.objects[handleIndex(owner)];
@@ -244,7 +238,7 @@ export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserOb
 
 export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	const kind = handleHeapKind(handle);
-	if (kind != RaiserHeapKind.Array && kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object) return;
+	if (kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object) return;
 	if (!registered(arrHeap, objHeap, handle)) return;
 	unregisterAt(arrHeap, objHeap, handle);
 }
@@ -402,7 +396,7 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	const o = allocNode(obj);
 	const items = heapAllocArray(arr);
 	const words = heapAllocArrayOf(arr, RaiserRegClass.Ref);
-	arr.arrays[handleIndex(items)].elemCyclic = true;
+	heapArraySetFlags(arr, items, true, false);
 	heapArraySetFlags(arr, words, true, false);
 	heapObjectSetField(arr, obj, o, "items", raiserArray(items));
 	heapArrayPush(arr, items, raiserArray(words));
@@ -410,7 +404,7 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	rcIncref(arr, obj, raiserObject(o));
 	orcRegisterCandidate(arr, obj, items);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 3;
-	assert arr.freeList.length == 1 && obj.freeList.length == 1;
+	assert heapSeqHandles(arr).length == 0 && obj.freeList.length == 1;
 }
 
 test "orcRegisterCandidate asks for a collection at 128 plus the threshold and the threshold follows the runtime rule" {

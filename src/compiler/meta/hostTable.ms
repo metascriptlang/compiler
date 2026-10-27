@@ -39,7 +39,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
+	heapArrayLen, heapArrayGet, heapArraySetLen, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
@@ -996,7 +996,7 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 		handle = heapAllocArray(heap);
 		if (placed) setStringBytesHandle(heap, args[0], handle);
 	} else {
-		heap.arrays[handleIndex(handle)].items.length = 0;
+		heapArraySetLen(heap, handle, 0);
 	}
 	let i = 0;
 	while (i < bytes.length) {
