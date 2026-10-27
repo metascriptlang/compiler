@@ -4,7 +4,7 @@ import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
 import { ensureDir, exists, readFile, remove, removeAll, rename, symlink, writeFile } from "std/fs";
 
 const windows = platform == "windows";
-const macos = platform == "macos";
+const macos = platform == "darwin";
 
 interface Scenario {
 	name: string;

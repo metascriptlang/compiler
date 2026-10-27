@@ -581,7 +581,7 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 }
 
 function developerToolchain(): string {
-	if (platform != "macos") return "";
+	if (platform != "darwin") return "";
 	const selected = env.get("DEVELOPER_DIR") != "" ? env.get("DEVELOPER_DIR") : realpath("/var/db/xcode_select_link");
 	let text = `\n${selected}\n${env.get("TOOLCHAINS")}\n${env.get("SDKROOT")}`;
 	for (const tool of ["usr/bin/clang", "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"]) {
@@ -2611,4 +2611,50 @@ test "a precompiled header goes stale when a header it includes changes in place
 	writeFile(`${dir}/inner.h`, inner("42"));
 	assert !pchManifestCurrent(`${dir}/prefix.pch.deps`);
 	assert !pchManifestCurrent(`${dir}/absent.pch.deps`);
+}
+
+const SAMPLE_SEARCH = [
+	"clang version 19.1.0",
+	" \"/usr/bin/clang\" -cc1 -triple arm64 -E -v -x c /dev/null",
+	"ignoring nonexistent directory \"/opt/none/include\"",
+	"#include \"...\" search starts here:",
+	"#include <...> search starts here:",
+	" /usr/local/include",
+	" /usr/include",
+	" /Library/Frameworks (framework directory)",
+	"End of search list.",
+];
+
+test "a search list keeps its directories, frameworks and absent directories and skips the command line" {
+	const found = parseImplicitSearch(SAMPLE_SEARCH.join("\n"), "k");
+	assert found.complete;
+	assert found.dirs.join("|") == "/opt/none/include|/usr/local/include|/usr/include";
+	assert found.frameworks.join("|") == "/opt/none/include|/Library/Frameworks";
+	assert parseImplicitSearch(searchLines(found).join("\n"), "k").key == found.key;
+}
+
+test "a search list without its end or with a header map is incomplete" {
+	assert !parseImplicitSearch(SAMPLE_SEARCH.slice(0, SAMPLE_SEARCH.length - 1).join("\n"), "k").complete;
+	const mapped = SAMPLE_SEARCH.slice(0);
+	mapped.splice(5, 0, " /work/app.hmap (headermap)");
+	assert !parseImplicitSearch(mapped.join("\n"), "k").complete;
+	assert !parseImplicitSearch("", "k").complete;
+}
+
+test "the selected developer directory keys the compiler identity on macOS only" {
+	const saved = env.get("DEVELOPER_DIR");
+	env.set("DEVELOPER_DIR", "/msc/first");
+	const first = developerToolchain();
+	env.set("DEVELOPER_DIR", "/msc/second");
+	const second = developerToolchain();
+	if (saved == "") {
+		env.delete("DEVELOPER_DIR");
+	} else {
+		env.set("DEVELOPER_DIR", saved);
+	}
+	if (platform == "darwin") {
+		assert first != second;
+	} else {
+		assert first == "" && second == "";
+	}
 }
