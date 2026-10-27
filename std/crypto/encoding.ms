@@ -18,10 +18,11 @@ export function encodeHex(this data: Readonly<Span<uint8>>): string {
 	when (c) { return result; } else { return result.asString(); }
 }
 
-function hexDigit(byte: int32): int32 {
-	if (byte >= "0".code && byte <= "9".code) return byte - "0".code;
-	if (byte >= "a".code && byte <= "f".code) return byte - "a".code + 10;
-	if (byte >= "A".code && byte <= "F".code) return byte - "A".code + 10;
+export function hexDigitValue(byte: uint8): int32 {
+	const digit = (byte as int32) - "0".code;
+	if ((digit as uint32) < 10) return digit;
+	const letter = ((byte as int32) | 32) - "a".code;
+	if ((letter as uint32) < 6) return letter + 10;
 	return -1;
 }
 
@@ -33,8 +34,8 @@ export function decodeHex(this text: string): uint8[] {
 	const out: Span<uint8> = result;
 	const inputLength = byteCount as EncodingIndex;
 	for (let i: EncodingIndex = 0; i < inputLength; i += 2) {
-		const hi = hexDigit(bytes[i] as int32);
-		const lo = hexDigit(bytes[i + 1] as int32);
+		const hi = hexDigitValue(bytes[i]);
+		const lo = hexDigitValue(bytes[i + 1]);
 		if (hi < 0 || lo < 0) return [];
 		out[i / 2] = ((hi << 4) | lo) as uint8;
 	}
@@ -122,8 +123,8 @@ when (c) {
 		let result = newEncodingOutput(count / 2);
 		const bytes = freshEncodingOutputBytes(result);
 		for (let i: int64 = 0; i < count; i += 2) {
-			const hi = hexDigit(data[i] as int32);
-			const lo = hexDigit(data[i + 1] as int32);
+			const hi = hexDigitValue(data[i]);
+			const lo = hexDigitValue(data[i + 1]);
 			if (hi < 0 || lo < 0) return emptyEncoding;
 			bytes[i / 2] = ((hi << 4) | lo) as uint8;
 		}

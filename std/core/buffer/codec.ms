@@ -2,15 +2,9 @@
 // not two hex digits; base64 takes both alphabets, skips any other byte and stops at `=`.
 
 import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../../crypto/encodingOutput";
+import { hexDigitValue } from "../../crypto/encoding";
 
 const equalsSign: uint8 = 61;
-
-function hexValue(byte: uint8): int32 {
-	if (byte >= 48 && byte <= 57) return (byte as int32) - 48;
-	if (byte >= 97 && byte <= 102) return (byte as int32) - 87;
-	if (byte >= 65 && byte <= 70) return (byte as int32) - 55;
-	return -1;
-}
 
 function base64Value(byte: uint8): int32 {
 	if (byte >= 65 && byte <= 90) return (byte as int32) - 65;
@@ -38,8 +32,8 @@ export function writeHex(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: 
 	const count = limit < pairs ? limit : pairs;
 	let k: int64 = 0;
 	while (k < count) {
-		const hi = hexValue(text[k * 2]);
-		const lo = hexValue(text[k * 2 + 1]);
+		const hi = hexDigitValue(text[k * 2]);
+		const lo = hexDigitValue(text[k * 2 + 1]);
 		if (hi < 0 || lo < 0) break;
 		bytes[at + k] = ((hi << 4) | lo) as uint8;
 		k += 1;
