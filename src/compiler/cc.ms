@@ -899,11 +899,18 @@ function planDir(): string {
 
 export function toolchainHeaderRoot(ccOption: number, ccBinary: string): string {
 	const command = compilerInvocation(ccOption, ccBinary);
+	if (command.ok && ccOption == CC_PREPARED) return dirname(dirname(command.value.path));
 	if (!command.ok || !isZigDriver(command.value)) return "";
 	let path = command.value.path;
 	const found = findOnPath(path);
 	if (found != "") path = found;
 	return `${dirname(path)}/lib`;
+}
+
+test "a prepared bundle owns the headers under its root, an explicit clang owns none" {
+	assert toolchainHeaderRoot(CC_PREPARED, `"/prepared with spaces/bin/clang" --no-default-config --config=/prepared/target.cfg`) == "/prepared with spaces";
+	assert toolchainHeaderRoot(CC_PREPARED, "") == "";
+	assert toolchainHeaderRoot(0, "/usr/bin/clang") == "";
 }
 
 function isZigDriver(command: ToolCommand): boolean {
