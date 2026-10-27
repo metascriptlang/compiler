@@ -529,6 +529,7 @@ export function replayPreludeTables(tables: PreludeTables): void {
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
 //   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
+//     opsCsv readonlyView mutableView typeInst
 //   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv <payload...>
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
@@ -713,6 +714,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		}
 		enqType(t.typeReturn);
 		enqType(t.typeExtra);
+		enqType(t.readonlyView);
+		enqType(t.mutableView);
+		enqType(t.typeInst);
 		enqSym(t.sym, false);
 		for (const op of t.attachedOps) enqSym(op, false);
 	}
@@ -734,7 +738,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
 		const ops: int32[] = [];
 		for (const o of t.attachedOps) ops.push(idxSym(o));
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${idxType(t.readonlyView)}\t${idxType(t.mutableView)}\t${idxType(t.typeInst)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1281,6 +1285,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const typeExtraIdx: int32[] = [];
 	const typeSymIdx: int32[] = [];
 	const typeOpsIdx: int32[][] = [];
+	const typeViewIdx: int32[] = [];
+	const typeMutableIdx: int32[] = [];
+	const typeInstIdx: int32[] = [];
 	const symTypeIdx: int32[] = [];
 	const symOverloadIdx: int32[][] = [];
 	const symStaticIdx: int32[][] = [];
@@ -1349,6 +1356,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			const optional = rd.str();
 			if (optional != "-") t.optionalFields = splitCsv(optional);
 			typeOpsIdx.push(rd.ints());
+			typeViewIdx.push(rd.int() as int32);
+			typeMutableIdx.push(rd.int() as int32);
+			typeInstIdx.push(rd.int() as int32);
 			types.push(t);
 			rd.endRow();
 		} else if (tag == 78) {
@@ -1488,6 +1498,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		t.typeReturn = typeReturnIdx[i] >= 0 && typeReturnIdx[i] < types.length ? types[typeReturnIdx[i]] : null as unknown as Type;
 		t.typeExtra = typeExtraIdx[i] >= 0 && typeExtraIdx[i] < types.length ? types[typeExtraIdx[i]] : null as unknown as Type;
 		t.sym = typeSymIdx[i] >= 0 && typeSymIdx[i] < syms.length ? syms[typeSymIdx[i]] : null as unknown as Symbol;
+		t.readonlyView = typeViewIdx[i] >= 0 && typeViewIdx[i] < types.length ? types[typeViewIdx[i]] : null;
+		t.mutableView = typeMutableIdx[i] >= 0 && typeMutableIdx[i] < types.length ? types[typeMutableIdx[i]] : null;
+		t.typeInst = typeInstIdx[i] >= 0 && typeInstIdx[i] < types.length ? types[typeInstIdx[i]] : null;
 		for (const k of typeOpsIdx[i]) {
 			if (k >= syms.length) return null;
 			t.attachedOps.push(k >= 0 ? syms[k] : null);
