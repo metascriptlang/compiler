@@ -46,7 +46,7 @@ define(ROW_COPY_VALUE, [
 
 define(ROW_STR_CONCAT, ["msStringConcat"]);
 define(ROW_STR_TEXT, ["msNumberToString", "msIntToString", "msUint64ToString", "msBoolToString", "msCharToString"]);
-define(ROW_TRACE, ["msOrcTraceRef"]);
+define(ROW_TRACE, ["msOrcTraceRef", "msClosureTrace"]);
 define(ROW_SET_LEN, ["msArraySetLen"]);
 define(ROW_STR_APPEND, ["msStringAppend"]);
 define(ROW_STR_APPEND_CHAR, ["msStringAppendChar"]);
