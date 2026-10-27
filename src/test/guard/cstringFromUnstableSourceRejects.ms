@@ -3,7 +3,8 @@
 // INVARIANT (implicit cstring conversion): a cstring keeps no string alive, so
 //   the checker takes one implicitly only from a string literal, a const bound
 //   to one, or a call argument, which the call keeps alive unless it is a
-//   parameter or local the function assigns.
+//   parameter the function assigns, or a local that a nested function or the
+//   call's own arguments assign.
 //
 // WHAT IT CATCHES: a cstring taken from a local that is reassigned afterwards,
 //   from a temporary kept past its statement, or from a parameter or local the
@@ -18,14 +19,16 @@
 // GUARD-CHECK-FAIL cannot take a cstring from 's'
 // GUARD-CHECK-FAIL cannot take a cstring from 'captured'
 // GUARD-CHECK-FAIL cannot take a cstring from 'p'
-// GUARD-CHECK-FAIL cannot take a cstring from 'moved'
+// GUARD-CHECK-FAIL cannot take a cstring from 'viaClosure'
+// GUARD-CHECK-FAIL cannot take a cstring from 'inArguments'
+// GUARD-CHECK-FAIL cannot take a cstring from 'viaArgumentClosure'
 // GUARD-CHECK-FAIL cannot take a cstring from 'kept'
 // GUARD-CHECK-FAIL cannot take a cstring from 'returned'
-// GUARD-CHECK-FAIL cannot take a cstring from 'shifted'
 // GUARD-CHECK-FAIL cannot take a cstring from this expression
 
 @include("string.h")
 extern function strlen(s: cstring): int64;
+extern function strcmp(a: cstring, b: cstring): int32;
 
 function fromReassignedLocal(n: int32): int64 {
 	let s: string = "value-" + n.toString();
@@ -47,16 +50,23 @@ function fromAssignedParameter(p: string): int64 {
 	return strlen(p); // GUARD-REFUSED
 }
 
-function fromAssignedLocalArgument(n: int32): int64 {
-	let moved: string = "value-" + n.toString();
-	moved = moved + "-other";
-	return strlen(moved); // GUARD-REFUSED
+function fromLocalAssignedByClosure(n: int32): int64 {
+	let viaClosure: string = "value-" + n.toString();
+	const bump = (): void => { viaClosure = "other"; };
+	bump();
+	return strlen(viaClosure); // GUARD-REFUSED
 }
 
-function fromAssignedLocalBehindCast(n: int32): int64 {
-	let shifted: string | null = "value-" + n.toString();
-	shifted = "other";
-	return strlen(shifted as string); // GUARD-REFUSED
+function fromLocalAssignedInArguments(n: int32): int64 {
+	let inArguments: string = "value-" + n.toString();
+	return strcmp(inArguments, (inArguments = "other")); // GUARD-REFUSED
+}
+
+function runIt(f: () => string): string { return f(); }
+
+function fromLocalAssignedByArgumentClosure(n: int32): int64 {
+	let viaArgumentClosure: string = "value-" + n.toString();
+	return strcmp(viaArgumentClosure, runIt(() => { viaArgumentClosure = "other"; return "x"; })); // GUARD-REFUSED
 }
 
 function fromParameterKeptInLocal(kept: string): int64 {
@@ -73,4 +83,4 @@ function fromTemporary(n: int32): int64 {
 	return strlen(c);
 }
 
-console.log(fromReassignedLocal(1) + fromReassignedLocalCapturedBySpawn(4) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromAssignedLocalBehindCast(5) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));
+console.log(fromReassignedLocal(1) + fromReassignedLocalCapturedBySpawn(4) + fromAssignedParameter("x") + fromLocalAssignedByClosure(2) + fromLocalAssignedInArguments(5) + fromLocalAssignedByArgumentClosure(6) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));
