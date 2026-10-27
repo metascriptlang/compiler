@@ -13,7 +13,7 @@ import { RaiserRegClass } from "../../raiser/bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectData, RaiserObjectHeap, RaiserClassType, handleIndex, raiserNil, raiserInt, createStructHeap,
 	createClassType, layOutObject, heapAllocObject, fieldIndex, fieldValueAt, fieldStoreAt, appendField,
-	heapObjectFieldNameAt,
+	heapObjectFieldNameAt, createArrayHeap, isObjectCell, heapObjectGetField, heapObjectSetField, heapNewObjectCell, objectCellHandle, OWNED_BY_RECEIVER_RC,
 } from "../../raiser/value";
 
 const NODE_WIRE_META: string[] = ["kind", "line", "column", "endLine", "endColumn", "argOrigin", "declSymHandle", "paramSymHandles",
@@ -109,12 +109,17 @@ function wireFieldIndex(obj: RaiserObjectData, name: string): number {
 }
 
 export function wireGet(objHeap: RaiserObjectHeap, h: int64, name: string): RaiserValue {
+	if (isObjectCell(h)) return heapObjectGetField(objHeap, h, name);
 	const obj = objHeap.objects[handleIndex(h)];
 	const i = wireFieldIndex(obj, name);
 	return i >= 0 ? fieldValueAt(obj, i) : raiserNil();
 }
 
 export function wireSet(objHeap: RaiserObjectHeap, h: int64, name: string, val: RaiserValue): void {
+	if (isObjectCell(h)) {
+		heapObjectSetField(objHeap, h, name, val);
+		return;
+	}
 	const obj = objHeap.objects[handleIndex(h)];
 	const i = wireFieldIndex(obj, name);
 	if (i >= 0) fieldStoreAt(obj, i, val);
@@ -142,4 +147,15 @@ test "a laid wire node reads its header as metadata and its kind's fields as chi
 	assert !isNodeWireMetaSlot(heap, h, NODE_WIRE_META.length as int32);
 	const u = allocWireObject(heap, WIRE_UNION);
 	assert !isNodeWireMetaSlot(heap, u, 1);
+}
+
+test "a wire read or write of an object cell goes through the cell's own layout" {
+	const arrHeap = createArrayHeap();
+	const objHeap = createStructHeap();
+	const t = createClassType("Tag", 0, [1], ["count", "bytes"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const cell = objectCellHandle(heapNewObjectCell(arrHeap.mem, t, OWNED_BY_RECEIVER_RC as int64));
+	wireSet(objHeap, cell, "count", raiserInt(7));
+	assert wireGet(objHeap, cell, "count").intVal == 7;
+	assert wireGet(objHeap, cell, "$tag").kind == RaiserValueKind.Nil;
+	assert wireGet(objHeap, cell, "kind").kind == RaiserValueKind.Nil;
 }
