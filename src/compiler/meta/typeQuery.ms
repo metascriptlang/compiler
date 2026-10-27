@@ -32,7 +32,8 @@ function queryError(ctx: CheckerContext, msg: string): RaiserValue {
 function boundSymOf(v: RaiserValue): Symbol | null {
 	if (v.kind != RaiserValueKind.Object) return null;
 	const heap = activeHostObjectHeap();
-	return heap == null ? null : boundSymOfObject(heap, v.intVal);
+	const arr = activeHostArrayHeap();
+	return heap == null || arr == null ? null : boundSymOfObject(arr, heap, v.intVal);
 }
 
 function emitNode(n: Node): RaiserValue {
@@ -75,8 +76,9 @@ function peelAlias(t: Type): Type {
 function typeArgOf(v: RaiserValue): Type | null {
 	if (v.kind == RaiserValueKind.Object) {
 		const heap = activeHostObjectHeap();
-		if (heap != null) {
-			const t = boundTypeOfObject(heap, v.intVal);
+		const arr = activeHostArrayHeap();
+		if (heap != null && arr != null) {
+			const t = boundTypeOfObject(arr, heap, v.intVal);
 			if (t != null) return t;
 		}
 	}
@@ -156,9 +158,10 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 
 function namesBuiltinType(ctx: CheckerContext, v: RaiserValue): boolean {
 	const heap = activeHostObjectHeap();
-	if (heap == null || v.kind != RaiserValueKind.Object) return false;
-	if (wireGet(heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
-	const name = wireGet(heap, v.intVal, "name");
+	const arr = activeHostArrayHeap();
+	if (heap == null || arr == null || v.kind != RaiserValueKind.Object) return false;
+	if (wireGet(arr, heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
+	const name = wireGet(arr, heap, v.intVal, "name");
 	return name.kind == RaiserValueKind.String && builtinTypeNamed(ctx, unboxString(name)) != null;
 }
 
