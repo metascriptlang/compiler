@@ -590,6 +590,39 @@ function subdirModule(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function initThrowMessage(): void {
+	const tag = "hcrInitThrowMessage";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const cases = [
+		["initThrow", "HCR: initialization of module 'app' threw: an uncaught exception: boom: the reason the author needs"],
+		["initThrowImported", "HCR: initialization of module 'lib' threw: an uncaught exception: plain thrown value"],
+	];
+	for (const c of cases) {
+		const dir = freshDir(`${TMP}/${c[0]}`);
+		for (const f of readDir(`${FIXTURES}/${c[0]}`)) copy(`${FIXTURES}/${c[0]}/${f}`, `${dir}/${f}`);
+		const started = spawnChild(MSC, ["run", "--hcr", "app.ms"], { cwd: dir, mergeStderr: true });
+		need(tag, started.ok, `cannot start ${MSC}`);
+		if (!started.ok) continue;
+		const child = started.value;
+		const seen = [""];
+		const reported = readUntil(child, seen, "HCR: initialization of module", 120000);
+		readUntil(child, seen, "
+", 5000);
+		if (!reported) console.log(seen[0]);
+		need(tag, reported, `${c[0]}: the init fatal was not reported`);
+		child.write("q
+", 5000);
+		child.wait(30000);
+		child.close();
+		const text = seen[0].replaceAll("", "");
+		if (!text.contains(c[1])) console.log(text);
+		need(tag, text.contains(c[1]), `${c[0]}: the init fatal does not carry the thrown message`);
+	}
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
 function runBound(): void {
 	const tag = "hcrRunBound";
 	const cases = [
@@ -2389,6 +2422,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
 	{ name: "hcrRunEvents", run: runEvents },
+	{ name: "hcrInitThrowMessage", run: initThrowMessage },
 	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
