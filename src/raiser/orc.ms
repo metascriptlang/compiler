@@ -11,7 +11,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapSeqHandles, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
-	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
+	handleHeapKind, raiserNil, rcDecrefHandle, rcForgetRoot, ORC_COLOR_MASK, ORC_ROOT_SHIFT, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
 	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, objectCellFieldValue, objectCellStoreField, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
 import { cellRootIdx, setCellRootIdx, liveCellBlocks } from "./memory";
@@ -24,8 +24,8 @@ const COL_WHITE = 2;   // condemned (garbage)
 
 export type OrcDestroy = (handle: int64) => void;
 
-const COLOR_MASK = 3;
-const ROOT_SHIFT = 2;
+const COLOR_MASK = ORC_COLOR_MASK;
+const ROOT_SHIFT = ORC_ROOT_SHIFT;
 const MIN_THRESHOLD = 16;
 const NEVER_COLLECT = 2147483647;
 
@@ -213,20 +213,6 @@ function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, e
 	}
 }
 
-function unregisterAt(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): void {
-	const roots = arrHeap.orcRoots;
-	const slot = (colorField(arrHeap, objHeap, h) >> ROOT_SHIFT) - 1;
-	const last = roots.length - 1;
-	const moved = roots[last];
-	roots[slot] = moved;
-	roots.length = last;
-	if (moved != h) {
-		const field = colorField(arrHeap, objHeap, moved);
-		setColorField(arrHeap, objHeap, moved, (field & COLOR_MASK) | ((slot + 1) << ROOT_SHIFT));
-	}
-	setColorField(arrHeap, objHeap, h, colorField(arrHeap, objHeap, h) & COLOR_MASK);
-}
-
 export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
 	if (handle == 0) return false;
 	if (registered(arrHeap, objHeap, handle)) return false;
@@ -240,7 +226,7 @@ export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHea
 	const kind = handleHeapKind(handle);
 	if (kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object) return;
 	if (!registered(arrHeap, objHeap, handle)) return;
-	unregisterAt(arrHeap, objHeap, handle);
+	rcForgetRoot(arrHeap, objHeap, handle);
 }
 
 export function orcCollect(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, destroy: OrcDestroy): int32 {
