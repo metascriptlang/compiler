@@ -2,7 +2,7 @@
 // the current line.
 
 import { FormatOptions, TrailingComma } from "./options";
-import { Doc, DocKind, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak } from "./doc";
+import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak } from "./doc";
 
 enum Mode {
 	Flat,
@@ -92,13 +92,21 @@ function indentWidth(prefix: string, options: FormatOptions): int32 {
 }
 
 // Whether `next` fits in `width` columns, then whether the rest of the line (the commands left
-// on `rest` up to `restIdx`) still fits behind it.
+// on `rest` up to `restIdx`) still fits behind it, each rest command measured in its own mode.
 function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32): boolean {
 	const stack: Cmd[] = [next];
 	let remaining = width;
+	let restLeft = restIdx;
+	let inRest = false;
 
-	while (stack.length > 0) {
-		if (remaining < 0) return false;
+	while (remaining >= 0) {
+		if (stack.length == 0) {
+			if (restLeft < 0) return true;
+			stack.push(rest[restLeft]);
+			restLeft -= 1;
+			inRest = true;
+			continue;
+		}
 		const cmd = stack[stack.length - 1];
 		stack.shrink(stack.length - 1);
 		const doc = cmd.doc;
@@ -106,8 +114,8 @@ function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32): boolean {
 			DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => {},
 			DocKind.Text => { remaining = remaining - textOf(doc).length; },
 			DocKind.Group => {
-				if (doc.shouldBreak) return false;
-				pushChildren(stack, doc, cmd.indent, cmd.mode);
+				if (doc.shouldBreak && !inRest) return false;
+				pushChildren(stack, doc, cmd.indent, doc.shouldBreak ? Mode.Break : cmd.mode);
 			},
 			DocKind.Indent => { pushChildren(stack, doc, cmd.indent + 1, cmd.mode); },
 			DocKind.Line => {
@@ -126,43 +134,7 @@ function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32): boolean {
 		}
 	}
 
-	let i = restIdx;
-	while (i >= 0) {
-		if (remaining < 0) return false;
-		const cmd = rest[i];
-		i = i - 1;
-		const doc = cmd.doc;
-		match (doc.kind) {
-			DocKind.Nil | DocKind.BreakParent => {},
-			DocKind.Text => { remaining = remaining - textOf(doc).length; },
-			DocKind.HardLine => { return true; },
-			DocKind.Line => {
-				if (cmd.mode == Mode.Break) return true;
-				if (!isSoft(doc)) remaining = remaining - 1;
-			},
-			DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IfBreak => {
-				if (cmd.mode == Mode.Break) return true;
-				if (doc.kind == DocKind.IfBreak) remaining = remaining - flatWidth(branchesOf(doc).flat);
-			},
-		}
-	}
-
-	return remaining >= 0;
-}
-
-function flatWidth(doc: Doc): int32 {
-	return match (doc.kind) {
-		DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => 0,
-		DocKind.Text => textOf(doc).length,
-		DocKind.Group | DocKind.Indent => {
-			let w = 0;
-			for (const child of childrenOf(doc)) { w = w + flatWidth(child); }
-			return w;
-		},
-		DocKind.Line => isSoft(doc) ? 0 : 1,
-		DocKind.HardLine => 1000,
-		DocKind.IfBreak => flatWidth(branchesOf(doc).flat),
-	};
+	return false;
 }
 
 export function formatDoc(doc: Doc, options: FormatOptions): string {
@@ -283,6 +255,31 @@ test "layout: an indented blank line carries no tab, and a multi-line text keeps
 	assert formatDoc(blank, tabs) == "a\n\n\tb\n";
 	const literal = docGroupBreak([docText("x\n  "), docText("  "), docHardLine(), docText("b")]);
 	assert formatDoc(literal, narrow) == "x\n  \nb\n";
+}
+
+test "layout: a trailing comma added by break mode counts against the last item" {
+	const lastItem = (): Doc => docGroup([
+		docText("h("),
+		docIndent([docSoftLine(), docText("xxxxx")]),
+		docSoftLine(),
+		docText(")"),
+	]);
+	const call = (items: Doc[]): Doc => docGroup([
+		docText("f("),
+		docIndent(docCommaSepList(items, true)),
+		docSoftLine(),
+		docText(")"),
+	]);
+	assert formatDoc(call([docText("aaaaaaaaaaaa"), lastItem()]), narrow) == "f(\n  aaaaaaaaaaaa,\n  h(\n    xxxxx\n  ),\n)\n";
+	assert formatDoc(call([docText("aaaaaaaaaaaa"), docText("bbbbbbb")]), narrow) == "f(\n  aaaaaaaaaaaa,\n  bbbbbbb,\n)\n";
+}
+
+test "layout: a nested conditional in the rest queue is measured too" {
+	const doc = docGroupBreak([
+		docIndent([docSoftLine(), docGroup([docText("a("), docSoftLine(), docText("bcde)")]), docIfBreak(docGroup([docText(";"), docText(";")]), docNil())]),
+		docSoftLine(),
+	]);
+	assert formatDoc(doc, narrow) == "\n  a(\n  bcde);;\n";
 }
 
 test "layout: formatDocAt indents continuation lines by the base prefix" {
