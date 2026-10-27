@@ -18,7 +18,7 @@ import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifie
 import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot } from "../utils/cachePaths";
-import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
+import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
@@ -761,7 +761,10 @@ function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit
 		if (!exists(object)) continue;
 		const text = try readFile(`${dir}/${entry}`) catch "";
 		const deps = manifestDeps(text, argDirs, includers);
-		if (deps != null) return { object, deps };
+		if (deps != null) {
+			markUsed(`${dir}/${entry}`, nowSeconds());
+			return { object, deps };
+		}
 	}
 	return null;
 }
@@ -833,9 +836,8 @@ export function collectGlobalCache(): void {
 	const root = globalCacheRoot();
 	if (root == "") return;
 	const now = nowSeconds();
-	collectStaleEntries(`${root}/objects`, now);
-	collectStaleEntries(`${root}/store`, now);
-	collectStaleEntries(`${root}/headers`, now);
+	collectStaleEntries(`${root}/store`, now, [".m", ".o"]);
+	collectStaleEntries(`${root}/headers`, now, [".hi"]);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
@@ -1528,6 +1530,7 @@ export function lookupHeaderModule(key: string): string {
 		if (line.length == 0) continue;
 		if (!verifyHeaderDep(line)) return "";
 	}
+	markUsed(`${headersCacheDir()}/${key}.hi`, nowSeconds());
 	return body.slice(pos, body.length);
 }
 

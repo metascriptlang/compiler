@@ -835,7 +835,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
-	collectStaleEntries(packBase(), nowSeconds());
+	collectStaleEntries(packBase(), nowSeconds(), [".pk", ".deps"]);
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
