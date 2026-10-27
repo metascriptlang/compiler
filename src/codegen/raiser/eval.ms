@@ -1698,7 +1698,7 @@ test "orc: a cycle through a reference array and one through a union array are c
 	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
 		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
 	}
-	assert live == 1, `${live}`;
+	assert live == 0 && heapSeqHandles(vm.arrayHeap).length == 0, `${live} ${heapSeqHandles(vm.arrayHeap).length}`;
 }
 
 test "untag: the indexed fast paths keep length, bounds, view and reference counts exact in every element class" {
