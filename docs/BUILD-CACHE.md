@@ -120,12 +120,20 @@ build and never published to the store: a name only a macro supplies (`__has_inc
 name outside ASCII (two Unicode normal forms can name one file), and a compiler whose search list
 could not be read.
 
+The price is paid on every up-to-date build, which now reads each object's `<dep>.q` and its
+presence memo (`<cache>/presence/`) and walks only directories whose stamp moved. On RTX Linux,
+2026-10-28, a project with one `@compile` source including `<stdio.h>`, global store on,
+`perf stat` task-clock of a no-op `msc build`, base and candidate interleaved, 80 runs each, two
+rounds: `149ed6202` median 16.8 and 17.4 ms, `776ea3b32` 18.9 and 19.8 ms, about 2.3 ms more.
+The extra time is mostly kernel reads of those files; user CPU differed by about 0.4 ms in an
+earlier profile of the same change. A larger project or the macOS cost is not measured.
+
 `src/test/cache/run.ms` is the cache lane (`tools/gate.sh` lane `cache`, chosen when
 `cache`/`cc`/`compile`/`toolchain` or the lane changes, and in the release ladder): 22
 input changes on the project record, the local objects and the store, each warm build compared
 with a build from an empty cache, 132 checks. On macOS arm64, 2026-10-27, the compiler before
 this arc (`6b7294f60`) failed 38 of them and the arc before the search-list fix (`98474fe84`)
-23; on RTX Linux the fix (`660433d89`) failed none, in 377 s. The fix has not run the lane on
+23; on RTX Linux, 2026-10-28, the fix (`776ea3b32`) failed none, in 347 s. The fix has not run the lane on
 macOS yet, so its macOS-only rows (framework headers, a case-insensitive volume) are unmeasured. Older compilers still miss these; with one of them, a build that adds such a
 header needs an edited source, or an empty `MSC_CACHE_DIR` together with `MSC_NO_GLOBAL_CACHE=1`.
 
