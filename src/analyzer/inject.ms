@@ -1618,10 +1618,10 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 		// Per-scope isolation (reference parity): each scope has its own
 		// preStmts/pendingStmts, so branch processing can't leak parent stmts.
 		const curScope = currentScope(dctx);
-		for (const pre of curScope.preStmts) { buf.push(pre); }
+		for (let k = 0; k < curScope.preStmts.length; k += 1) { buf.push(curScope.preStmts[k]); }
 		curScope.preStmts = [];
 		buf.push(processed);
-		for (const post of curScope.pendingStmts) { buf.push(post); }
+		for (let k = 0; k < curScope.pendingStmts.length; k += 1) { buf.push(curScope.pendingStmts[k]); }
 		curScope.pendingStmts = [];
 		dctx.capturedNodes = [];
 		dctx.capturedSyms = [];
