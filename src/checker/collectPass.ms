@@ -911,6 +911,11 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			for (const loc of methodNode.paramLocations) { newLocs.push(loc); }
 			methodNode.paramLocations = newLocs;
 		}
+		if (methodNode.typeExprs != null) {
+			const newTypeExprs: Node[] = [null as unknown as Node];
+			for (const t of methodNode.typeExprs) { newTypeExprs.push(t); }
+			methodNode.typeExprs = newTypeExprs;
+		}
 		// Align methodDefaults with the prepended receiver. fillDefaultArgsForNode
 		// uses defaultOffset=1 for non-static methods, expecting defaults[0] to be
 		// the (always-null) receiver slot. Without this shift, non-static class

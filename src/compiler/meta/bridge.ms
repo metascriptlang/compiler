@@ -1674,14 +1674,24 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 
 function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
 	const operand = valueToNode(val, objHeap, arrHeap, loc);
-	if (operand.nodeType == null) throw new Error("internal: a quote's type operand reached the wire without its Type");
 	operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+	if (operand.nodeType != null) return operand;
+	const names = heapObjectGetField(objHeap, val.intVal, "boundTypeNames");
+	if (names.kind != RaiserValueKind.Array) throw new Error("internal: a quote's type operand reached the wire without its Type or its bound names");
+	const bindings: Node[] = [];
+	for (let i = 0; i < heapArrayLen(arrHeap, names.intVal); i += 1) {
+		const binding = valueToNode(heapArrayGet(arrHeap, names.intVal, i), objHeap, arrHeap, loc);
+		if (binding.resolvedSym == null) throw new Error("internal: a bound name of a quote's type text reached the wire without its symbol");
+		bindings.push(binding);
+	}
+	operand.typeExprs = bindings;
 	return operand;
 }
 
 function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
 	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
-		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr;
+		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr
+		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr;
 	if (!carriesTypeText) return;
 	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
 	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
