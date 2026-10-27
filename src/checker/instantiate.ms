@@ -12,7 +12,7 @@ import { getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferred
 import { ensureShaped, registerTypeInstanceHooks, registerGenericTypeHook, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
-import { splitTopLevel } from "../utils/string";
+import { splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -1259,6 +1259,50 @@ function readsThis(node: Node): boolean {
 }
 
 export function literalFieldInitializer(ctx: CheckerContext, classType: Type | null, fieldName: string, fieldType: Type, loc: SourceLocation): Node | null {
+	const init = classFieldInitializer(ctx, classType, fieldName, fieldType, loc);
+	return init != null ? init : omittedFieldDefault(ctx, fieldType, loc);
+}
+
+// The default of a type that has no zero it can hold. A union of literals defaults to its
+// first member, the way a range defaults to its first value; a struct whose fields need that
+// default is built from an empty literal, so each omitted field takes its own.
+function omittedFieldDefault(ctx: CheckerContext, fieldType: Type, loc: SourceLocation): Node | null {
+	let node: Node | null = null;
+	const first = firstLiteralMember(fieldType);
+	if (first != null) {
+		if (first.kind == TypeKind.StringLiteral) node = createNodeAt(NodeKind.StringLiteral, { value: first.typeName }, loc);
+		else if (first.kind == TypeKind.BooleanLiteral) node = createNodeAt(NodeKind.BooleanLiteral, { boolValue: first.typeName == "true" }, loc);
+		else {
+			const isFloat = numericLiteralIsFloat(first.typeName);
+			node = createNodeAt(NodeKind.NumberLiteral, { value: parseNumberLiteral(first.typeName), isFloat: isFloat, intVal: isFloat ? 0 : parseIntegerLiteral(first.typeName), outOfRangeText: "", isBitPattern: false }, loc);
+		}
+	} else if (isDeclaredStruct(fieldType) && structNeedsLiteralDefault(fieldType, [])) {
+		node = createNodeAt(NodeKind.ObjectLiteral, { properties: [], keys: [], keyLocations: [] }, loc);
+	}
+	if (node == null) return null;
+	callCheckExpr(ctx, node, fieldType);
+	if (node.nodeType != null) node = fitNode(ctx, node, fieldType, node.nodeType);
+	return node;
+}
+
+function firstLiteralMember(t: Type): Type | null {
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return null;
+	for (const m of t.typeChildren) {
+		if (m.kind != TypeKind.StringLiteral && m.kind != TypeKind.NumberLiteral && m.kind != TypeKind.BooleanLiteral) return null;
+	}
+	return t.typeChildren[0];
+}
+
+function structNeedsLiteralDefault(t: Type, seen: Type[]): boolean {
+	if (seen.includes(t)) return false;
+	seen.push(t);
+	for (const f of t.typeChildren) {
+		if (firstLiteralMember(f) != null || (isDeclaredStruct(f) && structNeedsLiteralDefault(f, seen))) return true;
+	}
+	return false;
+}
+
+function classFieldInitializer(ctx: CheckerContext, classType: Type | null, fieldName: string, fieldType: Type, loc: SourceLocation): Node | null {
 	let cur = classType;
 	for (let depth = 0; cur != null && depth < 16; depth += 1) {
 		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
