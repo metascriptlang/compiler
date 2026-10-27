@@ -518,7 +518,7 @@ export function isFreshValue(n: Node | null, s: FreshScope): boolean {
 		},
 		NodeKind.ObjectLiteral => allFresh((p.data as ObjectLiteralData).properties, s),
 		NodeKind.ArrayLiteral => allFresh((p.data as ArrayLiteralData).elements, s),
-		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, s),
+		NodeKind.SpreadExpr => spreadCopiesRefFree(p) || isFreshValue((p.data as SpreadExprData).spreadArg, s),
 		NodeKind.NewExpr => allFresh((p.data as NewExprData).newArguments, s) && s.buildsAlone(p),
 		NodeKind.CallExpr => {
 			const d = p.data as CallExprData;
@@ -798,12 +798,14 @@ function borrowedOf(value: Node | null): BorrowSource | null {
 	};
 }
 
-function spreadBorrow(n: Node): BorrowSource | null {
-	const arg = (n.data as SpreadExprData).spreadArg;
-	let t = arg.nodeType;
+function spreadCopiesRefFree(spread: Node): boolean {
+	let t = (spread.data as SpreadExprData).spreadArg.nodeType;
 	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
-	if (t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn)) return null;
-	return borrowedOf(arg);
+	return t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn);
+}
+
+function spreadBorrow(n: Node): BorrowSource | null {
+	return spreadCopiesRefFree(n) ? null : borrowedOf((n.data as SpreadExprData).spreadArg);
 }
 
 function viewsInScope(): boolean {
