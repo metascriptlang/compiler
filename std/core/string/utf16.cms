@@ -13,6 +13,15 @@ extern function msStringMarkAscii(s: string): void;
 extern function msStringMarkNonAscii(s: string): void;
 extern function msStringPrepareAdd(dest: Ptr<string>, addLen: int64): void;
 extern function msStringAppendChar(dest: Ptr<string>, c: char): void;
+extern function newBytes(length: int64): string from "msStringNewUninit";
+extern function copyTo(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
+
+@inline
+function bytesOf(sb: Readonly<Span<uint8>>, first: int64, end: int64): string {
+	const text = newBytes(end - first);
+	copyTo((text as cstring) as Ptr<uint8>, 0, sb, first, end - first);
+	return text;
+}
 
 // Stride-1 on purpose: a lead-byte skip loop gets if-converted to a select under LTO, which
 // serializes every step on the load (~6x); with a fixed advance there is nothing to serialize.
@@ -147,7 +156,11 @@ export function stringSlice(s: string, start: int64, end: int64): string {
 	if (from < 0) from = 0;
 	if (to > units) to = units;
 	if (from >= to) return "";
-	if (ascii) return s.byteSlice(from as int32, to as int32);
+	if (ascii) {
+		const out = bytesOf(sb, from, to);
+		msStringMarkAscii(out);
+		return out;
+	}
 	const first = from as int32;
 	const last = to as int32;
 	let p = 0;
@@ -188,7 +201,7 @@ export function stringSlice(s: string, start: int64, end: int64): string {
 		p = p + seq;
 	}
 	const middle = bs < 0 ? 0 : be - bs;
-	if (!lowPrefix && !highSuffix) return s.byteSlice(bs < 0 ? 0 : bs, bs < 0 ? 0 : be);
+	if (!lowPrefix && !highSuffix) return bs < 0 ? "" : bytesOf(sb, bs, be);
 	const buf = new Array<uint8>((lowPrefix ? 3 : 0) + middle + (highSuffix ? 3 : 0));
 	const out: Span<uint8> = buf;
 	let at = 0;
