@@ -2982,10 +2982,9 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (mapObjType != null && mapObjType.kind == TypeKind.Ref && mapObjType.typeReturn != null) {
 		mapObjType = mapObjType.typeReturn;
 	}
-	if (mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
-		&& isIndexableMapType(mapObjType)
-		&& !isRangeIndex(d.index)
-		&& ctx.initTracker.leftPartOfAsgn == 0) {
+	const mapSubscript = mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
+		&& isIndexableMapType(mapObjType) && !isRangeIndex(d.index);
+	if (mapSubscript && ctx.initTracker.leftPartOfAsgn == 0) {
 		const loc = node.location;
 		const memberTok = createToken(TokenKind.Ident, "", loc.line);
 		const memberData: NodeData = { object: d.array, property: "get", isOptional: false };
@@ -3077,7 +3076,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	} else {
 		accessType = getElementType(arrType);
 	}
-	if (isUnresolvedType(accessType) && !isSliceSource(arrType) && arrType.kind != TypeKind.Ptr) {
+	if (isUnresolvedType(accessType) && !isSliceSource(arrType) && arrType.kind != TypeKind.Ptr && !mapSubscript) {
 		addError(ctx, "type '" + typeDisplayName(arrType) + "' has no '[]' operator", node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
