@@ -313,6 +313,16 @@ when (windows) {
 		let st: Stat = {};
 		return statOf(path, st) ? st.st_mtime as number : -1;
 	}
+	function changedTimeKernel(path: string): number {
+		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+		if (file == INVALID_HANDLE_VALUE) return -1;
+		let basic: BasicInformation = {};
+		const ok = GetFileInformationByHandleEx(file, FileBasicInfo, basic, sizeof(BasicInformation) as uint32) != 0;
+		CloseHandle(file);
+		if (!ok || basic.ChangeTime.QuadPart == 0) return -1;
+		return ((basic.ChangeTime.QuadPart - UNIX_EPOCH_IN_FILETIME) / FILETIME_PER_SECOND) as number;
+	}
 	function changeStampKernel(path: string): string {
 		const wide = widePath(path);
 		if (wide == null) return "";
@@ -422,6 +432,10 @@ when (windows) {
 	function modifiedTimeKernel(path: string): number {
 		let st: Stat = {};
 		return cStat(path as cstring, st) == 0 ? mtimeOf(st).tv_sec as number : -1;
+	}
+	function changedTimeKernel(path: string): number {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 ? ctimeOf(st).tv_sec as number : -1;
 	}
 	@inline
 	function putTime(ref buf: uint8[128], at: int32, t: Timespec): int32 {
@@ -594,6 +608,7 @@ export function isDir(path: string): boolean { return isDirKernel(path); }
 export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
 export function fileSize(path: string): number { return fileSizeKernel(path); }
 export function modifiedTime(path: string): number { return modifiedTimeKernel(path); }
+export function changedTime(path: string): number { return changedTimeKernel(path); }
 export function changeStamp(path: string): string { return changeStampKernel(path); }
 
 // List directory entries. Directories have a trailing "/" marker.

@@ -228,6 +228,10 @@ export function modifiedTime(path: string): number {
 	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
 }
 
+export function changedTime(path: string): number {
+	try { return Math.floor(statSync(path).ctimeMs / 1000); } catch (e) { return -1; }
+}
+
 export function changeStamp(path: string): string {
 	try {
 		const s = statSync(path);
