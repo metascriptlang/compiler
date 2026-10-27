@@ -20,13 +20,14 @@ RULES=(
   'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
+  'cache|^src/compiler/(cache|cc|compile|toolchain)\.ms$|^src/test/cache/'
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana"
-LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
-KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san tsan guard solana"
+ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
+LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
+PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
+KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
@@ -614,6 +615,7 @@ reds_of() {
       sed -n 's/^FAIL \(self-host: .*[^)]\)\( ([^)]*)\)\{0,1\}$/\1/p' "$log"
       [ "$rc" -eq 0 ] || grep -q '^FAIL self-host: ' "$log" || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
+    cache) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^cache: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -nE 's/^FAIL (.*): (bash -n|self-test|check)$/\1/p' "$log" ;;
     suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
@@ -1725,8 +1727,8 @@ runtime/actor/actor.h|boundary build corpus guard hcr san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
-src/compiler/cc.ms|boundary build corpus solana suite tests
-src/compiler/compile.ms|boundary build corpus hcr solana suite tests
+src/compiler/cc.ms|boundary build cache corpus solana suite tests
+src/compiler/compile.ms|boundary build cache corpus hcr solana suite tests
 src/compiler/meta/comptime.ms|build corpus guard solana suite tests
 src/compiler/lsp/server.ms|build lsp suite
 src/compiler/transam/query.ms|build lsp suite
@@ -1736,6 +1738,8 @@ runtime/process.h|boundary build corpus hcr lsp suite tests
 src/compiler/package/install.ms|boundary build suite
 src/compiler/meta/hostTable.ms|boundary build corpus guard solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
+src/test/cache/run.ms|build cache suite
+src/compiler/cache.ms|boundary build cache corpus hcr suite tests
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
@@ -2128,6 +2132,7 @@ lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
+    cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
