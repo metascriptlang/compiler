@@ -5,7 +5,7 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData,
+	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -251,8 +251,9 @@ function pushDeclarator(parts: Doc[], node: Node, options: FormatOptions): void 
 		return;
 	}
 	const d = node.data as VariableDeclData;
-	parts.push(docText(d.declName));
-	if (d.declType != "") {
+	const typed = d.declType != "" ? typedAsWritten(node, d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
+	parts.push(docText(d.declName + typed));
+	if (d.declType != "" && typed == "") {
 		parts.push(docText(": " + d.declType));
 	}
 	if (d.initializer != null) {
@@ -742,6 +743,22 @@ function prefixAt(names: string[], positions: string, word: string): void {
 		const i = p.parseInt() as int32;
 		if (i >= 0 && i < names.length) names[i] = word + names[i];
 	}
+}
+
+// A type is captured as text, which skips its comments; when the holder keeps one written between
+// `line:column` and the type's end, the span is returned as written and the holder lets go of it.
+export function typedAsWritten(holder: Node, line: int32, column: int32, typeExpr: Node | null, options: FormatOptions): string {
+	if (options.source == "" || typeExpr == null || typeExpr.location.endLine == 0) return "";
+	const start = makeLoc(line, column);
+	const end = makeLoc(typeExpr.location.endLine, typeExpr.location.endColumn);
+	const rest: Token[] = [];
+	for (const c of holder.comments) {
+		if (!isBetween(c, start, end)) rest.push(c);
+	}
+	if (rest.length == holder.comments.length) return "";
+	const text = sourceSpan(options.source, line, column, end.line, end.column);
+	if (text != "") holder.comments = rest;
+	return text;
 }
 
 export function isSynthesized(decl: Node, body: Node): boolean {

@@ -10,7 +10,7 @@
 
 import { TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError } from "./cursor";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, stampEnd } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
 
@@ -78,6 +78,7 @@ export function captureType(state: ParserState): CapturedType {
 	state.position = start;
 	const expr = parseTypeExpr(state);
 	state.position = end;
+	stampEnd(state, expr);
 	return { text, expr };
 }
 

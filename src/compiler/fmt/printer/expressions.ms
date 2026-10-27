@@ -19,7 +19,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl, headerAsWritten } from "./statements";
+import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl, headerAsWritten, typedAsWritten } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -395,16 +395,19 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const asWritten = blockBody ? headerAsWritten(node, d.arrowBody, options, null) : null;
 	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, callPrintNode(writtenArrowBody(d.arrowBody, options), options)]);
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
+	const typed = d.arrowReturnType != "" ? typedAsWritten(node, node.location.line, node.location.column, node.typeExpr, options) : "";
 	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
 	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
-	if (bare) {
+	if (typed != "") {
+		parts.push(docText(typed));
+	} else if (bare) {
 		parts.push(params[0]);
 	} else {
 		for (const p of paramListInParens(params, options)) parts.push(p);
 	}
-	if (d.arrowReturnType != "") {
+	if (typed == "" && d.arrowReturnType != "") {
 		parts.push(docText(": " + d.arrowReturnType));
 	}
 	parts.push(docText(" => "));
