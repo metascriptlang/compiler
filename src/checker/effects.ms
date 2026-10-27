@@ -789,12 +789,21 @@ function borrowedOf(value: Node | null): BorrowSource | null {
 		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object) ?? heldBorrow((n.data as MemberExprData).object),
 		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array) ?? heldBorrow((n.data as ArrayAccessData).array),
 		NodeKind.CallExpr => callBorrow(n),
+		NodeKind.SpreadExpr => spreadBorrow(n),
 		NodeKind.Identifier => bindingBorrow(n, value),
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => capturedBorrow(n),
 		NodeKind.NewExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral | NodeKind.AwaitExpr | NodeKind.StringLiteral | NodeKind.NullLiteral
 			| NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.SizeofExpr => null,
 		_ => unfollowed(),
 	};
+}
+
+function spreadBorrow(n: Node): BorrowSource | null {
+	const arg = (n.data as SpreadExprData).spreadArg;
+	let t = arg.nodeType;
+	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
+	if (t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn)) return null;
+	return borrowedOf(arg);
 }
 
 function viewsInScope(): boolean {
