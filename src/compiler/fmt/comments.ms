@@ -212,7 +212,7 @@ function matchingClose(tokens: Token[], open: int32, openKind: TokenKind, closeK
 	let depth = 0;
 	for (let i = open; i < tokens.length; i += 1) {
 		const kind = tokens[i].kind;
-		if (kind == openKind) depth += 1;
+		if (kind == openKind || (openKind == TokenKind.LBrace && kind == TokenKind.QuoteInterp)) depth += 1;
 		else if (kind == closeKind) {
 			depth -= 1;
 			if (depth == 0) return i;

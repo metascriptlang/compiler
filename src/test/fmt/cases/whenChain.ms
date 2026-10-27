@@ -17,3 +17,7 @@ test "fmt: a top-level when chain with comments keeps every branch" {
 test "fmt: a when chain closing a block keeps every branch" {
 	assert assertFmtLossless("function f(): void {\n\tg();\n\twhen (js) {\n\t\th();\n\t}\n}\n");
 }
+
+test "fmt: a when chain holding a quote splice keeps every branch" {
+	assert assertFmtLossless("when (hcr) {\n\texport macro reload(): Node {\n\t\treturn quote { ${bindSym(\"x\")}() };\n\t}\n\texport function g(): void {}\n} else {\n\texport function g(): void {}\n}\n");
+}
