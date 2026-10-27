@@ -900,6 +900,12 @@ function peelAnnotation(layers: AnnotationLayer[], wrap: AnnotationWrap, inner: 
 }
 
 function readonlyAnnotationOf(viewed: Type): Type {
+	if (isMaybeType(viewed) && viewed.typeReturn != null && !hasGenericParams(viewed)) {
+		return nullableUnionOf([readonlyAnnotationOf(viewed.typeReturn), nullType()]);
+	}
+	if (viewed.kind == TypeKind.Union && !hasGenericParams(viewed)) {
+		return nullableUnionOf(viewed.typeChildren.map((m) => readonlyAnnotationOf(m)));
+	}
 	if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
 	const source = createGenericParam("$source");
 	const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
