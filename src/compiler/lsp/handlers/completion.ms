@@ -13,7 +13,7 @@ import {
 	lspFmtCompletionItem, lspFmtLeanCompletionItem, lspFmtMultiLineTextEdit,
 } from "../format";
 import {
-	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
+	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates, sgCompleteLocals,
 	sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
 	sgComputeImportEdit, sgQueryAtPosition, sgQueryContextualTypeAt, sgObjectFieldPathAST, sgCompleteObjectFields,
@@ -50,9 +50,21 @@ function lspKeywordItems(kind: SgCompletionKind, prefix: string): string[] {
 	const result: string[] = [];
 	for (const w of words) {
 		if (prefix.length > 0 && !w.startsWith(prefix)) continue;
-		result.push(lspFmtCompletionItem(w, KEYWORD_COMPLETION_KIND, "keyword", "16", false, "", "", ""));
+		result.push(lspFmtCompletionItem(w, KEYWORD_COMPLETION_KIND, "keyword", "15", false, "", "", ""));
 	}
 	return result;
+}
+
+function lspLocalsBefore(db: TransAmDb, path: string, program: Node, pos: LspCursorParams, prebuilt: string[]): string[] {
+	const ctx = dbTypeCheck(db, path);
+	if (ctx == null) return prebuilt;
+	const locals = sgCompleteLocals(ctx, program, pos.line, pos.col + 1, "", false);
+	if (locals.length == 0) return prebuilt;
+	const shadowed: HashSet<string> = new HashSet<string>();
+	for (const local of locals) shadowed.add(local.name);
+	const items = formatCompletionItemsArray(locals, db, path);
+	for (const item of prebuilt) if (!shadowed.has(lspGetField(item, "label"))) items.push(item);
+	return items;
 }
 
 export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
@@ -66,7 +78,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	const items: string[] = [];
 	for (const kw of STMT_KEYWORDS) {
-		items.push(lspFmtLeanCompletionItem(kw, KEYWORD_COMPLETION_KIND, "16"));
+		items.push(lspFmtLeanCompletionItem(kw, KEYWORD_COMPLETION_KIND, "15"));
 	}
 	for (const c of candidates) {
 		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
@@ -151,7 +163,8 @@ function lspCompletionItemKind(kind: SymbolKind, isMutable: boolean): number {
 		SymbolKind.Interface => 8,
 		SymbolKind.Enum => 13,
 		SymbolKind.TypeAlias => 7,   // Class — TS-Go maps type names to Class
-		SymbolKind.Property => 10,
+		SymbolKind.Property => 5,
+		SymbolKind.Module => 9,
 		_ => 6,
 	};
 }
@@ -280,7 +293,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	// Inside a JSX opening tag: the tag from IntrinsicElements plus the names in scope, an
 	// attribute from the props type only.
 	const jsxSite = sgJsxSiteAt(program, source, pos.line, pos.col + 1);
-	if (jsxSite != null) {
+	if (jsxSite != null && !jsxSite.afterTagDot) {
 		const jsxCtx = dbTypeCheck(db, path);
 		if (jsxCtx == null) return lspResponse(id, "[]");
 		const jsxItems = formatJsxCompletionItems(sgCompleteJsx(jsxCtx, jsxSite, prefix), db, path, program);
@@ -291,7 +304,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	}
 
 	// AST-based context detection FIRST — import contexts bypass all caches
-	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
+	const kind = jsxSite != null ? SgCompletionKind.MemberAccess : sgDetectCompletionContext(program, pos.line, pos.col + 1);
 
 	// ImportPath: scan filesystem for matching modules
 	if (kind == SgCompletionKind.ImportPath) {
@@ -353,12 +366,13 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		return lspResponse(id, "[]");
 	}
 
-	// Prebuilt cache hit: return pre-computed items instantly.
-	// Skip for member access (char before cursor is '.') and import triggers.
+	// Prebuilt cache hit: return pre-computed items instantly, after the cursor's locals, which
+	// the file-wide list cannot hold. Skip for member access (char before cursor is '.') and
+	// import triggers.
 	const charBefore = pos.col > 0 ? source.byteAt(lineOffset(source, pos.line) + pos.col - 1) : 0;
 	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
 	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
-		const limited = prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems;
+		const limited = lspLocalsBefore(db, path, program, pos, prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems);
 		cache.uri = pos.uri;
 		cache.line = pos.line;
 		cache.prefix = "";
@@ -432,7 +446,14 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// ObjectField handled early (before caches) — see above
 
-	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType, staticOwner);
+	let candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType, staticOwner);
+	if (kind == SgCompletionKind.Identifier || kind == SgCompletionKind.TypeAnnotation) {
+		const locals = sgCompleteLocals(ctx, program, pos.line, pos.col + 1, prefix, kind == SgCompletionKind.TypeAnnotation);
+		const shadowed: HashSet<string> = new HashSet<string>();
+		for (const local of locals) shadowed.add(local.name);
+		for (const c of candidates) if (!shadowed.has(c.name)) locals.push(c);
+		candidates = locals;
+	}
 
 	// Cache the individual formatted items for future prefix filtering
 	const cachedItems = formatCompletionItemsArray(candidates, db, path);
@@ -479,6 +500,7 @@ export function handleCompletionResolve(id: string, params: string): string {
 
 // TypeScript-style sortText: lower number = higher priority
 function lspCompletionSortText(item: SgSuggest): string {
+	if (item.sortText != "") return item.sortText;
 	if (item.contextFit) return "10";
 	if (item.scopeDepth == 0) return "11";
 	if (item.scopeDepth <= 2) return "12";
