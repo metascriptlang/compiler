@@ -11,7 +11,7 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount, immField } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
@@ -563,6 +563,22 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	if (d.finallyBody != null) compileStmt(s, d.finallyBody);
 	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, routeReg, 0, 0));
 	if (d.hasCatchClause && catchGuard < 0) patchJumpTo(s, catchEnd, codeLen(s));
+}
+
+export function compileBodyReleasingOnRaise(s: RaiserCompState, body: Node, owned: int32): void {
+	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
+	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
+	s.tries.push({ finallyBody: null, routeReg });
+	compileStmt(s, body);
+	s.tries.pop();
+	const finIdx = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.Finally, routeReg, 0, 0));
+	patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
+	emitInst(s, raiserABC(RaiserOpcode.BeqI64Imm, routeReg, immField(1), 1));
+	const skip = emitJumpPlaceholder(s);
+	emitInst(s, raiserABC(RaiserOpcode.RcDec, owned, 1, 0));
+	patchJumpTo(s, skip, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, routeReg, 0, 0));
 }
 
 function leaveTries(s: RaiserCompState, depth: int32): void {

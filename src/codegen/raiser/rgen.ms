@@ -31,7 +31,8 @@ import {
 	resolveRoutine, RaiserCompState,
 	isScalarClass
 } from "./context";
-import { compileStmt } from "./statements";
+import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
+import { bodyIsErrorBlind } from "../../checker/raises";
 import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
@@ -241,7 +242,8 @@ function compileClassConstructor(
 
 	// Execute constructor body
 	if (ctorBody != null) {
-		compileStmt(s, ctorBody);
+		if (bodyIsErrorBlind(ctorBody)) compileStmt(s, ctorBody);
+		else compileBodyReleasingOnRaise(s, ctorBody, thisReg);
 	}
 
 	// Always return this
