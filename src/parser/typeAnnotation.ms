@@ -40,6 +40,14 @@ function skipUnionType(state: ParserState, leavesQuestion: boolean): void {
 	}
 }
 
+// A function type returns a predicate as a declaration does: `x is T` or `asserts x is T`.
+function skipReturnPredicateHead(state: ParserState): void {
+	const asserts = current(state).kind == TokenKind.Asserts ? 1 : 0;
+	if (isIdentLikeKind(peek(state, asserts).kind) && peek(state, asserts + 1).kind == TokenKind.Is) {
+		for (let i = 0; i < asserts + 2; i += 1) advance(state);
+	}
+}
+
 export function skipTypeAnnotation(state: ParserState): void {
 	skipUnionType(state, false);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
@@ -331,6 +339,7 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	// Arrow => return type
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
+		skipReturnPredicateHead(state);
 		const returnType = parseTypeAtom(state);
 		return createNode(NodeKind.TypeFunction, {
 			typExprParams: paramTypes,
@@ -477,6 +486,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
+			skipReturnPredicateHead(state);
 			skipTypeAtomNoOptional(state);
 		}
 		// Array type suffix: ((T) => U)[] or (T)[]
@@ -554,6 +564,7 @@ function skipTypeAtom(state: ParserState): void {
 		// Arrow function type: (...) => R
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
+			skipReturnPredicateHead(state);
 			skipTypeAtom(state);
 		}
 		// Array type suffix on parenthesized/function type: ((n) => T)[] or (T)[]

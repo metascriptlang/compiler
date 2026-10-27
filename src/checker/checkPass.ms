@@ -22,7 +22,7 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
@@ -707,7 +707,10 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 		if (paramTypeStrs[i] == "") return null;
 		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
 	}
-	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	const predicate = predicateReturnOf(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr);
+	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	if (predicate != null) closure.typeExtra = predicate.sentinel;
+	return closure;
 }
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
