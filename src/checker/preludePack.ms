@@ -30,7 +30,7 @@ import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords } from "./context";
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
-import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
+import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants, createReadonlyView } from "./types";
 import { makeSymbolState, setFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { globalCacheRoot } from "../utils/cachePaths";
@@ -1829,6 +1829,31 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		const md = got.declNode.data as MacroDeclData;
 		assert md.macroDeclName == "pkMacro";
 		assert md.macroDeclParams.length == 1;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
+test "preludePack: a read-only view keeps the type it views, so a generic parameter seen through it binds to the declared one" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const t = createGenericParam("T");
+		const view = createReadonlyView(t);
+		const sym = makeSymbolState("pkView", SymbolKind.TypeAlias, view, false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		sym.typeParams = [t];
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const key = preludePackKey("readonly-view", ".test");
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkView"));
+		assert got != null;
+		assert got.symbolType.mutableView == got.typeParams[0];
+		assert got.typeParams[0].readonlyView == got.symbolType;
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);
