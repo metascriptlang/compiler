@@ -117,8 +117,14 @@ export function replace(this s: string, search: string, replacement: string): st
 	return out;
 }
 
+const memChrBreakEven = 16;
+
 function hasDollar(rb: Readonly<Span<uint8>>): boolean {
-	return msMemChr(rb, 0, rb.length, 36) >= 0;
+	if (rb.length > memChrBreakEven) return msMemChr(rb, 0, rb.length, 36) >= 0;
+	for (let i: int64 = 0; i < rb.length; i++) {
+		if (rb[i] == 36) return true;
+	}
+	return false;
 }
 
 // A `$` pattern in a string replacement: `$$`, `$&`, `` $` `` or `$'`, else 0 and the `$` is literal.
@@ -195,8 +201,9 @@ export function replaceAll(this s: string, search: string, replacement: string):
 	const sb = s.asBytes();
 	const xb = search.asBytes();
 	const rb = replacement.asBytes();
+	if (xb.length == 0) return hasDollar(rb) ? interleavePatterned(sb, rb) : interleaveUnits(sb, rb);
+	if (xb.length > sb.length) return s;
 	const patterned = hasDollar(rb);
-	if (xb.length == 0) return patterned ? interleavePatterned(sb, rb) : interleaveUnits(sb, rb);
 	let count: int64 = 0;
 	let length: int64 = sb.length;
 	let pos: int64 = 0;
