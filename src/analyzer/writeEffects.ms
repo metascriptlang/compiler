@@ -524,7 +524,7 @@ function capturedParamCalled(w: WriteEffects, s: WriteSummary, callee: Node): Sy
 	if (t.kind != NodeKind.MemberExpr) return null;
 	const md = t.data as MemberExprData;
 	const env = holderType(md.object.nodeType);
-	if (env == null || env.sym == null || !env.sym.name.startsWith(ENV_STRUCT_PREFIX)) return null;
+	if (env == null || env.sym == null || !hasFlag(env.sym, SymbolFlag.ClosureEnv)) return null;
 	const stores = envStoresOf(w, unitOf(w, s), env).get(md.property);
 	if (stores == null || stores.length != 1) return null;
 	const stored = skipConvDfa(stores[0].kind == NodeKind.MoveExpr ? (stores[0].data as MoveExprData).moveArg : stores[0]);
@@ -533,8 +533,6 @@ function capturedParamCalled(w: WriteEffects, s: WriteSummary, callee: Node): Sy
 	return sym;
 }
 
-const ENV_STRUCT_PREFIX = "$Env_";
-
 function envStoresOf(w: WriteEffects, unit: string, env: Type): HashMap<string, Node[]> {
 	let byEnv = w.tables.envStores.get(unit);
 	if (byEnv == null) {
@@ -542,7 +540,7 @@ function envStoresOf(w: WriteEffects, unit: string, env: Type): HashMap<string, 
 		byEnv = found;
 		const note = (envType: Type | null, field: string, value: Node): void => {
 			const held = holderType(envType);
-			if (held == null || held.sym == null || !held.sym.name.startsWith(ENV_STRUCT_PREFIX)) return;
+			if (held == null || held.sym == null || !hasFlag(held.sym, SymbolFlag.ClosureEnv)) return;
 			let fields = found.get(held);
 			if (fields == null) {
 				fields = new HashMap<string, Node[]>();
