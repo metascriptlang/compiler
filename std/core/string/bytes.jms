@@ -48,6 +48,11 @@ function decodeWellFormed(arr: Readonly<uint8[]>): string {
 	unreachable;
 }
 
+/** The bytes as a string without a scan; the caller guarantees well-formed WTF-8 with no split surrogate pair. */
+export function wellFormedString(data: Readonly<uint8[]>): string {
+	return decodeWellFormed(data);
+}
+
 /** Decodes the bytes as WTF-8: an ill-formed sequence becomes U+FFFD per maximal subpart, as TextDecoder reads it; an encoded surrogate stays. */
 export function asString(this arr: Readonly<uint8[]>): string {
 	const valid = wellFormedPrefix(arr, 0, true);

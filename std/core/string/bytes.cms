@@ -54,6 +54,14 @@ export function utf8String(data: Readonly<Span<uint8>>, surrogates: boolean): st
 	return result;
 }
 
+/** The bytes as a string without a scan; the caller guarantees well-formed WTF-8 with no split surrogate pair. */
+export function wellFormedString(data: Readonly<Span<uint8>>): string {
+	const length = data.length as int64;
+	const whole = newBytes(length);
+	copyBytes((whole as cstring) as Ptr<uint8>, 0, data, 0, length);
+	return whole;
+}
+
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 export function byteLength(this s: string): int32 {
 	return s.asBytes().length;

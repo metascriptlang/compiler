@@ -7,7 +7,7 @@
 // ⚠ Every COMPUTED push must cast `as uint8` (a number-typed arg silently
 // binds the number[] overload on C — §2 push-dispatch facet).
 
-import { asBytes, byteSlice } from "./bytes";
+import { asBytes, byteSlice, wellFormedString } from "./bytes";
 
 export function clampIndex(i: int32, len: int32): int32 {
 	return i < 0 ? 0 : i > len ? len : i;
@@ -44,7 +44,7 @@ export function toLowerCase(this s: string): string {
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < sb.length) { result.push(asciiLower(sb[i] as int32) as uint8); i = i + 1; }
-	return result.asString();
+	return wellFormedString(result);
 }
 
 export function toUpperCase(this s: string): string {
@@ -52,7 +52,7 @@ export function toUpperCase(this s: string): string {
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < sb.length) { result.push(asciiUpper(sb[i] as int32) as uint8); i = i + 1; }
-	return result.asString();
+	return wellFormedString(result);
 }
 
 export function repeat(this s: string, count: int32): string {
@@ -65,7 +65,16 @@ export function repeat(this s: string, count: int32): string {
 		while (j < sb.length) { result.push(sb[j]); j = j + 1; }
 		i = i + 1;
 	}
-	return result.asString();
+	return count > 1 && endsWithHighSurrogate(sb) && startsWithLowSurrogate(sb) ? result.asString() : wellFormedString(result);
+}
+
+function endsWithHighSurrogate(sb: Readonly<Span<uint8>>): boolean {
+	const n = sb.length;
+	return n >= 3 && sb[n - 3] == 0xED && sb[n - 2] >= 0xA0 && sb[n - 2] <= 0xAF;
+}
+
+function startsWithLowSurrogate(sb: Readonly<Span<uint8>>): boolean {
+	return sb.length >= 3 && sb[0] == 0xED && sb[1] >= 0xB0;
 }
 
 export function reverse(this s: string): string {
