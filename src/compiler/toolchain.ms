@@ -4,7 +4,7 @@ import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
 import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
-import { hashContent } from "../utils/contentHash";
+import { sha256, toHex } from "std/crypto/sha256";
 import { nowSeconds } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -258,13 +258,17 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 		const name = `bin/${tool}${suffix}`;
 		if (!names.has(name) || !isExecutable(join(root, name))) return Result.err(`native toolchain: missing executable ${name}`);
 	}
-	const memo = stampRoot == "" ? "" : `${stampRoot}/${hashContent(root)}.bundle`;
+	const memo = stampRoot == "" ? "" : `${stampRoot}/${bundleDigest(root)}.bundle`;
 	const seal = bundleSeal(root, identity, lines);
 	if (seal == "" || memo == "" || (try readFile(memo) catch "") != seal) {
 		const verified = try verifyBundlePayload(root, identity, version, lines);
 		if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
 	}
 	return Result.ok({ root, version, identity });
+}
+
+function bundleDigest(text: string): string {
+	return sha256(text.asBytes()).toHex();
 }
 
 // Taken before verification, so a file that changes while it is hashed fails
@@ -283,7 +287,7 @@ function bundleSeal(root: string, identity: string, lines: string[]): string {
 		if (stamp == "" || modified < 0 || modified > settledBefore) return "";
 		stamps.push(`${name}\t${stamp}`);
 	}
-	return hashContent(stamps.join("\n"));
+	return bundleDigest(stamps.join("\n"));
 }
 
 const BUNDLE_SETTLED_SECONDS = 2;
@@ -342,7 +346,7 @@ test "a matching bundle seal never skips payload containment" {
 	const seal = bundleSeal(real, identity, SEAL_LINES);
 	assert seal != "";
 	assert ensureDir(stamps).ok;
-	assert writeFile(`${stamps}/${hashContent(real)}.bundle`, seal).ok;
+	assert writeFile(`${stamps}/${bundleDigest(real)}.bundle`, seal).ok;
 	const validated = validateNativeToolchain(root, stamps);
 	assert !validated.ok;
 	assert validated.error.contains("escaping payload bin/clang");
