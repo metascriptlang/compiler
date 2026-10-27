@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser error: Cannot resolve module './lib' (an extern C module)
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — an `extern function` whose Span parameter becomes two C arguments (data, len)
 // still passes each `out` argument by address, wherever the `out` stands.
 // Axes: Span then out; out, Span, out; Span, out, scalar; two Spans with an out between and after;

@@ -4,7 +4,7 @@
 // in a conditional arm.
 //
 // @skip-js: the extern is a C function taking the routine; the JS backend has no C linkage
-// @xfail(raiser): raiser runtime error: Unknown host function: corpusApplyCallback
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @stdout: arg: caught|new: caught|nullish: caught|arm: caught|none: ran,done|wrong: none
 // @exit: 0
 

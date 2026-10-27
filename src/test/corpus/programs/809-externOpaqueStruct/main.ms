@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus809MakeTag
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — an `extern struct` without a body is an opaque C struct: a pointer to it
 // reaches C as a pointer to that struct under its C name, never as `void*`, so the C compiler
 // sees the prototype's own type and `-Werror=incompatible-pointer-types` holds.

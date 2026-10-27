@@ -1,4 +1,4 @@
-// @xfail(raiser): the Raiser has no host bridge for libc abs and toupper (inbox 2026-10-15-raiser-has-no-host-bridge-for-abs-and-toupper)
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @stdout: 42 hi 3 | 1 #x | 7 [1,2,3] | 3 65 4 #x@
 when (js) {
 	extern class Box { size: int32; }
