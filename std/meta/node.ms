@@ -251,6 +251,7 @@ export enum SymbolFlag {
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
 	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 	IteratorHelper, // @iteratorHelper std generator: a close before its first next closes its first parameter, the source iterator
+	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 }
 
 // ===== Symbol =====
