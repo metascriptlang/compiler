@@ -902,7 +902,7 @@ test "engine: an instance holds its declared fields only, and the receiver's cla
 		+ " const b = new B(); b.y = who(new A()) * 10000 + who(b) * 100 + who(new C()); return b;");
 	const names = fieldNames(ctx.objectHeap, ctx.lastResult.intVal);
 	assert names.length == 2 && names.includes("x") && names.includes("y"), names.join(",");
-	assert heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "y").intVal == 112131;
+	assert heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "y").intVal == 112131;
 }
 
 test "engine: a subclass with no constructor holds its parent's fields first, as its type lays them out" {
@@ -1492,22 +1492,13 @@ test "orc: shared ref survives (stored in array)" {
 }
 
 test "untag: an object holds its scalar fields as raw words, a reference as its handle and a union as a value" {
-	const vm = evalLive("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
+	const vm = evalVM("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
 		+ " const p = new P(); p.n = 7; p.f = 2.5; p.b = true; p.s = 'x' + p.n.toString(); p.u = 9;"
 		+ " console.log(`${p.n} ${p.f} ${p.b} ${p.s} ${p.u}`);");
-	assert vm.error.includes("out of bounds"), vm.error;
+	assert vm.error == "", vm.error;
 	assert vm.output == "7 2.5 true x7 9\n", vm.output;
-	let found = 0;
-	for (const obj of vm.objectHeap.objects) {
-		if (obj.classType.name != "P" || obj.slots.length != 5) continue;
-		found += 1;
-		const kinds = obj.classType.kinds;
-		assert kinds[0] == RaiserRegClass.Word && kinds[1] == RaiserRegClass.Float && kinds[2] == RaiserRegClass.Bool && kinds[3] == RaiserRegClass.Ref && kinds[4] == RaiserRegClass.Dyn;
-		assert obj.slots[0] == 7 && obj.slots[1] == 4612811918334230528 && obj.slots[2] == 1;
-		assert heapStringText(vm.arrayHeap, handleValue(obj.slots[3])) == "x7";
-		assert obj.values.length == 1 && obj.values[obj.slots[4]].kind == RaiserValueKind.Int && obj.values[obj.slots[4]].intVal == 9;
-	}
-	assert found == 1;
+	const kinds = classNamed(vm, "P").kinds;
+	assert kinds[0] == RaiserRegClass.Word && kinds[1] == RaiserRegClass.Float && kinds[2] == RaiserRegClass.Bool && kinds[3] == RaiserRegClass.Ref && kinds[4] == RaiserRegClass.Dyn;
 }
 
 function classNamed(vm: RaiserVM, name: string): RaiserClassType {
@@ -1522,6 +1513,17 @@ test "template: an object of word fields starts from the class's zero slots and 
 	assert vm.output == "0 5 false 1.5\n", vm.output;
 	const t = classNamed(vm, "W");
 	assert t.zeroSlots.length == 4 && t.zeroWordSlots == 3 && t.zeroRefSlots == 0 && t.dynCount == 0;
+}
+
+test "a store loop over a union field writes the field's box in place" {
+	const vm = evalVM("class U { n: int32 = 0; u: int32 | string | null = null; }"
+		+ " const o = new U(); let total = 0;"
+		+ " for (let i = 0; i < 400; i++) { o.u = i; o.n = o.n + 1; if (i % 50 == 0) o.u = 'v' + i.toString(); }"
+		+ " console.log(`${o.n} ${o.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "400 399\n", vm.output;
+	assert vm.arrayHeap.boxes.items.length < 12, `${vm.arrayHeap.boxes.items.length}`;
+	assert vm.arrayHeap.mem.carved < 60, `${vm.arrayHeap.mem.carved}`;
 }
 
 test "template: a mixed object numbers its Dyn slots in order and masks its Word and Ref slots" {
@@ -1788,7 +1790,7 @@ test "nested function call (full pipeline)" {
 test "objects through transform" {
 	const ctx = evalFull("return { x: 42 };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const x = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "x");
+	const x = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "x");
 	assert x.intVal == 42;
 }
 

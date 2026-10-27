@@ -12,7 +12,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
-	heapNewObjectCell, objectCellHandle, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
+	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 } from "./value";
@@ -904,8 +904,8 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 		vmError(vm, "internal: a .then callback is not a closure pair");
 		return;
 	}
-	const fnField = heapObjectGetField(t.objectHeap, closure.intVal, "fn");
-	const envField = heapObjectGetField(t.objectHeap, closure.intVal, "env");
+	const fnField = heapObjectGetField(t.arrayHeap, t.objectHeap, closure.intVal, "fn");
+	const envField = heapObjectGetField(t.arrayHeap, t.objectHeap, closure.intVal, "env");
 	if (fnField.kind != RaiserValueKind.Int || fnField.intVal < 0 || fnField.intVal >= vm.mod.functions.length) {
 		vmError(vm, `.then: function index out of bounds: ${fnField.intVal}`);
 		return;
@@ -1129,7 +1129,7 @@ function discriminantHolds(vm: RaiserVM, held: RaiserValue, spec: string): boole
 	const eq = spec.indexOf("=");
 	const at = heapObjectFieldIndex(vm.objectHeap, held.intVal, spec.substring(0, eq));
 	if (at < 0) return false;
-	const stored = heapObjectFieldValueAt(vm.objectHeap, held.intVal, at as int64);
+	const stored = heapObjectFieldValueAt(vm.arrayHeap, vm.objectHeap, held.intVal, at as int64);
 	return stored.kind == RaiserValueKind.Int && stored.intVal == parseIntStr(spec.substring(eq + 1)) as int64;
 }
 
@@ -1461,7 +1461,7 @@ function vmExceptionText(vm: RaiserVM, thrown: RaiserValue): string {
 		vmError(vm, `object handle out of bounds: ${thrown.intVal}`);
 		return "";
 	}
-	return raiserToString(vm.arrayHeap, heapObjectGetField(vm.objectHeap, thrown.intVal, "message"));
+	return raiserToString(vm.arrayHeap, heapObjectGetField(vm.arrayHeap, vm.objectHeap, thrown.intVal, "message"));
 }
 
 function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
@@ -1489,7 +1489,7 @@ function vmHandleThrow(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 function wrapThrownString(vm: RaiserVM, text: RaiserValue): RaiserValue {
 	const handle = heapAllocObject(vm.objectHeap);
 	vm.objectHeap.objects[handleIndex(handle)].rc = 0;
-	heapObjectSetField(vm.objectHeap, handle, "message", text);
+	heapObjectSetField(vm.arrayHeap, vm.objectHeap, handle, "message", text);
 	vmIncref(vm, text);
 	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0 };
 }
@@ -1710,7 +1710,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		vmError(vm, "spawn expects a closure");
 		return -1;
 	}
-	const fnField = heapObjectGetField(vm.objectHeap, closure.intVal, "fn");
+	const fnField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "fn");
 	const funcIdx = fnField.intVal;
 	if (fnField.kind != RaiserValueKind.Int || funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
 		vmError(vm, `spawn: function index out of bounds: ${funcIdx}`);
@@ -1720,7 +1720,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const arrayHeap = createArrayHeap();
 	const regs = createRegFile(vm.mod);
 	const objectHeap = createStructHeap();
-	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
+	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
 	const copyMap = strandCopyMap(vm);
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
@@ -4047,6 +4047,14 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 			if (isObjectCell(handle)) {
 				const t = objectCellClass(handle);
 				for (let i = 0; i < t.kinds.length; i += 1) {
+					if (t.kinds[i] == RaiserRegClass.Dyn) {
+						const held = objectCellFieldValue(vm.arrayHeap, handle, i);
+						if (held.kind >= RaiserValueKind.String) {
+							objectCellStoreField(vm.arrayHeap, handle, i, raiserNil());
+							vmReleaseChild(vm, held.intVal, t.cyclic[i]);
+						}
+						continue;
+					}
 					if (t.kinds[i] != RaiserRegClass.Ref) continue;
 					const child = objectCellSlot(c, i);
 					objectCellSetSlot(c, i, 0);
@@ -4202,7 +4210,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 		const laid = heapObjectLaidCount(vm.objectHeap, handle);
 		const count = heapObjectFieldCount(vm.objectHeap, handle);
 		for (let f = 0; f < count; f += 1) {
-			const held = heapObjectFieldValueAt(vm.objectHeap, handle, f);
+			const held = heapObjectFieldValueAt(vm.arrayHeap, vm.objectHeap, handle, f);
 			if (held.kind < RaiserValueKind.String) continue;
 			if (f < laid && classType.uncounted[f]) continue;
 			const name = heapObjectFieldNameAt(vm.objectHeap, handle, f);
@@ -4216,7 +4224,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 			vmReleasePlanned(vm, held.intVal, plans, child, f < laid && classType.cyclic[f]);
 		}
 	} else if (plan.kind == RaiserCopyKind.Union && kind == RaiserHeapKind.Object) {
-		const discriminant = heapObjectGetField(vm.objectHeap, handle, plan.names[0]);
+		const discriminant = heapObjectGetField(vm.arrayHeap, vm.objectHeap, handle, plan.names[0]);
 		let arm: int32 = -1;
 		for (let i = 0; i < plan.discriminants.length; i += 1) {
 			if (discriminant.kind != RaiserValueKind.Nil && plan.discriminants[i] == discriminant.intVal) arm = plan.children[i];
@@ -4328,11 +4336,11 @@ function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	}
 	const handle = vmHeapOperand(vm, getDyn(vm, ib), RaiserValueKind.Object, "an object");
 	if (vm.halted) return;
-	const fn = heapObjectGetField(vm.objectHeap, handle, "fn");
+	const fn = heapObjectGetField(vm.arrayHeap, vm.objectHeap, handle, "fn");
 	if (fn.kind != RaiserValueKind.Int || fn.intVal < 0 || fn.intVal >= vm.mod.functions.length) {
 		vmError(vm, `function index out of bounds: ${fn.intVal}`); return;
 	}
-	const env = heapObjectGetField(vm.objectHeap, handle, "env");
+	const env = heapObjectGetField(vm.arrayHeap, vm.objectHeap, handle, "env");
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 2 + caller.blocks[ic + 1]] as int32, env);
 	enterCallee(vm, ia, fn.intVal as number, ic, env.kind == RaiserValueKind.Nil);
@@ -4423,7 +4431,7 @@ function vmHandleLoadDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 		if (!vmElemIndex(vm, ptr.intVal, ptr.floatVal as int64)) return;
 		held = heapArrayGet(vm.arrayHeap, ptr.intVal, ptr.floatVal as int64);
 	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
-		held = heapObjectGetField(vm.objectHeap, ptr.intVal, fieldAddrName(ptr));
+		held = heapObjectGetField(vm.arrayHeap, vm.objectHeap, ptr.intVal, fieldAddrName(ptr));
 	} else if (ptr.kind == RaiserValueKind.Nil) {
 		vmError(vm, "attempt to read through a nil pointer"); return;
 	}
@@ -4739,7 +4747,7 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 // --- Object opcode handlers ---
 
 function vmHandleNewObject(vm: RaiserVM, ia: int32, ib: int32, func: RaiserFunction): void {
-	if (ib > 0 && func.classTypes[ib - 1].dynCount == 0 && func.classTypes[ib - 1].fields.length > 0) {
+	if (ib > 0 && func.classTypes[ib - 1].fields.length > 0) {
 		const cell = heapNewObjectCell(vm.arrayHeap.mem, func.classTypes[ib - 1], OWNED_BY_RECEIVER_RC as int64);
 		setRegRef(vm, ia, RaiserValueKind.Object, objectCellHandle(cell));
 		return;
@@ -4759,7 +4767,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
 	const idx = cachedFieldIndexOf(vm, func, pc, handle, ic);
-	setRegConform(vm, ia, idx >= 0 ? heapObjectFieldValueAt(vm.objectHeap, handle, idx) : raiserNil());
+	setRegConform(vm, ia, idx >= 0 ? heapObjectFieldValueAt(vm.arrayHeap, vm.objectHeap, handle, idx) : raiserNil());
 }
 
 function cachedFieldIndexOf(vm: RaiserVM, func: RaiserFunction, pc: int32, handle: int64, ni: int32): int32 {
@@ -4816,8 +4824,8 @@ function vmStoreFieldAt(vm: RaiserVM, handle: int64, idx: number, val: RaiserVal
 	const refused = heapObjectFieldRefusal(vm.objectHeap, handle, idx, val);
 	if (refused != "") { vmError(vm, refused); return; }
 	vmIncref(vm, val);
-	const old = heapObjectFieldValueAt(vm.objectHeap, handle, idx as int64);
-	heapObjectStoreFieldAt(vm.objectHeap, handle, idx, val);
+	const old = heapObjectFieldValueAt(vm.arrayHeap, vm.objectHeap, handle, idx as int64);
+	heapObjectStoreFieldAt(vm.arrayHeap, vm.objectHeap, handle, idx, val);
 	vmDecref(vm, old);
 }
 
@@ -7142,7 +7150,7 @@ test "a spawned strand writes to its own copy of the captured env" {
 	// C would let the child write straight through the borrow; here the child
 	// owns a copy, so the parent still reads what it stored (Amendment J).
 	assert vm.output == "7\n";
-	const childEnv = heapObjectGetField(vm.sched.strands.items[1].objectHeap, 0, "n");
+	const childEnv = heapObjectGetField(vm.sched.strands.items[1].arrayHeap, vm.sched.strands.items[1].objectHeap, 0, "n");
 	assert childEnv.intVal == 99;
 }
 

@@ -1331,7 +1331,7 @@ test "object as return value" {
 test "nested object config" {
 	const ctx = evalRaiser("return { build: { target: \"native\", outDir: \"out\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
@@ -1342,7 +1342,7 @@ test "nested object config" {
 test "config with array of objects" {
 	const ctx = evalRaiser("return { transforms: [{ name: \"var_hoist\" }] };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const arrField = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "transforms");
+	const arrField = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "transforms");
 	assert arrField.kind == RaiserValueKind.Array;
 	assert heapArrayLen(ctx.arrayHeap, arrField.intVal) == 1;
 	const elem = heapArrayGet(ctx.arrayHeap, arrField.intVal, 0);
@@ -1356,7 +1356,7 @@ test "nested config object" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
@@ -1374,7 +1374,7 @@ test "export default nested object" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "app.ms";
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
@@ -1388,14 +1388,14 @@ test "real: neon/build.ms" {
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// format.tabWidth
-	const fmtHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "format");
+	const fmtHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "format");
 	assert fmtHandle >= 0;
-	const tabWidth = heapObjectGetField(ctx.objectHeap, fmtHandle, "tabWidth");
+	const tabWidth = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, fmtHandle, "tabWidth");
 	assert tabWidth.intVal == 4;
 	// build.targets array
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const targets = heapObjectGetField(ctx.objectHeap, buildHandle, "targets");
+	const targets = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, buildHandle, "targets");
 	assert targets.kind == RaiserValueKind.Array;
 	assert heapArrayLen(ctx.arrayHeap, targets.intVal) == 2;
 	// targets[0].target === "native"
@@ -1458,7 +1458,7 @@ test "real: void/build.ms" {
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// build.target
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
