@@ -28,7 +28,7 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../checker/symbol";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
@@ -311,12 +311,9 @@ function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, s
 }
 
 function callFormals(call: Node): Type[] | null {
-	let sym = call.resolvedSym;
-	if (sym != null) {
-		const impl = findOverloadImpl(sym);
-		if (impl != null) sym = impl;
-	}
-	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
+	const sym = call.resolvedSym;
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return null;
+	return calledRoutineType(call)!.typeChildren;
 }
 
 function callsFieldValue(callee: Node): boolean {

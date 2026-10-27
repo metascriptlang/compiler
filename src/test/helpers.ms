@@ -271,12 +271,17 @@ function isIdentChar(c: string): boolean {
 
 // A prelude routine is named by its declaring module in a JS module, which carries the
 // absolute path of the checkout; a test that pins the call shape reads it without that suffix.
+function isUpperHexChar(c: string): boolean {
+	return (c >= "0" && c <= "9") || (c >= "A" && c <= "F");
+}
+
 function moduleSuffixAt(js: string, from: int32): int32 {
 	let at = js.indexOf("__", from);
 	while (at >= 0) {
 		const lead = js.charAt(at + 2);
 		const next = js.charAt(at + 3);
 		if (lead == "Z" || (lead == "M" && next >= "0" && next <= "9")) return at;
+		if (lead == "U" && isUpperHexChar(next) && isUpperHexChar(js.charAt(at + 4))) return at;
 		at = js.indexOf("__", at + 2);
 	}
 	return -1;
@@ -793,6 +798,6 @@ test "a second compile in one process emits the hook bodies again" {
 	const rec = "struct S { s: string; }\nfunction run(): void { const a: S = { s: \"x\" + \"y\" }; console.log(a.s); }\nrun();\n";
 	for (const src of [cls, rec, cls, rec]) {
 		const c = compileToC(src);
-		assert c.ok && c.value.contains("msStringDecref((*self).s);"), c.ok ? "hook body missing" : c.error;
+		assert c.ok && c.value.contains("msStringDecref((*self_p0).s);"), c.ok ? "hook body missing" : c.error;
 	}
 }

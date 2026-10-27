@@ -11,7 +11,7 @@ import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionD
 import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { proxyAtExtern } from "./proxy";
@@ -419,8 +419,8 @@ function warnOncePerLine(ctx: CheckerContext, msg: string, line: int32, col: int
 	addWarning(ctx, msg, line, col);
 }
 
-export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
-	const t = resolveAnnotation(text, ctx, line, col);
+export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32, operand: Node | null = null): Type {
+	const t = annotatedType(text, operand, ctx, line, col);
 	if (t.kind == TypeKind.Span) {
 		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
@@ -452,8 +452,29 @@ export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: S
 	}
 }
 
+// The Types a macro bound into a call's `base<operands>` callee: they travel on the call
+// as `typeExprs` (operands that already carry their `nodeType`), never as spelling.
+export function suppliedTypeArgs(node: Node): Type[] | null {
+	if (node.typeExprs == null) return null;
+	const out: Type[] = [];
+	for (const operand of node.typeExprs) {
+		if (operand.nodeType == null) throw new Error("internal: a call's supplied type argument carries no bound type");
+		out.push(operand.nodeType);
+	}
+	return out;
+}
+
+export function hasExplicitTypeArgs(node: Node): boolean {
+	return node.typeExprs != null || findCallTypeArg(node) != "";
+}
+
 export function explicitTypeArgs(node: Node, ctx: CheckerContext, limit: int32): (Type | null)[] {
 	const out: (Type | null)[] = [];
+	const supplied = suppliedTypeArgs(node);
+	if (supplied != null) {
+		for (let i = 0; i < limit && i < supplied.length; i += 1) out.push(isUnresolvedType(supplied[i]) ? null : supplied[i]);
+		return out;
+	}
 	const explicitStr = findCallTypeArg(node);
 	if (explicitStr == "") return out;
 	const argNames = splitTopLevel(explicitStr, ",");
@@ -477,11 +498,15 @@ export function bindFromExplicitTypeArgs(node: Node, params: Type[], ctx: Checke
 }
 
 export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, paramNames: string[], calleeName: string): boolean {
-	const explicitStr = findCallTypeArg(node);
-	if (explicitStr == "") return true;
+	if (!hasExplicitTypeArgs(node)) return true;
 	let given: int32 = 0;
-	for (const a of splitTopLevel(explicitStr, ",")) {
-		if (a.trim() != "") given += 1;
+	const supplied = suppliedTypeArgs(node);
+	if (supplied != null) {
+		given = supplied.length;
+	} else {
+		for (const a of splitTopLevel(findCallTypeArg(node), ",")) {
+			if (a.trim() != "") given += 1;
+		}
 	}
 	if (given == paramNames.length) return true;
 	addError(ctx, `Wrong number of type arguments to '${calleeName}': expected ${paramNames.length}, got ${given}`, node.location.line, node.location.column);
@@ -688,7 +713,7 @@ function settleMapped(ctx: CheckerContext, t: Type, line: int32, col: int32): Ty
 	if (t.kind == TypeKind.GenericInstance && isReadonlyView(body)) return body!;
 	if (body == null || body.kind != TypeKind.Mapped || mappedIsGeneric(body)) return t;
 	const index = mappedIndexKey(body);
-	const mapSym = index != null ? lookupTypeSym(ctx, "Map") : null;
+	const mapSym = index != null ? stdSymbol(ctx, "Map") : null;
 	if (mapSym != null) {
 		ensureShaped(mapSym, ctx);
 		return genericInstanceOf(ctx, mapSym, symGenericParams(mapSym), [index!, mappedValueAt(body, index!)], line, col);
@@ -1573,10 +1598,19 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 
 export function boundAnnotationType(node: Node | null): Type | null {
 	if (node == null || !node.flags.has(NodeFlag.BoundSym)) return null;
-	if (node.resolvedSym == null || node.nodeType == null) {
-		throw new Error("internal: a bound type annotation has no checked symbol or type");
+	if (node.nodeType == null) {
+		throw new Error("internal: a bound type annotation has no checked type");
 	}
 	return node.nodeType;
+}
+
+export function annotatedType(text: string, operand: Node | null, ctx: CheckerContext, line: int32, col: int32): Type {
+	const bound = boundAnnotationType(operand);
+	return bound != null ? bound : resolveAnnotation(text, ctx, line, col);
+}
+
+export function operandAt(operands: Node[] | null, index: int32): Node | null {
+	return operands != null && index < operands.length ? operands[index] : null;
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -2090,7 +2124,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	let predicateSentinel: Type | null = null;
 	const boundReturn = boundAnnotationType(node.typeExpr);
 	if (boundReturn != null) {
-		returnType = boundReturn;
+		returnType = sym.builtinKind != "" ? boundReturn : resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column, node.typeExpr);
 	} else if (d.fnReturnType != "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct
@@ -2818,7 +2852,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 		// Mirrors resolveExtern below; Shaping machinery handles forward aliases.
 		const sym = lookupSymbol(ctx.table, d.declName);
 		if (sym != null && isUnresolvedType(sym.symbolType)) {
-			sym.symbolType = resolveAnnotation(d.declType, ctx, node.location.line, node.location.column);
+			sym.symbolType = annotatedType(d.declType, node.typeExpr, ctx, node.location.line, node.location.column);
 		}
 		return;
 	}
@@ -2860,6 +2894,11 @@ export function resolveExtern(ctx: CheckerContext, node: Node): void {
 	if (d.externType != "") {
 		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(resolved)) {
+			if (d.externKind == ExternKind.Type && isNumeric(resolved)) {
+				assignType(sym.symbolType, resolved);
+				node.nodeType = sym.symbolType;
+				return;
+			}
 			sym.symbolType = resolved;
 			if (!declaresValue(d.externKind)) resolved.sym = sym;
 			node.nodeType = resolved;
@@ -2935,7 +2974,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 
 // A resolved class names its parent by Symbol; one not resolved yet is declared in
 // this module, so its `extends` name binds in this scope.
-function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
+export function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
 	if (classSym.declNode == null || classSym.declNode.kind != NodeKind.ClassDecl) return null;
 	const resolved = parentClassSymOf(classSym);
 	if (resolved != null) return resolved;

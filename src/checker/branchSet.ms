@@ -19,7 +19,7 @@ export enum BreakState {
 // Intersection count entry for branch merging.
 class NameCount {
 	name: string;
-	count: number;
+	count: int32;
 }
 
 // ===== Core Set Operations =====
@@ -42,13 +42,7 @@ export function hasName(list: string[], name: string): boolean {
 
 // Collect names appended between oldState and current length.
 export function collectSince(list: string[], oldState: int32): string[] {
-	const result: string[] = [];
-	let i = oldState;
-	while (i < list.length) {
-		result.push(list[i]);
-		i = i + 1;
-	}
-	return result;
+	return list.slice(oldState);
 }
 
 // ===== Branch Merging =====
@@ -87,19 +81,10 @@ export function mergeBranches(
 	let toCover = 0;
 	const counts: NameCount[] = [];
 
-	let b = 0;
-	while (b < branchSets.length) {
-		const set = branchSets[b];
+	for (let b = 0; b < branchSets.length; b += 1) {
 		const breakState = branchBreaks[b];
-
-		if (breakState == BreakState.BsNone) {
-			toCover = toCover + 1;
-		}
-
-		for (const name of set) {
-			addToIntersection(counts, name, breakState);
-		}
-		b = b + 1;
+		if (breakState == BreakState.BsNone) toCover += 1;
+		for (const name of branchSets[b]) addToIntersection(counts, name, breakState);
 	}
 
 	// Restore to pre-branch state, then re-add only names in ALL non-exiting branches.

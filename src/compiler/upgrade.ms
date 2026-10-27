@@ -9,13 +9,13 @@
 
 import { FetchOptions } from "std/http/types";
 import { createHeaders, setHeader } from "std/http/headers";
-import { readFile, writeFile, readDir, remove } from "std/fs";
+import { readFile, writeFile, readDir, remove, ensureDir, removeAll } from "std/fs";
 import { join } from "std/fs/path";
 import { env, exec } from "std/process";
 import { VERSION } from "./usage";
 import { compareVersionStrings } from "./package/version";
 import { CliOptions } from "./options";
-import { resolveRuntimeDir, metascriptHome } from "../utils/path";
+import { resolveRuntimeDir, metascriptHome, tmpDir } from "../utils/path";
 import { yellow, dim, bold, cyan } from "../utils/color";
 
 // ===== Constants =====
@@ -109,18 +109,22 @@ function shouldSkipCheck(): boolean {
 	return false;
 }
 
+// Never checked, stale, or stamped in the future (the clock moved back).
+function checkDue(nowMs: number, lastCheckMs: number): boolean {
+	const age = nowMs - lastCheckMs;
+	return age < 0 || age > CACHE_TTL_MS;
+}
+
 // ===== Public API =====
 
 // Called at end of allowlisted commands. Silent on any failure.
 export function maybeShowUpdateNotice(): void {
 	if (shouldSkipCheck()) return;
 
-	const now = performance.now();
+	const now = Date.now();
 	let cache = readCache();
-	const age = now - cache.lastCheckMs;
 
-	// Stale or never checked → refresh. Clock skew (negative age) → treat as fresh.
-	if (age < 0 || age > CACHE_TTL_MS) {
+	if (checkDue(now, cache.lastCheckMs)) {
 		const latest = fetchLatestVersion();
 		if (latest != "") {
 			cache = { lastCheckMs: now, latestVersion: latest };
@@ -180,4 +184,27 @@ export function sweepUpgradeBackups(): void {
 		if (!e.startsWith("msc.exe.bak-")) continue;
 		remove(`${binDir}/${e}`);  // Result discarded: if still locked, try next time.
 	}
+}
+
+test "a check stamped now is fresh, and one stamped a day ago, never, or in the future is due" {
+	const now = Date.now();
+	assert !checkDue(now, now - 1000);
+	assert checkDue(now, now - CACHE_TTL_MS - 1);
+	assert checkDue(now, 0);
+	assert checkDue(now, now + 1000);
+}
+
+test "the cache keeps a wall-clock stamp across processes" {
+	const saved = env.get("HOME");
+	const home = join(tmpDir(), "mscUpdateCheckTest");
+	removeAll(home);
+	ensureDir(join(home, ".metascript"));
+	env.set("HOME", home);
+	const stamp = Date.now();
+	writeCache({ lastCheckMs: stamp, latestVersion: "9.9.9" });
+	const back = readCache();
+	env.set("HOME", saved);
+	assert back.latestVersion == "9.9.9";
+	assert !checkDue(Date.now(), back.lastCheckMs);
+	removeAll(home);
 }

@@ -75,8 +75,8 @@ test "E2E ccgPtr: a direct call passes the caller's struct pointer through" {
 		"export function caller(item: BigS): number { return process(item); }";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* item)");
-	assert c.value.contains("_u0(item);");
+	assert c.value.contains("* item_p0)");
+	assert c.value.contains("_u0(item_p0);");
 }
 
 test "E2E ccgPtr: a closure call passes the struct pointer through" {
@@ -85,9 +85,9 @@ test "E2E ccgPtr: a closure call passes the struct pointer through" {
 		"export function run(h: Handler, d: BigS): number { return h(d); }";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* d)");
-	assert c.value.contains("h.fn)(d, h.env)");
-	assert c.value.contains("h.fn)(d)");
+	assert c.value.contains("* d_p1)");
+	assert c.value.contains("h_p0.fn)(d_p1, h_p0.env)");
+	assert c.value.contains("h_p0.fn)(d_p1)");
 }
 
 test "E2E ccgPtr: a call under try passes the struct pointer through" {
@@ -100,8 +100,8 @@ test "E2E ccgPtr: a call under try passes the struct pointer through" {
 		"}";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* d)");
-	assert c.value.contains(", d);");
+	assert c.value.contains("* d_p0)");
+	assert c.value.contains(", d_p0);");
 }
 
 // ===== Empty array param typing (reference: semArrayConstr expectedType) =====
@@ -117,7 +117,7 @@ test "E2E: empty [] arg typed as Type[] param" {
 	const src = "interface Foo { x: number; }\nfunction bar(items: Foo[]): number { return items.length; }\nconst y = bar([]);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.contains("(msRefArray* items)");
+	assert result.value.contains("(msRefArray* items_p0)");
 }
 
 import { compileProjectToC, MapEntry } from "../helpers";

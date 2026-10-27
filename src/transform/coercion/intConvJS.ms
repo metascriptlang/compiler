@@ -8,7 +8,7 @@
 import { Node, NodeKind, NodeFlag, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, Type, TypeKind, VariableDeclData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, jsGlobalRef, runtimeRef } from "../util";
 import { createPrimitive, isWideningInt64Conv, peelToRepr, distinctNumericBase } from "../../checker/types";
 import { readsUnionMember } from "./bigIntJS";
 import { is64Kind, isFloatKind, isNarrowIntKind } from "../numKinds";
@@ -90,7 +90,7 @@ function materializeIntConv(node: Node): Node {
 }
 
 function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
-	const result = makeCall(generatedRef("Number", loc), [inner], loc);
+	const result = makeCall(jsGlobalRef("Number", loc), [inner], loc);
 	result.nodeType = createPrimitive(kind);
 	return result;
 }
@@ -106,7 +106,7 @@ export function truncateTo(inner: Node, kind: TypeKind, loc: SourceLocation): No
 		TypeKind.Uint8 | TypeKind.Char => makeBinary(inner, "&", makeNumber(255, loc), loc),
 		TypeKind.Uint16 => makeBinary(inner, "&", makeNumber(65535, loc), loc),
 		TypeKind.Uint32 => makeBinary(inner, ">>>", makeNumber(0, loc), loc),
-		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(generatedRef("Math", loc), "trunc", loc), [inner], loc),
+		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(jsGlobalRef("Math", loc), "trunc", loc), [inner], loc),
 		_ => inner,
 	};
 	result.nodeType = createPrimitive(kind);

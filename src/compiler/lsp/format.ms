@@ -53,12 +53,13 @@ export function lspFmtMultiLineTextEdit(line: number, col: number, endLine: numb
 export function lspFmtCompletionItem(
 	label: string, kind: number, detail: string,
 	sortText: string, isDeprecated: boolean, commitChars: string,
-	documentation: string, additionalEdits: string
+	documentation: string, additionalEdits: string, data: string = ""
 ): string {
 	const b = jsonObj();
 	jStr(b, "label", label);
 	jNum(b, "kind", kind);
 	jStr(b, "detail", detail);
+	jStrIf(b, "data", data);
 	jStr(b, "insertText", label);
 	jNum(b, "insertTextFormat", 1);
 	jStrIf(b, "sortText", sortText);
@@ -82,11 +83,12 @@ export function lspFmtCompletionItem(
 	return jEnd(b);
 }
 
-export function lspFmtLeanCompletionItem(label: string, kind: number, sortText: string): string {
+export function lspFmtLeanCompletionItem(label: string, kind: number, sortText: string, data: string = ""): string {
 	const b = jsonObj();
 	jStr(b, "label", label);
 	jNum(b, "kind", kind);
 	jStr(b, "sortText", sortText);
+	jStrIf(b, "data", data);
 	return jEnd(b);
 }
 
@@ -261,6 +263,12 @@ test "completion with sortText" {
 test "completion deprecated" {
 	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "");
 	assert item.length > 30;
+}
+
+test "completion item carries its resolve data" {
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "", "/m/a.ms\tfoo");
+	assert item.indexOf("\"data\":\"/m/a.ms\\tfoo\"", 0) >= 0;
+	assert lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "").indexOf("\"data\"", 0) < 0;
 }
 
 test "completion commit chars" {

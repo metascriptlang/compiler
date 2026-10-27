@@ -148,7 +148,13 @@ MS_TLS_EXTERN(int, msMySchedulerID);
  * semantics; hazard pins stand in for BEAM's thread-progress. */
 
 #define MS_PID_SLOT_BITS 26
-#define MS_PID_GEN_MASK ((1ull << 27) - 1)
+#ifndef MS_TEST_PID_GEN_BITS
+#define MS_TEST_PID_GEN_BITS 27
+#endif
+#ifndef MS_TEST_PID_SLOT_LIMIT
+#define MS_TEST_PID_SLOT_LIMIT (1 << MS_PID_SLOT_BITS)
+#endif
+#define MS_PID_GEN_MASK ((1ull << MS_TEST_PID_GEN_BITS) - 1)
 #define MS_PID_SLOT_MASK ((1u << MS_PID_SLOT_BITS) - 1)
 #define MS_PID_SEG_BITS 12
 #define MS_PID_SEG_SIZE (1 << MS_PID_SEG_BITS)
@@ -178,7 +184,9 @@ static inline msPidSlot* msPidSlotAt(int32_t idx) {
     return &seg[idx & (MS_PID_SEG_SIZE - 1)];
 }
 
-static inline int32_t msPidSlotClaim(void) {
+__attribute__((noinline, cold, noreturn)) static void msPidTableFull(msActor* spawning);
+
+static inline int32_t msPidSlotClaim(msActor* spawning) {
     uint64_t head = atomic_load_explicit(&msPidFreeHead, memory_order_acquire);
     while ((uint32_t)head != 0u) {
         int32_t idx = (int32_t)((uint32_t)head - 1u);
@@ -188,6 +196,9 @@ static inline int32_t msPidSlotClaim(void) {
                 memory_order_acq_rel, memory_order_acquire)) return idx;
     }
     int32_t idx = atomic_fetch_add(&msPidNextSlot, 1);
+    if (idx >= MS_TEST_PID_SLOT_LIMIT) {
+        msPidTableFull(spawning);
+    }
     int segI = idx >> MS_PID_SEG_BITS;
     if (atomic_load_explicit(&msPidSegs[segI], memory_order_acquire) == NULL) {
         pthread_mutex_lock(&msPidSegLock);
@@ -238,10 +249,9 @@ static inline bool msHazardScan(void* p) {
 }
 
 static inline int64_t msPidPublish(msActor* a) {
-    int32_t idx = msPidSlotClaim();
+    int32_t idx = msPidSlotClaim(a);
     msPidSlot* s = msPidSlotAt(idx);
     uint64_t g = atomic_load_explicit(&s->gen, memory_order_relaxed) + 1;
-    if ((g & MS_PID_GEN_MASK) == 0) g++;  /* keep the packed pid nonzero (0 = null pid) */
     atomic_store_explicit(&s->gen, g, memory_order_relaxed);
     a->pid = (int64_t)(((g & MS_PID_GEN_MASK) << MS_PID_SLOT_BITS) | (uint64_t)(uint32_t)idx);
     a->pidSlot = idx;
@@ -253,7 +263,8 @@ static inline int64_t msPidPublish(msActor* a) {
 static inline void msPidRelease(msActor* a) {
     msPidSlot* s = msPidSlotAt(a->pidSlot);
     atomic_store_explicit(&s->ptr, NULL, memory_order_relaxed);
-    atomic_fetch_add_explicit(&s->gen, 1, memory_order_release);
+    uint64_t dead = atomic_fetch_add_explicit(&s->gen, 1, memory_order_release) + 1;
+    if (dead >= MS_PID_GEN_MASK) return;  /* the next generation would wrap onto a stale pid: retire the slot */
     uint64_t head = atomic_load_explicit(&msPidFreeHead, memory_order_relaxed);
     uint64_t newHead;
     do {
@@ -324,6 +335,70 @@ static inline msActor* msPidPinSlot(int32_t idx) {
         return NULL;
     }
     return (msActor*)p;
+}
+
+typedef struct msPidTypeCount {
+    const msTypeInfo* type;
+    int64_t count;
+} msPidTypeCount;
+
+static inline const char* msPidTypeName(const msTypeInfo* t) {
+    return t == NULL ? "<untyped>" : t->name;
+}
+
+static int msPidTypeCountDesc(const void* x, const void* y) {
+    int64_t a = ((const msPidTypeCount*)x)->count, b = ((const msPidTypeCount*)y)->count;
+    return (a < b) - (a > b);
+}
+
+/* Best effort: a slot is read only under the hazard pin the cycle detector uses, so a racing
+ * release or publish can make the counts off by the actors that moved during the walk. */
+static void msPidTableFull(msActor* spawning) {
+    int32_t slots = atomic_load_explicit(&msPidNextSlot, memory_order_acquire);
+    if (slots > MS_TEST_PID_SLOT_LIMIT) slots = MS_TEST_PID_SLOT_LIMIT;
+    msPidTypeCount* tab = NULL;
+    int64_t live = 0;
+    int used = 0, cap = 0;
+    bool tabOk = true;
+    for (int32_t i = 0; i < slots; i++) {
+        if (atomic_load_explicit(&msPidSegs[i >> MS_PID_SEG_BITS], memory_order_acquire) == NULL) continue;
+        msActor* a = msPidPinSlot(i);
+        if (a == NULL) continue;
+        live++;
+        const msTypeInfo* t = a->state != NULL ? msHeader(a->state)->type : NULL;
+        msHazardClear(a);
+        if (!tabOk) continue;
+        int k = 0;
+        while (k < used && tab[k].type != t) k++;
+        if (k == used) {
+            if (used == cap) {
+                int ncap = cap == 0 ? 16 : cap * 2;
+                msPidTypeCount* nt = (msPidTypeCount*)realloc(tab, (size_t)ncap * sizeof(msPidTypeCount));
+                if (nt == NULL) { tabOk = false; continue; }
+                tab = nt;
+                cap = ncap;
+            }
+            tab[used].type = t;
+            tab[used].count = 0;
+            used++;
+        }
+        tab[k].count++;
+    }
+    fprintf(stderr, "fatal: pid table full: %lld live actors (limit %d)\n",
+            (long long)live, (int)MS_TEST_PID_SLOT_LIMIT);
+    if (tabOk && used > 0) {
+        const msTypeInfo* st = spawning->state != NULL ? msHeader(spawning->state)->type : NULL;
+        fprintf(stderr, "  spawning: %s\n  live by type:", msPidTypeName(st));
+        qsort(tab, (size_t)used, sizeof(msPidTypeCount), msPidTypeCountDesc);
+        int shown = used < 8 ? used : 8;
+        for (int k = 0; k < shown; k++)
+            fprintf(stderr, "%s %s %lld", k == 0 ? "" : " \xc2\xb7", msPidTypeName(tab[k].type), (long long)tab[k].count);
+        if (used > shown) fprintf(stderr, " \xc2\xb7 +%d more types", used - shown);
+        fputs("\n  live actors are never reclaimed until stopped: a type that keeps growing is not being stopped\n", stderr);
+    }
+    free(tab);
+    if (msFatalTrap != NULL) msFatalTrap();
+    exit(1);
 }
 
 /* ===== Flag Helpers ===== */

@@ -38,10 +38,10 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
-import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive, isStringLike } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -54,7 +54,7 @@ import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
-import { tdzBindingOf } from "./moduleTdz";
+import { tdzBindingOf, moduleBindingRead } from "./moduleTdz";
 import { cstringSource } from "../native/cstringConvLower";
 
 // ===== Hoist (top-down) =====
@@ -76,7 +76,7 @@ function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node 
 // is conditionally evaluated → never descended (LHS is).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (expr == null) return expr;
-	if (expr.kind == NodeKind.Identifier) {
+	if (expr.kind == NodeKind.Identifier || expr.kind == NodeKind.MemberExpr && tdzFlagOf(expr) != null) {
 		const flag = tdzFlagOf(expr);
 		if (flag != null) pushTdzGuard(expr, flag, hoisted, ctx);
 		return expr;
@@ -735,7 +735,9 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function compoundReadsTargetFirst(bd: BinaryExprData, rhsPre: Node[], writes: Symbol[], ctx: TransformContext): boolean {
-	if (ctx.jsBackend || bd.operator == "=" || !isNumeric(bd.left.nodeType)) return false;
+	if (ctx.jsBackend || bd.operator == "=") return false;
+	if (bd.operator == "+=" && isStringLike(bd.left.nodeType)) return true;
+	if (!isNumeric(bd.left.nodeType)) return false;
 	if (readsAnyOf(bd.left, writes) || holdsCall(bd.right)) return true;
 	for (const s of rhsPre) {
 		if (holdsCall(s)) return true;
@@ -757,7 +759,11 @@ function readCompoundTarget(bd: BinaryExprData, pre: Node[], ctx: TransformConte
 	pre.push(decl);
 	const op = bd.operator.slice(0, bd.operator.length - 1);
 	const target = bd.left.nodeType!;
-	if (isBitwiseCompound(bd.operator) && !isIntegerType(target)) {
+	if (isStringLike(target)) {
+		const concat = makeCall(runtimeRef("msStringConcat", loc), [makeIdentResolved(sym, loc), bd.right], loc);
+		concat.nodeType = target;
+		bd.right = concat;
+	} else if (isBitwiseCompound(bd.operator) && !isIntegerType(target)) {
 		const bits = makeBinary(makeHiddenStdConv(makeIdentResolved(sym, loc), int32Type(), loc), op, bd.right, loc);
 		bits.nodeType = op == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
 		bd.right = makeHiddenStdConv(bits, target, loc);
@@ -880,8 +886,8 @@ let tdzFlags = new HashMap<Symbol, Symbol>();
 let tdzGuards = new HashSet<Node>();
 
 function tdzFlagOf(n: Node): Symbol | null {
-	if (functionDepth == 0 || n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	return tdzFlags.get(tdzBindingOf(n.resolvedSym));
+	const read = functionDepth == 0 ? null : moduleBindingRead(n);
+	return read == null ? null : tdzFlags.get(tdzBindingOf(read));
 }
 
 function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: TransformContext): void {
@@ -891,7 +897,7 @@ function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: Transfo
 		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", loc);
 		return;
 	}
-	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(binding.resolvedSym!).name, loc)], fail, loc);
+	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(moduleBindingRead(binding)!).name, loc)], fail, loc);
 	const guard = makeIf(makeUnary("!", makeIdentResolved(flag, loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
 	tdzGuards.add(guard);
 	hoisted.push(guard);

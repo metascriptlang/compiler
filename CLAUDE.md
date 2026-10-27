@@ -43,6 +43,11 @@ msc build src/index.ms --danger --lto=off --output=msc
 bash tools/editor-plugin/build.sh --install   # after grammar/highlights edits
 ```
 
+Before moving a cache directory, sharing build artifacts between jobs or measuring reuse, read
+[`docs/BUILD-CACHE.md`](docs/BUILD-CACHE.md): each job keeps its own local cache, worktrees
+share only through the global store, and that store has a measured false hit and an age sweep
+that deletes files it does not own.
+
 Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
@@ -124,7 +129,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 Three flows, chosen by when they run. Read [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running before you test, run or measure anything: it owns which flow applies, the check for each kind of change and its measured cost.
 
-- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build.
+- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build; it ends with the ready check (`~/metascript/docs/GLOSSARY.md`).
 - **Land gate**: once per land, `tools/gate.sh` on the gate train; lanes run only here and in the release ladder.
 - **Release ladder**: `tools/gate.sh --release` and the fixpoint check when cutting a release per `docs/GIT-FLOW.md`. Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for it.
 
@@ -133,7 +138,7 @@ How the land gate works:
 - **One command picks and runs the lanes** — `tools/gate.sh` maps changed paths to lanes (a path is its stand-in for what the change can reach; the decision above is yours) and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why, `--release` runs the release ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
 - **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
 - **The machine is shared** — gates queue machine-wide FIFO in `~/.metascript/gates`; once admitted, a gate checks load before its phases and shares its worker/slot budget among concurrent lanes. Do not start a second heavy lane beside it. Measured phase and queue time: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
-- **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct ([`docs/TESTING.md`](docs/TESTING.md)), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
+- **The object cache stays** — no `rm -rf out` before a build or a suite, because wiping it triggers the cold-build link race. A fingerprint is only as complete as its recorded inputs; [cache rules and measured limits](docs/BUILD-CACHE.md) distinguish reuse from proven validity. Investigate a named stale-cache symptom instead of resetting another job's state.
 - **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
 - **The corpus lanes run on what the change can alter** — the gate emits all programs with the merge-base compiler and candidate, selecting changed C/JS hashes, emit failures on either side, and touched programs. It runs them whole under `--lanes` / `--release`, or for blind paths such as `runtime/`, `std/`, `vendor/` and the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
 - **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
@@ -158,7 +163,7 @@ How the land gate works:
 ## Commits
 
 - **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `~/nerdtools/claude/tools/wt.sh land`, and nothing is pushed without a yes.
-- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own guard has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
+- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own pin has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
 
 IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 

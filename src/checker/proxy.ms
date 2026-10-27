@@ -335,7 +335,9 @@ export function keyedProxyAccess(ctx: CheckerContext, node: Node): Keyed {
 
 // An array method on a Proxy<E[], H> and the std function that runs its steps, with the
 // traps it needs and how many arguments it takes.
-type Chain = { method: string, fn: string, steps: string[], minArgs: int32, maxArgs: int32 };
+type Step = "len" | "get" | "set" | "setLen" | "has" | "del";
+
+type Chain = { method: string, fn: string, steps: Step[], minArgs: int32, maxArgs: int32 };
 
 const CHAINS: Chain[] = [
 	{ method: "push", fn: "proxyPush", steps: ["len", "set", "setLen"], minArgs: 1, maxArgs: 1 },
@@ -364,27 +366,31 @@ const TRAPS = ["get", "set", "has", "deleteProperty", "ownKeys"];
 
 // One step of a chain as a routine that captures nothing: each reads or writes the proxy
 // it is given, so the read or write goes through the trap like one written in the source.
-function step(kind: string, handler: Type, ctx: CheckerContext, loc: SourceLocation): Node {
+function step(kind: Step, handler: Type, ctx: CheckerContext, loc: SourceLocation): Node {
 	const p = ident("$p", loc);
 	const k = ident("$k", loc);
-	if (kind == "len") return routine(["$p"], member(p, "length", loc), loc);
-	if (kind == "get") return routine(["$p", "$k"], createNodeAt(NodeKind.ArrayAccess, { array: p, index: k }, loc), loc);
-	if (kind == "set") {
-		const write = createNodeAt(NodeKind.BinaryExpr, { left: createNodeAt(NodeKind.ArrayAccess, { array: p, index: k }, loc), operator: "=", right: ident("$v", loc) }, loc);
-		return routine(["$p", "$k", "$v"], block([statement(write)], loc), loc);
-	}
-	if (kind == "setLen") {
-		const write = createNodeAt(NodeKind.BinaryExpr, { left: member(p, "length", loc), operator: "=", right: ident("$n", loc) }, loc);
-		return routine(["$p", "$n"], block([statement(write)], loc), loc);
-	}
-	if (kind == "has") {
-		const has = routeOf(ctx, handler, "has", loc) == "trap" ? handlerCall(ctx, p, "has", [k], loc) : reflectCall(ctx, p, "has", [k], loc);
-		return routine(["$p", "$k"], has, loc);
-	}
-	const del = routeOf(ctx, handler, "deleteProperty", loc) == "trap"
-		? call(ctx, "proxyChecked", [handlerCall(ctx, p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeKeepSem(k)], loc)
-		: reflectCall(ctx, p, "deleteProperty", [k], loc);
-	return routine(["$p", "$k"], block([statement(del)], loc), loc);
+	return match (kind) {
+		"len" => routine(["$p"], member(p, "length", loc), loc),
+		"get" => routine(["$p", "$k"], createNodeAt(NodeKind.ArrayAccess, { array: p, index: k }, loc), loc),
+		"set" => {
+			const write = createNodeAt(NodeKind.BinaryExpr, { left: createNodeAt(NodeKind.ArrayAccess, { array: p, index: k }, loc), operator: "=", right: ident("$v", loc) }, loc);
+			return routine(["$p", "$k", "$v"], block([statement(write)], loc), loc);
+		},
+		"setLen" => {
+			const write = createNodeAt(NodeKind.BinaryExpr, { left: member(p, "length", loc), operator: "=", right: ident("$n", loc) }, loc);
+			return routine(["$p", "$n"], block([statement(write)], loc), loc);
+		},
+		"has" => {
+			const has = routeOf(ctx, handler, "has", loc) == "trap" ? handlerCall(ctx, p, "has", [k], loc) : reflectCall(ctx, p, "has", [k], loc);
+			return routine(["$p", "$k"], has, loc);
+		},
+		"del" => {
+			const del = routeOf(ctx, handler, "deleteProperty", loc) == "trap"
+				? call(ctx, "proxyChecked", [handlerCall(ctx, p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeKeepSem(k)], loc)
+				: reflectCall(ctx, p, "deleteProperty", [k], loc);
+			return routine(["$p", "$k"], block([statement(del)], loc), loc);
+		},
+	};
 }
 
 function chainOf(method: string, argc: int32): Chain | null {

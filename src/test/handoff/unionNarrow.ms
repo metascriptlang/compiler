@@ -11,7 +11,7 @@ import { MapEntry } from "../../module/loader";
 // The struct body the as-cast local `d` reads, when it reads a union member of
 // that same struct type; "" otherwise.
 function variantReadBody(code: string): string {
-	const access = "((*doc).data).v";
+	const access = "((*doc_p0).data).v";
 	const at = code.indexOf(access);
 	if (at < 0) return "";
 	const idx = code.slice(at + access.length, code.indexOf(")", at + access.length));

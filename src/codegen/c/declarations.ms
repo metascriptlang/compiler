@@ -14,7 +14,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, paramCName, staticFieldCName, isModuleGlobalVar } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, assertExternLayout, isOpenArrayParam, returnsBorrow, openArrayDataName, openArrayLenName, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
@@ -74,10 +74,12 @@ export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void 
 function genExternDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as ExternDeclData;
 
-	if (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type) {
+	const isScalar = d.externKind == ExternKind.Type && node.nodeType != null && isNumeric(node.nodeType);
+	if (!isScalar && (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type)) {
 		// Opaque type forward decl for classes/types without @include definition
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.externName} ${d.externName};`);
 	}
+	// An imported scalar names a C typedef the header defines; a forward struct of that name would clash with it.
 	// extern interface: type defined in C header via @include — no forward decl needed.
 	// Reference parity (sfImportc): importc types use the C name directly, no codegen emission.
 	// Vars/consts/enums/macros: provided by @include headers, no emission needed.
@@ -170,8 +172,10 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 		for (let pi = 0; pi < d.params.length; pi += 1) {
 			const paramSym = node.paramSyms != null && pi < node.paramSyms.length ? node.paramSyms[pi] : null;
 			p.params.push(d.params[pi]);
+			const paramName = paramCName(d.params[pi], pi);
 			scopeMangledParam(p, safeName(d.params[pi]));
-			if (paramSym != null) setLocalSymName(p, paramSym, safeName(d.params[pi]));
+			if (paramSym == null) addCGenError(g, `internal: parameter '${d.params[pi]}' of '${name}' reached codegen without a symbol`, 0, 0);
+			else setLocalSymName(p, paramSym, paramName);
 			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated, pi == 0 && returnsBorrow(fnType)));
 			if (bodyPromote) {
@@ -179,7 +183,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 				if (paramSym != null) addIndirectSym(p, paramSym);
 			}
 			if (pi < fnType.typeChildren.length && isOpenArrayParam(fnType.typeChildren[pi])) {
-				const spanName = safeName(d.params[pi]);
+				const spanName = paramName;
 				const spanType = getTypeDesc(g, skipModifier(fnType.typeChildren[pi]));
 				emitProcLocalsLine(p, `${spanType} ${spanName} = { ${openArrayDataName(spanName)}, ${openArrayLenName(spanName)} };`);
 			}

@@ -877,7 +877,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 
 function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, target: Type | null): int32 {
 	const refusal = byteViewRefusal(source, target, true);
-	if (refusal == "") return -1;
+	if (refusal == null) return -1;
 	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
 	return emitTrapNil(s, msg);
@@ -890,7 +890,7 @@ function refuseBigInt(s: RaiserCompState, node: Node): int32 {
 
 function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	const refusal = pointerOpRefusal(node);
-	if (refusal == "") return -1;
+	if (refusal == null) return -1;
 	const msg = refusal + " on the Raiser VM" + NO_ADDRESS_ARITHMETIC;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
 	return emitTrapNil(s, msg);

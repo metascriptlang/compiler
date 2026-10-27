@@ -1,6 +1,4 @@
-// Identifier interning — reference IdentCache parity
-// Fixed hash table (4096 buckets) + chaining. DJB2 hash.
-// Intern string → unique int32 ID for O(1) symbol name comparison.
+// Interns a name as a unique int32 id (1-based) so symbol names compare in O(1).
 
 import { hashStringSigned } from "std/hash";
 
@@ -9,12 +7,12 @@ import { hashStringSigned } from "std/hash";
 export class IdentEntry {
 	name: string;
 	id: int32;
-	next: IdentEntry;
+	next: IdentEntry | null;
 	hash: int32;
 }
 
 export class IdentCache {
-	buckets: IdentEntry[];
+	buckets: (IdentEntry | null)[];
 	counter: int32;
 	names: string[];
 }
@@ -25,13 +23,13 @@ const BUCKET_COUNT: int32 = 4096;
 const BUCKET_MASK: int32 = 4095;
 
 export function createIdentCache(): IdentCache {
-	const buckets: IdentEntry[] = [];
+	const buckets: (IdentEntry | null)[] = [];
 	let i = 0;
 	while (i < BUCKET_COUNT) {
-		buckets.push(null as unknown as IdentEntry);
+		buckets.push(null);
 		i = i + 1;
 	}
-	return { buckets, counter: 0, names: [""] };
+	return { buckets, counter: 0, names: [] };
 }
 
 // ===== Core: Intern String → ID =====
@@ -40,10 +38,9 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 	const h = hashStringSigned(name);
 	const idx = h & BUCKET_MASK;
 	let entry = cache.buckets[idx];
-	let last: IdentEntry = null as unknown as IdentEntry;
+	let last: IdentEntry | null = null;
 	while (entry != null) {
 		if (entry.hash == h && entry.name == name) {
-			// Move-to-front (LRU)
 			if (last != null) {
 				last.next = entry.next;
 				entry.next = cache.buckets[idx];
@@ -54,7 +51,6 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 		last = entry;
 		entry = entry.next;
 	}
-	// Not found — allocate new entry
 	cache.counter = cache.counter + 1;
 	const newEntry: IdentEntry = {
 		name,
@@ -68,10 +64,11 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 }
 
 export function identName(cache: Readonly<IdentCache>, id: int32): string {
-	return id > 0 && id < cache.names.length ? cache.names[id] : "";
+	if (id < 1 || id > cache.names.length) throw new Error("internal: identName of id " + id.toString() + " that was never interned");
+	return cache.names[id - 1];
 }
 
-export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {
+export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 | null {
 	const h = hashStringSigned(name);
 	const idx = h & BUCKET_MASK;
 	let entry = cache.buckets[idx];
@@ -79,7 +76,7 @@ export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {
 		if (entry.hash == h && entry.name == name) return entry.id;
 		entry = entry.next;
 	}
-	return 0;
+	return null;
 }
 
 // ===== Tests =====
@@ -104,6 +101,14 @@ test "ids start at 1" {
 	assert id == 1;
 }
 
+test "identName and findIdentId round-trip, and an unknown name is null" {
+	const cache = createIdentCache();
+	const id = getIdentId(cache, "alpha");
+	assert identName(cache, id) == "alpha";
+	assert findIdentId(cache, "alpha") == id;
+	assert findIdentId(cache, "beta") == null;
+}
+
 test "empty string interns" {
 	const cache = createIdentCache();
 	const id1 = getIdentId(cache, "");
@@ -119,7 +124,6 @@ test "many identifiers" {
 		const name = "var_" + i.toString();
 		const id = getIdentId(cache, name);
 		assert id > 0;
-		// Re-intern returns same id
 		const id2 = getIdentId(cache, name);
 		assert id == id2;
 		i = i + 1;

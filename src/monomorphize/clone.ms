@@ -6,7 +6,7 @@
 // (src/checker/instantiate.ms) and the monomorphize collect pass
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
-import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { isResult, getResultOkType, getResultErrType, refSubstInner, refWrapperName, emptyType } from "../checker/types";
 import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { isFrameValue } from "../checker/symbol";
@@ -68,6 +68,15 @@ export function cloneNodeKeepSem(node: Node): Node {
 // dropped). All of it is pinned by the exhaustive per-kind payload roundtrip
 // test at the bottom of this file.
 
+export function bindsSignatureTypes(node: Node): boolean {
+	if (node.typeExpr != null && node.typeExpr.flags.has(NodeFlag.BoundSym)) return true;
+	if (node.typeExprs == null) return false;
+	for (const operand of node.typeExprs) {
+		if (operand != null && operand.flags.has(NodeFlag.BoundSym)) return true;
+	}
+	return false;
+}
+
 // Copy node-level metadata from source to clone. Behavior depends on currentCloneMode.
 //
 // Shared (both modes):
@@ -84,7 +93,8 @@ export function cloneNodeKeepSem(node: Node): Node {
 //     and fall back to a location-keyed side channel holding the original strings,
 //     defeating substitution. replaceTypeVars substitutes this field too.
 //   - Skips resolvedSym (name rewriting path, re-resolved via shared IdentCache).
-//   - Skips typeExpr/typeExprs (LSP side channel — mono clones don't need positions).
+//   - Skips typeExpr/typeExprs (LSP side channel — mono clones don't need positions),
+//     except a type a quote bound where it was written, which carries the Type.
 //
 // Check (dbTypeCheck clone-before-mutate):
 //   - Skips nodeType (checker will re-populate during resolvePass + checkPass).
@@ -96,7 +106,7 @@ export function cloneNodeKeepSem(node: Node): Node {
 // The mode distinction ensures that dbTypeCheck can safely mutate the clone without
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
-function copyNodeMeta(src: Node, dst: Node): Node {
+function copyNodeMeta(src: Node, dst: Node): void {
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
 		dst.variantSlot = src.variantSlot;
@@ -108,7 +118,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.paramLocations = src.paramLocations;
 		dst.paramSyms = src.paramSyms;
 		dst.comments = src.comments;
-		return dst;
+		return;
 	}
 	// Clear Sem flag on mono clones so monoCheckInstantiatedBody can actually
 	// re-check the cloned body. Without this, the Sem flag from the original
@@ -126,6 +136,11 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		// side channel that still holds the original "K, V" strings, defeating
 		// substitution. replaceTypeVars substitutes this field in substNodeLocal.
 		dst.typeArg = src.typeArg;
+		if (src.kind == NodeKind.CallExpr || src.kind == NodeKind.NewExpr) dst.typeExprs = src.typeExprs;
+		if (bindsSignatureTypes(src)) {
+			dst.typeExpr = src.typeExpr;
+			dst.typeExprs = src.typeExprs;
+		}
 	} else {
 		// Check mode: preserve all parse-time side channels the checker reads
 		// (typeExpr/typeExprs for resolvePass, paramLocations for function
@@ -153,7 +168,6 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		if (isFrameValue(src.resolvedSym)) dst.flags = dst.flags.excl(NodeFlag.BoundSym);
 		else dst.resolvedSym = src.resolvedSym;
 	}
-	return dst;
 }
 
 const cloneXform: FieldXform = {
@@ -194,7 +208,9 @@ const cloneXform: FieldXform = {
 function cloneNodeImpl(node: Node | null): Node {
 	if (node == null) return null as unknown as Node;
 	const loc = node.location;
-	return copyNodeMeta(node, createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn)));
+	const dst = createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn));
+	copyNodeMeta(node, dst);
+	return dst;
 }
 
 

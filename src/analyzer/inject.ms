@@ -32,7 +32,7 @@ import {
 } from "./scope";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
-import { isViewCall, returnsView } from "../checker/effects";
+import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -499,12 +499,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	const sym = node.resolvedSym;
 
-	let sinkParams: Type[] | null = null;
-	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-		sinkParams = sym.symbolType.typeChildren;
-	} else if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		sinkParams = cd.callee.nodeType.typeChildren;
-	}
+	const sinkParams = calledRoutineType(node)?.typeChildren ?? null;
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
@@ -591,7 +586,8 @@ function sinkClassify(t: Type | null, dctx: DrcContext): RcInfo {
 	const link = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
 	if (link != null && (link.kind == TypeKind.Ptr || link.kind == TypeKind.Cursor) && link.typeReturn != null) {
 		const inner = classifyRc(link.typeReturn, dctx);
-		if (inner.needsCleanup && inner.rcKind == RcKind.Ref) return inner;
+		if (inner.needsCleanup && (inner.rcKind == RcKind.Ref
+			|| (link.kind == TypeKind.Cursor && inner.rcKind == RcKind.Closure))) return inner;
 	}
 	return classifyRc(t, dctx);
 }
@@ -2443,14 +2439,14 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		//         return state.tokens[pos] (struct with string field),
 		//         return _globalArray (module-level variable), etc.
 		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr) {
-			const retRc = classifyRc(d.argument.nodeType, dctx);
+			const retRc = sinkClassify(d.argument.nodeType, dctx);
 			if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
 		}
 		const convCore = skipConversionWrappers(d.argument);
 		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess)) {
-			const convRc = classifyRc(d.argument.nodeType, dctx);
+			const convRc = sinkClassify(d.argument.nodeType, dctx);
 			if (convRc.needsCleanup && convRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
@@ -2463,7 +2459,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 			const vi = findVarInfoInFunction(dctx, origSym);
 			if (vi == null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
-				const retRc = classifyRc(d.argument.nodeType, dctx);
+				const retRc = sinkClassify(d.argument.nodeType, dctx);
 				if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 					d.argument = passCopyToSink(d.argument, dctx);
 				}

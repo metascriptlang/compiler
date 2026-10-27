@@ -13,7 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, MemberExprData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkExpandBlocks, containsExprKind } from "../walker";
 import { hoistGuarded, expandConditionStmt } from "./guardedLower";
@@ -27,6 +27,12 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } fro
 import { hashStringSigned } from "std/hash";
 import { endsInNoReturn } from "../analysis/dce";
 
+enum ArmMode {
+	Stmt,
+	Assign,
+	Return,
+}
+
 // ===== Nested MatchExpr Hoisting =====
 
 function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
@@ -39,18 +45,16 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	const loc = node.location;
 	const resultSym = freshTempSym(ctx, "matchres", node.nodeType);
 
-	// let $matchres_N;
 	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(resultSym.name, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = resultSym;
 	if (node.nodeType != null) { letDecl.nodeType = node.nodeType; }
 	hoisted.push(letDecl);
 
-	for (const s of distributeMatch(node, "assign", resultSym, ctx)) {
+	for (const s of distributeMatch(node, ArmMode.Assign, resultSym, ctx)) {
 		hoisted.push(s);
 	}
 
-	// Replace MatchExpr with $matchres_N
 	return makeIdentResolved(resultSym, loc);
 }
 
@@ -61,7 +65,6 @@ export function lowerMatch(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-// Expand a single statement that may contain a match
 function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.MatchStmt => {
@@ -82,7 +85,7 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
 			if (d.argument != null && d.argument.kind == NodeKind.MatchExpr) {
-				return lowerMatchExprInReturn(stmt, ctx);
+				return distributeMatch(d.argument, ArmMode.Return, null, ctx);
 			}
 			if (d.argument != null && containsExprKind(d.argument, NodeKind.MatchExpr)) {
 				const hoisted: Node[] = [];
@@ -114,34 +117,22 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-// ===== MatchStmt → if-else chain =====
-
 export function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const d = matchNode.data as MatchStmtData;
 	const loc = matchNode.location;
 	const matchSym = freshTempSym(ctx, "match", d.matchStmtDisc.nodeType);
 	const result: Node[] = [];
 
-	// const $match_N = discriminant;
 	const matchDecl = makeVarDecl(matchSym.name, d.matchStmtDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
-	const discType = d.matchStmtDisc.nodeType;
-
-	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, matchSym, discType!, loc, "stmt", null, ctx);
-	result.push(ifChain);
-
+	result.push(buildIfChain(d.matchStmtCases, matchSym, d.matchStmtDisc.nodeType, loc, ArmMode.Stmt, null, ctx));
 	return result;
 }
 
-// ===== MatchExpr at statement position (value discarded) =====
-
 function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
-	return distributeMatch(matchNode, "stmt", null, ctx);
+	return distributeMatch(matchNode, ArmMode.Stmt, null, ctx);
 }
-
-// ===== MatchExpr in VariableDecl → let x; if-chain with x = armValue =====
 
 function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const varData = stmt.data as VariableDeclData;
@@ -151,7 +142,6 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 		throw new Error(`internal: match initializer of '${varData.declName}' reached lowering without its symbol`);
 	}
 	const result: Node[] = [];
-	// let x; (uninitialized, to be assigned in each branch)
 	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
@@ -159,35 +149,25 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 		letDecl.nodeType = stmt.nodeType;
 	}
 	result.push(letDecl);
-	for (const s of distributeMatch(varData.initializer, "assign", stmt.resolvedSym, ctx)) {
+	for (const s of distributeMatch(varData.initializer, ArmMode.Assign, stmt.resolvedSym, ctx)) {
 		result.push(s);
 	}
 	return result;
 }
 
-// ===== MatchExpr in ReturnStmt → if-chain with return armValue =====
-
-function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
-	const retData = stmt.data as ReturnStmtData;
-	return distributeMatch(retData.argument!, "return", null, ctx);
-}
-
-function distributeMatch(matchNode: Node, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node[] {
+function distributeMatch(matchNode: Node, mode: ArmMode, assignSym: Symbol | null, ctx: TransformContext): Node[] {
 	const d = matchNode.data as MatchExprData;
 	const loc = matchNode.location;
 	const matchSym = freshTempSym(ctx, "match", d.matchDisc.nodeType);
 	const matchDecl = makeVarDecl(matchSym.name, d.matchDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
-	return [matchDecl, buildIfChain(d.matchCases, matchSym, d.matchDisc.nodeType!, loc, mode, assignSym, ctx)];
+	return [matchDecl, buildIfChain(d.matchCases, matchSym, d.matchDisc.nodeType, loc, mode, assignSym, ctx)];
 }
 
 // ===== Build if-else chain =====
-// Unified builder for all match contexts.
-// mode: "stmt" = body as-is, "assign" = assignSym = body, "return" = return body
 
-// Check if all non-wildcard/non-binding patterns are enum members or integer literals.
-// Guards are allowed — they become if-chains inside switch case bodies.
-function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
+// Guards are allowed: they become if-chains inside switch case bodies.
+function canUseSwitchDispatch(cases: Node[], discType: Type | null): boolean {
 	if (!isCSwitchableType(discType)) return false;
 	for (let i = 0; i < cases.length; i += 1) {
 		const cd = cases[i].data as MatchCaseData;
@@ -201,10 +181,8 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 				return false;
 			}
 			if (p.kind == NodeKind.MemberExpr) {
-				// Only accept enum member access (Color.Red), not .code or other property access.
-				// .code patterns are MemberExpr but resolve to runtime values, not constants.
-				const pmd = p.data as { object: Node, property: string };
-				if (pmd.object != null && pmd.object.nodeType != null && pmd.object.nodeType.kind == TypeKind.Enum) continue;
+				const objectType = (p.data as MemberExprData).object.nodeType;
+				if (objectType != null && objectType.kind == TypeKind.Enum) continue;
 				return false;
 			}
 			if (p.kind == NodeKind.UnaryExpr) continue;
@@ -214,12 +192,7 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 	return true;
 }
 
-// Build switch dispatch for enum/int patterns with guard support.
-// Groups same-pattern arms with different guards into one switch case.
-function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node {
-	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
-	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
-	// becomes: if (g1) { b1 } else if (g2) { b2 } else { b3 }
+function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type | null, loc: SourceLocation, mode: ArmMode, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	for (let wi = cases.length - 1; wi >= 0; wi -= 1) {
 		const wd = cases[wi].data as MatchCaseData;
@@ -232,39 +205,20 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 		}
 	}
 
-	// The $matched flag is ONLY needed when (a) arms can't early-return (stmt/assign
-	// mode) AND (b) the default body is observably non-empty. No wildcard, or
-	// `_ => {}`, means there's nothing to gate — skip the flag entirely to eliminate
-	// dead stores and empty `if (!$matched) {}` epilogues in the generated C.
-	const needsFlag = mode != "return" && !isEmptyBlock(defaultBody);
+	// The $matched flag gates only a non-empty default body that arms cannot early-return past.
+	const needsFlag = mode != ArmMode.Return && !isEmptyBlock(defaultBody);
 	const matchedSym = freshTempSym(ctx, "matched", booleanType());
 	const matchedName = matchedSym.name;
 
-	// Reference-aligned lowering: each MatchCase maps to ONE SwitchCase holding
-	// all of its OR-patterns (A | B | C) as caseTests. The C backend emits this
-	// as `case A: case B: case C: { body } break;` — one body with multiple
-	// fall-through labels, matching standard multi-label branch semantics.
-	//
-	// Cross-MatchCase merging: two MatchCases with the IDENTICAL pattern set
-	// (same labels, possibly in different order) merge into one SwitchCase with
-	// an if-else guard chain. This handles both:
-	//   (a) Single-pattern guard chain — `case 1 when g1 => a; case 1 => b`
-	//   (b) OR-pattern guard chain    — `case A|B when g => x; case A|B => y`
-	// Both collapse into one SwitchCase with chained bodies inside caseStmts.
-	//
-	// Partial overlap (`case A|B => x; case A when g => y`) is rejected via
-	// labelOwners bookkeeping — merging would run the second arm's body on
-	// sibling labels it wasn't meant to match, and emitting separate SwitchCases
-	// would produce duplicate C `case` labels. Reference compilers catch this
-	// at sem time as "duplicate case label"; we catch it here and push a clear
-	// error into ctx.errors.
-	const patternKeys: string[] = [];    // canonical set-signature per group
-	const patternTests: Node[][] = [];   // caseTests arrays per group
-	const armGuards: Node[][] = [];
+	// Arms with the identical pattern set (`A | B` equals `B | A`) merge into one SwitchCase
+	// with a guard chain. A partial overlap (`A | B => x; A when g => y`) is an error: merging
+	// would run the second body on labels it does not match, and separate cases would emit
+	// duplicate C labels.
+	const groupBySet = new Map<string, int32>();
+	const groupByLabel = new Map<string, int32>();
+	const patternTests: Node[][] = [];
+	const armGuards: (Node | null)[][] = [];
 	const armBodies: Node[][] = [];
-	// Per-label index for partial-overlap detection.
-	const labelOwners: string[] = [];
-	const labelOwnerGroup: int32[] = [];
 
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;
@@ -272,25 +226,12 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 
 		const setKey = patternSetKey(caseData.casePatterns, i);
 
-		// Same-set merge (handles both single-pattern and OR-pattern guard chains).
-		let mergedInto = -1;
-		for (let gi = 0; gi < patternKeys.length; gi += 1) {
-			if (patternKeys[gi] == setKey) {
-				mergedInto = gi;
-				break;
-			}
-		}
+		const mergedInto = groupBySet.get(setKey);
 
-		// Partial-overlap detection for new groups: any individual label that
-		// already belongs to a different group means duplicate C case labels.
-		if (mergedInto < 0) {
+		if (mergedInto == null) {
 			for (const pat of caseData.casePatterns) {
 				const lk = patternKey(pat, i);
-				let owner = -1;
-				for (let li = 0; li < labelOwners.length; li += 1) {
-					if (labelOwners[li] == lk) { owner = labelOwnerGroup[li]; break; }
-				}
-				if (owner >= 0) {
+				if (groupByLabel.has(lk)) {
 					reportTransformError(ctx, "match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms", pat.location);
 				}
 			}
@@ -298,26 +239,23 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 
 		const armBody = wrapArmBody(caseData.caseBody, mode, assignSym, loc, ctx);
 
-		if (mergedInto >= 0) {
-			const mergedGuard = caseData.caseGuard;
-			armGuards[mergedInto].push(mergedGuard!);
+		if (mergedInto != null) {
+			armGuards[mergedInto].push(caseData.caseGuard);
 			armBodies[mergedInto].push(armBody);
 		} else {
-			const newGroupIdx = patternKeys.length;
-			patternKeys.push(setKey);
+			const newGroup = patternTests.length;
+			groupBySet.set(setKey, newGroup);
 			patternTests.push(caseData.casePatterns);
-			armGuards.push([caseData.caseGuard!]);
+			armGuards.push([caseData.caseGuard]);
 			armBodies.push([armBody]);
 			for (const pat of caseData.casePatterns) {
-				labelOwners.push(patternKey(pat, i));
-				labelOwnerGroup.push(newGroupIdx);
+				groupByLabel.set(patternKey(pat, i), newGroup);
 			}
 		}
 	}
 
-	// Build switch cases from grouped arms
 	const switchCases: Node[] = [];
-	for (let gi = 0; gi < patternKeys.length; gi += 1) {
+	for (let gi = 0; gi < patternTests.length; gi += 1) {
 		const guards = armGuards[gi];
 		const bodies = armBodies[gi];
 		const caseStmts: Node[] = [];
@@ -334,8 +272,9 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
 				armBody = makeBlock([setMatched, armBody], loc);
 			}
-			if (guards[ai] != null) {
-				chained = makeIf(guards[ai], armBody, chained, loc);
+			const guard = guards[ai];
+			if (guard != null) {
+				chained = makeIf(guard, armBody, chained, loc);
 			} else {
 				chained = armBody;
 			}
@@ -345,7 +284,6 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 		switchCases.push(makeSwitchCase(patternTests[gi], caseStmts, false, loc));
 	}
 
-	// Build final switch
 	const discIdent = makeTypedIdentResolved(matchSym, discType, loc);
 	const switchNode = makeSwitch(discIdent, switchCases, loc);
 
@@ -366,13 +304,11 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 	return makeBlock(stmts, loc);
 }
 
-function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node {
-	// String hash dispatch for >8 string cases
+function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type | null, loc: SourceLocation, mode: ArmMode, assignSym: Symbol | null, ctx: TransformContext): Node {
 	if (!ctx.raiserBackend && isAllStringCases(cases)) {
 		return buildHashSwitch(cases, matchSym, discType, loc, mode, assignSym, ctx);
 	}
 
-	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
 	if (canUseSwitchDispatch(cases, discType)) {
 		return buildSwitchDispatch(cases, matchSym, discType, loc, mode, assignSym, ctx);
 	}
@@ -383,12 +319,10 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 		const caseNode = cases[i];
 		const caseData = caseNode.data as MatchCaseData;
 
-		// Wrap body based on mode
 		const body = wrapArmBody(caseData.caseBody, mode, assignSym, loc, ctx);
 
 		if (isWildcard(caseData.casePatterns)) {
 			if (caseData.caseGuard != null) {
-				// Guarded wildcard: if (guard) { body } else { previous_else }
 				elseNode = makeIf(caseData.caseGuard, body, elseNode, loc);
 			} else {
 				elseNode = body;
@@ -400,7 +334,6 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 			const bindingName = getBindingName(caseData.casePatterns);
 			const bindDecl = makeVarDecl(bindingName, makeTypedIdentResolved(matchSym, discType, loc), DeclKind.Const, loc);
 			if (caseData.caseGuard != null) {
-				// Bind first, then check guard
 				const guardedBody = makeIf(caseData.caseGuard, body, elseNode, loc);
 				elseNode = prependToBody(bindDecl, guardedBody, loc);
 			} else {
@@ -419,33 +352,28 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 	return elseNode;
 }
 
-// ===== moveInto — Unified Result Destination Insertion =====
-// Standard reference pattern: unified result destination insertion
-// Pushes the "result destination" (return or assignment) into terminal positions.
-// C has no expression-blocks — this makes each arm produce a statement-level result.
+// ===== moveInto — result destination insertion =====
+// C has no expression-blocks: the return or assignment moves into each terminal position.
 
-function wrapArmBody(armBody: Node, mode: string, assignSym: Symbol | null, loc: SourceLocation, ctx: TransformContext): Node {
+function wrapArmBody(armBody: Node, mode: ArmMode, assignSym: Symbol | null, loc: SourceLocation, ctx: TransformContext): Node {
 	if (armBody.kind == NodeKind.MatchExpr) {
 		return makeBlock(distributeMatch(armBody, mode, assignSym, ctx), loc);
 	}
-	if (mode == "stmt") {
-		// Expression-form arms (=> expr) need wrapping in ExprStmt for codegen.
-		// Block-form arms (=> { ... }) are already BlockStmt — pass through.
-		if (armBody.kind != NodeKind.BlockStmt && armBody.kind != NodeKind.ExprStmt
-			&& armBody.kind != NodeKind.IfStmt && armBody.kind != NodeKind.ReturnStmt
-			&& armBody.kind != NodeKind.BreakStmt && armBody.kind != NodeKind.ContinueStmt
-			&& armBody.kind != NodeKind.ThrowStmt && armBody.kind != NodeKind.VariableDecl) {
-			return makeExprStmt(armBody, loc);
-		}
-		return armBody;
-	}
-	return moveInto(armBody, mode, assignSym, loc, ctx);
+	return match (mode) {
+		ArmMode.Stmt => {
+			if (armBody.kind != NodeKind.BlockStmt && armBody.kind != NodeKind.ExprStmt
+				&& armBody.kind != NodeKind.IfStmt && armBody.kind != NodeKind.ReturnStmt
+				&& armBody.kind != NodeKind.BreakStmt && armBody.kind != NodeKind.ContinueStmt
+				&& armBody.kind != NodeKind.ThrowStmt && armBody.kind != NodeKind.VariableDecl) {
+				return makeExprStmt(armBody, loc);
+			}
+			return armBody;
+		},
+		ArmMode.Assign | ArmMode.Return => moveInto(armBody, mode, assignSym, loc, ctx),
+	};
 }
 
-// Recursive: walks into blocks and if-else to find terminal expressions.
-// Returns a new node with return/assign inserted at every terminal position.
-function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: SourceLocation, ctx: TransformContext): Node {
-	// BlockStmt: keep leading stmts, moveInto the last one
+function moveInto(node: Node, mode: ArmMode, assignSym: Symbol | null, loc: SourceLocation, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
 		if (bd.statements.length == 0) return node;
@@ -458,7 +386,6 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 		newStmts.push(moveInto(bd.statements[bd.statements.length - 1], mode, assignSym, loc, ctx));
 		return makeBlock(newStmts, loc);
 	}
-	// IfStmt: recurse into both branches
 	if (node.kind == NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;
 		d.consequent = moveInto(d.consequent, mode, assignSym, loc, ctx);
@@ -471,7 +398,7 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 	// ReturnStmt in "assign" mode: strip return, convert to assignment.
 	// This supports `const x = match { arm => { return expr; } }` syntax.
 	if (node.kind == NodeKind.ReturnStmt) {
-		if (mode == "return") return node;
+		if (mode == ArmMode.Return) return node;
 		const rd = node.data as ReturnStmtData;
 		if (rd.argument != null) {
 			return moveInto(rd.argument, mode, assignSym, loc, ctx);
@@ -479,7 +406,6 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 		return node;
 	}
 	if (endsInNoReturn(node, ctx)) return node;
-	// ExprStmt: unwrap and wrap in return/assign
 	if (node.kind == NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
 		return moveInto(expr, mode, assignSym, loc, ctx);
@@ -487,21 +413,24 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 	if (node.kind == NodeKind.MatchExpr) {
 		return makeBlock(distributeMatch(node, mode, assignSym, ctx), loc);
 	}
-	// Bare expression (not wrapped in ExprStmt): wrap directly
 	return emitResult(node, mode, assignSym, loc);
 }
 
-// Emit the final result: either return expr or assignSym = expr.
-// A noreturn arm yields no value — emit the bare call.
-function emitResult(expr: Node, mode: string, assignSym: Symbol | null, loc: SourceLocation): Node {
+// A noreturn arm yields no value: emit the bare call.
+function emitResult(expr: Node, mode: ArmMode, assignSym: Symbol | null, loc: SourceLocation): Node {
 	if (expr.nodeType != null && expr.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(expr, loc);
 	}
-	if (mode == "return") {
-		return makeReturn(expr, loc);
-	}
-	if (assignSym == null) throw new Error("internal: a match arm assigns to a binding that has no symbol");
-	return makeExprStmt(makeAssign(makeIdentResolved(assignSym, loc), expr, loc), loc);
+	return match (mode) {
+		ArmMode.Return => makeReturn(expr, loc),
+		ArmMode.Assign => {
+			if (assignSym == null) throw new Error("internal: a match arm assigns to a binding that has no symbol");
+			return makeExprStmt(makeAssign(makeIdentResolved(assignSym, loc), expr, loc), loc);
+		},
+		ArmMode.Stmt => {
+			throw new Error("internal: a statement-mode match arm reached result insertion");
+		},
+	};
 }
 
 function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
@@ -519,7 +448,6 @@ function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
 
 // ===== Pattern Helpers =====
 
-// Check if pattern list is a wildcard (_)
 function isWildcard(patterns: Node[]): boolean {
 	if (patterns.length != 1) return false;
 	if (patterns[0].kind != NodeKind.Identifier) return false;
@@ -527,7 +455,6 @@ function isWildcard(patterns: Node[]): boolean {
 	return id.name == "_";
 }
 
-// Check if pattern list is a binding (single identifier, not _, not a literal/member/enum-rewrite)
 function isBindingPattern(patterns: Node[]): boolean {
 	if (patterns.length != 1) return false;
 	if (patterns[0].kind != NodeKind.Identifier) return false;
@@ -538,55 +465,34 @@ function isBindingPattern(patterns: Node[]): boolean {
 	return true;
 }
 
-// Get binding name from a binding pattern
 function getBindingName(patterns: Node[]): string {
 	const id = patterns[0].data as IdentifierData;
 	return id.name;
 }
 
-// Semantic key for cross-MatchCase grouping. Two patterns with the same key
-// refer to the same discriminant value (enum member, literal). Used by the
-// guard-chain merge path in buildSwitchDispatch.
-function patternKey(pat: Node, caseIdx: number): string {
+function patternKey(pat: Node, caseIdx: int32): string {
 	return match (pat.kind) {
 		NodeKind.NumberLiteral => `n:${(pat.data as NumberLiteralData).value}`,
 		NodeKind.Identifier => "id:" + (pat.data as IdentifierData).name,
 		NodeKind.MemberExpr => {
 			if (pat.resolvedSym != null) return "sym:" + pat.resolvedSym.name;
-			return "m:" + (pat.data as { object: Node, property: string }).property;
+			return "m:" + (pat.data as MemberExprData).property;
 		},
-		// Unique fallback — never matches another pattern, effectively disables merge.
+		// A key no other pattern shares, so the arm never merges.
 		_ => `x:${caseIdx}`,
 	};
 }
 
-// Canonical signature of a pattern set for same-set merging. Sorts label keys
-// so that `A | B` and `B | A` collapse to the same group.
-function patternSetKey(patterns: Node[], caseIdx: number): string {
+function patternSetKey(patterns: Node[], caseIdx: int32): string {
 	const keys: string[] = [];
 	for (const pat of patterns) {
 		keys.push(patternKey(pat, caseIdx));
 	}
-	// Insertion sort — pattern sets are tiny (typically 1-4 items).
-	for (let i = 1; i < keys.length; i += 1) {
-		const x = keys[i];
-		let j = i - 1;
-		while (j >= 0 && keys[j] > x) {
-			keys[j + 1] = keys[j];
-			j -= 1;
-		}
-		keys[j + 1] = x;
-	}
-	let sig = "";
-	for (let k = 0; k < keys.length; k += 1) {
-		if (k > 0) sig = sig + "|";
-		sig = sig + keys[k];
-	}
-	return sig;
+	keys.sort();
+	return keys.join("|");
 }
 
-// Build condition from pattern list: $m === p1 || $m === p2 || ...
-function buildPatternCondition(patterns: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation): Node {
+function buildPatternCondition(patterns: Node[], matchSym: Symbol, discType: Type | null, loc: SourceLocation): Node {
 	let cond = makePatternTest(patterns[0], matchSym, discType, loc);
 	for (let i = 1; i < patterns.length; i += 1) {
 		const nextTest = makePatternTest(patterns[i], matchSym, discType, loc);
@@ -595,21 +501,16 @@ function buildPatternCondition(patterns: Node[], matchSym: Symbol, discType: Typ
 	return cond;
 }
 
-// Build a single pattern test: $m === pattern
-function makePatternTest(pattern: Node, matchSym: Symbol, discType: Type, loc: SourceLocation): Node {
+function makePatternTest(pattern: Node, matchSym: Symbol, discType: Type | null, loc: SourceLocation): Node {
 	return makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", pattern, loc);
 }
 
 // ===== String Hash Dispatch =====
-// When ALL non-wildcard/non-binding arms are string literals and they hold > 8 labels,
-// emit switch(djb2(disc)) with equality guards instead of if-else chain.
-// Matches standard string-case optimization pattern.
+// When all non-wildcard arms are string literals holding more than STRING_HASH_THRESHOLD labels,
+// emit a switch on msStringHash(disc) with equality checks in place of an if-else chain.
 
-const STRING_HASH_THRESHOLD: number = 8;
+const STRING_HASH_THRESHOLD: int32 = 8;
 
-// DJB2 hash — uses hashStringSigned from std/hash (matches C runtime msStringHash).
-
-// Check if all non-wildcard/non-binding patterns are string literals.
 function isAllStringCases(cases: Node[]): boolean {
 	let stringCount = 0;
 	for (let i = 0; i < cases.length; i += 1) {
@@ -620,7 +521,6 @@ function isAllStringCases(cases: Node[]): boolean {
 		if (caseData.caseGuard != null) return false;
 		if (isWildcard(caseData.casePatterns)) continue;
 		if (isBindingPattern(caseData.casePatterns)) return false;
-		// Check all patterns in this arm are string literals
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
 			if (caseData.casePatterns[j].kind != NodeKind.StringLiteral) return false;
 		}
@@ -635,7 +535,7 @@ interface HashBucket {
 	arms: int32[];
 }
 
-function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node {
+function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type | null, loc: SourceLocation, mode: ArmMode, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	const armTests: Node[][] = [];
 	const armBodies: Node[] = [];
@@ -673,7 +573,7 @@ function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: S
 		}
 	}
 
-	const defaultInSwitch = mode != "return" && !isEmptyBlock(defaultBody);
+	const defaultInSwitch = mode != ArmMode.Return && !isEmptyBlock(defaultBody);
 	const dispatchCases: Node[] = [];
 	for (let arm = 0; arm < armBodies.length; arm += 1) {
 		dispatchCases.push(makeSwitchCase(armTests[arm], [armBodies[arm]], false, loc));
@@ -721,13 +621,11 @@ test "match preserves surrounding stmts" { assert stmtCountAfter("let a = 1; mat
 
 test "string hash dispatch for >8 arms" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
-	// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
 	assert stmtCountAfter(src, lowerMatch) == 2;
 }
 
 test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
-	// 2 string arms <= threshold → stays as if-else chain
 	assert stmtCountAfter(src, lowerMatch) == 2;
 }
 
@@ -745,7 +643,6 @@ test "string hash dispatch counts labels, not arms" {
 test "hash switch stmt mode lowers into one block" {
 	const src = "match (cmd) { \"a\" => foo(), \"b\" => bar(), \"c\" => c(), \"d\" => d(), \"e\" => e(), \"f\" => f(), \"g\" => g(), \"h\" => h(), \"i\" => i(), _ => fallback() }";
 	const stmts = stmtCountAfter(src, lowerMatch);
-	// Top level: [VarDecl($match_temp), BlockStmt(VarDecl($arm) + Switch + Switch)]
 	assert stmts == 2;
 }
 

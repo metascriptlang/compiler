@@ -39,6 +39,11 @@ function typeIdentity(t: Type): string {
 	return "";
 }
 
+function heldKey(held: Type): string {
+	const named = held.typeName != "" && !isAnonTypeName(held.typeName);
+	return hasGenericParams(held) || (named && !hasTypeIdentity(held)) ? "" : typeIdentity(held);
+}
+
 function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
@@ -143,10 +148,11 @@ function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: Nam
 
 // An interface or unnamed record stands for every object type the checker accepted behind
 // it (noteHeldBeyond); a cycle can run through any of them. An implementer with generic
-// parameters, or no identity to key a walk by, has fields no walk can see, so it counts as closing one.
+// parameters, or with no key to mark a walk by, has fields no walk can see, so it counts as
+// closing one.
 function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || !hasTypeIdentity(held) || cfaAux(held, origKey, withRef, marker)) return true;
+		if (heldKey(held) == "" || cfaAux(held, origKey, withRef, marker)) return true;
 	}
 	return false;
 }
@@ -210,8 +216,8 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
 		if (body == null || body.kind != TypeKind.Struct) continue;
 		for (const held of heldBeyond(body)) {
-			if (hasGenericParams(held) || !hasTypeIdentity(held)) return true;
-			const key = typeIdentity(held);
+			const key = heldKey(held);
+			if (key == "") return true;
 			if (nameSetContains(seen, key)) continue;
 			nameSetAdd(seen, key);
 			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createNameSet())) return true;
@@ -339,7 +345,7 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || !hasTypeIdentity(held) || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
+		if (heldKey(held) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
@@ -411,6 +417,9 @@ function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker
 	if (t.kind == TypeKind.Struct && addsAux(base, true, cyclicCache, acyclicCache, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	for (const held of heldBeyond(t)) {
+		if (heldKey(held) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }

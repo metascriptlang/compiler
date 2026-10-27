@@ -244,16 +244,16 @@ export function moduleExportsName(gen: JSGenerator, modulePath: string, name: st
 
 export function jsTypedArrayName(elemKind: TypeKind): string {
 	return match (elemKind) {
-		TypeKind.Int8 => "Int8Array",
-		TypeKind.Int16 => "Int16Array",
-		TypeKind.Int32 => "Int32Array",
-		TypeKind.Int64 => "BigInt64Array",
-		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "Uint8Array",
-		TypeKind.Uint16 => "Uint16Array",
-		TypeKind.Uint32 => "Uint32Array",
-		TypeKind.Uint64 => "BigUint64Array",
-		TypeKind.Float32 => "Float32Array",
-		TypeKind.Float64 | TypeKind.Number => "Float64Array",
+		TypeKind.Int8 => "globalThis.Int8Array",
+		TypeKind.Int16 => "globalThis.Int16Array",
+		TypeKind.Int32 => "globalThis.Int32Array",
+		TypeKind.Int64 => "globalThis.BigInt64Array",
+		TypeKind.Uint8 | TypeKind.Char | TypeKind.Boolean => "globalThis.Uint8Array",
+		TypeKind.Uint16 => "globalThis.Uint16Array",
+		TypeKind.Uint32 => "globalThis.Uint32Array",
+		TypeKind.Uint64 => "globalThis.BigUint64Array",
+		TypeKind.Float32 => "globalThis.Float32Array",
+		TypeKind.Float64 | TypeKind.Number => "globalThis.Float64Array",
 		_ => "",
 	};
 }

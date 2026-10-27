@@ -1,6 +1,6 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { appendFile, chmod, copyFile, ensureDir, exists, readFile, remove, removeAll, writeFile } from "std/fs";
+import { appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile, remove, removeAll, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
 	exit(2);
 }
 
@@ -1117,6 +1117,66 @@ function runFlows(): void {
 	recordTrue("MSC_FLOWS splits a test run into graph, phase A, cc, link and the run of the test binary", flowRow(testRows, "phase.graph", "ms") > 0 && flowRow(testRows, "phase.A", "ms") > 0 && flowRow(testRows, "cc", "count") > 0 && flowRow(testRows, "phase.link", "ms") > 0 && flowRow(testRows, "test.run", "ms") > 0 && flowRow(testRows, "total", "ms") >= flowRow(testRows, "test.run", "ms"));
 }
 
+function runTestTiming(): void {
+	const dir = `${root}/test-timing`;
+	ensureDir(dir);
+	put(
+		`${dir}/timing.ms`,
+		"import { argv } from \"std/process\";\n" +
+		"import { writeStderr } from \"std/io\";\n" +
+		"test \"a\\tline\\n\\u00e9" + "x".repeat(8192) + "\" { assert argv.length == 1; }\n" +
+		"test \"\" { writeStderr(\"ct 42\\n\"); assert true; }\n" +
+		"test \"failure stays named\" { assert false; }\n",
+	);
+	const plain = command(
+		dir,
+		"plain",
+		compiler,
+		["test", "--tests-in-dir", "timing.ms"],
+	);
+	const timed = command(
+		dir,
+		"timed",
+		"bash",
+		[
+			"-c", "exec \"$@\" 2>&1", "test-timing", compiler,
+			"test", "--tests-in-dir", "--time", "timing.ms",
+		],
+	);
+	recordTrue(
+		"plain tests keep results without timing records",
+		plain.code == 1 && plain.stdout.includes("2 passed") &&
+		plain.stdout.includes("1 failed") && plain.stdout.includes("failure stays named") &&
+		!plain.stdout.includes("TESTTIME\t"),
+	);
+	recordTrue(
+		"timed tests keep argv, counts and named failures",
+		timed.code == 1 && timed.stdout.includes("2 passed") &&
+		timed.stdout.includes("1 failed") && timed.stdout.includes("failure stays named"),
+	);
+	const rows = timed.stdout.split("\n")
+		.filter((line: string): boolean => line.startsWith("TESTTIME\t"));
+	record("--time records every native test case", "3", `${rows.length}`);
+	let valid = true;
+	let escaped = false;
+	let empty = false;
+	for (let i = 0; i < rows.length; i++) {
+		const cols = rows[i].split("\t");
+		if (cols.length != 5) {
+			valid = false;
+			continue;
+		}
+		valid = valid && parseFloat(cols[1]) >= 0 && cols[2] == `${i}` &&
+			cols[3].endsWith("74696d696e672e6d73") && !rows[i].includes("timing.ms");
+		if (cols[2] == "0") escaped = cols[4] == "61096c696e650ac3a9" + "78".repeat(8192);
+		if (cols[2] == "1") empty = cols[4] == "";
+	}
+	recordTrue(
+		"long timing records survive later stderr with escaped and empty identities",
+		valid && escaped && empty,
+	);
+}
+
 function runTestScope(): void {
 	const dir = `${root}/test-scope`;
 	ensureDir(`${dir}/app`);
@@ -1135,7 +1195,44 @@ function runTestScope(): void {
 	recordTrue("only the shard that tests a module checks its test blocks", shard0 != shard1);
 }
 
+function runWindowsCross(): void {
+	const dir = `${root}/windows-cross`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "console.log(Math.random() < 1);\n");
+	record("a std extern from a libc header builds for --os=windows", "0", `${command(dir, "windows-cross", compiler, ["build", "main.ms", "--os=windows", "--output=main.exe"]).code}`);
+}
+
+function sameBytes(dir: string, a: string, b: string): boolean {
+	return execFileCapture("cmp", [a, b], dir).ok;
+}
+
+function testBinaryIn(dir: string): string {
+	for (const name of readDir(`${dir}/out/debug`)) {
+		if (name.startsWith("_test_check_") && !name.endsWith("_link.rsp")) return `${dir}/out/debug/${name}`;
+	}
+	return "";
+}
+
+function runReproducibleLink(): void {
+	if (windows) return;
+	const dir = `${root}/reproducible-link`;
+	ensureDir(dir);
+	put(`${dir}/check.ms`, "test \"sum\" { assert 1 + 2 == 3; }\n");
+	need(command(dir, "repro-test1", compiler, ["test", "check.ms"]).code == 0, "first test run");
+	const bin = testBinaryIn(dir);
+	need(bin != "" && copyFile(bin, `${dir}/first.bin`).ok, "first test binary");
+	need(command(dir, "repro-test2", compiler, ["test", "check.ms"]).code == 0, "second test run");
+	recordTrue("an unchanged test source links to a byte-identical test binary", sameBytes(dir, `${dir}/first.bin`, bin));
+	put(`${dir}/main.ms`, "console.log(1 + 2);\n");
+	need(command(dir, "repro-build1", compiler, ["build", "main.ms", "--output=app"]).code == 0, "first build");
+	need(copyFile(`${dir}/app`, `${dir}/app.first`).ok, "first build output");
+	need(command(dir, "repro-build2", compiler, ["build", "main.ms", "--output=app"]).code == 0, "second build");
+	recordTrue("an unchanged program builds to a byte-identical binary", sameBytes(dir, `${dir}/app.first`, `${dir}/app`));
+}
+
 if (group == "argv" || group == "all") runArgv();
+if (group == "reproducible-link" || group == "all") runReproducibleLink();
 if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -1155,7 +1252,9 @@ if (group == "emcc-jspi" || group == "all") runEmccJspi();
 if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
 if (group == "ios-process" || group == "all") runIosProcess();
+if (group == "windows-cross" || group == "all") runWindowsCross();
 if (group == "flows" || group == "all") runFlows();
+if (group == "test-timing" || group == "all") runTestTiming();
 
 let failures = 0;
 console.log(`root ${root}`);

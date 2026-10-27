@@ -13,7 +13,7 @@ import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, qu
 
 export struct TaDependencyEntry {
 	depKey: TaQueryKey;
-	expectedHash: number;
+	expectedHash: int64;
 }
 
 // ===== Cache Entry — per-query metadata (NOT the result value) =====
@@ -26,7 +26,7 @@ export class TaCacheEntry {
 	verifiedAt: int32;      // revision when last verified green
 	durability: TaDurability;
 	dependencies: TaDependencyEntry[];
-	outputHash: number;       // hash of the output (0 in Phase 1)
+	outputHash: int64;       // hash of the output (0 in Phase 1)
 }
 
 export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
@@ -44,7 +44,7 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 
 // ===== Dependency Frame — pushed when a query starts executing =====
 
-export class TaDependencyFrame {
+class TaDependencyFrame {
 	queryKey: TaQueryKey;
 	deps: TaDependencyEntry[];
 	minDurability: TaDurability;
@@ -77,7 +77,7 @@ export function hasActiveFrame(stack: TaDependencyStack): boolean {
 	return stack.frames.length > 0;
 }
 
-export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey, outputHash: number): void {
+export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey, outputHash: int64): void {
 	if (stack.frames.length == 0) return;  // defensive
 	const frame = stack.frames[stack.frames.length - 1];
 	const entry: TaDependencyEntry = { depKey, expectedHash: outputHash };

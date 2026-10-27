@@ -32,6 +32,20 @@ function mapRuntimeType(name: string): string {
 	};
 }
 
+// A typedef whose width differs from its fixed-width twin on some target (`size_t` is `unsigned long`
+// where `uint64_t` is `unsigned long long`) keeps its name, so a pointer to it is spelled as C spells it.
+function isNamedScalar(name: string): boolean {
+	return name == "size_t" || name == "ssize_t" || name == "uintptr_t" || name == "intptr_t";
+}
+
+// The C `char` a pointer-to-pointer points at: the exact type, where `cstring` is `const char *`.
+const C_CHAR = "cchar";
+
+function isMutableChar(c: CType): boolean {
+	return c != null && c.base != null && c.base.kind == CTypeKind.Char && c.base.isPlainChar && !c.base.isConst
+		&& c.base.typedefName == "" && c.kind == CTypeKind.Ptr;
+}
+
 // `skipTypedef=false` (default): USE-site — preserves typedef alias names so a
 // MyId parameter emits as `x: MyId`. `skipTypedef=true`: DEFINE-site — used by
 // emitTypedef so `type MyId = ...` resolves to the underlying type, not back
@@ -39,6 +53,7 @@ function mapRuntimeType(name: string): string {
 // first names it, so its typedefName === obj.name).
 function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 	if (!skipTypedef && t.typedefName != "") {
+		if (isNamedScalar(t.typedefName)) return t.typedefName;
 		const mapped = mapRuntimeType(t.typedefName);
 		if (mapped != "") return mapped;
 		// Opaque types from heuristic (unknown C types without #include)
@@ -73,7 +88,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
 			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") return `Ptr<${t.base.tagName}>`;
-			const inner = cTypeToMs(t.base);
+			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base);
 			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) return `Ptr<${inner}>`;
 			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
 			// borrow-promotion); mutable → Ptr<T>.
@@ -116,9 +131,8 @@ function emitParams(t: CType, outHandles: boolean): string {
 		if (i > 0) result = result + ", ";
 		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
 		const p = t.params[i];
-		result = outHandles && isOutHandle(p)
-			? result + `out ${pName}: ${cTypeToMs(p.base)}`
-			: result + `${pName}: ${nullablePointer(p, cTypeToMs(p))}`;
+		if (outHandles && isOutHandle(p)) result = result + `out ${pName}: ${cTypeToMs(p.base)}`;
+		else result = result + `${pName}: ${nullablePointer(p, cTypeToMs(p))}`;
 	}
 	return result;
 }
@@ -289,6 +303,7 @@ function emitTypedef(obj: Obj, prefix: string): string {
 	if (emitsStructBody(obj)) return emitStructBody(obj.name, t, prefix);
 	// Enum typedef → handled separately via emitEnum
 	if (t.kind == CTypeKind.Enum) return "";
+	if (isNamedScalar(obj.name)) return `${prefix}extern type ${obj.name}: ${cTypeToMs(t, true)} from "${obj.name}";\n`;
 	// Skip cTypeToMs's typedefName short-circuit — it would return obj.name
 	// itself and emit `type X = X;`. Forward-declared struct whose tagName
 	// matches obj.name still produces self-reference via the kind branch;
@@ -392,6 +407,7 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 		declaredNames.add(tag.tagName);
 		tags = tags + emitOpaqueTag(tag, "export ");
 	}
+	if (ownShape.indexOf(`<${C_CHAR}>`) >= 0) tags = tags + `export extern type ${C_CHAR}: ${tg.charSigned ? "int8" : "uint8"} from "char";\n`;
 	return { source: head + ownShape + tags, ownShape, includedShapes };
 }
 
@@ -435,7 +451,7 @@ function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<stri
 		// user code uses the MS-native alias; do NOT walk into the C struct
 		// internals or we drag implementation details (msStrPayload etc.)
 		// into the emitted MS source and clash with other modules' externs.
-		if (mapped != "") return;
+		if (mapped != "" && !isNamedScalar(t.typedefName)) return;
 		refs.add(t.typedefName);
 		if (declaredElsewhere.has(t.typedefName)) return;
 	}
@@ -571,7 +587,7 @@ test "handle written through a pointer param binds as out" {
 	assert ms.indexOf("mk(out out: H)") >= 0;
 	assert ms.indexOf("mk2(out out: Ptr<S>)") >= 0;
 	assert ms.indexOf("mk3(out out: Ptr<void>)") >= 0;
-	assert ms.indexOf("argv(v: Ptr<cstring> | null)") >= 0;
+	assert ms.indexOf("argv(v: Ptr<Ptr<cchar>> | null)") >= 0;
 	assert ms.indexOf("out h") < 0;
 }
 
@@ -593,7 +609,7 @@ function plainCharPointersAreCString(os: string, cpu: string): boolean {
 	const ms = emitFor(os, cpu, src);
 	return ms.indexOf("function a(): cstring") >= 0
 		&& ms.indexOf("function b(): cstring") >= 0
-		&& ms.indexOf("v: Ptr<cstring> | null") >= 0
+		&& ms.indexOf("c(v: Ptr<Ptr<cchar>> | null)") >= 0
 		&& ms.indexOf("function d(): cstring") >= 0;
 }
 
@@ -647,7 +663,22 @@ test "emit variadic function" {
 
 test "emit type alias" {
 	const ms = translateHeaderModule("typedef unsigned long size_t;", "header.h", [], null, null, targetFor("linux", "x86_64")).source;
-	assert ms.indexOf("type size_t = uint64") >= 0, ms;
+	assert ms.indexOf("extern type size_t: uint64 from \"size_t\"") >= 0, ms;
+}
+
+test "a pointer to size_t, char* or const char* keeps the exact C pointee" {
+	const src = "typedef unsigned long size_t;\ntypedef long ssize_t;\ntypedef struct Node { int v; } Node;\n"
+		+ "ssize_t getline(char **line, size_t *cap, void *file);\nint names(const char **cv, const char *s, char *m);\n"
+		+ "int nodes(Node **out, struct Node **sp);";
+	const ms = translateHeaderModule(src, "header.h", [], null, null, targetFor("linux", "x86_64")).source;
+	assert ms.includes("getline(line: Ptr<Ptr<cchar>> | null, cap: Ptr<size_t> | null, file: Ptr<void> | null): ssize_t;"), ms;
+	assert ms.includes("names(cv: Ptr<cstring> | null, s: cstring, m: cstring)"), ms;
+	assert ms.includes("export extern type cchar: int8 from \"char\";"), ms;
+	assert ms.includes("extern type ssize_t: int64 from \"ssize_t\""), ms;
+	const unsignedChar = translateHeaderModule(src, "header.h", [], null, null, targetFor("android", "arm64")).source;
+	assert unsignedChar.includes("export extern type cchar: uint8 from \"char\";"), unsignedChar;
+	const narrow = translateHeaderModule("typedef unsigned int size_t;\nint f(size_t *n);", "header.h", [], null, null, targetFor("linux", "i386")).source;
+	assert narrow.includes("extern type size_t: uint32 from \"size_t\""), narrow;
 }
 
 test "a long takes the width of the target's long" {

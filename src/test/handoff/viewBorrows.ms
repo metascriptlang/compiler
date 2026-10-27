@@ -176,3 +176,15 @@ test "a Borrow<T> local is a read-only view of a place" {
 	assert refusedWith("const xs: int32[] = [1]; const b: Borrow<int32[]> = xs; const f = (): int32 => b.length as int32; return f();", "cannot be captured"), "closure";
 	assert compiles("const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; const r: Readonly<Span<int32>> = b; return r[0] + b[1];") == "", "a read-only view of the borrowed array";
 }
+
+test "a borrow trigger after a nested routine is found" {
+	const nested = "const noop = (): int32 => 1; function inner(): int32 { return 2; } ";
+	const xs = "let xs: S[] = [{ n: 1, name: \"a\" }];";
+	assert refusedWith(`${nested}${xs} const p = xs[0] as Ptr<S>; for (let i = 0; i < 9; i++) { xs.push({ n: i, name: "b" }); } return p[].n + noop() + inner();`, "which is potentially changed at"), "pointer";
+	assert refusedWith(`${nested}${xs} const sp: Span<S> = xs; xs.push({ n: 2, name: "b" }); return sp[0].n + noop() + inner();`, "is potentially changed at"), "view";
+	assert compiles(`${nested}${xs} return xs[0].n + noop() + inner();`) == "", "no trigger";
+	const actors = "class Box { n: int32 = 0; }\nactor W { total: int32 = 0; run(f: Sendable<() => int32>): void { this.total = this.total + f(); } }\n";
+	const spawn = actors + "function go(w: W): void { const noop = (): int32 => 1; const b = new Box(); b.n = 1; w.run(() => b.n); b.n = 2; }\ngo(new W());";
+	const c = compileToCWithStd(spawn);
+	assert !c.ok && c.error.includes("a send without a reply runs this closure on the actor after this code moves on"), c.ok ? "compiled" : c.error;
+}

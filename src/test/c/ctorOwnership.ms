@@ -42,8 +42,8 @@ test "ctorOwnership: a constructor moves its arguments into the fresh fields wit
 	assert body != "";
 	assert !body.contains("Incref");
 	assert !body.contains("oldField");
-	assert occurrences(body, "msPtrWasMoved(left)") == 1;
-	assert occurrences(body, "msPtrWasMoved(right)") == 1;
+	assert occurrences(body, "msPtrWasMoved(left_p1)") == 1;
+	assert occurrences(body, "msPtrWasMoved(right_p2)") == 1;
 }
 
 test "ctorOwnership: the caller of a constructor that cannot raise carries no error check" {
@@ -90,4 +90,15 @@ test "ctorOwnership: an argument still used after the new is copied into the con
 	const result = compileToC(FIELDS_SRC);
 	assert result.ok, result.error;
 	assert occurrences(routineBody(result.value, "run"), "msIncref(") == 4;
+}
+
+test "ctorOwnership: a parent constructor call passes the child's receiver by its declared C name" {
+	for (const shape of [["class B extends A { }", "new B()"], ["class B extends A { constructor(n: int32) { super(n); } }", "new B(2)"]]) {
+		const child = shape[0];
+		const result = compileToC(`class A { n: int32; constructor(n: int32 = 1) { this.n = n; } }\n${child}\nconsole.log(String(${shape[1]}.n));\n`);
+		assert result.ok, result.error;
+		const body = initBody(result.value, "B");
+		assert body.contains("*)this_p0"), child + ": " + body;
+		assert !body.contains("*)this)"), child + ": " + body;
+	}
 }

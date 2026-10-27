@@ -2,7 +2,10 @@ import { Token, TokenKind, tokenKindToString } from "../../lexer/token";
 import { lex } from "../../lexer/lexer";
 
 function isCloser(kind: TokenKind): boolean {
-	return kind == TokenKind.RParen || kind == TokenKind.RBracket || kind == TokenKind.RBrace;
+	return match (kind) {
+		TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace => true,
+		_ => false,
+	};
 }
 
 function nextSignificant(tokens: Token[], from: int32): Token | null {
@@ -47,8 +50,10 @@ function sameToken(a: Token, b: Token): boolean {
 function greaterUnits(tokens: Token[]): Token[] {
 	const out: Token[] = [];
 	for (const t of tokens) {
-		const joined = t.kind == TokenKind.GtGt || t.kind == TokenKind.GtGtGt || t.kind == TokenKind.GtEq
-			|| t.kind == TokenKind.GtGtEq || t.kind == TokenKind.GtGtGtEq;
+		const joined = match (t.kind) {
+			TokenKind.GtGt | TokenKind.GtGtGt | TokenKind.GtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
+			_ => false,
+		};
 		if (!joined) {
 			out.push(t);
 			continue;
@@ -76,18 +81,15 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
 	const a = greaterUnits(significantTokens(before.value));
 	const b = greaterUnits(significantTokens(after.value));
-	let i = 0;
-	let j = 0;
-	while (i < a.length && j < b.length) {
-		if (!sameToken(a[i], b[j])) {
-			const kind = a[i].value == b[j].value;
-			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
+	const shared = Math.min(a.length, b.length);
+	for (let i = 0; i < shared; i += 1) {
+		if (!sameToken(a[i], b[i])) {
+			const kind = a[i].value == b[i].value;
+			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[i], kind) + " of the output");
 		}
-		i += 1;
-		j += 1;
 	}
-	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
-	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
+	if (shared < a.length) return Result.err("fmt drops " + describe(a[shared], false) + " and everything after it");
+	if (shared < b.length) return Result.err("fmt adds " + describe(b[shared], false) + " of the output at the end");
 	return Result.ok(null);
 }
 

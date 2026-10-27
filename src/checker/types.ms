@@ -4,9 +4,7 @@
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty } from "../codegen/c/names";
-import { resolveRuntimeDir } from "../utils/path";
 import { isAssignable } from "./compat";
-import { join, normalize } from "std/fs/path";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -1115,8 +1113,14 @@ function duLayoutName(t: Type | null): string {
 		TypeKind.BooleanLiteral => "boolean",
 		TypeKind.NumberLiteral => duLayoutName(numberLiteralBase(t)),
 		TypeKind.EnumLiteral => t.typeName,
-		_ => typeDisplayName(t),
+		_ => duDeclaredLayoutName(t),
 	};
+}
+
+function duDeclaredLayoutName(t: Type): string {
+	const named = t.kind == TypeKind.Ref && t.typeReturn != null && t.sym == null ? t.typeReturn : t;
+	if (named.sym == null) return typeDisplayName(t);
+	return typeDisplayName(t) + "@" + nominalTypeKey(named);
 }
 
 // C lays each variant's fields sequentially inside the overlapping union, so a
@@ -1774,15 +1778,7 @@ export function isNodeGraphType(t: Type | null): boolean {
 	}
 	if (base.kind == TypeKind.Array) return isNodeGraphType(base.typeReturn);
 	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
-	return isMetaGraphRoot(base, "Node");
-}
-
-let _metaGraphModule = "";
-
-function isMetaGraphRoot(t: Type, name: string): boolean {
-	if (t.sym == null || t.sym.name != name) return false;
-	if (_metaGraphModule == "") _metaGraphModule = normalize(join(resolveRuntimeDir(), "std/meta/node.ms"));
-	return normalize(t.sym.modulePath) == _metaGraphModule;
+	return base.sym != null && base.sym.builtinKind == "MetaNode";
 }
 
 export function propagateReadonlyView(t: Type | null): Type {
@@ -3466,10 +3462,11 @@ function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
 		_heldBySym.set(slot.sym, made);
 		return made;
 	}
-	const known = _heldByName.get(slot.typeName);
+	const key = "{" + slot.typeNames.join(",") + "}";
+	const known = _heldByName.get(key);
 	if (known != null || !create) return known;
 	const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
-	_heldByName.set(slot.typeName, made);
+	_heldByName.set(key, made);
 	return made;
 }
 
@@ -4601,6 +4598,21 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 	}
 }
 
+function genericBaseSym(t: Type): Symbol | null {
+	const base = t.kind == TypeKind.GenericInstance && t.typeExtra != null ? unwrapRefBase(t.typeExtra) : t;
+	return base.sym;
+}
+
+// Affine and plain Promises share a typeName and carry no declaring symbol, so
+// the spelling only decides between types that have none.
+function sameGenericBase(a: Type, b: Type): boolean {
+	if (a.typeName != b.typeName) return false;
+	const sa = genericBaseSym(a);
+	const sb = genericBaseSym(b);
+	if (sa == null || sb == null) return true;
+	return sa == sb || (sa.modulePath == sb.modulePath && sa.name == sb.name && sa.disamb == sb.disamb);
+}
+
 let _unifyCount: float64 = 0;
 export function unifyTypeProfile(): float64[] { return [_unifyCount]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
@@ -4666,7 +4678,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.GenericInstance) {
 		// Affine and plain Promises share typeName "Promise" — their distinction
 		// is in flag bits, not in the name. Simple equality covers both.
-		const namesMatch = formal.typeName == concrete.typeName;
+		const namesMatch = sameGenericBase(formal, concrete);
 		if (!namesMatch) {
 			const aliased = peelTransparentInstance(concrete);
 			if (aliased != concrete) {
@@ -4697,7 +4709,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.GenericInstance) {
 		// Struct("Map") with generic params vs GenericInstance("Map", [string, string])
 		// Unify by matching formal's fields against the instantiated body's fields
-		if (formal.typeName == concrete.typeName && concrete.typeReturn != null) {
+		if (sameGenericBase(formal, concrete) && concrete.typeReturn != null) {
 			const body = unwrapRef(concrete.typeReturn);
 			if (body.kind == TypeKind.Struct) {
 				const limit = formal.typeChildren.length < body.typeChildren.length ? formal.typeChildren.length : body.typeChildren.length;

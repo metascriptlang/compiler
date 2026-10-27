@@ -1,6 +1,7 @@
 // Node wire metadata keys — the ONE list shared by the wire writer
 // (nodeToASTLiteral in expand.ms) and the child-traversal reader (the
-// msNodeChildCount/At bridges in hostTable.ms). resolvedSym and nodeType
+// msNodeChildCount/At bridges in hostTable.ms), and the checker's Node literal
+// key check (engineNodeHasVirtualKey). resolvedSym and nodeType
 // are node-shaped on the wire (Object with a numeric "kind"), so telling
 // children from metadata rests entirely on both sides using this predicate.
 // Adding a metadata key to nodeToASTLiteral without adding it here would
@@ -10,5 +11,6 @@ export function isNodeWireMetaField(name: string): boolean {
 	return name == "kind" || name == "line" || name == "column"
 		|| name == "endLine" || name == "endColumn"
 		|| name == "nodeType" || name == "resolvedSym" || name == "symHandle" || name == "typeHandle" || name == "gensym"
-		|| name == "declSymHandle" || name == "paramSymHandles" || name == "argOrigin";
+		|| name == "declSymHandle" || name == "paramSymHandles" || name == "argOrigin"
+		|| name == "boundTypeExpr" || name == "boundTypeExprs";
 }

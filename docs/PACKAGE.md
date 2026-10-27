@@ -59,6 +59,13 @@ Measured on exactly this shape (plus a `file:` dep): `msc build` → `Built 11 m
 | `lsp` | the language server only | see below |
 | `package` / `deps` / `devDeps` | the package manager | see below |
 
+### Compiler cache
+
+Where build artifacts are cached, what other worktrees and jobs reuse, the variables that move
+or disable the cache, and its measured limits: [BUILD-CACHE.md](BUILD-CACHE.md). `build.ms` has
+no cache field yet. Package downloads under `~/.metascript/cache/extracted` are the package
+manager's and are not affected by those variables.
+
 ### `cc` — C compiler and flags
 
 `cc.compiler`, `cc.flags`, `cc.linkFlags` apply to every build; `cc.targets` keys on `"<os>-<cpu>"`

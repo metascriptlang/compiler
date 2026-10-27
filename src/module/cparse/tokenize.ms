@@ -55,8 +55,7 @@ function advance(s: ScanState): void {
 }
 
 function skipN(s: ScanState, n: int32): void {
-	let i = 0;
-	while (i < n) { advance(s); i = i + 1; }
+	for (let i = 0; i < n; i += 1) advance(s);
 }
 
 function isSpace(ch: int32): boolean {
@@ -191,14 +190,14 @@ function readEscapedChar(s: ScanState): int32 {
 	// Hex
 	if (ch == "x".code) {
 		advance(s);
-		if (fromHex(peek(s)) < 0) {
+		let h = fromHex(peek(s));
+		if (h == null) {
 			s.diags.push(makeDiag(DiagSeverity.Error, s.file, s.line, s.col, "invalid hex escape sequence"));
 			return 0;
 		}
 		let c: int32 = 0;
-		let h = fromHex(peek(s));
-		while (h >= 0) {
-			c = (c << 4) + (h as int32);
+		while (h != null) {
+			c = (c << 4) + h;
 			advance(s);
 			h = fromHex(peek(s));
 		}
@@ -351,7 +350,7 @@ function toLower(ch: int32): int32 {
 	return ch;
 }
 
-export function convertPPInt(tok: CToken): boolean {
+function convertPPInt(tok: CToken): boolean {
 	const s = tok.stringVal;
 	let p = 0;
 	const len = s.byteLength;
@@ -359,7 +358,7 @@ export function convertPPInt(tok: CToken): boolean {
 	let base = 10;
 	if (len >= 2 && s.byteAt(0) == "0".code) {
 		const c1 = toLower(s.byteAt(1));
-		if (c1 == "x".code && len >= 3 && fromHex(s.byteAt(2)) >= 0) {
+		if (c1 == "x".code && len >= 3 && fromHex(s.byteAt(2)) != null) {
 			p = 2; base = 16;
 		} else if (c1 == "b".code && len >= 3 && (s.byteAt(2) == "0".code || s.byteAt(2) == "1".code)) {
 			p = 2; base = 2;
@@ -373,7 +372,7 @@ export function convertPPInt(tok: CToken): boolean {
 	while (p < len) {
 		const ch = s.byteAt(p);
 		let digit = -1;
-		if (base == 16) { digit = fromHex(ch); }
+		if (base == 16) { digit = fromHex(ch) ?? -1; }
 		else if (base == 2) {
 			if (ch == "0".code) digit = 0;
 			else if (ch == "1".code) digit = 1;
@@ -432,7 +431,7 @@ export function convertPPInt(tok: CToken): boolean {
 	return true;
 }
 
-export function convertPPNumber(tok: CToken, diags: Diagnostic[]): void {
+function convertPPNumber(tok: CToken, diags: Diagnostic[]): void {
 	if (convertPPInt(tok)) return;
 
 	const val = tok.stringVal.parseFloat();
@@ -622,14 +621,6 @@ export function tokenizeFile(source: string, path: string): TokenizeResult {
 
 export function equal(tok: CToken, str: string): boolean {
 	return tok.stringVal == str;
-}
-
-export function skipTok(tok: CToken, str: string, diags: Diagnostic[]): CToken {
-	if (tok.stringVal != str) {
-		diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col,
-			`expected '${str}'`));
-	}
-	return tok.next;
 }
 
 export function consume(tok: CToken, str: string): boolean {

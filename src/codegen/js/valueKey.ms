@@ -64,7 +64,7 @@ function keyFnName(gen: JSGenerator, shape: Type): string {
 		const part = partExpr(gen, shape.typeReturn, "v[j]");
 		const body = "let key = \"[\"; for (let j = 0; j < " + shape.typeValue.toString()
 			+ "; j++) { key += (j > 0 ? \",\" : \"\") + " + part + "; } return key + \"]\";";
-		gen.staticSlots.push("function " + name + "(v) { if (v === null || v === undefined) return \"u\"; const rt = msValueKeys(); " + body + " }\n");
+		gen.staticSlots.push("function " + name + "(v) { if (v === null || v === void 0) return \"u\"; const rt = msValueKeys(); " + body + " }\n");
 		return name;
 	}
 	let parts = "";
@@ -77,14 +77,14 @@ function keyFnName(gen: JSGenerator, shape: Type): string {
 	const open = shape.kind == TypeKind.Tuple ? "\"[\"" : "\"{\"";
 	const close = shape.kind == TypeKind.Tuple ? "\"]\"" : "\"}\"";
 	const body = parts == "" ? open + " + " + close : open + " + " + parts + " + " + close;
-	gen.staticSlots.push("function " + name + "(v) { if (v === null || v === undefined) return \"u\"; const rt = msValueKeys(); return " + body + "; }\n");
+	gen.staticSlots.push("function " + name + "(v) { if (v === null || v === void 0) return \"u\"; const rt = msValueKeys(); return " + body + "; }\n");
 	return name;
 }
 
 // One runtime per JS realm, shared by every module and every emission mode.
 const RUNTIME = "function msValueKeys() {\n"
 	+ "  return globalThis.__msValueKeys || (globalThis.__msValueKeys = (() => {\n"
-	+ "    const ids = new WeakMap();\n"
+	+ "    const ids = new globalThis.WeakMap();\n"
 	+ "    let nextId = 0;\n"
 	+ "    let nextNaN = 0;\n"
 	+ "    function prim(v) {\n"
@@ -98,41 +98,41 @@ const RUNTIME = "function msValueKeys() {\n"
 	+ "        case \"function\": {\n"
 	+ "          if (v === null) return \"u\";\n"
 	+ "          let id = ids.get(v);\n"
-	+ "          if (id === undefined) { id = ++nextId; ids.set(v, id); }\n"
+	+ "          if (id === void 0) { id = ++nextId; ids.set(v, id); }\n"
 	+ "          return \"o\" + id;\n"
 	+ "        }\n"
-	+ "        default: return \"x\" + String(v);\n"
+	+ "        default: return \"x\" + globalThis.String(v);\n"
 	+ "      }\n"
 	+ "    }\n"
 	+ "    class KeyedStore {\n"
-	+ "      constructor(key, copy, hash, eq) { this.c = copy; this.h = hash || key; this.q = eq || (hash ? (x, y) => key(x) === key(y) : null); this.m = new Map(); this.b = new Map(); this.n = 0; }\n"
+	+ "      constructor(key, copy, hash, eq) { this.c = copy; this.h = hash || key; this.q = eq || (hash ? (x, y) => key(x) === key(y) : null); this.m = new globalThis.Map(); this.b = new globalThis.Map(); this.n = 0; }\n"
 	+ "      get size() { return this.m.size; }\n"
 	+ "      keyOf(id) { return this.m.get(id); }\n"
-	+ "      find(a) { const ids = this.b.get(this.h(a)); if (ids !== undefined) for (const id of ids) if (this.q === null || this.q(this.keyOf(id), a)) return id; return undefined; }\n"
-	+ "      insert(a, entry) { const id = ++this.n; this.m.set(id, entry); const h = this.h(a); const ids = this.b.get(h); if (ids === undefined) this.b.set(h, [id]); else ids.push(id); }\n"
-	+ "      delete(a) { const h = this.h(a); const ids = this.b.get(h); const id = this.find(a); if (id === undefined) return false; this.m.delete(id); ids.splice(ids.indexOf(id), 1); if (ids.length === 0) this.b.delete(h); return true; }\n"
+	+ "      find(a) { const ids = this.b.get(this.h(a)); if (ids !== void 0) for (const id of ids) if (this.q === null || this.q(this.keyOf(id), a)) return id; return void 0; }\n"
+	+ "      insert(a, entry) { const id = ++this.n; this.m.set(id, entry); const h = this.h(a); const ids = this.b.get(h); if (ids === void 0) this.b.set(h, [id]); else ids.push(id); }\n"
+	+ "      delete(a) { const h = this.h(a); const ids = this.b.get(h); const id = this.find(a); if (id === void 0) return false; this.m.delete(id); ids.splice(ids.indexOf(id), 1); if (ids.length === 0) this.b.delete(h); return true; }\n"
 	+ "      clear() { this.m.clear(); this.b.clear(); }\n"
 	+ "    }\n"
 	+ "    class ValueMap extends KeyedStore {\n"
 	+ "      constructor(key, copy, hash, eq, init) { super(key, copy, hash, eq); if (init) for (const [a, b] of init) this.set(a, b); }\n"
 	+ "      keyOf(id) { return this.m.get(id)[0]; }\n"
-	+ "      set(a, b) { const id = this.find(a); if (id !== undefined) this.m.get(id)[1] = b; else this.insert(a, [this.c ? this.c(a) : a, b]); return this; }\n"
-	+ "      get(a) { const id = this.find(a); return id === undefined ? undefined : this.m.get(id)[1]; }\n"
-	+ "      has(a) { return this.find(a) !== undefined; }\n"
+	+ "      set(a, b) { const id = this.find(a); if (id !== void 0) this.m.get(id)[1] = b; else this.insert(a, [this.c ? this.c(a) : a, b]); return this; }\n"
+	+ "      get(a) { const id = this.find(a); return id === void 0 ? void 0 : this.m.get(id)[1]; }\n"
+	+ "      has(a) { return this.find(a) !== void 0; }\n"
 	+ "      *keys() { for (const e of this.m.values()) yield e[0]; }\n"
 	+ "      *values() { for (const e of this.m.values()) yield e[1]; }\n"
 	+ "      *entries() { for (const e of this.m.values()) yield [e[0], e[1]]; }\n"
-	+ "      [Symbol.iterator]() { return this.entries(); }\n"
+	+ "      [globalThis.Symbol.iterator]() { return this.entries(); }\n"
 	+ "      forEach(f, self) { for (const e of this.m.values()) f.call(self, e[1], e[0], this); }\n"
 	+ "    }\n"
 	+ "    class ValueSet extends KeyedStore {\n"
 	+ "      constructor(key, copy, hash, eq, init) { super(key, copy, hash, eq); if (init) for (const a of init) this.add(a); }\n"
-	+ "      add(a) { if (this.find(a) === undefined) this.insert(a, this.c ? this.c(a) : a); return this; }\n"
-	+ "      has(a) { return this.find(a) !== undefined; }\n"
+	+ "      add(a) { if (this.find(a) === void 0) this.insert(a, this.c ? this.c(a) : a); return this; }\n"
+	+ "      has(a) { return this.find(a) !== void 0; }\n"
 	+ "      *values() { yield* this.m.values(); }\n"
 	+ "      keys() { return this.values(); }\n"
 	+ "      *entries() { for (const a of this.m.values()) yield [a, a]; }\n"
-	+ "      [Symbol.iterator]() { return this.values(); }\n"
+	+ "      [globalThis.Symbol.iterator]() { return this.values(); }\n"
 	+ "      forEach(f, self) { for (const a of this.m.values()) f.call(self, a, a, this); }\n"
 	+ "    }\n"
 	+ "    return { prim, ValueMap, ValueSet };\n"
@@ -159,7 +159,7 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const keyOps = node.flags.has(NodeFlag.KeyOps);
 	const init = keyOps || d.newArguments.length > 0 ? d.newArguments[0] : null;
 	if (shape == null) {
-		emit(gen, "new " + (isMap ? "Map" : "Set") + "(");
+		emit(gen, "new " + (isMap ? "globalThis.Map" : "globalThis.Set") + "(");
 		if (init != null) emitNode(gen, init);
 		emit(gen, ")");
 		return true;

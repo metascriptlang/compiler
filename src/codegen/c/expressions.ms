@@ -17,7 +17,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
 	isIndirectRef,
 } from "./context";
-import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
+import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
@@ -420,10 +420,18 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<
 	return arg;
 }
 
+// An indirect parameter is already a pointer, so it passes as the C name its declaration was given.
+function indirectParamCName(g: CGen, p: CProc, id: Readonly<Node>): string {
+	const name = (id.data as IdentifierData).name;
+	const pos = p.params.lastIndexOf(name);
+	const cName = id.resolvedSym != null ? lookupLocalSymName(p, id.resolvedSym) : pos >= 0 ? paramCName(name, pos) : "";
+	if (cName == "") addCGenError(g, `internal: indirect parameter '${name}' has no C name in '${p.name}' at ${id.location.line}:${id.location.column}`, id.location.line, id.location.column);
+	return cName;
+}
+
 export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Readonly<Type>): string {
 	if (argNode.kind == NodeKind.Identifier && isIndirectRef(p, argNode.resolvedSym, (argNode.data as IdentifierData).name)) {
-		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
-		return safeName((argNode.data as IdentifierData).name);
+		return indirectParamCName(g, p, argNode);
 	}
 	// Not indirect: take address — use safeAddrOf to handle bare compound literals
 	return safeAddrOf(g, p, arg, argNode, paramType);
@@ -1503,7 +1511,11 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 				}
 				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
 			}
-			let argList = `(${parentName}*)this`;
+			if (p.params.length == 0) {
+				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				return;
+			}
+			let argList = `(${parentName}*)${paramCName(p.params[0], 0)}`;
 			let ai = 0;
 			while (ai < cd.arguments.length) {
 				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
@@ -2199,8 +2211,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
 		if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
-			// Indirect param: already a pointer — reference pattern returns raw snippet
-			ctx.results.push(safeName((d.expr.data as IdentifierData).name));
+			ctx.results.push(indirectParamCName(g, p, d.expr));
 		} else {
 			ctx.results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
 		}
@@ -2233,23 +2244,16 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		const convUnion = matchUnionBehindInstance(d.convType);
 		if (isTagCarriedUnion(convUnion)) {
 			const srcType = d.convExpr.nodeType;
-			let vi = 0;
-			// Checker-stamped slot wins: union variants are frequently anonymous,
-			// so re-deriving one by type NAME here silently found nothing and
-			// emitted the bare variant struct.
 			const stampedSlot = node.variantSlot;
-			if (stampedSlot > 0) {
-				vi = stampedSlot - 1;
-			} else {
-				for (const child of convUnion.typeChildren) {
-					if (srcType != null && srcType.kind == TypeKind.Struct && child.kind == TypeKind.Struct
-						&& child.typeName == srcType.typeName) break;
-					vi += 1;
-				}
+			if (stampedSlot > convUnion.typeChildren.length) {
+				addCGenError(g, `internal: variant slot ${stampedSlot} is past the ${convUnion.typeChildren.length} arms of union '${typeDisplayNameUnprofiled(convUnion)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
-			if (vi < convUnion.typeChildren.length) {
-				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
+			if (stampedSlot > 0) {
+				ctx.results.push(`((${targetC}){._tag=${stampedSlot - 1}, .v${stampedSlot - 1}=${inner}})`);
 				return;
+			}
+			if (srcType != null && srcType.kind == TypeKind.Struct) {
+				addCGenError(g, `internal: struct/class '${typeDisplayNameUnprofiled(srcType)}' widened to union '${typeDisplayNameUnprofiled(convUnion)}' without a variant slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			ctx.results.push(inner);
 			return;

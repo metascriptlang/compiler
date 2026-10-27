@@ -11,12 +11,10 @@ import { TaDurability } from "./revision";
 
 // ===== File Entry =====
 
-export class TaFileEntry {
+class TaFileEntry {
 	filePath: string;
 	source: string;
-	// A content hash, not an index: it carries taHashString's full 64-bit range
-	// and must NOT be narrowed with the fileId/index fields around it.
-	sourceHash: number;
+	sourceHash: int64;
 	fileId: int32;
 	durability: TaDurability;
 }
@@ -45,12 +43,7 @@ function findByPath(store: TaFileInputStore, filePath: string): int32 {
 }
 
 function findByFileId(store: TaFileInputStore, fileId: int32): int32 {
-	// fileId === array index for sequentially assigned IDs
-	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId == fileId) return fileId;
-	// Fallback linear scan for non-sequential IDs
-	for (let i = 0; i < store.files.length; i = i + 1) {
-		if (store.files[i].fileId == fileId) return i;
-	}
+	if (fileId >= 0 && fileId < store.files.length) return fileId;
 	return -1;
 }
 
@@ -63,7 +56,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		// Existing file — check if content changed
 		if (store.files[idx].source == source) return false;
 		store.files[idx].source = source;
-		store.files[idx].sourceHash = taHashString(source) as number;
+		store.files[idx].sourceHash = taHashString(source);
 		return true;
 	}
 	// New file
@@ -72,7 +65,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const entry: TaFileEntry = {
 		filePath,
 		source,
-		sourceHash: taHashString(source) as number,
+		sourceHash: taHashString(source),
 		fileId,
 		durability: TaDurability.Low,
 	};
@@ -87,10 +80,9 @@ export function getFileText(store: TaFileInputStore, fileId: int32): string {
 	return store.files[idx].source;
 }
 
-// Returns the content hash — see TaFileEntry.sourceHash, deliberately not int32.
-export function getFileHash(store: TaFileInputStore, fileId: int32): number {
+export function getFileHash(store: TaFileInputStore, fileId: int32): int64 | null {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return 0;
+	if (idx < 0) return null;
 	return store.files[idx].sourceHash;
 }
 
@@ -200,6 +192,14 @@ test "getFilePath reverse lookup" {
 	const id = getFileId(store, "/a/b.ms");
 	assert getFilePath(store, id) == "/a/b.ms";
 	assert getFilePath(store, 999) == "";
+}
+
+test "getFileHash of an unknown id is null, not the hash of an empty file" {
+	const store = createFileInputStore();
+	setFileText(store, "empty.ms", "");
+	assert getFileHash(store, 0) != null;
+	assert getFileHash(store, 1) == null;
+	assert getFileHash(store, -1) == null;
 }
 
 test "getFileHash nonzero" {

@@ -7,9 +7,7 @@ import { ParserState } from "../cursor";
 type NodeResult = Result<Node, string>;
 type BlockParserFn = (state: ParserState) => NodeResult;
 type ExprParserFn = (state: ParserState) => NodeResult;
-type StmtParserFn = (state: ParserState) => NodeResult;
 type StateProgramParserFn = (state: ParserState) => NodeResult;
-type PatternParserFn = (state: ParserState) => NodeResult;
 
 let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Block parser not registered");
@@ -34,10 +32,6 @@ export function registerStmtExprParser(fn: ExprParserFn): void {
 export function registerStateProgramParser(fn: StateProgramParserFn): void {
 	stateProgramParserFn = fn;
 }
-
-export function registerStmtParser(fn: StmtParserFn): void {}
-
-export function registerPatternParsers(objectFn: PatternParserFn, arrayFn: PatternParserFn): void {}
 
 export function callBlockParser(state: ParserState): NodeResult {
 	return blockParserFn(state);

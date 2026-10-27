@@ -147,20 +147,13 @@ export function mangleSeparatedProperty(name: string): string {
 	return kept.indexOf("__") >= 0 ? escapedPropertyName(name) : kept;
 }
 
-// ===== Character Ordinal =====
-// Mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
-// Prevents clashes with Z (path sep) and O (dot) special meanings.
+// ===== Byte Escape =====
+// `U` and two uppercase hex digits: a code of fixed width that no pass-through
+// byte (lowercase, digit) or marker (Z, O, M, S, P) can continue, so a decoder
+// reads the encoded path back one way.
 
-function charOrd(ch: string): string {
-	return match (ch) {
-		"A" => "65", "B" => "66", "C" => "67", "D" => "68", "E" => "69",
-		"F" => "70", "G" => "71", "H" => "72", "I" => "73", "J" => "74",
-		"K" => "75", "L" => "76", "M" => "77", "N" => "78", "O" => "79",
-		"P" => "80", "Q" => "81", "R" => "82", "S" => "83", "T" => "84",
-		"U" => "85", "V" => "86", "W" => "87", "X" => "88", "Y" => "89",
-		"Z" => "90", "_" => "95", "-" => "45", " " => "32",
-		_ => "63",
-	};
+function byteEscape(b: int32): string {
+	return "U" + b.toString(16).toUpperCase().padStart(2, "0");
 }
 
 function isLowerOrDigit(ch: string): boolean {
@@ -175,7 +168,7 @@ function isLowerOrDigit(ch: string): boolean {
 
 // ===== Module Name Mangling =====
 // a-z, 0-9 pass through; / → Z; . → O;
-// everything else (A-Z, _, special) → ord(c) as decimal string.
+// every other byte (A-Z, _, special, non-ASCII) → U + two hex digits.
 
 export interface ModuleNameRoots {
 	compiler: string;
@@ -245,14 +238,12 @@ function encodeModulePath(modulePath: string): string {
 		} else if (ch == ".") {
 			result += "O";
 		} else {
-			result += charOrd(ch);
+			result += byteEscape(modulePath.byteAt(i));
 		}
 	}
-	// Ensure the mangled name starts with a letter so it is a valid C identifier
-	// when used as the first token (e.g. in `<modname>__Init000`). Windows
-	// absolute paths begin with a drive letter (`C:` → `67` + wildcard), and
-	// uppercase-first relative paths (`MyMod` → `77y...`) start with a digit.
-	// POSIX absolute paths avoid this by chance (leading `/` → `Z`).
+	// A name that starts with a digit gets M, a marker no other output letter
+	// produces, so the name is a valid C identifier as the first token (e.g. in
+	// `<modname>__Init000`).
 	if (result.length > 0 && result.charAt(0) >= "0" && result.charAt(0) <= "9") {
 		result = "M" + result;
 	}
@@ -291,16 +282,27 @@ export function ownedGeneratedName(sym: Readonly<Symbol> | null): boolean {
 	return sym != null && sym.modulePath != "";
 }
 
+function identitySuffix(sym: Readonly<Symbol>): string {
+	if (hasFlag(sym, SymbolFlag.Anon)) return `_c${sym.disamb}`;
+	return sym.disamb > 0 ? `_u${sym.disamb}` : "";
+}
+
+function ownedTypeName(roots: Readonly<ModuleNameRoots>, sym: Readonly<Symbol>, name: string): string {
+	return mangleQualified(name, mangleModuleName(roots, sym.modulePath)) + identitySuffix(sym);
+}
+
 export function mangledTypeName(roots: Readonly<ModuleNameRoots>, sym: Readonly<Symbol> | null, name: string): string {
 	if (sym != null) {
 		const early = symExternOrImportName(sym, name);
 		if (early != "") return early;
 	}
-	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangleQualified(name, mangleModuleName(roots, sym!.modulePath)) : mangle(name);
-	if (sym != null && sym.modulePath != "" && sym.instantiatedFrom == null) {
-		return mangleQualified(name, mangleModuleName(roots, sym.modulePath));
-	}
+	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? ownedTypeName(roots, sym!, name) : mangle(name);
+	if (sym != null && sym.modulePath != "" && sym.instantiatedFrom == null) return ownedTypeName(roots, sym, name);
 	return mangle(name);
+}
+
+export function paramCName(name: string, position: number): string {
+	return `${mangle(name)}_p${position}`;
 }
 
 export function classInitCName(classCName: string): string {
@@ -421,8 +423,7 @@ export function mangledGlobalName(roots: Readonly<ModuleNameRoots>, sym: Readonl
 		? `__static${sym.location.line.toString()}_${sym.location.column.toString()}`
 		: "";
 	if (sym != null && sym.modulePath != "") {
-		const ordinal = sym.disamb > 0 ? `_u${sym.disamb}` : "";
-		return mangleQualified(baseName, mangleModuleName(roots, sym.modulePath)) + ordinal + site;
+		return mangleQualified(baseName, mangleModuleName(roots, sym.modulePath)) + identitySuffix(sym) + site;
 	}
 	return safeName(baseName) + site;
 }
@@ -677,26 +678,42 @@ test "keyword gets suffix" {
 	assert safeName("void") == "void_";
 }
 
+test "a parameter name carries its position, so no runtime C name or keyword is one" {
+	assert paramCName("msPrintln", 0) == "msPrintln_p0";
+	assert paramCName("int", 2) == "int_p2";
+	assert paramCName("$a", 1) == "dollara__p1";
+}
+
 test "simple lowercase path" { assert mangleModuleName(buildModuleNameRoots(), "mymod") == "mymod"; }
 
 test "path separators become Z" { assert mangleModuleName(buildModuleNameRoots(), "src/codegen/c") == "srcZcodegenZc"; }
 
 test "dots become O" { assert mangleModuleName(buildModuleNameRoots(), "foo.bar") == "fooObar"; }
 
-test "uppercase becomes ordinal" {
-	assert mangleModuleName(buildModuleNameRoots(), "MyClass") == "M77y67lass";
-	assert mangleModuleName(buildModuleNameRoots(), "AB") == "M6566";
+test "uppercase becomes a hex escape" {
+	assert mangleModuleName(buildModuleNameRoots(), "MyClass") == "U4DyU43lass";
+	assert mangleModuleName(buildModuleNameRoots(), "AB") == "U41U42";
 }
 
-test "windows drive letter does not produce digit-leading identifier" {
-	// `C:` → `67` + wildcard — without guard this yields `6763Z…`, invalid as C ident.
-	const out = mangleModuleName(buildModuleNameRoots(), "C:/Users/foo/mod.cms");
-	assert out.charAt(0) == "M";
+test "a digit-leading path gets the M marker" {
+	assert mangleModuleName(buildModuleNameRoots(), "81") == "M81";
 }
 
-test "underscore becomes ordinal" { assert mangleModuleName(buildModuleNameRoots(), "my_mod") == "my95mod"; }
+test "windows drive letter keeps a letter first" {
+	assert mangleModuleName(buildModuleNameRoots(), "C:/Users/foo/mod.cms") == "U43U3AZU55sersZfooZmodOcms";
+}
 
-test "full path with mixed case" { assert mangleModuleName(buildModuleNameRoots(), "src/codegen/MyGen") == "srcZcodegenZ77y71en"; }
+test "underscore becomes a hex escape" { assert mangleModuleName(buildModuleNameRoots(), "my_mod") == "myU5Fmod"; }
+
+test "full path with mixed case" { assert mangleModuleName(buildModuleNameRoots(), "src/codegen/MyGen") == "srcZcodegenZU4DyU47en"; }
+
+test "two paths never share a module name" {
+	assert mangleModuleName(buildModuleNameRoots(), "a_b") != mangleModuleName(buildModuleNameRoots(), "a95b");
+	assert mangleModuleName(buildModuleNameRoots(), "Q") != mangleModuleName(buildModuleNameRoots(), "81");
+	assert mangleModuleName(buildModuleNameRoots(), "Z") != mangleModuleName(buildModuleNameRoots(), "/");
+	assert mangleModuleName(buildModuleNameRoots(), "U41") != mangleModuleName(buildModuleNameRoots(), "A");
+	assert mangleModuleName(buildModuleNameRoots(), "é") != mangleModuleName(buildModuleNameRoots(), "?");
+}
 
 test "a module name is spelled from its root, so a std module and a same-named project module stay apart" {
 	const roots: ModuleNameRoots = { compiler: "/msc", packages: "/pkgs", project: "/proj", uniqueNames: new HashMap<string, string>() };

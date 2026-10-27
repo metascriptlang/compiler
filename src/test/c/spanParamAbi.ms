@@ -24,20 +24,20 @@ console.log(sumLocal(v) + sumPub(v) + sumPts(pts, 1) + sumPtsPub(pts));
 test "a module-local Span parameter is a data pointer and a length" {
 	const c = compileToC(SRC);
 	assert c.ok;
-	assert lineOf(c.value, "sumLocal").contains("(int64_t* xsData_0, int64_t xsLen_0)");
+	assert lineOf(c.value, "sumLocal").contains("(int64_t* xs_p0Data_0, int64_t xs_p0Len_0)");
 }
 
 test "an exported Span parameter is a data pointer and a length" {
 	const c = compileToC(SRC);
 	assert c.ok;
-	assert lineOf(c.value, "sumPub").contains("(int64_t* xsData_0, int64_t xsLen_0)");
+	assert lineOf(c.value, "sumPub").contains("(int64_t* xs_p0Data_0, int64_t xs_p0Len_0)");
 }
 
 test "a struct-element Span parameter is a data pointer and a length" {
 	const c = compileToC(SRC);
 	assert c.ok;
-	assert lineOf(c.value, "sumPts").contains("* psData_0, int64_t psLen_0, int32_t k)");
-	assert lineOf(c.value, "sumPtsPub").contains("* psData_0, int64_t psLen_0)");
+	assert lineOf(c.value, "sumPts").contains("* ps_p0Data_0, int64_t ps_p0Len_0, int32_t k_p1)");
+	assert lineOf(c.value, "sumPtsPub").contains("* ps_p0Data_0, int64_t ps_p0Len_0)");
 }
 
 test "no function takes a pointer to a span struct" {

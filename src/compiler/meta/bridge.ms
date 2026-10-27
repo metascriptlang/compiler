@@ -1672,6 +1672,29 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 	return valueToTypedNode(val, null, objHeap, arrHeap, fallbackLoc);
 }
 
+function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
+	const operand = valueToNode(val, objHeap, arrHeap, loc);
+	if (operand.nodeType == null) throw new Error("internal: a quote's type operand reached the wire without its Type");
+	operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+	return operand;
+}
+
+function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
+	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
+		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr;
+	if (!carriesTypeText) return;
+	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
+	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
+	const many = heapObjectGetField(objHeap, handle, "boundTypeExprs");
+	if (many.kind != RaiserValueKind.Array) return;
+	const operands: Node[] = [];
+	for (let i = 0; i < heapArrayLen(arrHeap, many.intVal); i += 1) {
+		const element = heapArrayGet(arrHeap, many.intVal, i);
+		operands.push(element.kind == RaiserValueKind.Nil ? null as unknown as Node : readTypeOperand(element, objHeap, arrHeap, loc));
+	}
+	out.typeExprs = operands;
+}
+
 export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => fromTemplate(intValueToNode(val.intVal, t, fallbackLoc)),
@@ -1711,6 +1734,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
+					readQuotedTypeOperands(out, handle, objHeap, arrHeap, fallbackLoc);
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
 					const flagsValue = readInt(objHeap, handle, "flags");
@@ -2195,7 +2219,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const importSource = readStr(objHeap, arrHeap, h, "importSource");
 			const importTypeNames = readStrs(objHeap, arrHeap, h, "importTypeNames");
 			return createNodeAt(NodeKind.ImportDecl, {
-				importNames, importAliases, importSource, nameLocations: [], importTypeNames,
+				importNames, importAliases, importSource, nameLocations: [], aliasLocations: [], importTypeNames,
 			}, loc);
 		},
 		NodeKind.ExportDecl => {
@@ -3006,7 +3030,7 @@ test "round-trip ImportDecl" {
 	const loc = makeLoc(1, 0);
 	const orig = createNode(NodeKind.ImportDecl, {
 		importNames: ["X", "Y"], importAliases: ["X", "Z"],
-		importSource: "./mod", nameLocations: [], importTypeNames: ["Y"],
+		importSource: "./mod", nameLocations: [], aliasLocations: [], importTypeNames: ["Y"],
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);

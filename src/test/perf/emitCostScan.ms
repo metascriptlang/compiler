@@ -37,9 +37,18 @@ class Mangled {
 	module: string;
 }
 
-function upperOf(two: string): string {
-	const n = (two.byteAt(0) - 48) * 10 + (two.byteAt(1) - 48);
-	return n >= 65 && n <= 90 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(n - 65) : "";
+function isUpperHex(c: string): boolean {
+	return (c >= "0" && c <= "9") || (c >= "A" && c <= "F");
+}
+
+function hexValue(c: string): int32 {
+	return c <= "9" ? c.byteAt(0) - 48 : c.byteAt(0) - 55;
+}
+
+function escapedOf(two: string): string {
+	const n = hexValue(two.charAt(0)) * 16 + hexValue(two.charAt(1));
+	if (n >= 65 && n <= 90) return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(n - 65);
+	return n == 95 ? "_" : n == 45 ? "-" : n == 32 ? " " : "";
 }
 
 function allDigits(s: string): boolean {
@@ -52,25 +61,27 @@ function allDigits(s: string): boolean {
 function isModuleToken(m: string): boolean {
 	for (let i = m.startsWith("S") || m.startsWith("P") ? 1 : 0; i < m.length; i += 1) {
 		const c = m.charAt(i);
-		if (!((c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c == "Z" || c == "O")) return false;
+		if (c == "U" && i + 2 < m.length && isUpperHex(m.charAt(i + 1)) && isUpperHex(m.charAt(i + 2))) { i += 2; continue; }
+		if (!((c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c == "Z" || c == "O" || (c == "M" && i == 0))) return false;
 	}
 	return true;
 }
 
-// Inverse of the module-path mangling in src/codegen/c/names.ms: a-z0-9 stay, Z is `/`, O is `.`, any other
-// character is its two-digit code. A two-digit run that is no code stays digits.
+// Inverse of the module-path mangling in src/codegen/c/names.ms: a-z0-9 stay, Z is `/`, O is `.`, M marks a
+// digit-leading name, U and two uppercase hex digits is any other byte; a byte with no label here stays `U..`.
 function demangleModule(m: string): string {
 	let i = 0;
 	let out = "";
 	if (m.startsWith("P")) { out = "pkg:"; i = 1; } else if (m.startsWith("S")) i = 1;
 	while (i < m.length) {
 		const c = m.charAt(i);
-		const two = i + 1 < m.length ? m.slice(i, i + 2) : "";
 		if (c == "Z") { out += "/"; i += 1; }
 		else if (c == "O") { out += "."; i += 1; }
-		else if (c >= "0" && c <= "9" && two != "") {
-			const code = two == "95" ? "_" : two == "45" ? "-" : two == "32" ? " " : two == "63" ? "?" : upperOf(two);
-			if (code == "") { out += c; i += 1; } else { out += code; i += 2; }
+		else if (c == "M" && i == 0) { i += 1; }
+		else if (c == "U" && i + 2 < m.length && isUpperHex(m.charAt(i + 1)) && isUpperHex(m.charAt(i + 2))) {
+			const label = escapedOf(m.slice(i + 1, i + 3));
+			out += label == "" ? m.slice(i, i + 3) : label;
+			i += 3;
 		} else { out += c; i += 1; }
 	}
 	return out;

@@ -12,15 +12,19 @@ export function formatToken(token: Token): string {
 	return `[${tokenKindToString(token.kind)}: '${token.value}' at line ${token.line}]`;
 }
 
-// Returns true for Ident and all keyword tokens.
-// Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
+function inWordRange(kind: TokenKind, first: TokenKind): boolean {
+	return (kind as number) >= (first as number) && (kind as number) < (TokenKind.JsxTagStart as number) &&
+		kind != TokenKind.Comment && kind != TokenKind.Eof;
+}
+
+// Ident and every keyword, so a keyword can name a property (`obj.get`, `obj.set`).
 export function isIdentOrKeyword(kind: TokenKind): boolean {
-	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+	return kind == TokenKind.Ident || inWordRange(kind, TokenKind.Break);
 }
 
 // Ident and the contextual keywords (Abstract up to the JSX block): the tokens that may name a variable, parameter, field or type.
 export function isIdentLikeKind(kind: TokenKind): boolean {
-	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Abstract as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+	return kind == TokenKind.Ident || inWordRange(kind, TokenKind.Abstract);
 }
 
 // A token after which an expression may begin: the part a regex literal and a JSX `<` agree on.
@@ -39,8 +43,6 @@ export function startsExprAfter(kind: TokenKind): boolean {
 	};
 }
 
-// Map identifier string to keyword TokenKind (or Ident)
-// Compiler generates FNV-1a hash table for 80+ string cases — O(1) lookup
 export function identToKeyword(ident: string): TokenKind {
 	return match (ident) {
 		"break" => TokenKind.Break,
@@ -145,7 +147,6 @@ export function identToKeyword(ident: string): TokenKind {
 	};
 }
 
-// Map TokenKind enum to display string (match on enum -> C switch)
 export function tokenKindToString(kind: TokenKind): string {
 	return match (kind) {
 		TokenKind.Number => "NUMBER",
@@ -308,8 +309,8 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Int64 => "INT64",
 		TokenKind.Uint8 => "UINT8",
 		TokenKind.Uint16 => "UINT16",
-		TokenKind.Uint32 => "Uint32",
-		TokenKind.Uint64 => "Uint64",
+		TokenKind.Uint32 => "UINT32",
+		TokenKind.Uint64 => "UINT64",
 		TokenKind.Float32 => "FLOAT32",
 		TokenKind.Float64 => "FLOAT64",
 		TokenKind.Int => "INT",
@@ -318,11 +319,12 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.CString => "CSTRING",
 		TokenKind.Comment => "COMMENT",
 		TokenKind.Eof => "EOF",
-		_ => "UNKNOWN_TOKEN",
+		TokenKind.JsxTagStart => "JSX_TAG_START",
+		TokenKind.JsxClose => "JSX_CLOSE",
+		TokenKind.JsxText => "JSX_TEXT",
 	};
 }
 
-// ===== Token Tests =====
 test "identToKeyword const" { assert identToKeyword("const") == TokenKind.Const; }
 
 test "identToKeyword let" { assert identToKeyword("let") == TokenKind.Let; }
@@ -347,4 +349,16 @@ test "isIdentLikeKind takes contextual keywords and refuses reserved ones, comme
 	assert !isIdentLikeKind(TokenKind.Eof);
 	assert !isIdentLikeKind(TokenKind.JsxTagStart);
 	assert isIdentOrKeyword(TokenKind.Const);
+}
+
+test "tokenKindToString names every sized integer and JSX kind in the same upper-case form" {
+	assert tokenKindToString(TokenKind.Uint32) == "UINT32";
+	assert tokenKindToString(TokenKind.Uint64) == "UINT64";
+	assert tokenKindToString(TokenKind.JsxTagStart) == "JSX_TAG_START";
+	assert tokenKindToString(TokenKind.JsxClose) == "JSX_CLOSE";
+	assert tokenKindToString(TokenKind.JsxText) == "JSX_TEXT";
+}
+
+test "formatToken prints the kind name of a JSX token" {
+	assert formatToken(createToken(TokenKind.JsxText, "hi", 3)) == "[JSX_TEXT: 'hi' at line 3]";
 }

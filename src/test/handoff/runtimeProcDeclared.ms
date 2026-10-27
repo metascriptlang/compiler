@@ -21,7 +21,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msActorSuspendReplyInt32", "msActorSuspendReplyInt64", "msActorSuspendReplyPtr",
 	"msActorSuspendReplyString", "msAcyclicRefArrayDestroy", "msAcyclicRefArraySetLen",
 	"msAcyclicRefArraySplice3", "msArrayAcyclicRefCopy", "msArrayAcyclicRefDestroy",
-	"msArrayAcyclicRefSink", "msArrayCopy", "msArrayDestroy", "msArrayNumberSink",
+	"msArrayAcyclicRefSink", "msArrayCopy", "msArrayCopyPayload", "msArrayDestroy", "msArrayNumberSink",
 	"msArrayNumberWasMoved",
 	"msArrayRefCopy", "msArrayRefDestroy", "msArrayRefSink", "msArrayRefWasMoved", "msArraySetLen",
 	"msArrayStringCopy", "msArrayStringDestroy", "msArrayStringSink", "msArrayStringWasMoved",

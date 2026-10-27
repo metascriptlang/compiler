@@ -12,7 +12,7 @@
 // - Node* fields work through pointers: lowerDeferInNode(d.fnBody) modifies
 //   the body node in-place (data changes, pointer stays same).
 
-import { Node, NodeKind, SourceLocation, ProgramData, BlockStmtData, DeferStmtData, SwitchCaseData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, DeferStmtData, SwitchCaseData } from "../../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt, makeTryFinally } from "../util";
@@ -43,7 +43,7 @@ function lowerDeferInNode(node: Node): void {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			if (hasDefer(d.programStmts)) {
-				const newStmts = lowerDeferInBlock(d.programStmts, node.location);
+				const newStmts = lowerDeferInBlock(d.programStmts);
 				walkStmtList(newStmts);
 				node.data = { programStmts: newStmts };
 			} else {
@@ -53,7 +53,7 @@ function lowerDeferInNode(node: Node): void {
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			if (hasDefer(d.statements)) {
-				const newStmts = lowerDeferInBlock(d.statements, node.location);
+				const newStmts = lowerDeferInBlock(d.statements);
 				walkStmtList(newStmts);
 				node.data = { statements: newStmts };
 			} else {
@@ -63,7 +63,7 @@ function lowerDeferInNode(node: Node): void {
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
 			if (hasDefer(d.caseStmts)) {
-				const newStmts = lowerDeferInBlock(d.caseStmts, node.location);
+				const newStmts = lowerDeferInBlock(d.caseStmts);
 				walkStmtList(newStmts);
 				node.data = { caseTests: d.caseTests, caseStmts: newStmts, isDefault: d.isDefault };
 			} else {
@@ -76,7 +76,6 @@ function lowerDeferInNode(node: Node): void {
 	};
 }
 
-// Walk a statement list recursively (for nodes already processed by lowerDeferInBlock)
 function walkStmtList(stmts: Node[]): void {
 	for (const stmt of stmts) {
 		lowerDeferInNode(stmt);
@@ -88,40 +87,32 @@ function walkStmtList(stmts: Node[]): void {
 // Always returns a freshly built array (never returns stmts parameter unchanged).
 // Uses in-place recursion via lowerDeferInNode to avoid Node[] return aliasing.
 
-function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
+function lowerDeferInBlock(stmts: Node[]): Node[] {
 	let deferIdx = 0;
 	for (deferIdx = 0; deferIdx < stmts.length; deferIdx += 1) {
 		if (stmts[deferIdx].kind == NodeKind.DeferStmt) break;
 	}
 
-	// Extract defer info
+	if (deferIdx == stmts.length) {
+		throw new Error("internal: lowerDeferInBlock called on a list without a defer");
+	}
 	const deferData = stmts[deferIdx].data as DeferStmtData;
 	const deferBody = deferData.deferExpr;
 	const deferLoc = stmts[deferIdx].location;
 
-	// Build "after" stmts into a BlockStmt (sink semantics move the array)
 	const afterStmts: Node[] = [];
 	for (let a = deferIdx + 1; a < stmts.length; a += 1) {
 		afterStmts.push(stmts[a]);
 	}
 	const tryBody = makeBlock(afterStmts, deferLoc);
 
-	// Recursively lower nested defers in-place (no array return aliasing)
 	lowerDeferInNode(tryBody);
 
-	// Build try { after... } finally { deferBody }
-	const emptyBlock = makeBlock([], deferLoc);
-	// If deferBody is already a BlockStmt, use it directly as finallyBody.
-	// Otherwise wrap the expression in an ExprStmt inside a BlockStmt.
-	let finallyBody: Node = emptyBlock;
-	if (deferBody.kind == NodeKind.BlockStmt) {
-		finallyBody = deferBody;
-	} else {
-		finallyBody = makeBlock([makeExprStmt(deferBody, deferLoc)], deferLoc);
-	}
+	const finallyBody = deferBody.kind == NodeKind.BlockStmt
+		? deferBody
+		: makeBlock([makeExprStmt(deferBody, deferLoc)], deferLoc);
 	const tryCatch = makeTryFinally(tryBody, finallyBody, deferLoc);
 
-	// Result: before + [tryCatch]
 	const result: Node[] = [];
 	for (let b = 0; b < deferIdx; b += 1) {
 		result.push(stmts[b]);

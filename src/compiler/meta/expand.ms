@@ -53,17 +53,18 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
-import { isUnresolvedType } from "../../checker/types";
+import { isUnresolvedType, genericParamNamesOf } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
-import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling, engineStdSymbol } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -75,7 +76,7 @@ import { bindExpandedSubtree } from "../../binder/binder";
 import { takeWireRefusals, nodeToValue, builtNodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { parseIntStr } from "../../utils/string";
+import { parseIntStr, splitTopLevel } from "../../utils/string";
 import { ModuleGraph } from "../../module/graph";
 import { addWarning } from "../../checker/context";
 
@@ -94,19 +95,25 @@ let _quoteSpliceActive = false;
 
 let _metaScope: CheckerContext | null = null;
 let _metaBound: Map<Node, Symbol | null> = new Map<Node, Symbol | null>();
+let _metaQuoted: Map<Node, Symbol> = new Map<Node, Symbol>();
+let _metaDefiner = "";
 
-interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; }
+interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; quoted: Map<Node, Symbol>; definer: string; }
 
 function enterMetaScope(scope: CheckerContext, definer: string, params: string[], body: Node): MetaScope {
-	const outer: MetaScope = { scope: _metaScope, bound: _metaBound };
+	const outer: MetaScope = { scope: _metaScope, bound: _metaBound, quoted: _metaQuoted, definer: _metaDefiner };
 	_metaScope = scope;
-	_metaBound = bindMetaBodyNames(scope, definer, params, body);
+	_metaDefiner = definer;
+	_metaQuoted = new Map<Node, Symbol>();
+	_metaBound = bindMetaBodyNames(scope, definer, params, body, _metaQuoted);
 	return outer;
 }
 
 function leaveMetaScope(outer: MetaScope): void {
 	_metaScope = outer.scope;
 	_metaBound = outer.bound;
+	_metaQuoted = outer.quoted;
+	_metaDefiner = outer.definer;
 }
 
 function metaKind(n: Node | null): string {
@@ -128,6 +135,7 @@ function isSpliceCall(node: Node | null): boolean {
 }
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
+let _quoteTypeLocals: Map<Node, string[]> = new Map<Node, string[]>();
 
 // The std/meta `msMetaBindSym` host while a typed getTypeImpl literal is built:
 // a Symbol cannot be spelled as a literal, so nodeToASTLiteral reads it back from
@@ -221,6 +229,8 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteGensym = new HashSet<Node>();
 	markQuoteLocals(body, []);
+	_quoteTypeLocals = new Map<Node, string[]>();
+	scopeQuoteTypeLocals(body, []);
 	// Enable splice detection in nodeToASTLiteral
 	_quoteSpliceActive = true;
 
@@ -242,15 +252,152 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteSpliceActive = false;
 	_quoteGensym = new HashSet<Node>();
+	_quoteTypeLocals = new Map<Node, string[]>();
 	return result;
+}
+
+function collectGenericNames(params: string, out: string[]): void {
+	for (const name of splitTopLevel(genericParamNamesOf(params), ",")) { if (name != "") out.push(name); }
+}
+
+function declaredTypeName(n: Node): string {
+	return match (n.kind) {
+		NodeKind.ClassDecl => (n.data as ClassDeclData).className,
+		NodeKind.ActorDecl => (n.data as ActorDeclData).actorName,
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => (n.data as InterfaceDeclData).interfaceName,
+		NodeKind.EnumDecl => (n.data as EnumDeclData).enumName,
+		NodeKind.TypeAliasDecl => (n.data as TypeAliasDeclData).aliasName,
+		_ => "",
+	};
+}
+
+function addOwnGenericNames(n: Node, out: string[]): void {
+	match (n.kind) {
+		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl => collectGenericNames(n.typeArg, out),
+		NodeKind.FunctionDecl => { for (const g of extractGenericNames((n.data as FunctionDeclData).fnFlags)) out.push(g); },
+		NodeKind.MethodDecl => { for (const g of extractGenericNames((n.data as MethodDeclData).methodFlags)) out.push(g); },
+		NodeKind.ArrowFunction => { for (const g of extractGenericNames((n.data as ArrowFunctionData).arrowFlags)) out.push(g); },
+		NodeKind.FunctionExpr => { for (const g of extractGenericNames((n.data as FunctionExprData).funcExprFlags)) out.push(g); },
+		_ => {},
+	};
+}
+
+function scopeQuoteTypeLocals(n: Node | null, outer: string[]): void {
+	if (n == null) return;
+	const visible = outer.slice(0);
+	forEachChild(n, (c: Node): void => { const name = declaredTypeName(c); if (name != "") visible.push(name); });
+	addOwnGenericNames(n, visible);
+	_quoteTypeLocals.set(n, visible);
+	forEachChild(n, (c: Node): void => { scopeQuoteTypeLocals(c, visible); });
+}
+
+function namesAnyOf(text: string, names: string[]): boolean {
+	let i = 0;
+	while (i < text.length) {
+		const ch = text.charAt(i);
+		const starts = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_" || ch == "$";
+		if (!starts) { i += 1; continue; }
+		let end = i + 1;
+		while (end < text.length) {
+			const c = text.charAt(end);
+			if (!((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_" || c == "$")) break;
+			end += 1;
+		}
+		if (names.includes(text.slice(i, end))) return true;
+		i = end;
+	}
+	return false;
+}
+
+// The Type a quote's type text names where the quote is written, as an operand node that
+// carries it. A text that names a quote-local type, or a name nothing declares there, stays
+// text and is resolved where the quote expands.
+function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation): Node | null {
+	if (text == "" || _metaScope == null || _metaDefiner == "" || text.indexOf("typeof") >= 0) return null;
+	if (namesAnyOf(text, locals)) return null;
+	const ctx = _metaScope!;
+	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
+	if (home == null) return null;
+	const here = ctx.table.current;
+	ctx.table.current = home;
+	const mark = ctx.errors.length;
+	const t = resolveAnnotation(text, ctx, loc.line, loc.column);
+	ctx.table.current = here;
+	const failed = ctx.errors.length > mark || isUnresolvedType(t);
+	while (ctx.errors.length > mark) { ctx.errors.pop(); }
+	if (failed) return null;
+	const operand = createNodeAt(NodeKind.Identifier, { name: text } as IdentifierData, loc);
+	operand.nodeType = t;
+	return operand;
+}
+
+function addQuotedTypeOperand(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
+	const operand = quotedTypeOperand(text, locals, loc);
+	if (operand == null) return;
+	keys.push("boundTypeExpr");
+	values.push(nodeToASTLiteral(operand, loc, false));
+}
+
+function addQuotedTypeOperands(keys: string[], values: Node[], text: string, locals: string[], loc: SourceLocation): void {
+	if (text == "") return;
+	const elements: Node[] = [];
+	for (const part of splitTopLevel(text, ",")) {
+		const operand = quotedTypeOperand(part.trim(), locals, loc);
+		if (operand == null) return;
+		elements.push(nodeToASTLiteral(operand, loc, false));
+	}
+	keys.push("boundTypeExprs");
+	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
+}
+
+function addQuotedSignature(keys: string[], values: Node[], paramTypes: string[], returnType: string, locals: string[], loc: SourceLocation): void {
+	const elements: Node[] = [];
+	let anyBound = false;
+	for (const text of paramTypes) {
+		const operand = quotedTypeOperand(text.trim(), locals, loc);
+		anyBound = anyBound || operand != null;
+		elements.push(nodeToASTLiteral(operand, loc, false));
+	}
+	if (anyBound) {
+		keys.push("boundTypeExprs");
+		values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
+	}
+	if (returnType != "void" && returnType.indexOf(" is ") < 0 && !returnType.startsWith("asserts ")) addQuotedTypeOperand(keys, values, returnType, locals, loc);
+}
+
+function typeLocalsAt(node: Node): string[] {
+	const locals = _quoteTypeLocals.get(node);
+	if (locals == null) throw new Error("internal: a quoted node was not visited when the quote's type scopes were collected");
+	return locals;
+}
+
+function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {
+	match (node.kind) {
+		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; addQuotedSignature(keys, values, d.fnParamTypes, d.fnReturnType, typeLocalsAt(node), loc); },
+		NodeKind.ArrowFunction => { const d = node.data as ArrowFunctionData; addQuotedSignature(keys, values, d.arrowParamTypes, d.arrowReturnType, typeLocalsAt(node), loc); },
+		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, typeLocalsAt(node), loc); },
+		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
+		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, typeLocalsAt(node), loc),
+		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, typeLocalsAt(node), loc),
+		_ => {},
+	};
 }
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
 //
-function bindSymHostOf(declCtx: CheckerContext, macroSym: Symbol): Symbol | null {
-	const nodeSym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, "Node");
-	const metaDir = nodeSym == null ? "" : nodeSym.modulePath.slice(0, nodeSym.modulePath.lastIndexOf("/") + 1);
-	const metaCtx = metaDir == "" ? null : lookupModuleCtx(metaDir + "index.ms");
+// A free identifier of a quote carries the declaration it named where the quote was written.
+function quotedSymbolOf(node: Node): Symbol | null {
+	if (!_quoteSpliceActive || node.kind != NodeKind.Identifier || _quoteGensym.has(node)) return null;
+	const sym = _metaQuoted.get(node);
+	if (sym == null || _metaScope == null) return null;
+	if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, _metaScope!);
+	return sym;
+}
+
+function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
+	if (declCtx.moduleGraph == null) return null;
+	const bindSym = metaTagged(declCtx.moduleGraph, ["MetaBindSym"])[0];
+	const metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
 	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
 }
 
@@ -263,7 +410,7 @@ function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLo
 			callee: callee,
 			arguments: [mkString(name, loc), mkNumber(registerBakedSym(bound), loc)],
 		}, loc),
-		asType: "Node",
+		asType: metaNodeType,
 	}, loc);
 }
 
@@ -287,7 +434,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	const kindNum = node.kind as number;
 
 	keys.push("kind");
-	values.push(enumOrdinalAs("NodeKind", kindNum, loc));
+	values.push(enumOrdinalAs(metaNodeKindType, kindNum, loc));
 	keys.push("line");
 	values.push(mkNumber(node.location.line, loc));
 	keys.push("column");
@@ -303,6 +450,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
+	if (_quoteSpliceActive) addQuotedTypeSlots(node, keys, values, loc);
 
 	if (node.nodeType != null) {
 		keys.push("typeHandle");
@@ -336,7 +484,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
 	}
-	const carried = symbolCarried(node);
+	const carried = quotedSymbolOf(node) ?? symbolCarried(node);
 	if (carried != null) {
 		keys.push("symHandle");
 		values.push(mkNumber(registerBakedSym(carried), loc));
@@ -523,7 +671,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "declName", d.declName, loc);
 		addStrField(keys, values, "declType", d.declType, loc);
 		addNodeField(keys, values, "initializer", d.initializer, loc);
-		addEnumField(keys, values, "declKind", "DeclKind", d.declKind as number, loc);
+		addEnumField(keys, values, "declKind", metaDeclKindType, d.declKind as number, loc);
 		return;
 	}
 	if (k == NodeKind.UnaryExpr) {
@@ -952,7 +1100,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	}
 	if (k == NodeKind.ExternDecl) {
 		const d = node.data as ExternDeclData;
-		addEnumField(keys, values, "externKind", "ExternKind", d.externKind as number, loc);
+		addEnumField(keys, values, "externKind", metaExternKindType, d.externKind as number, loc);
 		addStrField(keys, values, "externName", d.externName, loc);
 		addStrField(keys, values, "nativeName", d.nativeName, loc);
 		addStrField(keys, values, "externType", d.externType, loc);
@@ -1262,6 +1410,16 @@ function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
 }
 
+// `console` as the std declaration the engine checks against, so a user binding of the name cannot capture the warning's log call.
+function consoleIdent(loc: SourceLocation): Node {
+	const id = createNodeAt(NodeKind.Identifier, { name: "console" }, loc);
+	const sym = engineStdSymbol("console");
+	if (sym == null) throw new Error("internal: warning() has no std console declaration to log through");
+	id.resolvedSym = sym;
+	id.flags = id.flags.incl(NodeFlag.BoundSym);
+	return id;
+}
+
 function tryRewriteCompileError(node: Node): Node {
 	if (node == null || node.kind != NodeKind.ExprStmt) return node;
 	const ed = node.data as ExprStmtData;
@@ -1316,7 +1474,7 @@ function tryRewriteCompileError(node: Node): Node {
 		}, loc);
 	}
 	const logCallee = mkMember(
-		createNodeAt(NodeKind.Identifier, { name: "console" }, loc), "log", loc);
+		consoleIdent(loc), "log", loc);
 	const logCall = createNodeAt(NodeKind.CallExpr, {
 		callee: logCallee, arguments: [warnPayload],
 		isDirectCall: true, resolvedOverloadIdx: -1,
@@ -1452,9 +1610,9 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
-			const hostSym = bindSymHostOf(bindCtx, macroSym);
+			const hostSym = bindSymHostOf(bindCtx);
 			if (hostSym == null) {
-				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs 'Node' imported from "std/meta" in the macro's module`, node.location.line, node.location.column);
+				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs "std/meta" in the module graph`, node.location.line, node.location.column);
 				return node;
 			}
 			return bindSymCall(hostSym, symName, boundSym, node.location);
@@ -1486,10 +1644,10 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
 				// anonymous struct and expose only the keys it happens to carry.
-				_bindSymHost = bindSymHostOf(declCtx, macroSym);
+				_bindSymHost = bindSymHostOf(declCtx);
 				const literal = nodeToASTLiteral(implementation, node.location, false);
 				_bindSymHost = null;
-				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: "Node" }, node.location);
+				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: metaNodeType }, node.location);
 			}
 		}
 		// getTypeArg() reads the explicit <T> written at THIS call site from the VM
@@ -1659,16 +1817,15 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 		paramTypes.push(pti < declParamTypes.length ? declParamTypes[pti] : "");
 		pti = pti + 1;
 	}
-	if (params.length > decl.macroDeclParams.length) paramTypes.push("Node");
+	if (params.length > decl.macroDeclParams.length) paramTypes.push(metaNodeType);
 	const emptyDefaults: Node[] = [];
-	const nodeInScope = isMetaNodeSym(lookupSymbol(regCtx.table, "Node"));
 	const macroFn = createNode(NodeKind.FunctionDecl, {
 		fnName: "$macro:body",
 		params: params,
 		fnParamTypes: paramTypes,
 		fnBody: fnBody,
 		fnFlags: "",
-		fnReturnType: nodeInScope ? "Node" : "",
+		fnReturnType: metaNodeType,
 		fnDefaults: emptyDefaults,
 		nameLocation: loc,
 	}, synthToken(loc));
@@ -2184,7 +2341,6 @@ registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
-import { isMetaNodeSym } from "./nodeSym";
 
 function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
 	const ctx = createContext();

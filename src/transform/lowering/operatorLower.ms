@@ -1,30 +1,17 @@
-// Operator Lowering — rewrite binary ops to function calls when operator overload exists
-//
-// reference parity: reference core defines `proc \`==\`*[T: tuple|object](x, y: T): bool`
-// and semantic analysis resolves `a == b` into `\`==\`(a, b)` as a normal call.
-// Codegen never sees struct == struct.
-//
-// This transform does the same: when a BinaryExpr's operand type has a matching
-// operator function registered in ExtensionRegistry, rewrite to CallExpr.
-// Built-in types (number, string, boolean) are never rewritten.
-//
-// reference parity coverage:
-//   reference core:1973  — proc `==`*[T: tuple|object]  → auto-generated _eq
-//   reference core:1980  — proc `<=`*[T: tuple]          → auto-generated _le
-//   reference core:1989  — proc `<`*[T: tuple]           → auto-generated _lt
-//   reference comparisons  — template `!=` = not(==)        → derived from ==
-//   reference comparisons  — template `>` = y < x           → derived from <
-//   reference comparisons  — template `>=` = y <= x         → derived from <=
+// Operator Lowering — rewrite a binary or unary operator to a call of the routine that declares it
 
 import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention } from "../../ast/node";
 import { isNullExpr } from "../../ast/shape";
-import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
+import { TransformContext, reportTransformError, createTransformContextWithChecker } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, hasNullMember, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, createStruct, createClosureType, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType, isMaybeType, isResult, isStringLike, hasNullMember, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../place";
-import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
+import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
+import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../checker/symbol";
+import { forEachChild } from "../../ast/visitor";
+import { parseInput, getStmts, firstExprKind, bindCStd } from "../testUtil";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -104,7 +91,7 @@ function neverHoldsNull(t: Type): boolean {
 // The operand of an `==`/`!=` against `null` whose answer is a constant, else null.
 // Every pass that must keep that operand's evaluation asks this one question.
 export function foldedNullOperand(ctx: TransformContext, node: Node): Node | null {
-	if (node.kind != NodeKind.BinaryExpr || ctx.checkerCtx == null) return null;
+	if (node.kind != NodeKind.BinaryExpr) return null;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 	if (op != "==" && op != "===" && op != "!=" && op != "!==") return null;
@@ -150,32 +137,17 @@ function unionEqName(ctx: TransformContext, t: Type): string {
 	return hookBaseCName(t.typeName, t, ctx.checkerCtx);
 }
 
-// Register a pending tuple operation for later generation by destructorLifting.
 function registerTupleOp(ctx: TransformContext, t: Type, tName: string, op: string): void {
-	// Find existing entry for this tuple
-	let i = 0;
-	while (i < ctx.pendingTupleOps.length) {
-		if (ctx.pendingTupleOps[i].tupleName == tName) {
-			// Add op if not already present
-			let found = false;
-			for (const existing of ctx.pendingTupleOps[i].ops) {
-				if (existing == op) { found = true; }
-			}
-			if (!found) ctx.pendingTupleOps[i].ops.push(op);
-			return;
-		}
-		i += 1;
+	for (const pending of ctx.pendingTupleOps) {
+		if (pending.tupleName != tName) continue;
+		if (!pending.ops.includes(op)) pending.ops.push(op);
+		return;
 	}
-	// Create new entry
-	const entry: PendingTupleOp = { tupleType: t, tupleName: tName, ops: [op] };
-	ctx.pendingTupleOps.push(entry);
+	ctx.pendingTupleOps.push({ tupleType: t, tupleName: tName, ops: [op] });
 }
 
 function registerUnionEq(ctx: TransformContext, t: Type): void {
-	for (const pending of ctx.pendingUnionEqs) {
-		if (pending == t) return;
-	}
-	ctx.pendingUnionEqs.push(t);
+	if (!ctx.pendingUnionEqs.includes(t)) ctx.pendingUnionEqs.push(t);
 }
 
 // A checked operator the program declares a routine for is a call of the routine the checker bound
@@ -209,35 +181,23 @@ function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: 
 	return makeRoutineCall(ext.sym, [left, right], loc);
 }
 
-// Resolve a base operator to a CallExpr.
-function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, leftType: Type, left: Node, right: Node, loc: SourceLocation): Node {
-	// Explicit user declaration takes priority. Same candidate set as the entry
-	// resolution — a derived operator must reach a flat `function `==`(a, b)`
-	// exactly as the direct form does, or `a == b` and `a != b` disagree.
-	{
-		const rt = resolveType(ctx, right);
-		const ext = extensionOperator(ctx, opName, [leftType, rt != null ? rt : leftType]);
-		if (ext != null) {
-			return makeExtOpCall(ext, opName, left, right, loc);
-		}
-	}
-	// Auto-generated ==, <, <= for tuples (reference: reference core:1973-1996)
-	if (leftType.kind == TypeKind.Tuple) {
-		const tName = tupleTypeName(leftType);
-		if (tName == "") return null as unknown as Node;
-		const suffix = match (opName) {
-			"<" => "Lt",
-			"<=" => "Le",
-			_ => "",
-		};
-		if (suffix != "") {
-			registerTupleOp(ctx, leftType, tName, suffix);
-			const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-			const tupleOp = suffix == "Lt" ? AttachedOp.AttachedLt : AttachedOp.AttachedLe;
-			return makeCall(makeTypedIdentResolved(liftedOp(leftType, tupleOp, tName + suffix, fnType), fnType, loc), [left, right], loc);
-		}
-	}
-	return null as unknown as Node;
+function resolveOpCall(ctx: TransformContext, opName: string, leftType: Type, left: Node, right: Node, loc: SourceLocation): Node | null {
+	const rt = resolveType(ctx, right);
+	const ext = extensionOperator(ctx, opName, [leftType, rt != null ? rt : leftType]);
+	if (ext != null) return makeExtOpCall(ext, opName, left, right, loc);
+	if (leftType.kind != TypeKind.Tuple) return null;
+	const tName = tupleTypeName(leftType);
+	if (tName == "") return null;
+	const suffix = match (opName) {
+		"<" => "Lt",
+		"<=" => "Le",
+		_ => "",
+	};
+	if (suffix == "") return null;
+	registerTupleOp(ctx, leftType, tName, suffix);
+	const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
+	const tupleOp = suffix == "Lt" ? AttachedOp.AttachedLt : AttachedOp.AttachedLe;
+	return makeCall(makeTypedIdentResolved(liftedOp(leftType, tupleOp, tName + suffix, fnType), fnType, loc), [left, right], loc);
 }
 
 // ===== Visitor =====
@@ -278,7 +238,6 @@ export function lowerClosureEqualities(program: Node, ctx: TransformContext): No
 function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	const bound = boundOperator(node);
 	if (bound != null) return lowerBoundOperator(node, bound);
-	if (ctx.checkerCtx == null) return node;
 	if (ctx.checkerCtx.extensionRegistry == null) return node;
 	const d = node.data as UnaryExprData;
 	const op = d.unaryOp;
@@ -304,7 +263,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const bound = boundOperator(node);
 	if (bound != null) return lowerBoundOperator(node, bound);
-	if (ctx.checkerCtx == null) return node;
 
 	const d = node.data as BinaryExprData;
 	const opName = d.operator;
@@ -318,22 +276,22 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	}
 	const loc = node.location;
 
-	const compoundBase = match (opName) {
+	const compoundBase: string | null = match (opName) {
 		"+=" => "+",
 		"-=" => "-",
 		"*=" => "*",
 		"/=" => "/",
 		"%=" => "%",
 		"**=" => "**",
-		_ => "",
+		_ => null,
 	};
-	if (compoundBase != "" && leftType != null
+	if (compoundBase != null && leftType != null
 		&& (d.left.kind == NodeKind.Identifier || d.left.kind == NodeKind.MemberExpr)
 		&& ctx.checkerCtx.extensionRegistry != null) {
 		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
 		if (ltName != "" && !isBuiltinOperand(leftType)) {
 			const crt = resolveType(ctx, d.right);
-			const cext = crt != null ? extensionOperator(ctx, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
+			const cext = crt != null ? extensionOperator(ctx, compoundBase, [leftType, crt]) : null;
 			if (cext != null) {
 				const rhsCall = makeExtOpCall(cext, compoundBase, cloneLvalue(d.left), d.right, loc);
 				return makeBinary(d.left, "=", rhsCall, loc);
@@ -341,11 +299,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		}
 	}
 
-	// 3. Null comparisons — check BEFORE typeName guard since null has typeName=""
-	// reference parity: objects can't be nil (reference comparisons, reference core)
-	// EQUALITY ops only: `x = null` is an assignment — rewriting it into a
-	// present-check would silently DROP the store (nullableLower wraps the
-	// null for Maybe assignment instead).
+	// Only equality operators: `x = null` is an assignment, and rewriting it into a present-check
+	// would drop the store (nullableLower wraps the null for Maybe assignment instead).
 	const isNullEqOp = opName == "==" || opName == "===" || opName == "!=" || opName == "!==";
 	const hasNullLeft = isNullExpr(d.left);
 	const hasNullRight = isNullExpr(d.right);
@@ -385,46 +340,25 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	}
 
 	if (leftType == null) return node;
-	// StringLiteral and Union<StringLiteral...> are string at runtime — use string operators
-	let typeName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
-	if (typeName == "") return node;
+	if (!isStringLike(leftType) && typeNameOf(leftType) == "") return node;
 
-	// 1. Explicit user-defined operator overload takes priority (reference parity:
-	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
-	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
+	// A declared overload beats the native operator: `==`(a: int32, b: int32) overrides the builtin.
 	if (ctx.checkerCtx.extensionRegistry != null) {
 		const rt = resolveType(ctx, d.right);
-		const ext = rt != null ? extensionOperator(ctx, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
+		const ext = rt != null ? extensionOperator(ctx, opName, [leftType, rt]) : null;
 		if (ext != null) {
 			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
 	}
 
-	// 2a. String operators (==, !=, <, >, <=, >=) handled by operator overloads in prelude.
-	// No hardcoded lowering — the overloads are registered as extensions and found above.
-
-	// 2b. Built-in types use native C operators — no rewrite needed.
 	if (isBuiltinOperand(leftType)) return node;
 
-	// 4. Derived operators — fallback for types without explicit prelude overloads.
-	// 4. Derived operators — fallback for types without prelude overloads.
-	// Strings define ALL operators in prelude (found in step 1 above).
-	// Interfaces/tuples use compiler derivation until templates exist.
-	const baseOp = match (opName) {
-		"===" => "==",
-		_ => "",
-	};
-	if (baseOp != "") {
-		let hasBase = false;
-		if (extensionOperator(ctx, baseOp, [leftType, leftType]) != null) hasBase = true;
-
-		if (hasBase) {
-			const derived = resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
-			if (derived != null) return derived;
-		}
+	if (opName == "===" && extensionOperator(ctx, "==", [leftType, leftType]) != null) {
+		const derived = resolveOpCall(ctx, "==", leftType, d.left, d.right, loc);
+		if (derived != null) return derived;
 	}
 
-	// 5. A named or anonymous payload union compares by tag, then payload (C only; JS `===` already does).
+	// C only: JS `===` already compares a payload union by tag and payload.
 	if (!ctx.jsBackend && hasUnionEq(leftType) && unionOperandsAgree(ctx, leftType, d.right)
 		&& (opName == "==" || opName == "===" || opName == "!=" || opName == "!==")) {
 		const eqName = unionEqName(ctx, leftType);
@@ -434,10 +368,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		return isNotEqual ? makeUnary("!", eqCall, loc) : eqCall;
 	}
 
-	// 6. Ordering of tuples (auto-generated <, <=).
-	//    Reference: reference core:1989 (<), :1980 (<=)
 	if (leftType.kind == TypeKind.Tuple && (opName == "<" || opName == "<=")) {
-		const resolved = resolveOpCall(ctx, typeName, opName, leftType, d.left, d.right, loc);
+		const resolved = resolveOpCall(ctx, opName, leftType, d.left, d.right, loc);
 		if (resolved != null) return resolved;
 	}
 
@@ -450,13 +382,19 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 // ===== Entry Point =====
 
+function requireChecker(ctx: TransformContext): void {
+	if (ctx.checkerCtx == null) throw new Error("internal: operator lowering ran without a checker context");
+}
+
 export function lowerOperators(program: Node, ctx: TransformContext): Node {
+	requireChecker(ctx);
 	return walkNode(program, (node: Node): Node => {
 		return lowerOperatorNode(node, ctx);
 	});
 }
 
 export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
+	requireChecker(ctx);
 	return walkNode(program, (node: Node): Node => {
 		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
 	});
@@ -476,7 +414,8 @@ function keyOpRef(sym: Symbol | null, loc: SourceLocation): Node {
 }
 
 export function bindCollectionKeyOps(program: Node, ctx: TransformContext): Node {
-	if (ctx.checkerCtx == null || ctx.checkerCtx.extensionRegistry == null) return program;
+	requireChecker(ctx);
+	if (ctx.checkerCtx.extensionRegistry == null) return program;
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.NewExpr || node.flags.has(NodeFlag.KeyOps)) return node;
 		const keyType = constructedCollectionKey(node);
@@ -497,14 +436,6 @@ export function bindCollectionKeyOps(program: Node, ctx: TransformContext): Node
 }
 
 // ===== Tests =====
-
-import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
-import { createStruct, createFunction, createClosureType, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType } from "../../checker/types";
-import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../checker/symbol";
-import { forEachChild } from "../../ast/visitor";
-import { createTransformContextWithChecker } from "../context";
-import { parseInput, getStmts, firstExprKind } from "../testUtil";
-import { ExprStmtData } from "../../ast/node";
 
 function bindFromTable(node: Node, table: SymbolTable): void {
 	if (node.kind == NodeKind.Identifier) {
@@ -620,8 +551,6 @@ test "operator lower does not rewrite Ref types" {
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
-// ===== Derived operator tests (reference: system/reference comparisons) =====
-
 test "!== over a value type is refused at lowering as well" {
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
@@ -696,8 +625,6 @@ test "explicit != overrides derivation from ==" {
 	assert firstExprKind(result) == NodeKind.CallExpr;
 }
 
-// ===== Tuple operator tests (reference: reference core:1973-1996) =====
-
 test "tuple === is refused at lowering: the checker routes it to the std equality" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a === b;");
@@ -713,6 +640,7 @@ test "tuple === is refused at lowering: the checker routes it to the std equalit
 }
 
 function lowerClosuresOf(src: string, operand: Type, jsBackend: boolean): Node[] {
+	bindCStd();
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, operand, false));

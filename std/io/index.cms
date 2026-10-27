@@ -32,7 +32,9 @@ extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
 extern function cRealloc(p: Ptr<uint8>, size: uint64): Ptr<uint8> | null from "realloc";
 extern function cFree(p: Ptr<uint8>): void from "free";
 extern function cMemmove(to: Ptr<uint8>, from: Ptr<uint8>, size: uint64): Ptr<uint8> from "memmove";
-extern function cGetline(ref line: Ptr<uint8>, ref cap: uint64, file: Ptr<FILE>): int64 from "getline";
+extern type CChar: uint8 from "char";
+extern type CSize: uint64 from "size_t";
+extern function cGetline(ref line: Ptr<CChar>, ref cap: CSize, file: Ptr<FILE>): int64 from "getline";
 extern function msStringNew(data: cstring, length: int64): string;
 
 const LF: uint8 = 10;
@@ -126,10 +128,10 @@ function readHeap(file: Ptr<FILE>, firstAt: Ptr<uint8>, firstRoom: int32): strin
 // The rest of a line that outgrows the stack chunk comes from one getline call: it returns
 // the byte count, so NUL bytes need no LF fill to be told apart from the end.
 function readRest(file: Ptr<FILE>, firstAt: Ptr<uint8>, head: int32): string {
-	let cap = FIRST_HEAP as uint64;
+	let cap: CSize = FIRST_HEAP as uint64;
 	const fresh = cMalloc(cap);
 	if (fresh == null) throw new Error("readLine: out of memory");
-	let rest: Ptr<uint8> = fresh;
+	let rest: Ptr<CChar> = fresh;
 	let read = cGetline(rest, cap, file);
 	while (read < 0 && errno == EINTR) {
 		errno = 0;

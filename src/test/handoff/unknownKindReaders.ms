@@ -42,7 +42,7 @@ test "emission reader: a user unknown param is declared void*" {
 	// of void* fields and would make a substring test pass for free.
 	const c = compileToC("function f(x: unknown): void { }\nfunction main(): void { f(null as unknown); }");
 	assert c.ok;
-	if (c.ok) { assert c.value.contains("(void* x)"); }
+	if (c.ok) { assert c.value.contains("(void* x_p0)"); }
 }
 
 test "emission reader: the call passes the value, not its address" {

@@ -41,13 +41,11 @@ function parseCorpus(): Node {
 // Dereferences every non-null child so the traversal is real work, not a no-op.
 function countNullChildren(root: Node): int32 {
 	let nulls = 0;
-	let kinds = 0;
 	forEachChild(root, (child: Node): void => {
 		if (child == null) {
 			nulls = nulls + 1;
 			return;
 		}
-		if (child.kind == NodeKind.Program) kinds = kinds + 1;
 		nulls = nulls + countNullChildren(child);
 	});
 	return nulls;

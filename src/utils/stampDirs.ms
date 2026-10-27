@@ -1,16 +1,30 @@
-import { readDir, remove, removeAll, writeFile, modifiedTime, ensureDir, exists } from "std/fs";
+import { readDir, remove, removeAll, writeFile, modifiedTime, ensureDir, exists, symlink } from "std/fs";
+import { writeStderr } from "std/io";
+import { IoErrorKind } from "std/io/errors";
 import { tmpDir } from "./path";
 
-export const STALE_ENTRY_SECONDS = 7 * 24 * 3600;
-export const STALE_TMP_SECONDS = 3600;
+const STALE_ENTRY_SECONDS = 7 * 24 * 3600;
+const STALE_TMP_SECONDS = 3600;
 const COLLECT_EVERY_SECONDS = 3600;
 const COLLECTED_MARK = ".collected";
 
-export function nowSeconds(): number {
+export function nowSeconds(): float64 {
 	return Date.now() / 1000;
 }
 
-export function collectStaleEntries(root: string, now: number, staleSeconds: number = STALE_ENTRY_SECONDS): void {
+function collectable(path: string, now: float64, limitSeconds: float64): boolean {
+	const mtime = modifiedTime(path);
+	return mtime < 0 || now - mtime > limitSeconds;
+}
+
+function drop(path: string, isDir: boolean): void {
+	const r = isDir ? removeAll(path) : remove(path);
+	if (!r.ok && r.error.kind != IoErrorKind.NotFound) {
+		writeStderr(`warning: cache collection could not remove ${path}: ${r.error.message}\n`);
+	}
+}
+
+export function collectStaleEntries(root: string, now: float64, staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
 	const mark = `${root}/${COLLECTED_MARK}`;
 	const last = modifiedTime(mark);
 	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return;
@@ -19,10 +33,8 @@ export function collectStaleEntries(root: string, now: number, staleSeconds: num
 		if (e == COLLECTED_MARK) continue;
 		const isDir = e.endsWith("/");
 		const path = `${root}/${isDir ? e.slice(0, e.length - 1) : e}`;
-		const age = now - modifiedTime(path);
-		if (age > staleSeconds) {
-			if (isDir) removeAll(path);
-			else remove(path);
+		if (collectable(path, now, staleSeconds)) {
+			drop(path, isDir);
 			continue;
 		}
 		if (!isDir) continue;
@@ -30,7 +42,7 @@ export function collectStaleEntries(root: string, now: number, staleSeconds: num
 			if (f.endsWith("/")) continue;
 			const entry = `${path}/${f}`;
 			const limit = f.indexOf(".tmp.", 0) >= 0 ? STALE_TMP_SECONDS : staleSeconds;
-			if (now - modifiedTime(entry) > limit) remove(entry);
+			if (collectable(entry, now, limit)) drop(entry, false);
 		}
 	}
 }
@@ -80,5 +92,14 @@ test "stamps and flat entries unwritten for a week go" {
 	assert !exists(`${root}/stampA`);
 	assert !exists(`${root}/stampB`);
 	assert !exists(`${root}/legacy.pk`);
+	removeAll(root);
+}
+
+test "an entry whose mtime cannot be read is collected" {
+	const root = scratchRoot("stamp-unreadable");
+	assert symlink(`${root}/missing-target`, `${root}/dangling.pk`).ok;
+	assert modifiedTime(`${root}/dangling.pk`) < 0;
+	collectStaleEntries(root, nowSeconds());
+	assert !readDir(root).includes("dangling.pk");
 	removeAll(root);
 }

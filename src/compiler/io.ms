@@ -2,15 +2,11 @@
 
 import { exit, platform } from "std/process";
 import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove } from "std/fs";
-import { error, green, bold, dim } from "../utils/color";
+import { error, dim } from "../utils/color";
 import { msModuleExtensions, stripMsModuleExtension } from "../module/resolver";
 
 
-// -- Shared timing + verbose helpers --
-// Extracted to separate functions to avoid DRC discard-variable bugs
-// inside conditional string concatenation.
-
-export function printTiming(label: string, t0: number): void {
+export function printTiming(label: string, t0: float64): void {
 	const elapsed = performance.now() - t0;
 	const ms = "" + elapsed;
 	const display = ms.slice(0, ms.length < 6 ? ms.length : 6);
@@ -23,19 +19,12 @@ export function verboseLog(msg: string): void {
 
 // -- Path utilities --
 
-// Replace a MetaScript source extension with newExt (or append if there is none).
-// replaceExt("foo.ms", ".c") → "foo.c"
-// replaceExt("foo.ms", "") → "foo"
+// Replaces a MetaScript source extension with newExt, appending when there is none.
 export function replaceExt(inputFile: string, newExt: string): string {
 	const stem = stripMsModuleExtension(inputFile);
 	return (stem != "" ? stem : inputFile) + newExt;
 }
 
-// Path utilities live in std/fs/path — import there. This module keeps only
-// msc-specific file-IO helpers (replaceExt, ensureDir, readSource, etc.).
-
-// Ensure directory exists (creates parent directories as needed).
-// Delegates to std/fs - cross-platform (no shell dependency).
 export function ensureDir(dir: string): void {
 	fsEnsureDir(dir);
 }
@@ -87,8 +76,6 @@ export function soSuffix(): string {
 	};
 }
 
-// -- Output directory based on build mode --
-
 export const BUILD_STOPPED = "msc: build stopped";
 let _recoverableBuild = false;
 
@@ -123,13 +110,6 @@ export function writeOutput(filePath: string, content: string): void {
 		console.log(error("error") + ": " + result.error.message);
 		stopBuild();
 	}
-}
-
-// Write generated code to outputPath or derive from filePath.
-export function emitOutput(code: string, filePath: string, outputPath: string, ext: string): void {
-	const outFile = outputPath != "" ? outputPath : replaceExt(filePath, ext);
-	writeOutput(outFile, code);
-	console.log(green("Wrote") + " " + bold(outFile));
 }
 
 // ===== Tests =====

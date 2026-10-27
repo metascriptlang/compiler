@@ -10,7 +10,7 @@
 
 import { CToken, CTokenKind } from "./token";
 
-export interface EvalResult {
+interface EvalResult {
 	value: int64;
 	tok: CToken;    // token position after the evaluated expression
 	ok: boolean;
@@ -133,8 +133,7 @@ function evalPrimary(es: CConstEvalState): int64 {
 		if (es.constants.has(name)) {
 			return es.constants.get(name)!;
 		}
-		// Unknown identifier in const expr context — not necessarily an error
-		// (could be a macro that expanded to nothing, or a forward ref)
+		if (es.error == "") es.error = `use of undeclared identifier '${name}'`;
 		return 0;
 	}
 

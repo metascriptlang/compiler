@@ -1,6 +1,6 @@
 // Parser cursor - the token stream, comments, errors, recovery and speculation marks
 
-import { Token, TokenKind } from "../lexer/token";
+import { Token, TokenKind, tokenKindToString } from "../lexer/token";
 import { lex } from "../lexer/lexer";
 import { Node } from "../ast/node";
 
@@ -11,7 +11,7 @@ export class ParserState {
 	position: int32;
 	errors: string[];
 	panicMode: boolean;
-	pendingComments: Token[]; // Added for comment preservation
+	pendingComments: Token[];
 	pendingTypeArg: string; // Captured <T> type arg waiting to be consumed by next CallExpr
 	// Restricted production (like JS's NoIn): >0 while parsing a match-case
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
@@ -184,33 +184,26 @@ export function addError(state: ParserState, msg: string): void {
 	}
 }
 
+function startsStatement(kind: TokenKind): boolean {
+	return match (kind) {
+		TokenKind.Const | TokenKind.Let | TokenKind.If | TokenKind.While | TokenKind.For
+		| TokenKind.Function | TokenKind.Return | TokenKind.Import | TokenKind.Export
+		| TokenKind.Class | TokenKind.Enum | TokenKind.Interface | TokenKind.Type
+		| TokenKind.Throw | TokenKind.Try | TokenKind.Match | TokenKind.Switch
+		| TokenKind.Defer | TokenKind.At | TokenKind.Break | TokenKind.Continue
+		| TokenKind.Async => true,
+		_ => false,
+	};
+}
+
 // Skip tokens until a statement boundary to resume parsing after an error.
 export function synchronize(state: ParserState): void {
 	state.panicMode = false;
 	while (!isAtEnd(state)) {
 		const kind = current(state).kind;
-		// Statement-starting keywords — resume here
-		if (kind == TokenKind.Const || kind == TokenKind.Let ||
-			kind == TokenKind.If || kind == TokenKind.While ||
-			kind == TokenKind.For || kind == TokenKind.Function ||
-			kind == TokenKind.Return || kind == TokenKind.Import ||
-			kind == TokenKind.Export || kind == TokenKind.Class ||
-			kind == TokenKind.Enum || kind == TokenKind.Interface ||
-			kind == TokenKind.Type || kind == TokenKind.Throw ||
-			kind == TokenKind.Try || kind == TokenKind.Match ||
-			kind == TokenKind.Switch || kind == TokenKind.Defer ||
-			kind == TokenKind.At || kind == TokenKind.Break ||
-			kind == TokenKind.Continue || kind == TokenKind.Async) {
-			return;
-		}
-		// Closing brace — consume it and resume
-		if (kind == TokenKind.RBrace) {
-			advance(state);
-			return;
-		}
+		if (startsStatement(kind)) return;
 		advance(state);
-		// Past semicolon — resume on next token
-		if (kind == TokenKind.Semicolon) { return; }
+		if (kind == TokenKind.RBrace || kind == TokenKind.Semicolon) return;
 	}
 }
 
@@ -269,18 +262,23 @@ export function consumeSemicolon(state: ParserState): void {
 	addError(state, `';' expected before '${current(state).value}' at line ${current(state).line}`);
 }
 
+function closerText(close: TokenKind): string {
+	return match (close) {
+		TokenKind.RParen => ")",
+		TokenKind.RBracket => "]",
+		TokenKind.RBrace => "}",
+		_ => {
+			throw new Error(`internal: no closer text for ${tokenKindToString(close)}`);
+		},
+	};
+}
+
 export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
 	if (current(state).kind == close) {
 		advance(state);
 		return;
 	}
-	const closeText = match (close) {
-		TokenKind.RParen => ")",
-		TokenKind.RBracket => "]",
-		TokenKind.RBrace => "}",
-		_ => `${close}`,
-	};
-	addError(state, `Expected '${closeText}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
+	addError(state, `Expected '${closerText(close)}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
 }
 
 // Skip balanced delimiter pairs: parens, braces, brackets.

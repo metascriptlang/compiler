@@ -72,12 +72,10 @@ function isPlainValue(n: Node): boolean {
 }
 
 function keptByLaterOptional(d: ObjectLiteralData, idx: int32, name: string): boolean {
-	let j = idx + 1;
-	while (j < d.keys.length) {
+	for (let j = idx + 1; j < d.keys.length; j += 1) {
 		if (d.keys[j] == name) return false;
 		const src = spreadSourceAt(d, j);
 		if (src != null && structHasField(src, name)) return declaredOptional(src, name);
-		j += 1;
 	}
 	return false;
 }
@@ -93,8 +91,7 @@ function fitIntoField(value: Node, target: Type, name: string, ctx: TransformCon
 function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[], safe: Node[] | null): void {
 	const d = lit.data as ObjectLiteralData;
 	if (builtStructOf(lit) == null) return;
-	let i = 0;
-	while (i < d.keys.length) {
+	for (let i = 0; i < d.keys.length; i += 1) {
 		if (d.keys[i] == "..." && d.properties[i].kind == NodeKind.SpreadExpr && (safe == null || safe.includes(d.properties[i]))) {
 			const sd = d.properties[i].data as SpreadExprData;
 			const arg = sd.spreadArg;
@@ -121,7 +118,6 @@ function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[], saf
 			d.properties[i] = ref;
 			decls.push(dcl);
 		}
-		i += 1;
 	}
 }
 
@@ -167,13 +163,11 @@ function prependDecls(stmt: Node, decls: Node[]): Node[] {
 
 // ===== Stage 2: expand spread entries into per-field member reads =====
 
-function providerOf(keys: string[], dropped: boolean[], name: string): int32 {
-	let j = keys.length - 1;
-	while (j >= 0) {
+function providerOf(keys: string[], dropped: boolean[], name: string): int32 | null {
+	for (let j = keys.length - 1; j >= 0; j -= 1) {
 		if (!dropped[j] && keys[j] == name) return j;
-		j -= 1;
 	}
-	return -1;
+	return null;
 }
 
 export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
@@ -184,11 +178,9 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 		if (k == "...") { hasSpread = true; break; }
 	}
 	if (!hasSpread) return node;
-	const target0 = builtStructOf(node);
-	if (target0 == null) return node;
-	const target = target0;
-	let i = 0;
-	while (i < d.keys.length) {
+	const target = builtStructOf(node);
+	if (target == null) return node;
+	for (let i = 0; i < d.keys.length; i += 1) {
 		if (d.keys[i] == "...") {
 			if (d.properties[i].kind != NodeKind.SpreadExpr) return node;
 			const arg = (d.properties[i].data as SpreadExprData).spreadArg;
@@ -197,7 +189,6 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 		} else if (!isPlainValue(d.properties[i]) && keptByLaterOptional(d, i, d.keys[i])) {
 			return node;
 		}
-		i += 1;
 	}
 	const newKeys: string[] = [];
 	const newProps: Node[] = [];
@@ -205,28 +196,23 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 	const dropped: boolean[] = [];
 	const fromSpread: boolean[] = [];
 	const hasLocs = d.keyLocations != null && d.keyLocations.length == d.keys.length;
-	i = 0;
-	while (i < d.keys.length) {
+	for (let i = 0; i < d.keys.length; i += 1) {
 		if (d.keys[i] != "...") {
 			const before = providerOf(newKeys, dropped, d.keys[i]);
-			if (before >= 0) dropped[before] = true;
+			if (before != null) dropped[before] = true;
 			newKeys.push(d.keys[i]);
 			newProps.push(d.properties[i]);
 			dropped.push(false);
 			fromSpread.push(false);
 			if (hasLocs) newLocs.push(d.keyLocations[i]);
-			i += 1;
 			continue;
 		}
 		const sp = d.properties[i];
 		const arg = (sp.data as SpreadExprData).spreadArg;
-		const src0 = spreadStructOf(arg.nodeType);
-		const sym0 = arg.resolvedSym;
-		if (src0 == null || sym0 == null) return node;
-		const src = src0;
-		const argSym = sym0;
-		let fi = 0;
-		while (fi < src.typeNames.length) {
+		const src = spreadStructOf(arg.nodeType);
+		const argSym = arg.resolvedSym;
+		if (src == null || argSym == null) return node;
+		for (let fi = 0; fi < src.typeNames.length; fi += 1) {
 			const fname = src.typeNames[fi];
 			if (structHasField(target, fname)) {
 				const ref = makeIdentResolved(argSym, sp.location);
@@ -234,13 +220,13 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 				const mem = makeMember(ref, fname, sp.location);
 				mem.nodeType = src.typeChildren[fi];
 				const before = providerOf(newKeys, dropped, fname);
-				if (before >= 0 && declaredOptional(src, fname)) {
+				if (before != null && declaredOptional(src, fname)) {
 					const at = target.typeNames.indexOf(fname);
 					const slot = at >= 0 && at < target.typeChildren.length ? target.typeChildren[at] : null;
 					newProps[before] = nullishLowered(mem, fitIntoField(newProps[before], target, fname, ctx), sp.location, slot, ctx);
 					fromSpread[before] = false;
 				} else {
-					if (before >= 0) dropped[before] = true;
+					if (before != null) dropped[before] = true;
 					newKeys.push(fname);
 					newProps.push(mem);
 					dropped.push(false);
@@ -248,21 +234,17 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 					if (hasLocs) newLocs.push(d.keyLocations[i]);
 				}
 			}
-			fi += 1;
 		}
-		i += 1;
 	}
 	const keys: string[] = [];
 	const props: Node[] = [];
 	const locs: SourceLocation[] = [];
-	i = 0;
-	while (i < newKeys.length) {
+	for (let i = 0; i < newKeys.length; i += 1) {
 		if (!dropped[i]) {
 			keys.push(newKeys[i]);
 			props.push(fromSpread[i] ? fitIntoField(newProps[i], target, newKeys[i], ctx) : newProps[i]);
 			if (hasLocs) locs.push(newLocs[i]);
 		}
-		i += 1;
 	}
 	d.keys = keys;
 	d.properties = props;

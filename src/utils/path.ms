@@ -135,6 +135,17 @@ export function resolveRuntimeDir(): string {
 	return runtimeDirFrom(resolveArgv0(argv[0]));
 }
 
+// The directory of stand-in system headers cparse reads in place of the C compiler's own.
+export function builtinIncludeDir(): string {
+	const root = resolveRuntimeDir();
+	return root != "" ? root + "/src/module/cparse/include" : "src/module/cparse/include";
+}
+
+// A builtin stub only stands in for a system header while cparse reads; the C compiler never sees it.
+export function isBuiltinStubHeader(path: string): boolean {
+	return path.startsWith(builtinIncludeDir() + "/") || path.startsWith("src/module/cparse/include/") || path.includes("/src/module/cparse/include/");
+}
+
 function runtimeDirFrom(exe: string): string {
 	const physicalExe = realpath(exe);
 	let base = dirname(physicalExe != "" ? physicalExe : exe);
@@ -256,4 +267,10 @@ test "the Windows temp directory is TMP, then TEMP, then USERPROFILE, then the s
 	env.set("TEMP", saved[1]);
 	env.set("USERPROFILE", saved[2]);
 	env.set("TMPDIR", saved[3]);
+}
+
+test "a builtin stub header is told from a user header by its directory, absolute or relative" {
+	assert isBuiltinStubHeader(builtinIncludeDir() + "/stdint.h");
+	assert isBuiltinStubHeader("src/module/cparse/include/stddef.h");
+	assert !isBuiltinStubHeader("/proj/include/stdint.h");
 }

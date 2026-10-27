@@ -61,13 +61,13 @@ function emitted(): string {
 	return "";
 }
 
-// A thunk is defined as `MS_LIB_PRIVATE void* <prefix>...(void* _envP) {`.
+// A thunk is defined as `MS_LIB_PRIVATE void* <prefix>...(void* _envP_p0) {`.
 function thunkBody(text: string, prefix: string): string {
 	let at = text.indexOf("\nMS_LIB_PRIVATE ", 0);
 	while (at >= 0) {
 		const eol = text.indexOf("\n", at + 1);
 		const line = text.slice(at + 1, eol < 0 ? text.length : eol);
-		if (line.contains(` ${prefix}`) && line.endsWith("(void* _envP) {")) {
+		if (line.contains(` ${prefix}`) && line.endsWith("(void* _envP_p0) {")) {
 			const end = text.indexOf("\n}\n", eol);
 			return text.slice(at + 1, end < 0 ? text.length : end);
 		}
@@ -102,16 +102,16 @@ function rcOpTarget(line: string): string {
 }
 
 function envCounts(body: string): string {
-	const fromEnv: string[] = ["_envP"];
+	const fromEnv: string[] = ["_envP_p0"];
 	for (const line of body.split("\n")) {
-		if (!line.contains("_envP")) continue;
+		if (!line.contains("_envP_p0")) continue;
 		const name = assignedName(line);
 		if (name != "" && !fromEnv.includes(name)) fromEnv.push(name);
 	}
 	for (const line of body.split("\n")) {
 		const target = rcOpTarget(line);
 		if (target == "") continue;
-		if (target.contains("_envP")) return line.trim();
+		if (target.contains("_envP_p0")) return line.trim();
 		for (const name of fromEnv) {
 			if (target == name) return line.trim();
 		}

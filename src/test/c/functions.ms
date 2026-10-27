@@ -48,7 +48,7 @@ test "E2E C: function returns expression" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("square__");
-	assert c.value.contains("x * x");
+	assert c.value.contains("x_p0 * x_p0");
 }
 
 test "E2E C: string param function" {

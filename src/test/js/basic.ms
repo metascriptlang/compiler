@@ -206,13 +206,13 @@ console.log(k.w.toString());
 test "E2E JS: sized array literal is a typed array" {
 	const js = compileToJSWithStd("function main(): void { const fixed: uint8[4] = [10, 20, 30, 40]; console.log(fixed[0]); }");
 	assert js.ok;
-	assert js.value.contains("new Uint8Array([10, 20, 30, 40])");
+	assert js.value.contains("new globalThis.Uint8Array([10, 20, 30, 40])");
 }
 
 test "E2E JS: sequence literal stays a plain array" {
 	const js = compileToJSWithStd("function main(): void { const seq: uint8[] = [10, 20, 30, 40]; console.log(seq[0]); }");
 	assert js.ok;
-	assert !js.value.contains("new Uint8Array([");
+	assert !js.value.contains("new globalThis.Uint8Array([");
 }
 
 // corpus 015 regression: copy-on-read must see through the Maybe<T> carrier

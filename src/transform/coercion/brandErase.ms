@@ -1,6 +1,5 @@
-// Brand erasure — TS branded primitives exist only in the checker (TSGAP
-// item 5 S1). Erasing BrandWiden Distincts to their base BEFORE any lowering
-// means string/number lowerings and codegen never see a Distinct to peel.
+// Brand erasure: a branded primitive exists only in the checker, so every BrandWiden
+// Distinct is erased to its base before any lowering runs.
 
 import { Node, Type, TypeKind, TypeFlag, ProgramData, ExprStmtData, BinaryExprData } from "../../ast/node";
 import { mapChildren } from "../walker";
@@ -20,9 +19,12 @@ function eraseBrandType(t: Type | null, depth: int32): Type | null {
 			t.typeChildren[i] = eraseBrandType(t.typeChildren[i], depth + 1) as Type;
 		}
 	}
-	if (t.typeReturn != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray
-		|| t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Span
-		|| t.kind == TypeKind.Var || t.kind == TypeKind.Borrow)) {
+	const wrapsElement = match (t.kind) {
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Ref | TypeKind.Ptr
+			| TypeKind.Span | TypeKind.Var | TypeKind.Borrow => true,
+		_ => false,
+	};
+	if (t.typeReturn != null && wrapsElement) {
 		t.typeReturn = eraseBrandType(t.typeReturn, depth + 1) as Type;
 	}
 	return t;

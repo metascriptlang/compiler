@@ -1,18 +1,17 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, DeclKind, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
-import { addError } from "../../checker/context";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
 import { hoistStmtValue } from "../blockExpand";
-import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
-import { DeclKind } from "../../ast/node";
+import { moveWhileTestIntoBody, moveDoWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { lowerForStmt } from "./forLoopLower";
 
 function byteType(): Type { return createPrimitive(TypeKind.Uint8); }
 function int32Type(): Type { return createPrimitive(TypeKind.Int32); }
 
-function typedNumber(val: number, t: Type, loc: SourceLocation): Node {
+function typedNumber(val: float64, t: Type, loc: SourceLocation): Node {
 	const n = makeNumber(val, loc);
 	n.nodeType = t;
 	return n;
@@ -44,9 +43,30 @@ function arrayRepr(t: Type | null): Type | null {
 	return repr;
 }
 
-function setOpName(sym: Node): string {
-	if (sym.kind != NodeKind.Identifier || sym.resolvedSym == null) return "";
-	return sym.resolvedSym.builtinKind;
+enum SetOp { Has, Incl, Excl, IsEmpty, Size, Hash, Union, Intersection, Difference, SymmetricDifference, IsSubsetOf, IsSupersetOf, IsDisjointFrom }
+
+function setOpOf(callee: Node): SetOp | null {
+	if (callee.kind != NodeKind.Identifier || callee.resolvedSym == null) return null;
+	return match (callee.resolvedSym.builtinKind) {
+		"SetHas" => SetOp.Has,
+		"SetIncl" => SetOp.Incl,
+		"SetExcl" => SetOp.Excl,
+		"SetIsEmpty" => SetOp.IsEmpty,
+		"SetSize" => SetOp.Size,
+		"SetHash" => SetOp.Hash,
+		"SetUnion" => SetOp.Union,
+		"SetIntersection" => SetOp.Intersection,
+		"SetDifference" => SetOp.Difference,
+		"SetSymmetricDifference" => SetOp.SymmetricDifference,
+		"SetIsSubsetOf" => SetOp.IsSubsetOf,
+		"SetIsSupersetOf" => SetOp.IsSupersetOf,
+		"SetIsDisjointFrom" => SetOp.IsDisjointFrom,
+		_ => null,
+	};
+}
+
+function isUnarySetOp(op: SetOp): boolean {
+	return op == SetOp.IsEmpty || op == SetOp.Size || op == SetOp.Hash;
 }
 
 function isSetBinaryOp(op: string): boolean {
@@ -59,17 +79,13 @@ function isSetCompoundOp(op: string): boolean {
 
 // ===== word class (uint32 / uint64) =====
 
-function isSetArgOp(name: string): boolean {
-	return name == "SetUnion" || name == "SetIntersection" || name == "SetDifference"
-		|| name == "SetSymmetricDifference" || name == "SetIsSubsetOf"
-		|| name == "SetIsSupersetOf" || name == "SetIsDisjointFrom";
-}
-
-function setWordOperator(name: string): string {
-	if (name == "SetUnion") return "|";
-	if (name == "SetIntersection" || name == "SetDifference") return "&";
-	if (name == "SetSymmetricDifference") return "^";
-	return "";
+function setWordOperator(op: SetOp): string | null {
+	return match (op) {
+		SetOp.Union => "|",
+		SetOp.Intersection | SetOp.Difference => "&",
+		SetOp.SymmetricDifference => "^",
+		_ => null,
+	};
 }
 
 function complementOf(operand: Node, t: Type, loc: SourceLocation): Node {
@@ -82,28 +98,18 @@ function isZero(expr: Node, t: Type, loc: SourceLocation): Node {
 	return typedBinary(expr, "==", typedNumber(0, t, loc), booleanType(), loc);
 }
 
-function lowerWordCall(node: Node, name: string, recv: Node, repr: Type): Node {
+function lowerWordCall(node: Node, op: SetOp, recv: Node, repr: Type): Node {
 	const d = node.data as CallExprData;
 	const loc = node.location;
-	if (name == "SetIsEmpty" && d.arguments.length == 1) {
-		return typedBinary(recv, "==", typedNumber(0, repr, loc), booleanType(), loc);
-	}
-	if (name == "SetSize" && d.arguments.length == 1) return lowerWordCard(recv, repr, loc);
-	if (name == "SetHash" && d.arguments.length == 1) return lowerWordHash(recv, repr, loc);
-	if (d.arguments.length != 2) return node;
-	if (isSetArgOp(name)) return lowerWordSetOp(node, name, recv, d.arguments[1], repr, loc);
-	const bit = shiftMember(d.arguments[1], repr);
-	if (name == "SetHas") {
-		const masked = typedBinary(recv, "&", bit, repr, loc);
-		return typedBinary(masked, "!=", typedNumber(0, repr, loc), booleanType(), loc);
-	}
-	if (name == "SetIncl") return typedBinary(recv, "|", bit, recv.nodeType, loc);
-	if (name == "SetExcl") {
-		const cleared = makeUnary("~", bit, loc);
-		cleared.nodeType = repr;
-		return typedBinary(recv, "&", cleared, recv.nodeType, loc);
-	}
-	return node;
+	return match (op) {
+		SetOp.IsEmpty => typedBinary(recv, "==", typedNumber(0, repr, loc), booleanType(), loc),
+		SetOp.Size => lowerWordCard(recv, repr, loc),
+		SetOp.Hash => lowerWordHash(recv, repr, loc),
+		SetOp.Has => typedBinary(typedBinary(recv, "&", shiftMember(d.arguments[1], repr), repr, loc), "!=", typedNumber(0, repr, loc), booleanType(), loc),
+		SetOp.Incl => typedBinary(recv, "|", shiftMember(d.arguments[1], repr), recv.nodeType, loc),
+		SetOp.Excl => typedBinary(recv, "&", complementOf(shiftMember(d.arguments[1], repr), repr, loc), recv.nodeType, loc),
+		_ => lowerWordSetOp(op, recv, d.arguments[1], repr, loc),
+	};
 }
 
 function lowerWordBinary(node: Node, repr: Type): Node {
@@ -151,17 +157,19 @@ function lowerWordCard(recv: Node, repr: Type, loc: SourceLocation): Node {
 	return typedBinary(low, "+", high, int32Type(), loc);
 }
 
-function lowerWordSetOp(node: Node, name: string, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
-	const setType = recv.nodeType;
-	const op = setWordOperator(name);
-	if (op != "") {
-		const right = name == "SetDifference" ? complementOf(other, repr, loc) : other;
-		return typedBinary(recv, op, right, setType, loc);
+function lowerWordSetOp(op: SetOp, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
+	const wordOp = setWordOperator(op);
+	if (wordOp != null) {
+		const right = op == SetOp.Difference ? complementOf(other, repr, loc) : other;
+		return typedBinary(recv, wordOp, right, recv.nodeType, loc);
 	}
-	if (name == "SetIsSubsetOf") return isZero(typedBinary(recv, "&", complementOf(other, repr, loc), repr, loc), repr, loc);
-	if (name == "SetIsSupersetOf") return isZero(typedBinary(other, "&", complementOf(recv, repr, loc), repr, loc), repr, loc);
-	if (name == "SetIsDisjointFrom") return isZero(typedBinary(recv, "&", other, repr, loc), repr, loc);
-	return node;
+	match (op) {
+		SetOp.IsSubsetOf => { return isZero(typedBinary(recv, "&", complementOf(other, repr, loc), repr, loc), repr, loc); },
+		SetOp.IsSupersetOf => { return isZero(typedBinary(other, "&", complementOf(recv, repr, loc), repr, loc), repr, loc); },
+		SetOp.IsDisjointFrom => { return isZero(typedBinary(recv, "&", other, repr, loc), repr, loc); },
+		_ => {},
+	};
+	throw new Error(`internal: BitSet operation ${op.toString()} reached the word-class set-operation lowering`);
 }
 
 // ===== array class (SizedArray<uint8, N>) — the reference's ctArray branch =====
@@ -211,73 +219,84 @@ function arrayLiteral(elements: Node[], t: Type | null, loc: SourceLocation): No
 	return lit;
 }
 
-function lowerArrayCall(node: Node, name: string, recv: Node, repr: Type): Node {
+function arrayIsEmpty(recv: Node, n: int32, loc: SourceLocation): Node {
+	let acc = wordAt(recv, 0, loc);
+	for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, loc), byteType(), loc);
+	return typedBinary(acc, "==", typedNumber(0, byteType(), loc), booleanType(), loc);
+}
+
+function arrayHash(recv: Node, n: int32, loc: SourceLocation): Node {
+	const words: Node[] = [];
+	for (let i = 0; i < n; i += 1) words.push(wordAt(recv, i, loc));
+	return foldWordHashes(words, loc);
+}
+
+function arraySize(recv: Node, n: int32, loc: SourceLocation): Node {
+	let total = cardCall(wordAt(recv, 0, loc), loc);
+	for (let i = 1; i < n; i += 1) total = typedBinary(total, "+", cardCall(wordAt(recv, i, loc), loc), int32Type(), loc);
+	return total;
+}
+
+function arrayHas(recv: Node, member: Node, loc: SourceLocation): Node {
+	const word = wordAtIndex(recv, memberWordIndex(member, loc), loc);
+	const masked = typedBinary(word, "&", memberBitInWord(member, loc), byteType(), loc);
+	return typedBinary(masked, "!=", typedNumber(0, byteType(), loc), booleanType(), loc);
+}
+
+function arrayInclExcl(op: SetOp, recv: Node, member: Node, repr: Type, loc: SourceLocation): Node {
+	const elements: Node[] = [];
+	for (let i = 0; i < wordCount(repr); i += 1) {
+		const bit = memberBit(member, i, loc);
+		if (op == SetOp.Incl) {
+			elements.push(typedBinary(wordAt(recv, i, loc), "|", bit, byteType(), loc));
+		} else {
+			elements.push(typedBinary(wordAt(recv, i, loc), "&", complementOf(bit, byteType(), loc), byteType(), loc));
+		}
+	}
+	return arrayLiteral(elements, repr, loc);
+}
+
+function lowerArrayCall(node: Node, op: SetOp, recv: Node, repr: Type): Node {
 	const d = node.data as CallExprData;
 	const loc = node.location;
 	const n = wordCount(repr);
-	if (name == "SetIsEmpty" && d.arguments.length == 1) {
-		let acc = wordAt(recv, 0, loc);
-		for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, loc), byteType(), loc);
-		return typedBinary(acc, "==", typedNumber(0, byteType(), loc), booleanType(), loc);
-	}
-	if (name == "SetHash" && d.arguments.length == 1) {
-		const words: Node[] = [];
-		for (let i = 0; i < n; i += 1) words.push(wordAt(recv, i, loc));
-		return foldWordHashes(words, loc);
-	}
-	if (name == "SetSize" && d.arguments.length == 1) {
-		let total = cardCall(wordAt(recv, 0, loc), loc);
-		for (let i = 1; i < n; i += 1) total = typedBinary(total, "+", cardCall(wordAt(recv, i, loc), loc), int32Type(), loc);
-		return total;
-	}
-	if (d.arguments.length != 2) return node;
-	const member = d.arguments[1];
-	if (isSetArgOp(name)) return lowerArraySetOp(node, name, recv, member, repr, loc);
-	if (name == "SetHas") {
-		const word = wordAtIndex(recv, memberWordIndex(member, loc), loc);
-		const masked = typedBinary(word, "&", memberBitInWord(member, loc), byteType(), loc);
-		return typedBinary(masked, "!=", typedNumber(0, byteType(), loc), booleanType(), loc);
-	}
-	if (name == "SetIncl" || name == "SetExcl") {
-		const elements: Node[] = [];
-		for (let i = 0; i < n; i += 1) {
-			const bit = memberBit(member, i, loc);
-			if (name == "SetIncl") {
-				elements.push(typedBinary(wordAt(recv, i, loc), "|", bit, byteType(), loc));
-			} else {
-				const cleared = makeUnary("~", bit, loc);
-				cleared.nodeType = byteType();
-				elements.push(typedBinary(wordAt(recv, i, loc), "&", cleared, byteType(), loc));
-			}
-		}
-		return arrayLiteral(elements, repr, loc);
-	}
-	return node;
+	return match (op) {
+		SetOp.IsEmpty => arrayIsEmpty(recv, n, loc),
+		SetOp.Hash => arrayHash(recv, n, loc),
+		SetOp.Size => arraySize(recv, n, loc),
+		SetOp.Has => arrayHas(recv, d.arguments[1], loc),
+		SetOp.Incl | SetOp.Excl => arrayInclExcl(op, recv, d.arguments[1], repr, loc),
+		_ => lowerArraySetOp(op, recv, d.arguments[1], repr, loc),
+	};
 }
 
-function arrayPredicateWord(name: string, recv: Node, other: Node, i: int32, loc: SourceLocation): Node {
+function arrayPredicateWord(op: SetOp, recv: Node, other: Node, i: int32, loc: SourceLocation): Node {
 	const t = byteType();
-	if (name == "SetIsSupersetOf") return isZero(typedBinary(wordAt(other, i, loc), "&", complementOf(wordAt(recv, i, loc), t, loc), t, loc), t, loc);
-	if (name == "SetIsDisjointFrom") return isZero(typedBinary(wordAt(recv, i, loc), "&", wordAt(other, i, loc), t, loc), t, loc);
-	return isZero(typedBinary(wordAt(recv, i, loc), "&", complementOf(wordAt(other, i, loc), t, loc), t, loc), t, loc);
+	match (op) {
+		SetOp.IsSupersetOf => { return isZero(typedBinary(wordAt(other, i, loc), "&", complementOf(wordAt(recv, i, loc), t, loc), t, loc), t, loc); },
+		SetOp.IsDisjointFrom => { return isZero(typedBinary(wordAt(recv, i, loc), "&", wordAt(other, i, loc), t, loc), t, loc); },
+		SetOp.IsSubsetOf => { return isZero(typedBinary(wordAt(recv, i, loc), "&", complementOf(wordAt(other, i, loc), t, loc), t, loc), t, loc); },
+		_ => {},
+	};
+	throw new Error(`internal: BitSet operation ${op.toString()} reached the array-class set predicate lowering`);
 }
 
-function lowerArraySetOp(node: Node, name: string, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
+function lowerArraySetOp(op: SetOp, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
 	const n = wordCount(repr);
-	const op = setWordOperator(name);
-	if (op != "") {
+	const wordOp = setWordOperator(op);
+	if (wordOp != null) {
 		const elements: Node[] = [];
 		for (let i = 0; i < n; i += 1) {
-			const right = name == "SetDifference"
+			const right = op == SetOp.Difference
 				? complementOf(wordAt(other, i, loc), byteType(), loc)
 				: wordAt(other, i, loc);
-			elements.push(typedBinary(wordAt(recv, i, loc), op, right, byteType(), loc));
+			elements.push(typedBinary(wordAt(recv, i, loc), wordOp, right, byteType(), loc));
 		}
 		return arrayLiteral(elements, repr, loc);
 	}
-	let acc = arrayPredicateWord(name, recv, other, 0, loc);
+	let acc = arrayPredicateWord(op, recv, other, 0, loc);
 	for (let i = 1; i < n; i += 1) {
-		acc = typedBinary(acc, "&&", arrayPredicateWord(name, recv, other, i, loc), booleanType(), loc);
+		acc = typedBinary(acc, "&&", arrayPredicateWord(op, recv, other, i, loc), booleanType(), loc);
 	}
 	return acc;
 }
@@ -325,11 +344,11 @@ function lowerCall(node: Node, ctx: TransformContext): Node {
 	if (!isSetOperand(recv)) return node;
 	const repr = setRepr(recv.nodeType);
 	if (repr == null) return node;
-	const name = setOpName(d.callee);
-	if (name == "") return node;
-	if (ctx.keepBuiltinMemberCalls && name == "SetSize") return node;
-	if (repr.kind == TypeKind.SizedArray) return lowerArrayCall(node, name, recv, repr);
-	return lowerWordCall(node, name, recv, repr);
+	const op = setOpOf(d.callee);
+	if (op == null || d.arguments.length != (isUnarySetOp(op) ? 1 : 2)) return node;
+	if (ctx.keepBuiltinMemberCalls && op == SetOp.Size) return node;
+	if (repr.kind == TypeKind.SizedArray) return lowerArrayCall(node, op, recv, repr);
+	return lowerWordCall(node, op, recv, repr);
 }
 
 function lowerCompound(node: Node, ctx: TransformContext): Node {
@@ -342,7 +361,7 @@ function lowerCompound(node: Node, ctx: TransformContext): Node {
 	}
 	const readBack = cloneIfPure(d.left);
 	if (readBack == null) {
-		addError(ctx.checkerCtx, "'" + d.operator + "' on a BitSet over 64 members needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		reportTransformError(ctx, "'" + d.operator + "' on a BitSet over 64 members needs a left side that can be read twice; hoist the receiver or index into a local first", node.location);
 		return node;
 	}
 	const op = d.operator.slice(0, d.operator.length - 1);
@@ -367,7 +386,15 @@ function lowerBinary(node: Node, ctx: TransformContext): Node {
 	return node;
 }
 
+function refuseUnhoistedOperand(node: Node, ctx: TransformContext): boolean {
+	if (node.kind == NodeKind.BinaryExpr && isSetCompoundOp((node.data as BinaryExprData).operator)) return false;
+	if (!isImpureArrayOp(node)) return false;
+	reportTransformError(ctx, "a BitSet operation over 64 members here needs operands that can be read twice; bind each operand to a local first", node.location);
+	return true;
+}
+
 function lowerNode(node: Node, ctx: TransformContext): Node {
+	if (refuseUnhoistedOperand(node, ctx)) return node;
 	if (node.kind == NodeKind.CallExpr) return lowerCall(node, ctx);
 	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node, ctx);
 	if (node.kind == NodeKind.TypeAssertion) {
@@ -382,7 +409,7 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 function isArrayOp(node: Node): boolean {
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
-		return d.arguments.length > 0 && arrayRepr(d.arguments[0].nodeType) != null && setOpName(d.callee) != "";
+		return d.arguments.length > 0 && arrayRepr(d.arguments[0].nodeType) != null && setOpOf(d.callee) != null;
 	}
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -454,7 +481,7 @@ export function isImpureArrayOp(node: Node): boolean {
 	return cloneIfPure(d.left) == null || cloneIfPure(d.right) == null;
 }
 
-export function containsImpureArrayOp(expr: Node): boolean {
+export function containsImpureArrayOp(expr: Node | null): boolean {
 	if (expr == null || expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) return false;
 	if (isImpureArrayOp(expr)) return true;
 	let found = false;
@@ -463,6 +490,13 @@ export function containsImpureArrayOp(expr: Node): boolean {
 		return child;
 	});
 	return found;
+}
+
+function forHeaderHasImpureOp(d: ForStmtData): boolean {
+	let init: Node | null = d.forInit;
+	if (init != null && init.kind == NodeKind.VariableDecl) init = (init.data as VariableDeclData).initializer;
+	else if (init != null && init.kind == NodeKind.ExprStmt) init = (init.data as ExprStmtData).expr;
+	return containsImpureArrayOp(init) || containsImpureArrayOp(d.forCondition) || containsImpureArrayOp(d.forUpdate);
 }
 
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
@@ -482,6 +516,15 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		moveWhileTestIntoBody(stmt, pre, cond);
 		return [stmt];
 	}
+	if (stmt.kind == NodeKind.DoWhileStmt) {
+		const pre: Node[] = [];
+		const d = stmt.data as DoWhileStmtData;
+		if (!containsImpureArrayOp(d.doCondition)) return [stmt];
+		const cond = hoistArrayOperands(d.doCondition, pre, ctx);
+		moveDoWhileTestIntoBody(stmt, pre, cond, ctx);
+		return [stmt];
+	}
+	if (stmt.kind == NodeKind.ForStmt) return forHeaderHasImpureOp(stmt.data as ForStmtData) ? [lowerForStmt(stmt, ctx)] : [stmt];
 	return hoistStmtValue(stmt, hoistArrayOperands, ctx);
 }
 

@@ -134,23 +134,67 @@ export function addDepToManifest(
 	return saveManifest(buildPath, newContent);
 }
 
+function isBlank(c: string): boolean {
+	return c == " " || c == "\t" || c == "\n" || c == "\r";
+}
+
+// The end of the `"name": "version"` entry that starts at `start`, with its comma and the blanks
+// after it; -1 when the quoted name there is not a key with a string value.
+function depEntryEnd(content: string, start: int32, quotedLength: int32, close: int32): int32 {
+	let i = start + quotedLength;
+	while (i < close && isBlank(content.charAt(i))) i = i + 1;
+	if (i >= close || content.charAt(i) != ":") return -1;
+	i = i + 1;
+	while (i < close && isBlank(content.charAt(i))) i = i + 1;
+	if (i >= close || content.charAt(i) != "\"") return -1;
+	i = i + 1;
+	while (i < close && content.charAt(i) != "\"") i = i + 1;
+	if (i >= close) return -1;
+	i = i + 1;
+	while (i < close && (content.charAt(i) == " " || content.charAt(i) == "\t")) i = i + 1;
+	if (i < close && content.charAt(i) == ",") i = i + 1;
+	while (i < close && (content.charAt(i) == " " || content.charAt(i) == "\t")) i = i + 1;
+	return i;
+}
+
+// Remove the entry from the text; its whole line goes when nothing else is on it.
+function cutDepEntry(content: string, start: int32, end: int32): string {
+	let lineStart = start;
+	while (lineStart > 0 && (content.charAt(lineStart - 1) == " " || content.charAt(lineStart - 1) == "\t")) lineStart = lineStart - 1;
+	const aloneBefore = lineStart == 0 || content.charAt(lineStart - 1) == "\n";
+	const aloneAfter = end >= content.length || content.charAt(end) == "\n" || content.charAt(end) == "\r";
+	if (aloneBefore && aloneAfter) {
+		let lineEnd = end;
+		while (lineEnd < content.length && content.charAt(lineEnd) != "\n") lineEnd = lineEnd + 1;
+		return content.slice(0, lineStart) + content.slice(lineEnd + 1, content.length);
+	}
+	return content.slice(0, start) + content.slice(end, content.length);
+}
+
 export function removeDepFromManifest(
 	buildPath: string,
 	name: string,
 ): Result<void, ManifestError> {
 	const content = try loadManifest(buildPath);
-
 	const quotedName = "\"" + name + "\"";
-	const idx = content.indexOf(quotedName);
-	if (idx < 0) return Result.err(ManifestError.NotFound);
 
-	let lineStart = idx;
-	while (lineStart > 0 && content.charAt(lineStart - 1) != "\n") lineStart = lineStart - 1;
-	let lineEnd = idx;
-	while (lineEnd < content.length && content.charAt(lineEnd) != "\n") lineEnd = lineEnd + 1;
+	for (const scope of ["deps:", "devDeps:"]) {
+		const blockStart = content.indexOf(scope);
+		if (blockStart < 0) continue;
+		let bracePos = blockStart + scope.length;
+		while (bracePos < content.length && content.charAt(bracePos) != "{") bracePos = bracePos + 1;
+		if (bracePos >= content.length) return Result.err(ManifestError.NoBlockBrace);
+		const closeBrace = findClosingBrace(content, bracePos);
+		if (closeBrace < 0) return Result.err(ManifestError.Unbalanced);
 
-	const newContent = content.slice(0, lineStart) + content.slice(lineEnd + 1, content.length);
-	return saveManifest(buildPath, newContent);
+		let at = content.indexOf(quotedName, bracePos);
+		while (at >= 0 && at < closeBrace) {
+			const end = depEntryEnd(content, at, quotedName.length, closeBrace);
+			if (end >= 0) return saveManifest(buildPath, cutDepEntry(content, at, end));
+			at = content.indexOf(quotedName, at + quotedName.length);
+		}
+	}
+	return Result.err(ManifestError.NotFound);
 }
 
 // --- Tests ---
@@ -207,6 +251,27 @@ test "a manifest edit says why it could not be made" {
 	assert addError("const config = {\n\tdeps: {\n") == ManifestError.Unbalanced;
 	assert addError("const config = {};\n") == ManifestError.NoExport;
 	assert addError("export default config;\n") == ManifestError.NoConfigObject;
+}
+
+test "removing a dependency leaves the package name and its neighbours on the same line" {
+	const path = join(tmpDir(), "test-manifest-rm-inline.ms");
+	writeFile(path, "const config = { package: { name: \"a\", version: \"1.0.0\" }, deps: { \"a\": \"1\", \"b\": \"2\" } };\n" +
+		"export default config;\n");
+	assert removeDepFromManifest(path, "a").ok;
+	const content = try readFile(path) catch "";
+	assert content.includes("name: \"a\"");
+	assert !content.includes("\"a\": \"1\"");
+	assert content.includes("\"b\": \"2\"");
+}
+
+test "removing a dependency named like a value leaves the value alone" {
+	const path = join(tmpDir(), "test-manifest-rm-value.ms");
+	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"x\": \"1\",\n\t},\n\tdevDeps: {\n\t\t\"foo\": \"2\",\n\t},\n};\n" +
+		"export default config;\n");
+	assert removeDepFromManifest(path, "foo").ok;
+	const content = try readFile(path) catch "";
+	assert content.includes("\"x\": \"1\"");
+	assert !content.includes("foo");
 }
 
 test "removing a dependency that is not declared is NotFound" {

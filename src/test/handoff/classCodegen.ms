@@ -20,7 +20,7 @@ test "E2E C: class type single pointer not double" {
 	const src = "class Doc { kind: number; name: string }\nfunction getKind(d: Doc): number { return d.kind; }\nconst doc = new Doc(1, \"hi\");\nconst k = getKind(doc);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* d)");
+	assert c.value.contains("* d_p0)");
 	assert singlePointer(c.value, "Doc");
 }
 
@@ -30,13 +30,13 @@ test "E2E C: class function param uses (*d).field" {
 	const c = compileToC(src);
 	assert c.ok;
 	// Should use (*d).kind or d->kind, NOT d.kind (d is a pointer)
-	assert c.value.contains("(*d).kind") || c.value.contains("d->kind");
+	assert c.value.contains("(*d_p0).kind") || c.value.contains("d_p0->kind");
 }
 
 test "E2E C: nullable class no double pointer" {
 	const src = "class Nd { value: number }\nfunction process(n: Nd): number {\n  if (n === null) { return 0; }\n  return n.value;\n}\nconst nd = new Nd(42);\nconst r = process(nd);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* n)");
+	assert c.value.contains("* n_p0)");
 	assert singlePointer(c.value, "Nd");
 }

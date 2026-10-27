@@ -44,13 +44,13 @@ export function taHashString(s: string): int64 { return djb2(s); }
 // Uses multiplication + modulo (not bitwise ops) for JS-backend compatibility.
 // Bitwise <<, >>, ^ operate on signed int32 in JS, giving different results than C int64.
 
-const PRIME: number = 2147483647;
+const PRIME: int64 = 2147483647;
 
-function combine(a: number, b: number): number {
+function combine(a: int64, b: int64): int64 {
 	return ((a * 31) + b) % PRIME;
 }
 
-function enumToNum(kind: TaQueryKind): number {
+function enumToNum(kind: TaQueryKind): int64 {
 	return match (kind) {
 		TaQueryKind.FileText => 0,
 		TaQueryKind.FileHash => 1,
@@ -64,32 +64,32 @@ function enumToNum(kind: TaQueryKind): number {
 	};
 }
 
-export function taHashKey(key: TaQueryKey): number {
-	return combine(enumToNum(key.queryKind) * 1000003, key.fileId);
+export function taHashKey(key: TaQueryKey): int64 {
+	return combine(enumToNum(key.queryKind) * 1000003, key.fileId as int64);
 }
 
 // ===== AST Content Hash Helpers =====
 
-function hS(h: number, s: string): number {
+function hS(h: int64, s: string): int64 {
 	if (s == null) return combine(h, 0);
-	return combine(h, taHashString(s) as number);
+	return combine(h, taHashString(s));
 }
 
-function hI(h: number, n: number): number {
+function hI(h: int64, n: int64): int64 {
 	const v = (n < 0) ? (0 - n) : n;
 	return combine(h, v % PRIME);
 }
 
-function hB(h: number, b: boolean): number {
+function hB(h: int64, b: boolean): int64 {
 	return combine(h, b ? 1 : 0);
 }
 
-function hN(h: number, node: Node | null): number {
+function hN(h: int64, node: Node | null): int64 {
 	if (node == null) return combine(h, 0);
-	return combine(h, transAmHashNode(node));
+	return combine(h, taHashNode(node));
 }
 
-function hNodes(h: number, nodes: Node[]): number {
+function hNodes(h: int64, nodes: Node[]): int64 {
 	if (nodes == null) return combine(h, 0);
 	h = hI(h, nodes.length);
 	for (const node of nodes) {
@@ -98,7 +98,7 @@ function hNodes(h: number, nodes: Node[]): number {
 	return h;
 }
 
-function hNodeRows(h: number, rows: Node[][]): number {
+function hNodeRows(h: int64, rows: Node[][]): int64 {
 	if (rows == null) return combine(h, 0);
 	h = hI(h, rows.length);
 	for (const row of rows) {
@@ -107,7 +107,7 @@ function hNodeRows(h: number, rows: Node[][]): number {
 	return h;
 }
 
-function hStrings(h: number, strs: string[]): number {
+function hStrings(h: int64, strs: string[]): int64 {
 	if (strs == null) return combine(h, 0);
 	h = hI(h, strs.length);
 	for (const s of strs) {
@@ -116,11 +116,15 @@ function hStrings(h: number, strs: string[]): number {
 	return h;
 }
 
-function hNumbers(h: number, nums: number[]): number {
+function hF(h: int64, v: float64): int64 {
+	return hS(h, String(v));
+}
+
+function hFloats(h: int64, nums: float64[]): int64 {
 	if (nums == null) return combine(h, 0);
 	h = hI(h, nums.length);
 	for (const n of nums) {
-		h = hI(h, n);
+		h = hF(h, n);
 	}
 	return h;
 }
@@ -141,21 +145,23 @@ function hNumbers(h: number, nums: number[]): number {
 // extend this function to hash the new channel.
 
 export function transAmHashNode(node: Node): number {
+	return taHashNode(node) as number;
+}
+
+export function taHashNode(node: Node): int64 {
 	if (node == null) return 0;
-	let h: number = (node.kind * 2654435761) % PRIME;
+	let h: int64 = ((node.kind as int32 as int64) * 2654435761) % PRIME;
 
 	match (node.kind) {
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const nd = node.data as NumberLiteralData;
-			h = hI(h, nd.value);
+			h = hF(h, nd.value);
 			if (nd.isFloat) {
 				h = hI(h, 1);
 			} else {
-				// Split: a single `as number` would round the halves back together
-				// and collide the exact pairs this field exists to distinguish.
-				h = hI(h, (nd.intVal & 0xFFFFFFFF) as number);
-				h = hI(h, ((nd.intVal >> 32) & 0xFFFFFFFF) as number);
+				h = hI(h, nd.intVal & 0xFFFFFFFF);
+				h = hI(h, (nd.intVal >> 32) & 0xFFFFFFFF);
 			}
 		},
 		NodeKind.StringLiteral => {
@@ -294,7 +300,7 @@ export function transAmHashNode(node: Node): number {
 		// === Statements ===
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			h = hS(h, d.declName); h = hS(h, d.declType); h = hN(h, d.initializer); h = hI(h, d.declKind as number);
+			h = hS(h, d.declName); h = hS(h, d.declType); h = hN(h, d.initializer); h = hI(h, d.declKind as int32 as int64);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
@@ -375,7 +381,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
-			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues); h = hNodes(h, d.enumInits);
+			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hFloats(h, d.enumValues); h = hNodes(h, d.enumInits);
 		},
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
@@ -407,7 +413,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
-			h = hI(h, d.externKind as number); h = hS(h, d.externName); h = hS(h, d.nativeName); h = hS(h, d.externType);
+			h = hI(h, d.externKind as int32 as int64); h = hS(h, d.externName); h = hS(h, d.nativeName); h = hS(h, d.externType);
 		},
 
 		// === Error Handling ===
@@ -469,7 +475,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.TypeArray => {
 			const d = node.data as TypeArrayData;
-			h = hN(h, d.typExprElement); h = hI(h, d.typExprSize);
+			h = hN(h, d.typExprElement); h = hF(h, d.typExprSize);
 		},
 		NodeKind.TypeUnion => {
 			h = hNodes(h, (node.data as TypeUnionData).typExprMembers);

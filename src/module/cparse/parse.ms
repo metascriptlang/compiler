@@ -354,7 +354,7 @@ function layoutKnownType(t: CType): boolean {
 
 function membersLayoutKnown(members: CMember[]): boolean {
 	for (const m of members) {
-		if (m.name == "" || m.bitWidth >= 0 || !layoutKnownType(m.type)) return false;
+		if (m.name == "" || m.bitWidth != null || !layoutKnownType(m.type)) return false;
 	}
 	return true;
 }
@@ -456,10 +456,14 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 	// Parse constant expression for array size
 	let size = 0;
 	if (!eq(ctx, "]")) {
+		const sizeAt = ctx.tok;
 		const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+		ctx.tok = evalResult.tok;
 		if (evalResult.ok) {
 			size = evalResult.value as int32;
-			ctx.tok = evalResult.tok;
+		} else {
+			ctx.diags.push(makeDiag(DiagSeverity.Error, sizeAt.file, sizeAt.line, sizeAt.col,
+				`array size: ${evalResult.error}`));
 		}
 	}
 	expect(ctx, "]");
@@ -677,18 +681,23 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			skipAttributes(ctx);
 
 			// Bitfield: int x : 3;
-			let bitWidth = -1;
+			let bitWidth: int32 | null = null;
 			if (consume(ctx, ":")) {
-				if (ctx.tok.kind == CTokenKind.Num) {
-					bitWidth = ctx.tok.intVal as int32;
-					advance(ctx);
+				const widthAt = ctx.tok;
+				const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+				ctx.tok = evalResult.tok;
+				if (evalResult.ok) {
+					bitWidth = evalResult.value as int32;
+				} else {
+					ctx.diags.push(makeDiag(DiagSeverity.Error, widthAt.file, widthAt.line, widthAt.col,
+						`bit-field width: ${evalResult.error}`));
 				}
 				skipAttributes(ctx);
 			}
 
 			const mem = makeMember(memName, memTy);
 			mem.bitWidth = bitWidth;
-			if (bitWidth >= 0) mem.bitOffset = 0;
+			if (bitWidth != null) mem.bitOffset = 0;
 			members.push(mem);
 
 			// Error recovery: break if no progress
@@ -739,9 +748,12 @@ function enumSpecifier(ctx: ParseCtx): CType {
 
 		if (consume(ctx, "=")) {
 			const evalResult = evalConstExpr(ctx.tok, ctx.enumConstants);
+			ctx.tok = evalResult.tok;
 			if (evalResult.ok) {
 				enumVal = evalResult.value;
-				ctx.tok = evalResult.tok;
+			} else {
+				ctx.diags.push(makeDiag(DiagSeverity.Error, nameAt.file, nameAt.line, nameAt.col,
+					`enum value: ${evalResult.error}`));
 			}
 		}
 

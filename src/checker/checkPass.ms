@@ -7,9 +7,9 @@ import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprS
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
-import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
-import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol } from "./symbol";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -17,13 +17,14 @@ import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
 import { env, cwd } from "std/process";
 import { parseAsBuildOf } from "../parser/context";
 import { backendName, backendOfExtension } from "../module/resolver";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, isBuiltinStubHeader } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
+import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { CtorRow, startCtorCapture, endCtorCapture, replayCtorRoutines } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
@@ -141,6 +142,23 @@ function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartStat
 	}
 }
 
+// A loop body may run again, so a binding declared outside it and moved inside it is
+// used after its move on the next iteration; the move also reaches the code after the loop.
+function leaveLoopConsumeScope(ctx: CheckerContext, snap: int32, loop: Node, body: Node): void {
+	const moved = collectNewConsumes(ctx.affineTracker, snap).filter(isMovedKey);
+	leaveConsumeScope(ctx.affineTracker, snap);
+	for (const key of moved) {
+		const declKey = key.slice(MOVED_PREFIX.length);
+		const name = consumeKeyName(declKey);
+		const outer = lookupSymbol(ctx.table, name);
+		if (outer == null || symbolConsumeKey(outer) != declKey) continue;
+		if (breaksBlock(body) == BreakState.BsNone) {
+			addError(ctx, `'${name}' is moved inside a loop, so the next iteration uses it after the move (PARALOCK E24)`, loop.location.line, loop.location.column);
+		}
+		markConsumedName(ctx.affineTracker, key);
+	}
+}
+
 // PARALOCK Phase 9 E40: direct `await spawn(...)` inside a loop body serializes
 // the fan-out — each iteration blocks before the next spawn starts. Warning,
 // not error: retry-style loops legitimately await inline (E40 catalog row).
@@ -191,6 +209,19 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 			pi = pi + 1;
 		}
 		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
+	}
+	if (bindsSignatureTypes(node)) {
+		fnExpr.typeExpr = node.typeExpr;
+		fnExpr.typeExprs = node.typeExprs;
+		node.typeExpr = null;
+		node.typeExprs = null;
+		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx, node.location) : null;
+		if (annotation != null) {
+			const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
+			operand.nodeType = annotation;
+			operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+			node.typeExpr = operand;
+		}
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -674,9 +705,9 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
 		if (paramTypeStrs[i] == "") return null;
-		paramTypes.push(resolveAnnotation(paramTypeStrs[i], ctx, loc.line, loc.column));
+		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
 	}
-	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column));
+	return createClosureType(paramTypes, paramNames, resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
 }
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
@@ -717,7 +748,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	let declType: Type | null = null;
 	if (d.declType != "") {
 		const typeLoc = node.typeExpr != null ? node.typeExpr.location : d.nameLocation;
-		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
+		declType = annotatedType(d.declType, node.typeExpr, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
 	// Self-recursive closure binding: `const fact = (n: int32): int32 => fact(n-1)`.
@@ -2182,7 +2213,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.whileBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.whileBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2211,7 +2242,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2293,7 +2324,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forOfBody);
 }
 
 function destructuresByPosition(t: Type): boolean {
@@ -2434,7 +2465,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forInBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forInBody);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
@@ -2450,7 +2481,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.doBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.doBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
@@ -2578,11 +2609,11 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
 	const fd = d.initializer.data as FunctionExprData;
 	const paramTypes: Type[] = [];
-	for (const pt of fd.funcExprParamTypes) {
-		if (pt == "") return;
-		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
+	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
+		if (fd.funcExprParamTypes[i] == "") return;
+		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, d.nameLocation.line, d.nameLocation.column));
 	}
-	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, d.nameLocation.line, d.nameLocation.column) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
@@ -2800,7 +2831,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 		restoreConsumeState(ctx.affineTracker, oldAffine);
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName != "") {
-			const errSym = lookupSymbol(ctx.table, "Error");
+			const errSym = stdSymbol(ctx, "Error");
 			const catchType = (errSym != null && errSym.symbolType != null) ? errSym.symbolType : inferredType();
 			node.nodeType = catchType;
 			const catchSym = declSymbol(ctx, node, d.catchName, SymbolKind.Variable, catchType, false);
@@ -3196,6 +3227,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 // ===== Check Program Body =====
 
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
+	ctx.topProgram = program;
 	const stmts = program.data as ProgramData;
 	const hoistMark = ctx.pendingHoisted.length;
 	let i = 0;
@@ -3351,7 +3383,7 @@ function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
 	let sym: Symbol | null = null;
 	if (call.kind == NodeKind.CallExpr) {
 		const callee = (call.data as CallExprData).callee;
-		if (callee.kind != NodeKind.Identifier) return null;
+		if (callee == null || callee.kind != NodeKind.Identifier) return null;
 		name = (callee.data as IdentifierData).name;
 		sym = resolveCalleeIdent(ctx, callee);
 	} else if (call.kind == NodeKind.MacroInvocation) {
@@ -3420,14 +3452,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		}
 	} else {
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
-		call.kind = expanded.kind;
-		call.data = expanded.data;
-		call.typeArg = expanded.typeArg;
-		if (expanded.location != null) call.location = expanded.location;
-		call.nodeType = null as unknown as Type;
-		call.resolvedSym = null;
-		call.flags = 0 as BitSet<NodeFlag>;
-		call.variantSlot = 0;
+		adoptExpansionResult(call, expanded);
 		expandCollectStmt(ctx, stmt, out, emitted);
 	}
 	ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
@@ -3593,8 +3618,10 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	const name = md.macroName;
 	if (name == "include") {
 		const modDir = getModuleDir(ctx.modulePath);
+		const header = moduleRelativeHeader(arg0Str, modDir);
+		if (isBuiltinStubHeader(header)) return;
 		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-		ctx.includeDirectives = ctx.includeDirectives + moduleRelativeHeader(arg0Str, modDir);
+		ctx.includeDirectives = ctx.includeDirectives + header;
 		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + modDir));
 	} else if (name == "compile") {
 		if (ctx.compileDirectives != "") ctx.compileDirectives = ctx.compileDirectives + "\n";
@@ -4172,10 +4199,10 @@ function appendDirectiveLines(lines: string, more: string): string {
 	return lines == "" ? more : lines + "\n" + more;
 }
 
-let _pendingSeedSymbols: Symbol[] = [];
+let _pendingSeedSymbols: NamedSymbol[] = [];
 let _pendingSeedExtensions: ExtensionMethod[] = [];
 
-export function registerSeedSymbols(syms: Symbol[], exts: ExtensionMethod[]): void {
+export function registerSeedSymbols(syms: NamedSymbol[], exts: ExtensionMethod[]): void {
 	_pendingSeedSymbols = syms;
 	_pendingSeedExtensions = exts;
 }
@@ -4187,10 +4214,10 @@ export function clearSeedSymbols(): void {
 
 function drainSeedSymbols(ctx: CheckerContext): void {
 	const table = ctx.table;
-	for (const sym of _pendingSeedSymbols) {
-		const innerNameId = getIdentId(table.identCache, sym.name);
+	for (const seed of _pendingSeedSymbols) {
+		const innerNameId = getIdentId(table.identCache, seed.name);
 		if (!table.current.symbols.has(innerNameId)) {
-			table.current.symbols.set(innerNameId, sym);
+			table.current.symbols.set(innerNameId, seed.sym);
 		}
 	}
 	for (const ext of _pendingSeedExtensions) {

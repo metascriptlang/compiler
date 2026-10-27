@@ -1,5 +1,3 @@
-// File URIs: percent-encoding between LSP document URIs and filesystem paths.
-
 import { digitValue } from "std/core/number/parse";
 
 function escapedByte(s: string, at: int32): int32 {
@@ -9,53 +7,49 @@ function escapedByte(s: string, at: int32): int32 {
 	return hi < 16 && lo < 16 ? hi * 16 + lo : -1;
 }
 
-// Percent-decoding. Real clients hand us escaped URIs: the VS Code plugin sends
-// `document.uri.toString()`, which escapes the Windows drive colon as `%3A` and
-// every space as `%20`. Left undecoded, the drive-letter check below never fires
-// and every path-keyed feature (project root, build.ms lookup) silently resolves
-// against a path that exists nowhere.
-//
-// Escapes are UTF-8 BYTES, so a non-ASCII character arrives as a run of them
-// (é = %C3%A9); decoding each byte through fromCodePoint would emit mojibake.
-// Continuation bytes are folded into one code point here.
+function continuationEscape(s: string, at: int32): int32 {
+	const b = escapedByte(s, at);
+	return b >= 0x80 && b < 0xC0 ? b - 0x80 : -1;
+}
+
+// The code point of the UTF-8 escape run at `at`, or -1 when it is not a well-formed run.
+function escapedCodePoint(s: string, at: int32): int32 {
+	const b0 = escapedByte(s, at);
+	if (b0 < 0x80) return b0;
+	const need = b0 >= 0xF0 ? 3 : b0 >= 0xE0 ? 2 : b0 >= 0xC2 ? 1 : 0;
+	if (need == 0 || b0 > 0xF4) return -1;
+	let cp = b0 - (need == 3 ? 0xF0 : need == 2 ? 0xE0 : 0xC0);
+	for (let k = 1; k <= need; k++) {
+		const cb = continuationEscape(s, at + 3 * k);
+		if (cb < 0) return -1;
+		cp = cp * 64 + cb;
+	}
+	const floor = need == 3 ? 0x10000 : need == 2 ? 0x800 : 0x80;
+	const surrogate = cp >= 0xD800 && cp <= 0xDFFF;
+	return cp < floor || cp > 0x10FFFF || surrogate ? -1 : cp;
+}
+
 function lspPercentDecode(s: string): string {
 	let out = "";
 	let i = 0;
 	while (i < s.length) {
-		const b0 = escapedByte(s, i);
-		if (b0 < 0) {
+		const cp = escapedCodePoint(s, i);
+		if (cp < 0) {
 			out += s.charAt(i);
 			i++;
 			continue;
 		}
-		i += 3;
-		if (b0 < 0x80) {
-			out += fromCodePoint(b0);
-			continue;
-		}
-		const need = b0 >= 0xF0 ? 3 : b0 >= 0xE0 ? 2 : b0 >= 0xC0 ? 1 : 0;
-		if (need == 0) continue;
-		let cp = b0 - (need == 3 ? 0xF0 : need == 2 ? 0xE0 : 0xC0);
-		let ok = true;
-		for (let taken = 0; taken < need; taken++) {
-			const cb = escapedByte(s, i);
-			if (cb < 0x80 || cb >= 0xC0) { ok = false; break; }
-			cp = cp * 64 + (cb - 0x80);
-			i += 3;
-		}
-		if (ok) out += fromCodePoint(cp);
+		out += fromCodePoint(cp);
+		i += cp < 0x80 ? 3 : cp < 0x800 ? 6 : cp < 0x10000 ? 9 : 12;
 	}
 	return out;
 }
 
 export function lspUriToPath(uri: string): string {
-	// "file:///Users/foo/bar.ms" → "/Users/foo/bar.ms"
-	// "file:///C:/Users/foo.ms" → "C:/Users/foo.ms" (drop leading slash before drive)
 	const prefix = "file://";
 	if (uri.byteLength > prefix.byteLength) {
 		if (uri.slice(0, prefix.byteLength) == prefix) {
 			const stripped = lspPercentDecode(uri.slice(prefix.byteLength, uri.byteLength));
-			// Windows: "/C:/..." → "C:/..." (RFC 8089 file URIs)
 			if (stripped.length >= 3 && stripped.charAt(0) == "/" && stripped.charAt(2) == ":") {
 				return stripped.slice(1, stripped.length);
 			}
@@ -128,4 +122,18 @@ test "uri to path folds multi-byte utf-8 escapes into one code point" {
 test "uri to path keeps a literal percent that is not an escape" {
 	assert lspUriToPath("file:///Users/100%pure/a.ms") == "/Users/100%pure/a.ms";
 	assert lspUriToPath("file:///Users/a%zz/b.ms") == "/Users/a%zz/b.ms";
+}
+
+test "uri to path keeps an invalid utf-8 escape run literally" {
+	assert lspUriToPath("file:///a/%80b.ms") == "/a/%80b.ms";
+	assert lspUriToPath("file:///a/%C3%41.ms") == "/a/%C3A.ms";
+	assert lspUriToPath("file:///a/%C3") == "/a/%C3";
+	assert lspUriToPath("file:///a/%FF.ms") == "/a/%FF.ms";
+	assert lspUriToPath("file:///a/%C0%80.ms") == "/a/%C0%80.ms";
+	assert lspUriToPath("file:///a/%ED%A0%80.ms") == "/a/%ED%A0%80.ms";
+}
+
+test "uri to path decodes three and four byte escape runs" {
+	assert lspUriToPath("file:///a/%E2%82%AC.ms") == "/a/" + fromCodePoint(0x20AC) + ".ms";
+	assert lspUriToPath("file:///a/%F0%9F%98%80.ms") == "/a/" + fromCodePoint(0x1F600) + ".ms";
 }

@@ -249,7 +249,15 @@ static inline void ms_record_failure(void) {
 /* Takes a NULL-terminated array of MsTestModule descriptors.
  * Runs all tests, prints per-file lines, failure details, and summary. */
 
-static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
+static inline void ms_test_hex(const char* value) {
+    static const char digits[] = "0123456789abcdef";
+    for (const unsigned char* p = (const unsigned char*)value; *p; ++p) {
+        fputc(digits[*p >> 4], stdout);
+        fputc(digits[*p & 15], stdout);
+    }
+}
+
+static inline int ms_test_run(MsTestModule* modules, int argc, char** argv, int timings) {
     const char* filter = (argc > 1) ? argv[1] : NULL;
     long t0_all = ms_clock_ms();
 
@@ -276,6 +284,7 @@ static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
             __ms_last_assert_line = 0;
             __ms_pa_pending = 0;
             __ms_current_test_name = e->name;
+            long test_start = timings ? ms_clock_ms() : 0;
             e->fn();
 
             if (msErr) {
@@ -290,6 +299,14 @@ static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
                 ms_record_failure();
             } else {
                 mod_passed++;
+            }
+            if (timings) {
+                printf("TESTTIME\t%ld\t%d\t", ms_clock_ms() - test_start, i);
+                ms_test_hex(mod->file_path);
+                fputc('\t', stdout);
+                ms_test_hex(e->name);
+                fputc('\n', stdout);
+                fflush(stdout);
             }
         }
 
@@ -373,6 +390,14 @@ static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
     printf("\n");
 
     return total_failed > 0 ? 1 : 0;
+}
+
+static inline int ms_test_main(MsTestModule* modules, int argc, char** argv) {
+    return ms_test_run(modules, argc, argv, 0);
+}
+
+static inline int ms_test_main_timed(MsTestModule* modules, int argc, char** argv) {
+    return ms_test_run(modules, argc, argv, 1);
 }
 
 #endif /* MS_TEST_H */

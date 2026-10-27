@@ -32,19 +32,19 @@ function isGenericSym(sym: Symbol): boolean {
 	return isGenericFn(fnFlagsOf(sym)) || hasGenericParams(sym.symbolType);
 }
 
-function noSingleValueReason(sym: Symbol): string {
+function noSingleValueReason(sym: Symbol): string | null {
 	if (sym.symbolKind == SymbolKind.Class && hasGenericParams(sym.symbolType)) return "it is a generic class, which compiles to one class per instance, not one value — export a non-generic class for each type a host needs, or drop 'export'";
-	if (sym.symbolKind != SymbolKind.Function) return "";
+	if (sym.symbolKind != SymbolKind.Function) return null;
 	const fns = hostFunctions(sym);
 	for (const f of fns) {
 		if (isGenericSym(f)) return "it is a generic function, which compiles to one function per instance, not one value — export a non-generic wrapper for each type a host needs, or drop 'export'";
 	}
 	if (fns.length > 1) return `it is an overload set of ${fns.length} functions, and an ES export holds one value — give each function its own name, or drop 'export'`;
-	return "";
+	return null;
 }
 
-function refuse(ctx: CheckerContext, node: Node, name: string, origin: string, reason: string): void {
-	const from = origin == "" ? "" : ` (re-exported from '${origin}')`;
+function refuse(ctx: CheckerContext, node: Node, name: string, origin: string | null, reason: string): void {
+	const from = origin == null ? "" : ` (re-exported from '${origin}')`;
 	addError(ctx, `the JS bundle cannot export '${name}'${from}: ${reason}`, node.location.line, node.location.column);
 }
 
@@ -76,7 +76,7 @@ export function checkJsBundleExports(ctx: CheckerContext, program: Node): Bundle
 			if (sym == null || handled.has(name)) continue;
 			handled.add(name);
 			const reason = noSingleValueReason(sym);
-			if (reason != "") refuse(ctx, exp, name, "", reason);
+			if (reason != null) refuse(ctx, exp, name, null, reason);
 			else if (sym.symbolKind == SymbolKind.Enum && runtimeValueOf(sym) != null) extra.push({ name, sym });
 			continue;
 		}
@@ -93,7 +93,7 @@ export function checkJsBundleExports(ctx: CheckerContext, program: Node): Bundle
 			if (sym == null || sym.modulePath == ctx.modulePath || handled.has(name)) continue;
 			handled.add(name);
 			const reason = noSingleValueReason(sym);
-			if (reason != "") refuse(ctx, exp, name, imp.importSource, reason);
+			if (reason != null) refuse(ctx, exp, name, imp.importSource, reason);
 			else {
 				const value = runtimeValueOf(sym);
 				if (value != null) extra.push({ name, sym: value });

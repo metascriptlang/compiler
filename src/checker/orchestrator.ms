@@ -150,7 +150,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	lastPreludeCtx = baseCtx;
 
 	const _tb0 = performance.now();
-	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64);
+	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null);
 	if (kept == null) {
 		dbSetResolverConfig(db, resolverConfig);
 		db.preludeCtx = baseCtx;

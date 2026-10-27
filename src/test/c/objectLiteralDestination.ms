@@ -40,8 +40,8 @@ function outer(a: int32, b: int32): Outer { return { inner: { a: a, b: b }, n: a
 function main(): void { console.log(outer(1, 2).n); }
 `);
 	assert c.ok;
-	assert c.value.contains("(*__result).inner.a = a;");
-	assert c.value.contains("(*__result).n = msAddI32(a, b);");
+	assert c.value.contains("(*__result).inner.a = a_p0;");
+	assert c.value.contains("(*__result).n = msAddI32(a_p0, b_p1);");
 	assert !c.value.contains("_lit");
 }
 

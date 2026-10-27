@@ -64,18 +64,14 @@ function markGreen(
 	entry.state = TaQueryState.Yellow;
 
 	// Check each dependency
-	let i = 0;
-	while (i < entry.dependencies.length) {
-		const dep = entry.dependencies[i];
-
+	for (const dep of entry.dependencies) {
 		if (dep.depKey.queryKind == TaQueryKind.FileText) {
 			// Input query: check if file content hash changed
 			const currentHash = getFileHash(fileInput, dep.depKey.fileId);
-			if (currentHash != dep.expectedHash) {
+			if (currentHash == null || currentHash != dep.expectedHash) {
 				entry.state = TaQueryState.Red;
 				return false;
 			}
-			i = i + 1;
 			continue;
 		}
 
@@ -89,7 +85,6 @@ function markGreen(
 					entry.state = TaQueryState.Red;
 					return false;
 				}
-				i = i + 1;
 				continue;
 			}
 		}
@@ -116,8 +111,6 @@ function markGreen(
 				// Output hash matches — comment/whitespace-only change, stay green
 			}
 		}
-
-		i = i + 1;
 	}
 
 	// All deps verified
@@ -135,7 +128,7 @@ export function executeQueryWith(
 	depStack: TaDependencyStack,
 	key: TaQueryKey,
 	currentRevision: int32,
-	outputHash: number,  // content hash
+	outputHash: int64,  // content hash
 	wasComputed: boolean
 ): void {
 	if (!wasComputed) return;
@@ -143,9 +136,8 @@ export function executeQueryWith(
 	// Store or update cache entry
 	let entry = cacheGet(cache, key);
 	if (entry == null) {
-		const newEntry = createCacheEntry(key);
-		cachePut(cache, newEntry);
-		entry = cacheGet(cache, key);
+		entry = createCacheEntry(key);
+		cachePut(cache, entry);
 	}
 	const kind = key.queryKind as int32;
 	while (cache.recomputed.length <= kind) cache.recomputed.push(0);
@@ -180,11 +172,7 @@ export function invalidateFile(
 
 // ===== Test Helpers =====
 
-interface TaTestCounter {
-	value: number;
-}
-
-function makeTestDeps(fileId: int32, expectedHash: number): TaDependencyEntry[] {
+function makeTestDeps(fileId: int32, expectedHash: int64): TaDependencyEntry[] {
 	const deps: TaDependencyEntry[] = [];
 	const dk = createQueryKey(TaQueryKind.FileText, fileId);
 	const de: TaDependencyEntry = { depKey: dk, expectedHash: expectedHash };
@@ -241,7 +229,7 @@ test "file dependency hash match -> true" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
 	setFileText(fileInput, "a.ms", "source");
-	const actualHash = getFileHash(fileInput, 0);
+	const actualHash = getFileHash(fileInput, 0)!;
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(parseKey);
 	entry.state = TaQueryState.Red;

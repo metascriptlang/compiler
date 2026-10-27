@@ -41,9 +41,9 @@ function defaultValueOf(declared: Type | null, open: Type[]): string {
 			const typedName = jsTypedArrayName(elemType.kind);
 			if (typedName != "") return `new ${typedName}(${size})`;
 			const elemInit = defaultValueOf(elemType, open);
-			if (elemInit != "") return `Array.from({ length: ${size} }, () => (${elemInit}))`;
+			if (elemInit != "") return `globalThis.Array.from({ length: ${size} }, () => (${elemInit}))`;
 		}
-		return `new Array(${size}).fill(null)`;
+		return `new globalThis.Array(${size}).fill(null)`;
 	}
 	if (t.kind == TypeKind.Array) return "[]";
 	if (t.kind == TypeKind.Number || t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64
@@ -147,7 +147,7 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 			body = "return v.slice();";
 		}
 	}
-	return "function " + name + "(v) { if (v === null || v === undefined) return v; " + body + " }\n";
+	return "function " + name + "(v) { if (v === null || v === void 0) return v; " + body + " }\n";
 }
 
 function armDiscriminant(union: Type, key: string): string {
@@ -164,7 +164,7 @@ function unionCopyBody(gen: JSGenerator, union: Type): string {
 	for (let i = 0; i < union.typeChildren.length; i += 1) {
 		body = body + "case " + armDiscriminant(union, union.typeNames[i + 1]) + ": return " + copyFnName(gen, union.typeChildren[i]) + "(v); ";
 	}
-	return body + "default: throw new Error(\"copy of a union whose discriminant matches no arm\"); }";
+	return body + "default: throw new globalThis.Error(\"copy of a union whose discriminant matches no arm\"); }";
 }
 
 function isElementRead(n: Node): boolean {
@@ -253,7 +253,7 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 			i += 1;
 		}
 	} else if (t.kind == TypeKind.Union) {
-		body = "const c = " + copy + "(v); for (const k of Object.keys(d)) delete d[k]; Object.assign(d, c); ";
+		body = "const c = " + copy + "(v); for (const k of globalThis.Object.keys(d)) delete d[k]; globalThis.Object.assign(d, c); ";
 	} else if (t.kind == TypeKind.Tuple) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
@@ -262,12 +262,12 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 			i += 1;
 		}
 	} else {
-		body = "if (ArrayBuffer.isView(d)) { if (d.length !== v.length) return " + copy + "(v); d.set(v); return d; } "
+		body = "if (globalThis.ArrayBuffer.isView(d)) { if (d.length !== v.length) return " + copy + "(v); d.set(v); return d; } "
 			+ "d.length = v.length; "
 			+ "for (let i = 0; i < v.length; i++) d[i] = " + assignExpr(gen, t.typeReturn, "d[i]", "v[i]") + "; ";
 	}
-	return "function " + name + "(d, v) { if (v === null || v === undefined) return v; "
-		+ "if (d === null || d === undefined) return " + copy + "(v); " + body + "return d; }\n";
+	return "function " + name + "(d, v) { if (v === null || v === void 0) return v; "
+		+ "if (d === null || d === void 0) return " + copy + "(v); " + body + "return d; }\n";
 }
 
 function isSimpleLvalue(n: Node): boolean {

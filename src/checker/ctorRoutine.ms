@@ -40,8 +40,8 @@ function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
 export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {
 	const types: Type[] = [thisType];
 	const names: string[] = ["this"];
-	for (let i = 0; i < userTypes.length; i += 1) types.push(userTypes[i]);
-	for (let i = 0; i < userNames.length; i += 1) names.push(userNames[i]);
+	for (const t of userTypes) types.push(t);
+	for (const n of userNames) names.push(n);
 	const routine = newSym(ctx, SymbolKind.Function, initFnName(ownerName), createFunction(types, names, voidType()));
 	routine.modulePath = owner.modulePath;
 	if (declNode != null) {
@@ -60,7 +60,7 @@ function declaredCtorRoutine(owner: Symbol): Symbol | null {
 	const body = decl.kind == NodeKind.ActorDecl ? (decl.data as ActorDeclData).actorBody : (decl.data as ClassDeclData).classBody;
 	for (const raw of body) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
-		if (member != null && member.kind == NodeKind.ConstructorDecl) return member.resolvedSym;
+		if (member.kind == NodeKind.ConstructorDecl) return member.resolvedSym;
 	}
 	return null;
 }
@@ -81,8 +81,5 @@ export function ctorRoutineFor(ctx: CheckerContext, owner: Symbol): Symbol | nul
 
 export function ctorFormalTypes(routine: Symbol | null): Type[] | null {
 	if (routine == null || routine.symbolType == null || routine.symbolType.kind != TypeKind.Function) return null;
-	const formals: Type[] = [];
-	const children = routine.symbolType.typeChildren;
-	for (let i = 1; i < children.length; i += 1) formals.push(children[i]);
-	return formals;
+	return routine.symbolType.typeChildren.slice(1);
 }

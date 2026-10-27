@@ -1,10 +1,10 @@
 import { platform } from "std/process";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -72,21 +72,41 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 	return null as unknown as ModuleExports;
 }
 
+const MACRO_PRELUDE_MODULE = "std/meta/index.ms";
+
+export function macroPreludeSym(ctx: CheckerContext, name: string): Symbol | null {
+	return macroPreludeIn(ctx.exportRegistry, name) ?? macroPreludeScoped(ctx.preludeCtx != null ? ctx.preludeCtx : ctx, name);
+}
+
+function macroPreludeScoped(prelude: CheckerContext, name: string): Symbol | null {
+	for (const path of prelude.preludeModuleScopes.keys()) {
+		if (!path.endsWith(MACRO_PRELUDE_MODULE)) continue;
+		for (const s of prelude.preludeModuleScopes.get(path)!) {
+			if (s.name == name && s.builtinKind.startsWith("Meta")) return s;
+		}
+	}
+	return null;
+}
+
+function macroPreludeIn(registry: ExportRegistry | null, name: string): Symbol | null {
+	if (registry == null) return null;
+	for (const mod of registry.entries) {
+		if (!mod.modulePath.endsWith(MACRO_PRELUDE_MODULE)) continue;
+		const e = findExportedSymbol(registry, mod.modulePath, name);
+		if (e != null && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym;
+	}
+	return null;
+}
+
 export function macroPreludeKind(ctx: CheckerContext, name: string): string {
-	if (ctx.exportRegistry != null) {
-		for (const mod of ctx.exportRegistry.entries) {
-			for (const e of mod.symbols) {
-				if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
-			}
-		}
-	}
-	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
-	for (const members of prelude.preludeModuleScopes.values()) {
-		for (const s of members) {
-			if (s.name == name && s.builtinKind.startsWith("Meta")) return s.builtinKind;
-		}
-	}
-	return "";
+	return macroPreludeSym(ctx, name)?.builtinKind ?? "";
+}
+
+// The std scope is the injected prelude, except where std's prelude is itself being checked:
+// there nothing is injected, or a prelude module is not injected into itself.
+export function stdSymbol(ctx: CheckerContext, name: string): Symbol | null {
+	const checkingStd = ctx.preludeCtx == null || (ctx.currentModule != null && ctx.currentModule.stdPrelude);
+	return lookupStd(ctx.table, name) ?? (checkingStd ? lookupSymbol(ctx.table, name) : null);
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
@@ -1038,6 +1058,26 @@ export function isGeneratorFlags(flags: string): boolean {
 		findFlagSegment(flags, "async_generator") == "async_generator";
 }
 
+export function routineFlags(decl: Node | null): string {
+	let d = decl;
+	while (d != null && d.kind == NodeKind.DecoratedDecl) {
+		d = (d.data as DecoratedDeclData).decoratedNode;
+	}
+	if (d == null) return "";
+	return match (d.kind) {
+		NodeKind.FunctionDecl => (d.data as FunctionDeclData).fnFlags,
+		NodeKind.MethodDecl => (d.data as MethodDeclData).methodFlags,
+		NodeKind.ArrowFunction => (d.data as ArrowFunctionData).arrowFlags,
+		NodeKind.FunctionExpr => (d.data as FunctionExprData).funcExprFlags,
+		_ => "",
+	};
+}
+
+export function routineSuspends(fn: Symbol | null): boolean {
+	if (fn == null) return false;
+	return hasFlag(fn, SymbolFlag.Async) || isGeneratorFlags(routineFlags(fn.declNode));
+}
+
 export function routineKindFlag(flags: string): string {
 	if (findFlagSegment(flags, "async_generator") == "async_generator") return "async_generator";
 	if (findFlagSegment(flags, "generator") == "generator") return "generator";
@@ -1374,6 +1414,7 @@ export class CheckerContext {
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
 	currentModule: Module;
+	topProgram: Node | null;   // the module body being checked: the owner walk of a move in top-level code
 	exportRegistry: ExportRegistry;
 	adoptedDecls: HashMap<Node, Symbol>;
 	adoptedParams: HashMap<Node, Symbol[]>;
@@ -1472,6 +1513,7 @@ export function createContext(): CheckerContext {
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
+		topProgram: null,
 		exportRegistry: createExportRegistry(),
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		adoptedParams: new HashMap<Node, Symbol[]>(),

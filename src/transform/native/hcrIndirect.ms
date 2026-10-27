@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt, staticFieldCName } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt, staticFieldCName, paramCName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner, hasNoRuntimeRepr, isOpenArrayParam, openArrayDataName, openArrayLenName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
@@ -382,7 +382,7 @@ function forwardToCurrent(fn: Node, symbol: string, cell: string): void {
 	for (let i = 0; i < d.params.length; i += 1) {
 		const paramType = i < fnType.typeChildren.length ? fnType.typeChildren[i] : null;
 		if (hasNoRuntimeRepr(paramType)) continue;
-		const name = safeName(d.params[i]);
+		const name = paramCName(d.params[i], i);
 		if (isOpenArrayParam(paramType)) {
 			args.push(openArrayDataName(name));
 			args.push(openArrayLenName(name));

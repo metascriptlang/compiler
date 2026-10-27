@@ -27,7 +27,7 @@ test "DRC hooks use pointer params for small interface" {
 		console.log("TAIL: " + tail);
 	}
 	// _destroy should take pointer: SmallThing* self, not SmallThing self
-	assert contains(c, "SmallThingDestroy(SmallThing* self)") || contains(c, "SmallThingDestroy(SmallThing *self)");
+	assert contains(c, "SmallThingDestroy(SmallThing* self_p0)") || contains(c, "SmallThingDestroy(SmallThing *self_p0)");
 }
 
 test "DRC hooks use pointer params for copy" {
@@ -36,7 +36,7 @@ test "DRC hooks use pointer params for copy" {
 	assert result.ok;
 	const c = result.value;
 	// _copy should take pointers: SmallThing* dest, SmallThing* src
-	assert contains(c, "SmallThingCopy(SmallThing* dest, SmallThing* src)") || contains(c, "SmallThingCopy(SmallThing *dest, SmallThing *src)");
+	assert contains(c, "SmallThingCopy(SmallThing* dest_p0, SmallThing* src_p1)") || contains(c, "SmallThingCopy(SmallThing *dest_p0, SmallThing *src_p1)");
 }
 
 test "DRC hooks use pointer params for wasMoved" {
@@ -45,5 +45,5 @@ test "DRC hooks use pointer params for wasMoved" {
 	assert result.ok;
 	const c = result.value;
 	// _wasMoved should take pointer
-	assert contains(c, "SmallThingWasMoved(SmallThing* self)") || contains(c, "SmallThingWasMoved(SmallThing *self)");
+	assert contains(c, "SmallThingWasMoved(SmallThing* self_p0)") || contains(c, "SmallThingWasMoved(SmallThing *self_p0)");
 }

@@ -11,7 +11,7 @@ test "E2E C: class lifecycle hooks have pointer params" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("Copy(Item__");
-	assert c.value.contains("* dest, Item__");
+	assert c.value.contains("* dest_p0, Item__");
 }
 
 test "E2E C: class lifecycle body does not use plain member access" {
@@ -19,6 +19,6 @@ test "E2E C: class lifecycle body does not use plain member access" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("Destroy(Item__");
-	assert c.value.contains("msStringDecref((*self).name)");
+	assert c.value.contains("msStringDecref((*self_p0).name)");
 	assert !c.value.contains("self.name");
 }

@@ -50,6 +50,54 @@ export function sinkParam(t: Thing | null, xs: Thing[]): void { xs.push(t!); }
 	}
 }
 
+test "Cursor callback fields materialize exactly one closure copy at owning boundaries" {
+	const result = compileToC(`
+interface CallbackLink { callback: Cursor<() => int32>; }
+interface CallbackOwner { callback: () => int32; }
+extern function takeCallback(sink callback: () => int32): void from "takeCallback";
+export function owningReturn(b: CallbackLink): () => int32 { return b.callback; }
+export function assertedReturn(b: CallbackLink): () => int32 {
+	return b.callback as () => int32;
+}
+export function owningElement(xs: Cursor<() => int32>[]): () => int32 { return xs[0]; }
+export function owningLocal(b: CallbackLink): () => int32 {
+	const callback: Cursor<() => int32> = b.callback;
+	return callback;
+}
+export function owningParam(callback: Cursor<() => int32>): () => int32 { return callback; }
+export function owningField(b: CallbackLink): CallbackOwner { return { callback: b.callback }; }
+export function owningArray(b: CallbackLink): (() => int32)[] { return [b.callback]; }
+export function owningSink(b: CallbackLink): void { takeCallback(b.callback); }
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	for (const name of ["owningReturn", "assertedReturn", "owningElement", "owningLocal",
+		"owningParam", "owningField", "owningArray", "owningSink"]) {
+		const body = functionBody(result.value, name);
+		assert body != "", name + " definition";
+		assert occurrences(body, "msClosureCopy") == 1, name + ": " + body;
+		assert occurrences(body, "msIncref") == 0, name + ": " + body;
+		assert occurrences(body, "msIncrefCyclic") == 0, name + ": " + body;
+	}
+}
+
+test "Cursor callback results and raw callback pointers remain nonowning" {
+	const result = compileToC(`
+interface CallbackLink { callback: Cursor<() => int32>; }
+export function cursorReturn(b: CallbackLink): Cursor<() => int32> { return b.callback; }
+export function cursorField(b: CallbackLink): CallbackLink { return { callback: b.callback }; }
+export function pointerReturn(callback: Ptr<() => int32>): Ptr<() => int32> { return callback; }
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	for (const name of ["cursorReturn", "cursorField", "pointerReturn"]) {
+		const body = functionBody(result.value, name);
+		assert body != "", name + " definition";
+		assert occurrences(body, "msClosureCopy") == 0, name + ": " + body;
+		assert occurrences(body, "msClosureDestroy") == 0, name + ": " + body;
+		assert occurrences(body, "msIncref") == 0, name + ": " + body;
+		assert occurrences(body, "msIncrefCyclic") == 0, name + ": " + body;
+	}
+}
+
 function catchBindings(code: string): string[] {
 	const names: string[] = [];
 	for (const line of code.split("\n")) {

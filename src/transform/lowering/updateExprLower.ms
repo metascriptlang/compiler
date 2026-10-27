@@ -2,12 +2,9 @@
 
 import { Node, NodeKind, ExprStmtData, UpdateExprData, BinaryExprData } from "../../ast/node";
 import { TransformContext } from "../context";
-import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
 import { makeExprStmt, makeBinary, makeNumber } from "../util";
-import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
-
-// ===== Visitor =====
+import { makeCtx, firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 
 function lowerUpdateNode(node: Node): Node {
 	if (node.kind != NodeKind.ExprStmt) return node;
@@ -15,20 +12,16 @@ function lowerUpdateNode(node: Node): Node {
 	if (d.expr.kind != NodeKind.UpdateExpr) return node;
 	const ud = d.expr.data as UpdateExprData;
 	const loc = node.location;
-	const op = match (ud.updateOp) {
-		"++" => "+=",
-		_ => "-=",
-	};
+	if (ud.updateOp != "++" && ud.updateOp != "--") {
+		throw new Error(`internal: update expression with operator '${ud.updateOp}'`);
+	}
+	const op = ud.updateOp == "++" ? "+=" : "-=";
 	return makeExprStmt(makeBinary(ud.updateArg, op, makeNumber(1, loc), loc), loc);
 }
-
-// ===== Entry Point =====
 
 export function lowerUpdateExpr(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, lowerUpdateNode);
 }
-
-// ===== Test Helpers =====
 
 function innerExprKindAfterUpdate(input: string): NodeKind {
 	const result = parseInput(input);
@@ -53,7 +46,6 @@ function updateOperatorAfter(input: string): string {
 	return (sd.expr.data as BinaryExprData).operator;
 }
 
-// ===== Tests =====
 test "x++ becomes assignment" { assert innerExprKindAfterUpdate("x++;") == NodeKind.BinaryExpr; }
 
 test "--x becomes assignment" { assert innerExprKindAfterUpdate("--x;") == NodeKind.BinaryExpr; }

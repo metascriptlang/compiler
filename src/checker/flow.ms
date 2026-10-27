@@ -18,6 +18,7 @@ import {
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 	Symbol, SymbolKind, DestructuringDeclData, MoveExprData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
+	BlockStmtData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isLogicalAssignOp } from "../ast/operators";
@@ -33,6 +34,7 @@ import {
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
+import { declaredNames } from "./bindNames";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
@@ -1653,6 +1655,7 @@ class ContainerAssignments {
 	statementStart: int32[] = [];
 	statementEnd: int32[] = [];
 	open: int32[] = [];
+	shadowed: string[] = [];
 }
 
 let containerAssignments = new HashMap<Node, ContainerAssignments>();
@@ -1712,7 +1715,9 @@ function scanAssignments(scan: ContainerAssignments, node: Node, nested: boolean
 	const written: Node[] = [];
 	writtenNames(node, written);
 	for (const n of written) {
-		scan.writes.push(new AssignmentWrite((n.data as IdentifierData).name, nested ? null : n.resolvedSym, at, nested, scan.open.slice(0)));
+		const name = (n.data as IdentifierData).name;
+		if (nested && scan.shadowed.includes(name)) continue;
+		scan.writes.push(new AssignmentWrite(name, nested ? null : n.resolvedSym, at, nested, scan.open.slice(0)));
 	}
 	const later = nested || runsLater(node);
 	const extending = !later && extendsAssignment(node);
@@ -1721,7 +1726,17 @@ function scanAssignments(scan: ContainerAssignments, node: Node, nested: boolean
 		scan.statementStart.push(at);
 		scan.statementEnd.push(0);
 	}
+	const scopeMark = scan.shadowed.length;
+	if (later) {
+		for (const p of paramNamesOf(node)) scan.shadowed.push(p);
+		if (k == NodeKind.BlockStmt) {
+			for (const stmt of (node.data as BlockStmtData).statements) declaredNames(stmt, scan.shadowed);
+		} else {
+			declaredNames(node, scan.shadowed);
+		}
+	}
 	forEachChild(node, (child: Node): void => { scanAssignments(scan, child, later); });
+	scan.shadowed.length = scopeMark;
 	if (extending) scan.statementEnd[scan.open.pop()] = scan.ordinal;
 }
 

@@ -6,8 +6,9 @@ import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverrid
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
+import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -275,10 +276,6 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, d
 // Call-site check: combines type analysis with expression-level rules (move, const binding).
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.
-function isActorRef(t: Type): boolean {
-	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
-}
-
 function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	if (t == null) return true;
 	// move always transfers ownership safely
@@ -299,11 +296,20 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	return false;
 }
 
+function recordActorMove(ctx: CheckerContext, mv: Node): void {
+	const arg = peelHidden((mv.data as MoveExprData).moveArg);
+	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (sym == null || !typeCarriesRef(sym.symbolType)) return;
+	checkMoveSoleOwner(ctx, sym, [sym.name], mv, mv.location);
+	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
+	if (argNode.kind == NodeKind.MoveExpr) recordActorMove(ctx, argNode);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
@@ -1747,8 +1753,24 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 			return true;
 		},
 	};
-	if (rhs == null || w.reported || isFreshValue(rhs, scope)) return;
+	if (rhs == null || w.reported) return;
+	if (followMovedSource(rhs, w)) return;
+	if (isFreshValue(rhs, scope)) return;
 	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
+}
+
+// `move a` hands over a's graph, so the receiver is the sole owner only when `a` was: the check
+// follows the chain to the source binding, whose own escapes before the move are refused.
+function followMovedSource(rhs: Node, w: OwnerWalk): boolean {
+	const p = peelView(rhs);
+	if (p.kind != NodeKind.MoveExpr) return false;
+	const arg = peelHidden((p.data as MoveExprData).moveArg);
+	const src = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (src == null || src == w.sym || !typeCarriesRef(src.symbolType)) return false;
+	const before = w.ctx.errors.length;
+	checkMoveSoleOwner(w.ctx, src, [], p, w.at);
+	if (w.ctx.errors.length > before) w.reported = true;
+	return true;
 }
 
 function requireFreshBinding(init: Node | null, w: OwnerWalk): void {
@@ -1875,8 +1897,14 @@ function walkOwner(node: Node | null, w: OwnerWalk): void {
 	};
 }
 
+function isActorRef(t: Type | null): boolean {
+	if (t == null) return false;
+	const bare = unwrapRefNullUnion(t) ?? t;
+	return bare.kind == TypeKind.Ref && bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor;
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
-	if (!typeCarriesRef(sym.symbolType)) return;
+	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
@@ -1885,7 +1913,7 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 		addError(ctx, "cannot move '" + sym.name + "': it is a module-level binding that every function in the module can reach — move a binding local to one function" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
-	const body = enclosingBody(ctx);
+	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
 	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: false, reported: false };
 	if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {

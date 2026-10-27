@@ -16,7 +16,7 @@ export function parseInput(input: string): Result<Node, string> {
 	return parseProgram(createState(lr.value));
 }
 
-export function bindStdFuncs(checkerCtx: CheckerContext): void {
+function bindStdFuncs(checkerCtx: CheckerContext): void {
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 }
 
@@ -56,7 +56,7 @@ function transformStmts(input: string, transform: (prog: Node, ctx: TransformCon
 
 // Parse and type-check `input`, run `transform` under the checker's context, and return the
 // program statements; null when the input does not parse.
-export function checkedStmtsAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): Node[] | null {
+function checkedStmtsAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): Node[] | null {
 	const result = parseInput(input);
 	if (!result.ok) return null;
 	const cc = checkProgram(result.value);

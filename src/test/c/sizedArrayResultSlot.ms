@@ -13,7 +13,7 @@ function pick(i: int32): uint64[4] {
 function main(): void { console.log(pick(1)[1]); }
 `);
 	assert c.ok;
-	assert c.value.contains("msSizedArray_uint64_t_4* __result, int32_t i)");
+	assert c.value.contains("msSizedArray_uint64_t_4* __result, int32_t i_p0)");
 	assert !c.value.contains("msSizedArrayAccess(pick__");
 }
 
@@ -27,7 +27,7 @@ function main(): void {
 }
 `);
 	assert c.ok;
-	assert c.value.contains("msSizedArray_uint8_t_4* __result, int32_t i)");
+	assert c.value.contains("msSizedArray_uint8_t_4* __result, int32_t i_p0)");
 	assert !c.value.contains("msSizedArrayAccess(small__");
 	assert !c.value.contains("msSizedArrayAccess((");
 }

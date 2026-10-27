@@ -8,32 +8,28 @@ import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc"
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt } from "./literals";
 
-function printJsxChildren(children: Node[], options: FormatOptions): Doc[] {
-	const parts: Doc[] = [];
-	for (const child of children) {
-		parts.push(callPrintNode(child, options));
-	}
-	return parts;
-}
-
-function printJsxOpening(tag: string, attrs: Node[], closer: string, options: FormatOptions): Doc {
+function printJsxOpening(tag: string, attrs: Node[], selfClosing: boolean, options: FormatOptions): Doc {
 	const parts: Doc[] = [];
 	for (const attr of attrs) {
 		parts.push(docLine());
 		parts.push(callPrintNode(attr, options));
 	}
-	const tail = closer == "/>" ? docLine() : docSoftLine();
-	return docGroup([docText("<" + tag), docIndent(parts), tail, docText(closer)]);
+	return docGroup([
+		docText("<" + tag),
+		docIndent(parts),
+		selfClosing ? docLine() : docSoftLine(),
+		docText(selfClosing ? "/>" : ">"),
+	]);
 }
 
 export function printJsxElement(node: Node, options: FormatOptions): Doc {
 	const d = node.data as JSXElementData;
 	if (d.jsxSelfClosing) {
-		return printJsxOpening(d.jsxTag, d.jsxAttrs, "/>", options);
+		return printJsxOpening(d.jsxTag, d.jsxAttrs, true, options);
 	}
-	const parts: Doc[] = [printJsxOpening(d.jsxTag, d.jsxAttrs, ">", options)];
-	for (const child of printJsxChildren(d.jsxChildren, options)) {
-		parts.push(child);
+	const parts: Doc[] = [printJsxOpening(d.jsxTag, d.jsxAttrs, false, options)];
+	for (const child of d.jsxChildren) {
+		parts.push(callPrintNode(child, options));
 	}
 	parts.push(docText("</" + d.jsxTag + ">"));
 	return docGroup(parts);
@@ -42,8 +38,8 @@ export function printJsxElement(node: Node, options: FormatOptions): Doc {
 export function printJsxFragment(node: Node, options: FormatOptions): Doc {
 	const d = node.data as JSXFragmentData;
 	const parts: Doc[] = [docText("<>")];
-	for (const child of printJsxChildren(d.jsxFragChildren, options)) {
-		parts.push(child);
+	for (const child of d.jsxFragChildren) {
+		parts.push(callPrintNode(child, options));
 	}
 	parts.push(docText("</>"));
 	return docGroup(parts);

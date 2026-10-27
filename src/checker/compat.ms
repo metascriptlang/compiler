@@ -755,6 +755,7 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 	const ptr = nonNullMemberOfNullable(target);
 	if (ptr == null || ptr.kind != TypeKind.Ptr || ptr.typeReturn == null) return false;
 	const isCValue = isNumeric(source) || source.kind == TypeKind.Boolean || source.kind == TypeKind.Enum || source.kind == TypeKind.Struct;
+	if (source.kind == TypeKind.Ptr || source.kind == TypeKind.CString) return sameType(source, ptr.typeReturn);
 	return isCValue && (ptr.typeReturn.kind == TypeKind.Void || sameType(source, ptr.typeReturn));
 }
 
@@ -1469,8 +1470,14 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
+function isPrimitiveBrand(t: Readonly<Type>): boolean {
+	return isBrandDistinct(t) && t.typeReturn != null && t.typeReturn.kind != TypeKind.Function;
+}
+
 function sameDistinct(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
-	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
+	if (isPrimitiveBrand(a) || isPrimitiveBrand(b)) {
+		return isPrimitiveBrand(a) && isPrimitiveBrand(b) && a.typeName == b.typeName && sameTypeAux(a.typeReturn, b.typeReturn, c);
+	}
 	return sameNominalAux(a, b, c);
 }
 

@@ -55,7 +55,7 @@ export interface CType {
 	typedefName: string;
 	// Typedef origin — tracks the original type before typedef alias.
 	// Used by is_compatible to look through typedefs.
-	origin: CType;
+	origin: CType | null;
 }
 
 export interface CMember {
@@ -63,8 +63,8 @@ export interface CMember {
 	type: CType;
 	offset: int32;
 	align: int32;
-	bitOffset: int32;
-	bitWidth: int32;
+	bitOffset: int32 | null;
+	bitWidth: int32 | null;
 }
 
 // ===== Internal constructor =====
@@ -93,7 +93,7 @@ function newType(kind: CTypeKind, size: int32, align: int32, signed: boolean): C
 		isFlexible: false,
 		layoutKnown: true,
 		typedefName: "",
-		origin: null as unknown as CType,
+		origin: null,
 	};
 }
 
@@ -212,7 +212,7 @@ export function isInteger(ty: CType): boolean {
 		ty.kind == CTypeKind.Enum;
 }
 
-export function isFlonum(ty: CType): boolean {
+function isFlonum(ty: CType): boolean {
 	return ty.kind == CTypeKind.Float || ty.kind == CTypeKind.Double ||
 		ty.kind == CTypeKind.LongDouble;
 }
@@ -227,10 +227,6 @@ export function isPointer(ty: CType): boolean {
 
 export function isArray(ty: CType): boolean {
 	return ty.kind == CTypeKind.Array;
-}
-
-export function isFunc(ty: CType): boolean {
-	return ty.kind == CTypeKind.Func;
 }
 
 export function isAggregate(ty: CType): boolean {
@@ -320,8 +316,8 @@ export function makeMember(name: string, type: CType): CMember {
 		type,
 		offset: 0,
 		align: type.align,
-		bitOffset: -1,
-		bitWidth: -1,
+		bitOffset: null,
+		bitWidth: null,
 	};
 }
 

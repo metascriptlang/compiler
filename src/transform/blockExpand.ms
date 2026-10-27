@@ -72,8 +72,8 @@ type StmtExpander = (stmt: Node, ctx: TransformContext) => Node[];
 class ExpandWalk {
 	expander: StmtExpander;
 	ctx: TransformContext;
-	onFnEntry: FnEntryHook;
-	onFnExit: FnExitHook;
+	onFnEntry: FnEntryHook | null;
+	onFnExit: FnExitHook | null;
 }
 
 // Optional hook called on function-like node entry/exit.
@@ -133,12 +133,12 @@ function expandStmtBodyHooked(node: Node, w: ExpandWalk, visit: Visitor): Node {
 }
 
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
-	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
+	walkExpandBlocksHooked(node, expander, ctx, null, null);
 }
 
 // One visitor per walk: the default arm hands it to mapChildren for every node it does not
 // special-case, so it is built once here and not once per node.
-export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook | null, onFnExit: FnExitHook | null): void {
 	const w: ExpandWalk = { expander, ctx, onFnEntry, onFnExit };
 	const visit = (child: Node): Node => {
 		expandWalk(child, w, visit);
@@ -228,10 +228,8 @@ function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			let i = 0;
-			while (i < d.switchCases.length) {
-				expandWalk(d.switchCases[i], w, visit);
-				i = i + 1;
+			for (const member of d.switchCases) {
+				expandWalk(member, w, visit);
 			}
 		},
 		NodeKind.SwitchCase => {
@@ -243,18 +241,14 @@ function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			let i = 0;
-			while (i < d.classBody.length) {
-				expandWalk(d.classBody[i], w, visit);
-				i = i + 1;
+			for (const member of d.classBody) {
+				expandWalk(member, w, visit);
 			}
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;
-			let i = 0;
-			while (i < d.actorBody.length) {
-				expandWalk(d.actorBody[i], w, visit);
-				i = i + 1;
+			for (const member of d.actorBody) {
+				expandWalk(member, w, visit);
 			}
 		},
 		_ => {

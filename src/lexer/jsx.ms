@@ -2,16 +2,15 @@
 //
 // MS pre-lexes the whole file, so JSX text (which holds chars illegal as MS tokens, e.g. `'`)
 // cannot survive a parser-driven scan. The lexer therefore owns JSX: a mode stack (`jsxStack`)
-// plus a `<`-decision driven by `lastToken` (Babel's `beforeExpr`). `scanJsx` is called at the
-// top of the main lex loop; it returns true when it fully handled the iteration.
+// plus a `<`-decision driven by `lastToken`. `scanJsx` is called at the top of the main lex
+// loop; it returns true when it fully handled the iteration.
 
 import { LexerState, JsxMode, peek, peekAt, advanceChar, addToken } from "./state";
 import { TokenKind, startsExprAfter } from "./token";
 import { isLetter, isDigit, isWhitespace, isNewline } from "./chars";
 import { scanString, scanTemplateContinuation } from "./scanner";
 
-// `<` begins JSX only in expression position. This mirrors Babel's `beforeExpr` flag.
-// `Eof` covers start-of-input. Comparison/closing-generic `Gt` deliberately excluded so
+// `<` begins JSX only in expression position. `Gt` is deliberately excluded so
 // `foo<T>()` and `a < b` stay arithmetic.
 function isExprPositionToken(k: TokenKind): boolean {
 	return startsExprAfter(k) || k == TokenKind.TemplateHead || k == TokenKind.TemplateMiddle;
@@ -157,7 +156,6 @@ function scanTemplateInterp(s: LexerState): boolean {
 	return false;
 }
 
-// Returns true when the JSX modes fully handled this iteration (caller continues the lex loop).
 export function scanJsx(s: LexerState): boolean {
 	const n = s.jsxStack.length;
 	if (n == 0) {
@@ -166,10 +164,11 @@ export function scanJsx(s: LexerState): boolean {
 		emitTagStart(s);
 		return true;
 	}
-	const top = s.jsxStack[n - 1];
-	if (top == JsxMode.Children) { return scanJsxChildren(s); }
-	if (top == JsxMode.Tag) { return scanJsxTag(s); }
-	if (top == JsxMode.Closing) { return scanJsxClosing(s); }
-	if (top == JsxMode.Template) { return scanTemplateInterp(s); }
-	return scanJsxBrace(s);
+	return match (s.jsxStack[n - 1]) {
+		JsxMode.Children => scanJsxChildren(s),
+		JsxMode.Tag => scanJsxTag(s),
+		JsxMode.Closing => scanJsxClosing(s),
+		JsxMode.Template => scanTemplateInterp(s),
+		JsxMode.Brace => scanJsxBrace(s),
+	};
 }

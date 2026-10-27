@@ -185,7 +185,7 @@ test "E2E C: an array field is released by its owner's destroy hook" {
 		console.log(b.items.length);
 	`);
 	assert c.ok;
-	assert c.value.contains("msDecref((*self).items)");
+	assert c.value.contains("msDecref((*self_p0).items)");
 }
 
 test "E2E C: class with method compiles" {
@@ -316,8 +316,8 @@ test "E2E C: a narrowed field returned through an identity assertion is copied" 
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("(&((*slot).got.value)));");
-	assert !c.value.contains("*__result = (*slot).got.value;");
+	assert c.value.contains("(&((*slot_p0).got.value)));");
+	assert !c.value.contains("*__result = (*slot_p0).got.value;");
 }
 
 test "E2E C: a narrowed captured local returned through an identity assertion is copied" {
@@ -452,7 +452,7 @@ test "E2E C: a non-null asserted field bound across a call that clears it takes 
 		}
 	`);
 	assert c.ok;
-	assert !c.value.contains("(d_1_ = (*h).a)");
+	assert !c.value.contains("(d_1_ = (*h_p0).a)");
 	assert c.value.contains("msIncref(dollarborrow_");
 	assert c.value.contains("(d_1_ = dollarborrow_");
 	assert c.value.contains("msDecref(d_1_)");
@@ -467,7 +467,7 @@ test "E2E C: a non-null asserted argument evaluated before a sibling that clears
 		function both(h: Holder): number { return sum(h.a!, bump(h)); }
 	`);
 	assert c.ok;
-	assert !c.value.contains("_ = (*h).a);");
+	assert !c.value.contains("_ = (*h_p0).a);");
 	assert c.value.contains("msIncref(dollarborrow_");
 	assert c.value.contains("_ = dollarborrow_");
 	assert c.value.contains("msDecref(__ord_");
@@ -483,7 +483,7 @@ test "E2E C: a non-null asserted field bound while nothing writes its holder sta
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("(d_1_ = (*h).a)");
+	assert c.value.contains("(d_1_ = (*h_p0).a)");
 	assert !c.value.contains("msDecref(d_1_)");
 }
 

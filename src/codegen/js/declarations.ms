@@ -94,16 +94,14 @@ export function jsEnumObject(local: string, d: EnumDeclData): string {
 	return out;
 }
 
-function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): void {
+function emitEnumDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as EnumDeclData;
 	// Flat constants matching the checker's `EnumName_Member` rewrite, in both
 	// bundle and non-bundle output. The IIFE `E.Member` object form is never
 	// referenced — the checker lowers every `E.Member` access to `E_Member`.
 	// Honor explicit values (enumValues), else fall back to ordinal index.
-	// linePrefix carries `export ` to members past the first — the caller
-	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
+		if (i > 0) emitIndent(gen);
 		const member = jsEnumMemberName(gen, node.resolvedSym, d.enumName, d.enumMembers[i]);
 		declareBinding(gen, member);
 		emit(gen, `var ${member} = ${enumMemberValue(d, i)};\n`);
@@ -112,7 +110,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 
 export function emitEnumDecl(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
-	emitEnumDeclInner(gen, node, "");
+	emitEnumDeclInner(gen, node);
 }
 
 // ===== Class Declaration =====
@@ -203,7 +201,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 						// same globalThis registry.
 						emit(gen, "pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {\n");
 						emitIndent(gen);
-						emit(gen, "\tvar g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new Map() });\n");
+						emit(gen, "\tvar g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new globalThis.Map() });\n");
 						emitIndent(gen);
 						emit(gen, "\tg.live.set(g.next, a);\n");
 						emitIndent(gen);
@@ -553,6 +551,15 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			return;
 		}
 	}
+	if (gen.multiFile && inner.kind == NodeKind.EnumDecl) {
+		const ed = inner.data as EnumDeclData;
+		emitIndent(gen);
+		emitEnumDeclInner(gen, inner);
+		gen.exportedNames.push(safeJsName(ed.enumName));
+		emitIndent(gen);
+		emit(gen, `export ${jsEnumObject(safeJsName(ed.enumName), ed)}`);
+		return;
+	}
 	emitIndent(gen);
 	emit(gen, isDefault ? "export default " : "export ");
 	if (isDefault && inner.kind == NodeKind.ExprStmt) {
@@ -580,18 +587,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			}
 			emit(gen, ";\n");
 		},
-		NodeKind.EnumDecl => {
-			const ed = inner.data as EnumDeclData;
-			if (gen.multiFile) {
-				for (const m of ed.enumMembers) { gen.exportedNames.push(jsEnumMemberName(gen, inner.resolvedSym, ed.enumName, m)); }
-			}
-			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
-			if (gen.multiFile) {
-				gen.exportedNames.push(safeJsName(ed.enumName));
-				emitIndent(gen);
-				emit(gen, `export ${jsEnumObject(safeJsName(ed.enumName), ed)}`);
-			}
-		},
+		NodeKind.EnumDecl => { emitEnumDeclInner(gen, inner); },
 		NodeKind.ClassDecl => {
 			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ClassDeclData).className)); }
 			emitClassDeclInner(gen, inner);

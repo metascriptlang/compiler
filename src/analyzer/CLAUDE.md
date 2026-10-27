@@ -21,7 +21,7 @@ Deterministic reference counting for the C backend: `analyzeProgram(program, che
 | `inject.ms` | `injectProgram` — the walker: `moveOrCopy`, `genSink` / `genCopy`, `generateCleanup`, try/finally wrapping |
 | `classify.ms` | `RcKind`, `RcInfo`, `classifyType`, `isFreshExpr`, `anonUnionOwnsRc` |
 | `scope.ms` | `DrcContext`, `DrcScope`, `VarInfo`, `pushScope` / `popScope`, `registerVar`, `recordMove`, `markUninitialized`, `setNeedsTryAll` |
-| `cfg.ms` | `buildCfgForSym`, `isLastReadCfgNode`, `isLastReadCfgNodeCached`, `CfgCache` |
+| `cfg.ms` | `isLastReadCfgNodeCached`, `CfgCache` |
 | `alias.ms` | `AliasKind`, `aliases`, `deepAliases`, `isAnalysableFieldAccess`, `skipConvDfa`, `getRootSym` |
 | `cursors.ms` | `inferCursors` |
 | `optimize.ms` | `optimizeDrc` |

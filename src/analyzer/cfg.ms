@@ -8,6 +8,7 @@
 
 import { Node, NodeKind, ProgramData, Symbol, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isEagerAssignOp } from "../ast/operators";
 import { flowTally } from "../compiler/flows";
 import { AliasKind, aliases, getRootSym } from "./alias";
 
@@ -256,8 +257,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			// Check for assignment: x = expr (def on LHS, use on RHS)
 			if (d.expr != null && d.expr.kind == NodeKind.BinaryExpr) {
 				const bd = d.expr.data as BinaryExprData;
-				if (bd.operator == "=" || bd.operator == "+=" || bd.operator == "-=" || bd.operator == "*=" || bd.operator == "/="
-					|| bd.operator == "&=" || bd.operator == "|=" || bd.operator == "^=" || bd.operator == "<<=" || bd.operator == ">>=" || bd.operator == ">>>=") {
+				if (isEagerAssignOp(bd.operator)) {
 					// RHS first (uses before def)
 					walkExpr(bd.right, ctx);
 					// LHS: check if it's a direct identifier or field path to our var
@@ -455,7 +455,7 @@ function finalizeCfg(ctx: BuildCtx): Cfg {
 	return { instrs: ctx.cfg };
 }
 
-export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
+function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 	const ctx: BuildCtx = {
 		cfg: [],
 		rootSym,
@@ -468,9 +468,8 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 
 // ===== Alias-Aware Last-Read Query (Phase B) =====
 // Uses aliases() for field-level comparison.
-// Reference: isLastReadImpl with bidirectional alias checks.
 
-export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
+function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
 	if (queryNode == null) return false;
 	const instrs = cfg.instrs;
 	const len = instrs.length;

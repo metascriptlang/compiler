@@ -45,7 +45,7 @@ test "a generic subclass built only from a dependent instantiation traces each i
 		assert result.ok, result.ok ? "" : result.error;
 		const trace = subTraceBody(result.value);
 		assert trace != "", c.label + ": Sub trace hook emitted";
-		assert occurrences(trace, `msClosureTrace((*self).${c.field}, callback)`) == 1, c.label + ": " + c.field + " traced once";
+		assert occurrences(trace, `msClosureTrace((*self_p0).${c.field}, callback_p1)`) == 1, c.label + ": " + c.field + " traced once";
 		assert trace.indexOf("Base_") < 0 && trace.indexOf("Mid_") < 0, c.label + ": no base hook call beside the flat fields";
 	}
 }

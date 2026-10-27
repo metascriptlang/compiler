@@ -1,36 +1,27 @@
 import { DepsSection, PackageSection } from "../buildConfig";
 
-export function reservedCommands(): string[] {
-	return [
-		"help", "version", "build", "run", "test", "check", "fmt", "init", "clean", "lsp",
-		"upgrade", "x", "add", "remove", "install", "update", "publish", "login", "logout",
-		"whoami", "org", "dump-tokens", "dump-ast", "pipeline",
-	];
-}
+const RESERVED_COMMANDS: string[] = [
+	"help", "version", "build", "run", "test", "check", "fmt", "init", "clean", "lsp",
+	"upgrade", "x", "add", "remove", "install", "update", "publish", "login", "logout",
+	"whoami", "org", "dump-tokens", "dump-ast", "pipeline",
+];
 
-export function isReservedCommand(cmd: string): boolean {
-	for (const r of reservedCommands()) {
-		if (r == cmd) return true;
-	}
-	return false;
-}
-
-export function commandNameError(cmd: string): string {
+export function commandNameError(cmd: string): string | null {
 	if (cmd.byteLength == 0) return "a command name cannot be empty";
 	const first = cmd.byteAt(0);
 	if (first < "a".code || first > "z".code) {
 		return `command '${cmd}': must start with a lowercase letter`;
 	}
-	let i = 1;
-	while (i < cmd.byteLength) {
+	for (let i = 1; i < cmd.byteLength; i++) {
 		const c = cmd.byteAt(i);
 		const ok = (c >= "a".code && c <= "z".code) || (c >= "0".code && c <= "9".code) || c == "-".code;
 		if (!ok) return `command '${cmd}': only lowercase letters, digits and '-' are allowed`;
-		i = i + 1;
 	}
 	if (cmd.charAt(cmd.byteLength - 1) == "-") return `command '${cmd}': cannot end with '-'`;
-	if (isReservedCommand(cmd)) return `command '${cmd}': shadows the msc subcommand of the same name`;
-	return "";
+	if (RESERVED_COMMANDS.includes(cmd)) {
+		return `command '${cmd}': shadows the msc subcommand of the same name`;
+	}
+	return null;
 }
 
 export function isAbsoluteEntry(entry: string): boolean {
@@ -38,10 +29,10 @@ export function isAbsoluteEntry(entry: string): boolean {
 }
 
 export function leavesPackage(entry: string): boolean {
-	return entry.contains("..");
+	return entry.split("/").includes("..");
 }
 
-export function commandEntryError(cmd: string, entry: string): string {
+function commandEntryError(cmd: string, entry: string): string | null {
 	if (entry.length == 0) return `command '${cmd}': needs an entry path`;
 	if (isAbsoluteEntry(entry)) {
 		return `command '${cmd}': entry '${entry}' must be a relative path inside the package`;
@@ -52,73 +43,72 @@ export function commandEntryError(cmd: string, entry: string): string {
 	if (!entry.endsWith(".ms")) {
 		return `command '${cmd}': entry '${entry}' must be a .ms file`;
 	}
-	return "";
+	return null;
 }
 
 export function validateBin(bin: DepsSection): string[] {
 	const errors: string[] = [];
-	let i = 0;
-	while (i < bin.keys.length) {
+	for (let i = 0; i < bin.keys.length; i++) {
 		const cmd = bin.keys[i];
 		const nameErr = commandNameError(cmd);
-		if (nameErr != "") {
+		if (nameErr != null) {
 			errors.push(nameErr);
 		} else {
 			const entryErr = commandEntryError(cmd, bin.values[i]);
-			if (entryErr != "") errors.push(entryErr);
+			if (entryErr != null) errors.push(entryErr);
 		}
-		let j = 0;
-		while (j < i) {
+		for (let j = 0; j < i; j++) {
 			if (bin.keys[j] == cmd) errors.push(`command '${cmd}': declared twice in package.bin`);
-			j = j + 1;
 		}
-		i = i + 1;
 	}
 	return errors;
 }
 
 export function binEntryFor(pkg: PackageSection, cmd: string): string {
-	let i = 0;
-	while (i < pkg.bin.keys.length) {
-		if (pkg.bin.keys[i] == cmd) return pkg.bin.values[i];
-		i = i + 1;
-	}
-	return "";
+	const i = pkg.bin.keys.indexOf(cmd);
+	return i < 0 ? "" : pkg.bin.values[i];
 }
 
 test "a plain command name passes" {
-	assert commandNameError("ion-generate") == "";
-	assert commandNameError("gen2") == "";
+	assert commandNameError("ion-generate") == null;
+	assert commandNameError("gen2") == null;
 }
 
 test "a command name that shadows an msc subcommand is rejected" {
-	assert commandNameError("build") != "";
-	assert commandNameError("x") != "";
-	assert commandNameError("whoami") != "";
+	assert commandNameError("build") != null;
+	assert commandNameError("x") != null;
+	assert commandNameError("whoami") != null;
 }
 
 test "every reserved command is rejected" {
-	for (const r of reservedCommands()) {
-		assert commandNameError(r) != "";
+	for (const r of RESERVED_COMMANDS) {
+		assert commandNameError(r) != null;
 	}
 }
 
 test "a command name with bad characters is rejected" {
-	assert commandNameError("") != "";
-	assert commandNameError("Gen") != "";
-	assert commandNameError("2fast") != "";
-	assert commandNameError("my_cmd") != "";
-	assert commandNameError("my/cmd") != "";
-	assert commandNameError("trailing-") != "";
+	assert commandNameError("") != null;
+	assert commandNameError("Gen") != null;
+	assert commandNameError("2fast") != null;
+	assert commandNameError("my_cmd") != null;
+	assert commandNameError("my/cmd") != null;
+	assert commandNameError("trailing-") != null;
 }
 
 test "an entry must be a relative .ms path inside the package" {
-	assert commandEntryError("c", "tooling/cli.ms") == "";
-	assert commandEntryError("c", "") != "";
-	assert commandEntryError("c", "/abs/cli.ms") != "";
-	assert commandEntryError("c", "../outside/cli.ms") != "";
-	assert commandEntryError("c", "tooling\\cli.ms") != "";
-	assert commandEntryError("c", "tooling/cli") != "";
+	assert commandEntryError("c", "tooling/cli.ms") == null;
+	assert commandEntryError("c", "") != null;
+	assert commandEntryError("c", "/abs/cli.ms") != null;
+	assert commandEntryError("c", "../outside/cli.ms") != null;
+	assert commandEntryError("c", "tooling\\cli.ms") != null;
+	assert commandEntryError("c", "tooling/cli") != null;
+}
+
+test "a parent segment leaves the package and a dotted name does not" {
+	assert leavesPackage("../a.ms");
+	assert leavesPackage("src/../../a.ms");
+	assert !leavesPackage("src/a..b.ms");
+	assert commandEntryError("x", "src/a..b.ms") == null;
 }
 
 test "validateBin reports one error per bad entry" {

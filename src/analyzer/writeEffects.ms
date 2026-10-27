@@ -6,8 +6,8 @@
 
 import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
+import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, setFlag } from "../checker/symbol";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
 import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
@@ -18,7 +18,7 @@ import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
-import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
+import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
@@ -1039,9 +1039,10 @@ function settled(w: WriteEffects, s: WriteSummary): WriteSummary {
 	return s;
 }
 
-function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteSummary {
+function callWriteParts(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteSummary[] {
 	const s = newSummary(SummaryKind.Routine, null, []);
-	if (call.kind == NodeKind.CallExpr && isLifecycleOp(w, call)) return s;
+	const parts = [s];
+	if (call.kind == NodeKind.CallExpr && isLifecycleOp(w, call)) return parts;
 	if (call.kind == NodeKind.CallExpr) addressWrites(w, s, call, null, false);
 	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(w, call) : calleesOf(w, call, s, null, null, defs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
@@ -1049,9 +1050,16 @@ function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteS
 	}
 	for (const c of callees) {
 		if (reloadsApart(w, s, c)) markUnknown(s);
-		else absorb(w, s, { call: null, callee: settled(w, c) });
+		else parts.push(settled(w, c));
 	}
-	return s;
+	return parts;
+}
+
+function partsMayWrite(w: WriteEffects, parts: WriteSummary[], slots: string[]): boolean {
+	for (const p of parts) {
+		if (mayWriteAny(w, p, slots)) return true;
+	}
+	return false;
 }
 
 const SUBMITS_JOINED_BEFORE_FRAME_EXIT = ["msSpawnSlotSubmit", "msSpawnTaskSubmit", "msSpawnHeldSubmit", "msSpawnIntoHeldSubmit"];
@@ -1068,7 +1076,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 }
 
 export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
-	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null) return true;
+	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym)) return true;
 	const known = w.tables.retainedParams.get(sym);
 	if (known != null) return (known & (1 << i)) != 0;
 	w.tables.retainedParams.set(sym, -1);
@@ -1077,6 +1085,12 @@ export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
 	const bits = body != null && decl!.paramSyms != null ? retainedParams(w, body, decl!.paramSyms!) : -1;
 	w.tables.retainedParams.set(sym, bits);
 	return (bits & (1 << i)) != 0;
+}
+
+function suspendsAcrossLowering(w: WriteEffects, sym: Symbol): boolean {
+	if (routineSuspends(sym)) return true;
+	const decl = routineDecl(w, sym);
+	return decl != null && decl.flags.has(NodeFlag.WasAsync);
 }
 
 function retainedParams(w: WriteEffects, body: Node, params: Symbol[]): int32 {
@@ -1231,7 +1245,7 @@ export function stepSlot(w: WriteEffects, n: Node): string | null {
 }
 
 export function mayWrite(w: WriteEffects, n: Node, slots: string[], defs: LocalDefs | null): boolean {
-	if (n.kind != NodeKind.BinaryExpr) return mayWriteAny(w, callWrites(w, n, defs), slots);
+	if (n.kind != NodeKind.BinaryExpr) return partsMayWrite(w, callWriteParts(w, n, defs), slots);
 	if (!isAssign((n.data as BinaryExprData).operator)) return false;
 	const writes = newSummary(SummaryKind.Routine, null, []);
 	const target = (n.data as BinaryExprData).left;
@@ -1250,10 +1264,11 @@ export function callsPlainRoutine(call: Node): boolean {
 }
 
 export function reachesModuleState(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
-	const writes = callWrites(w, call, defs);
-	if (writes.unknown) return true;
-	for (const slot of writes.slots) {
-		if (slot.startsWith("G:")) return true;
+	for (const writes of callWriteParts(w, call, defs)) {
+		if (writes.unknown) return true;
+		for (const slot of writes.slots) {
+			if (slot.startsWith("G:")) return true;
+		}
 	}
 	return false;
 }
@@ -1321,7 +1336,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		if (borrowed) any = true;
 	}
 	if (!any) return flags;
-	const writes = callWrites(w, call, defs);
+	const writes = callWriteParts(w, call, defs);
 	const lends = runsCallbacks(w, call);
 	for (let i = 0; i < args.length; i += 1) {
 		if (!flags[i] || cstringSource(args[i]) != null) continue;
@@ -1330,7 +1345,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
 		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
-		if (!keep && slots[i].length > 0) keep = mayWriteAny(w, writes, reads);
+		if (!keep && slots[i].length > 0) keep = partsMayWrite(w, writes, reads);
 		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
 		flags[i] = keep;
 	}
@@ -1608,4 +1623,33 @@ test "a view call's result is reached through the lowered accessor its callee re
 	const variant = loweredViewCall((u: Node, at: SourceLocation): Node => makeCall(generatedRef("msVariantAccess", at), [u, makeNumber(0, at), makeString("a", at), makeString("a|b", at)], at), arrType, loc);
 	const variantSlots = (viewReturnSlots(w, variant) ?? ["unknown"]).join(",");
 	assert variantSlots == "", variantSlots;
+}
+
+function callbackRoutine(name: string, flags: string, forwardTo: Symbol | null, loc: SourceLocation): Symbol {
+	const callbackType = createFunction([], [], int32Type());
+	const f = makeSymbol("f", SymbolKind.Parameter, callbackType, false);
+	const use = forwardTo == null ? makeCall(makeIdentResolved(f, loc), [], loc) : makeCallResolved(makeIdentResolved(forwardTo, loc), [makeIdentResolved(f, loc)], forwardTo, loc);
+	const sym = makeSymbol(name, SymbolKind.Function, createFunction([callbackType], ["f"], int32Type()), false);
+	sym.declNode = makeFnDecl(name, [f], [""], makeBlock([makeExprStmt(use, loc)], loc), flags, "", loc);
+	if (flags == "async") setFlag(sym, SymbolFlag.Async);
+	return sym;
+}
+
+test "a callback only called by a plain routine is not retained" {
+	const w = writeProbe();
+	assert !retainsParam(w, callbackRoutine("plain", "", null, makeLoc(0, 0)), 0);
+}
+
+test "a suspending routine retains its callback whatever its body shows" {
+	const w = writeProbe();
+	const loc = makeLoc(0, 0);
+	assert retainsParam(w, callbackRoutine("later", "async", null, loc), 0);
+	assert retainsParam(w, callbackRoutine("ticks", "generator", null, loc), 0);
+}
+
+test "a callback forwarded through a sync wrapper into a suspending routine is retained" {
+	const w = writeProbe();
+	const loc = makeLoc(0, 0);
+	const wrap = callbackRoutine("wrap", "", callbackRoutine("later", "async", null, loc), loc);
+	assert retainsParam(w, wrap, 0);
 }

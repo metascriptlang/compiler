@@ -12,7 +12,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots } from "./names";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
@@ -262,8 +262,8 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
 		if (typed && isOpenArrayParam(fnType.typeChildren[i])) {
 			const elemPtr = getTypeDesc(g, skipModifier(fnType.typeChildren[i])!.typeReturn) + "*";
-			parts.push(named ? `${elemPtr} ${openArrayDataName(safeName(names[i]))}` : elemPtr);
-			parts.push(named ? `int64_t ${openArrayLenName(safeName(names[i]))}` : "int64_t");
+			parts.push(named ? `${elemPtr} ${openArrayDataName(paramCName(names[i], i))}` : elemPtr);
+			parts.push(named ? `int64_t ${openArrayLenName(paramCName(names[i], i))}` : "int64_t");
 			continue;
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
@@ -272,7 +272,7 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
-		parts.push(named ? `${pType} ${safeName(names[i])}` : pType);
+		parts.push(named ? `${pType} ${paramCName(names[i], i)}` : pType);
 	}
 	const paramList = parts.length > 0 ? parts.join(", ") : "void";
 	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;
@@ -625,11 +625,11 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			key = key + "):" + typeKeyIn(roots, t.typeReturn);
 			return key;
 		},
-		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
+		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.Cursor => { return typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn); },
-		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
+		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.GenericInstance => {
 			const seen = peelTransparentInstance(t);
 			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKeyIn(roots, seen);
@@ -684,8 +684,17 @@ export function typeKey(t: Readonly<Type | null>): string {
 
 // ===== Primitive Type Mapping =====
 
+// An imported scalar (`extern type size_t: uint64 from "size_t"`) is the C name itself, so a pointer
+// to it matches the C prototype's pointee; a plain scalar of that kind is the fixed-width spelling.
+function importedScalarName(t: Readonly<Type | null>): string {
+	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.TypeAlias || !hasFlag(t.sym, SymbolFlag.ImportC) || !isNumeric(t)) return "";
+	return t.sym.nativeName;
+}
+
 export function getSimpleTypeDesc(t: Readonly<Type>): string {
 	if (!t) return "void";
+	const imported = importedScalarName(t);
+	if (imported != "") return imported;
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "double",
 		TypeKind.Float32 => "float",
@@ -1892,8 +1901,9 @@ function elemArrayCName(elem: Readonly<Type>): string {
 export function arrayCTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const elem = t.typeReturn;
 	if (elem == null) return "msRefArray";
-	// Awaitable element → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
-	if (isAwaitable(elem)) return "msRefArray";
+	// Awaitable element, nullable or not → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
+	const nonNull = unwrapRefNullUnion(elem);
+	if (isAwaitable(nonNull != null ? nonNull : elem)) return "msRefArray";
 	const ecn = elemArrayCNameIn(roots, elem);
 	const elemIsRefArray = elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array;
 	const elemIsClass = elem.sym != null && elem.sym.symbolKind == SymbolKind.Class;

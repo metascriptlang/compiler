@@ -415,6 +415,14 @@ export function generatedRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(generatedProcSym(procName), null, loc);
 }
 
+// A reference to a JS global spelled through `globalThis`, which the JS emitter
+// never lets a user binding take, so no binding in scope can capture it.
+export function jsGlobalRef(globalName: string, loc: SourceLocation): Node {
+	const sym = generatedProcSym(`globalThis.${globalName}`);
+	sym.nativeName = sym.name;
+	return makeTypedIdentResolved(sym, null, loc);
+}
+
 export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
 
 export function enterCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): CompilerFuncScope {

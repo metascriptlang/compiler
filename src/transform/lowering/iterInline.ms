@@ -14,6 +14,7 @@ import { isLoopKind } from "./jumpRetarget";
 import { isRoutineOrTestNode } from "../../ast/shape";
 import { hasFlag } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
+import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
@@ -53,6 +54,7 @@ interface InlineCall {
 interface CallTarget {
 	sym: Symbol;
 	args: Node[];
+	isStatic: boolean;
 }
 
 interface ConsumerExpansion {
@@ -431,23 +433,31 @@ function callTarget(call: Node): CallTarget | null {
 	const c = call.data as CallExprData;
 	let sym: Symbol | null = null;
 	const args: Node[] = [];
+	const isStatic = call.flags.has(NodeFlag.ExtStatic);
 	if (call.flags.has(NodeFlag.ExtCall)) {
-		if (call.flags.has(NodeFlag.ExtStatic) || c.callee.kind != NodeKind.MemberExpr) return null;
+		if (c.callee.kind != NodeKind.MemberExpr) return null;
 		sym = call.resolvedSym;
-		args.push((c.callee.data as MemberExprData).object);
+		if (passesReceiver(call)) args.push((c.callee.data as MemberExprData).object);
 	} else {
 		if (c.callee.kind != NodeKind.Identifier) return null;
 		sym = c.callee.resolvedSym;
 	}
 	if (sym == null) return null;
 	for (const a of c.arguments) { args.push(a); }
-	return { sym: placedInstanceOf(placedInstances(), sym), args };
+	return { sym: placedInstanceOf(placedInstances(), sym), args, isStatic };
+}
+
+function passesReceiver(call: Node): boolean {
+	return call.flags.has(NodeFlag.ExtCall) && !call.flags.has(NodeFlag.ExtStatic);
 }
 
 function inlinable(decl: Node, target: CallTarget, fromCaller: boolean, st: InlineState): boolean {
 	if (!fromCaller && st.expanding.has(target.sym)) return false;
 	const fd = decl.data as FunctionDeclData;
 	if (decl.paramSyms == null) throw new Error(`internal: '${fd.fnName}' reached inlining without its parameter symbols`);
+	if (target.isStatic && !isStaticExtensionFlag(fd.fnFlags)) {
+		throw new Error(`internal: a static call reached '${fd.fnName}', which is not a static extension`);
+	}
 	const n = target.args.length;
 	if (decl.paramSyms.length != n || fd.params.length != n) return false;
 	if (bodyRefusal(fd.fnBody, false, false) != "") return false;
@@ -717,7 +727,7 @@ function boundSource(arg: Node, source: InlineCall, out: Node[], st: InlineState
 		}
 	}
 	const c = arg.data as CallExprData;
-	const receiver = arg.flags.has(NodeFlag.ExtCall);
+	const receiver = passesReceiver(arg);
 	if (receiver) (c.callee.data as MemberExprData).object = bound[0];
 	c.arguments = receiver ? bound.slice(1) : bound;
 	return arg;
@@ -1190,6 +1200,33 @@ test "a forwarder that touches its source only on a throwing path is expanded do
 test "a forwarder that touches its source on the path it forwards keeps the source an iterator" {
 	const fwd = "function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { shut(it); return firstN(it, n); }\n";
 	assert forOfsLeft(fwd + "for (const x of firsts(count(9), 3)) { }") == 1;
+}
+
+const staticSrc = sumSrc
+	+ "struct Steps { }\n"
+	+ "function* stepsLazy(n: int32): Iterator<int32> { for (let i = 0; i < n; i++) { yield i; } }\n"
+	+ "function upTo(this typeof Steps, n: int32): Iterator<int32> { if (n < 0) { throw new Error(\"neg\"); } return stepsLazy(n); }\n"
+	+ "function* evens(this typeof Steps, n: int32): Iterator<int32> { for (let i = 0; i < n; i += 2) { yield i; } }\n";
+
+function staticForOfsLeft(src: string, js: boolean): int32 {
+	const parsed = parseInput(staticSrc + src);
+	if (!parsed.ok) throw new Error(parsed.error);
+	if (js) checkProgramJs(parsed.value);
+	else checkProgram(parsed.value);
+	const stmts = getStmts(lowerIterInline(parsed.value, js ? makeJsCtx() : makeCtx()));
+	return countKind(stmts[stmts.length - 1], NodeKind.ForOfStmt);
+}
+
+test "a for-of over a static extension generator or forwarder is expanded in place" {
+	for (const js of [false, true]) {
+		assert staticForOfsLeft("for (const x of Steps.evens(6)) { }", js) == 0;
+		assert staticForOfsLeft("for (const x of Steps.upTo(3)) { }", js) == 0;
+	}
+}
+
+test "a consumer of a static extension call is expanded in place" {
+	assert lastStmtCalls(staticSrc + "function f(): int32 { return total(Steps.upTo(3)); }") == 0;
+	assert lastStmtCalls(staticSrc + "function f(): int32 { const s = total(Steps.evens(6)); return s; }") == 0;
 }
 
 test "two expansions of one generator declare disjoint symbols" {

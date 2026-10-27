@@ -23,7 +23,7 @@ function main(): void { console.log(forward(3).c); }
 `);
 	assert c.ok;
 	const body = bodyOf(c.value, "forward");
-	assert body.contains("(&(*__result), n);");
+	assert body.contains("(&(*__result), n_p0);");
 	assert !body.contains("*__result =");
 }
 
@@ -35,6 +35,6 @@ function main(): void { console.log(forward((n: int64): Big => ({ a: n, b: n, c:
 `);
 	assert c.ok;
 	const body = bodyOf(c.value, "forward");
-	assert body.contains("(&(*__result), n)");
+	assert body.contains("(&(*__result), n_p1)");
 	assert !body.contains("*__result =");
 }

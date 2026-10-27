@@ -31,7 +31,7 @@ import { lineOffset } from "../../../utils/sourceLines";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
-	cacheResolveEdit, lookupResolveEdit,
+	cacheResolveEdit, lookupResolveEdit, resolveKey, lspHasBuiltinDoc,
 	CompletionCache, createCompletionCache, LspCursorParams
 } from "./shared";
 
@@ -83,7 +83,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
 				if (sym.ext != null) continue;
 				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
-				items.push(lspFmtLeanCompletionItem(sym.name, kindNum, "25"));
+				items.push(lspFmtLeanCompletionItem(sym.name, kindNum, "25", resolveKey(entry.modulePath, sym.name)));
 			}
 		}
 	}
@@ -216,11 +216,12 @@ function lspCrossModuleCandidates(
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
 			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
 			const detail = sgTypeToString(sym.sym.symbolType) + " (from " + importSpec + ")";
-			cacheResolveEdit(sym.name, detail, editJson);
+			const key = resolveKey(entry.modulePath, sym.name);
+			cacheResolveEdit(key, editJson);
 			const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
 			const hasExistingImport = sgFindImportBySource(program, importSpec) != null;
 			const sortText = hasExistingImport ? "20" : "25";
-			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson, key));
 		}
 	}
 
@@ -253,10 +254,11 @@ function lspCrossModuleCandidates(
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
 			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
 			const detail = sgTypeToString(sym.symbolType) + " (from " + importSpec + ")";
-			cacheResolveEdit(sym.name, detail, editJson);
+			const key = resolveKey(modPath, sym.name);
+			cacheResolveEdit(key, editJson);
 			const kindNum = lspCompletionItemKind(sym.symbolKind, false);
 			const sortText = "22";
-			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson, key));
 		}
 	}
 
@@ -465,9 +467,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 // completionItem/resolve — attach additionalTextEdits for auto-import items.
 // nvim-cmp strips additionalTextEdits from initial response and requests them here.
 export function handleCompletionResolve(id: string, params: string): string {
-	const label = lspGetField(params, "label");
-	const detail = lspGetField(params, "detail");
-	const edits = lookupResolveEdit(label, detail);
+	const edits = lookupResolveEdit(lspGetField(params, "data"));
 	if (edits.length > 0) {
 		let result = params;
 		const closeIdx = result.length - 1;
@@ -516,7 +516,7 @@ function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path
 		} else {
 			doc = sgExtractDocComment(currentSource, item.location.line);
 		}
-		if (doc == "") {
+		if (doc == "" && lspHasBuiltinDoc(db, item.sym)) {
 			doc = sgBuiltinDoc(item.name, item.containerName);
 		}
 		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, ""));
@@ -984,4 +984,22 @@ test "keyword completion: prebuilt empty-prefix includes const" {
 	const params = `{"textDocument":{"uri":"file:///kwpre.ms"},"position":{"line":1,"character":0}}`;
 	const r = handleCompletion("1", params, db, createCompletionCache());
 	assert r.indexOf("\"label\":\"const\"", 0) >= 0;
+}
+
+test "completion resolve: same-named exports of two modules keep their own import edit" {
+	const keyA = resolveKey("/m/a.ms", "shared");
+	const keyB = resolveKey("/m/b.ms", "shared");
+	cacheResolveEdit(keyA, "[A]");
+	cacheResolveEdit(keyB, "[B]");
+	const fromA = handleCompletionResolve("1", `{"label":"shared","detail":"same","data":${lspJsonString(keyA)}}`);
+	const fromB = handleCompletionResolve("2", `{"label":"shared","detail":"same","data":${lspJsonString(keyB)}}`);
+	assert fromA.indexOf("\"additionalTextEdits\":[A]", 0) >= 0;
+	assert fromB.indexOf("\"additionalTextEdits\":[B]", 0) >= 0;
+	assert fromA.indexOf("[B]", 0) < 0;
+}
+
+test "completion resolve: an item without its data key gets no edit" {
+	cacheResolveEdit(resolveKey("/m/c.ms", "lonely"), "[C]");
+	const r = handleCompletionResolve("1", `{"label":"lonely"}`);
+	assert r.indexOf("additionalTextEdits", 0) < 0;
 }

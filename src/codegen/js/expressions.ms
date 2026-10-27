@@ -94,7 +94,7 @@ const JS_RESERVED: HashSet<string> = new HashSet<string>([
 	"long", "native", "new", "null", "package", "private", "protected",
 	"public", "return", "short", "static", "switch", "synchronized",
 	"throw", "throws", "transient", "true", "try", "typeof", "var",
-	"void", "volatile", "while", "with", "yield",
+	"void", "volatile", "while", "with", "yield", "globalThis",
 ]);
 
 export function safeJsName(name: string): string {
@@ -154,6 +154,10 @@ function enumOfMember(sym: Symbol): Type | null {
 
 export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumName: string, member: string): string {
 	if (gen.bundleMode && enumSym != null && enumSym.modulePath != "" && !hasFlag(enumSym, SymbolFlag.ImportC)) return `${mangledGlobalName(buildModuleNameRoots(), enumSym, enumName)}_${member}`;
+	if (gen.multiFile && (enumSym == null || !hasFlag(enumSym, SymbolFlag.ImportC))) {
+		const home = enumSym != null && enumSym.modulePath != "" ? enumSym.modulePath : gen.currentModulePath;
+		return `${mangleQualified(enumName, mangleModuleName(buildModuleNameRoots(), home))}_${member}`;
+	}
 	return enumMemberName(enumSym, safeJsName(enumName), member);
 }
 
@@ -274,10 +278,10 @@ function multiFileHomeName(gen: JSGenerator, sym: Symbol, name: string, declared
 	// referencing side sees registry clones that carry one; naming must not
 	// depend on which side asks, so empty resolves to the module being emitted.
 	const effPath = hasModule ? sym.modulePath : gen.currentModulePath;
-	if (sym.symbolKind == SymbolKind.EnumMember && hasModule) {
-		// Checker lowers E.Member to a flat E_Member identifier; the emitted
-		// enum declaration exports exactly those flat names.
-		return safeJsName(name);
+	if (sym.symbolKind == SymbolKind.EnumMember) {
+		const owner = enumOfMember(sym);
+		if (owner == null) throw new Error(`internal: enum member ${name} has no enum type`);
+		return jsEnumMemberName(gen, owner.sym, owner.typeName, sym.name);
 	}
 	if (sym.symbolKind == SymbolKind.Function) {
 		if (moduleExportsName(gen, effPath, baseName) && !isStaticExtensionSym(sym)) {
@@ -538,7 +542,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	if (isMsPrintln || isMsWarnln || isMsEprintln) {
 		const method = isMsWarnln ? "warn" : isMsEprintln ? "error" : "log";
 		markNamed(gen, calleeOriginNode(d.callee), isMsWarnln ? "msWarnln" : isMsEprintln ? "msEprintln" : "msPrintln");
-		emit(gen, `console.${method}(`);
+		emit(gen, `globalThis.console.${method}(`);
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
 		return;
@@ -546,7 +550,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	if (sym != null && sym.builtinKind == "Echo") {
 		const method = sym.name;
 		markNamed(gen, calleeOriginNode(d.callee), `console.${method}`);
-		emit(gen, `console.${method}(`);
+		emit(gen, `globalThis.console.${method}(`);
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
 		return;
@@ -857,7 +861,7 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	if (arrayType != null && d.newArguments.length == 1) {
 		const zero = jsDefaultValue(arrayType.typeReturn);
 		if (zero != "") {
-			emit(gen, "Array.from({ length: ");
+			emit(gen, "globalThis.Array.from({ length: ");
 			emitNode(gen, d.newArguments[0]);
 			emit(gen, " }, () => (" + zero + "))");
 			return;
@@ -979,8 +983,8 @@ function heldKindOf(m: Type): string {
 
 function heldKindTest(kind: string): string {
 	if (kind == "null") return "v == null";
-	if (kind == "array") return "Array.isArray(v)";
-	if (kind == "object") return "(v !== null && typeof v === \"object\" && !Array.isArray(v))";
+	if (kind == "array") return "globalThis.Array.isArray(v)";
+	if (kind == "object") return "(v !== null && typeof v === \"object\" && !globalThis.Array.isArray(v))";
 	return "typeof v === \"" + kind + "\"";
 }
 
@@ -1029,7 +1033,7 @@ function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type,
 	emitNode(gen, classReference(cls, location));
 	emit(gen, ") ? v : ");
 	emitNode(gen, runtimeRef("msDefect", location));
-	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
+	emit(gen, "(v !== null && typeof v === \"object\" && !globalThis.Array.isArray(v) && v.constructor !== globalThis.Object ? \"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
 	emitHeldMember(gen, union, location);
 	emit(gen, " + \"'\"))(");
 }
@@ -1056,7 +1060,7 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		const tests: string[] = [];
 		for (const lit of literals) tests.push("v === \"" + escapeJSString(lit.typeName) + "\"");
 		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : ");
-		emitDefectCall(gen, "\"invalid union conversion: \" + JSON.stringify(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
+		emitDefectCall(gen, "\"invalid union conversion: \" + globalThis.JSON.stringify(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
 		emit(gen, ")(");
 		let stringSlot: Type | null = null;
 		if (union != null) {
@@ -1072,7 +1076,7 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		const tests: string[] = [];
 		for (const lit of numbers) tests.push("v == " + lit.typeName);
 		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : ");
-		emitDefectCall(gen, "\"invalid union conversion: \" + String(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
+		emitDefectCall(gen, "\"invalid union conversion: \" + globalThis.String(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
 		emit(gen, ")(");
 		emitNode(gen, d.asExpr);
 		emit(gen, ")");
@@ -1090,11 +1094,11 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 	if (kind == "null" || kind == "class") return false;
 	if (kind == "array") {
 		if (!soleMemberOfKind(union, kind)) return false;
-		openMemberTest(gen, payload, union, pass + "Array.isArray(v)", [], node.location);
+		openMemberTest(gen, payload, union, pass + "globalThis.Array.isArray(v)", [], node.location);
 	} else if (kind == "object") {
 		const classes = classMembers(union);
 		if (!soleMemberOfKind(union, kind) || classes == null) return false;
-		openMemberTest(gen, payload, union, pass + "v !== null && typeof v === \"object\" && !Array.isArray(v)", classes, node.location);
+		openMemberTest(gen, payload, union, pass + "v !== null && typeof v === \"object\" && !globalThis.Array.isArray(v)", classes, node.location);
 	} else {
 		openTagTest(gen, payload, union, pass, node.location);
 	}

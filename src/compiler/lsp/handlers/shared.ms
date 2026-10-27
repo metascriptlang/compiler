@@ -10,6 +10,7 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
 import { lspByteColumn } from "../position";
+import { Symbol } from "../../../ast/node";
 
 export { lspCharacter } from "../position";
 
@@ -25,16 +26,21 @@ export class CompletionCache {
 	items: string[];       // cached per-item JSON strings
 }
 
-// Resolve cache: maps label to additionalTextEdits JSON for completionItem/resolve.
+// Resolve cache: maps an item's data key to additionalTextEdits JSON for completionItem/resolve.
 // nvim-cmp strips additionalTextEdits from initial response and expects them on resolve.
 let _resolveCache: HashMap<string, string> = new HashMap<string, string>();
 
-export function cacheResolveEdit(label: string, detail: string, editsJson: string): void {
-	_resolveCache.set(label, editsJson);
+// An auto-import candidate is an export of one module: its key is the exporting module and the export name.
+export function resolveKey(modulePath: string, exportName: string): string {
+	return modulePath + "\t" + exportName;
 }
 
-export function lookupResolveEdit(label: string, detail: string): string {
-	const cached = _resolveCache.get(label);
+export function cacheResolveEdit(key: string, editsJson: string): void {
+	_resolveCache.set(key, editsJson);
+}
+
+export function lookupResolveEdit(key: string): string {
+	const cached = _resolveCache.get(key);
 	if (cached != null) return cached;
 	return "";
 }
@@ -68,6 +74,15 @@ export function drainChangedFiles(): ChangedFile[] {
 }
 
 // ===== Shared Helpers =====
+
+// The built-in doc table describes std and prelude declarations; a user declaration spelled
+// like one of them (`log`, `parse`) has no built-in doc.
+export function lspHasBuiltinDoc(db: TransAmDb, sym: Symbol | null): boolean {
+	if (sym == null) return false;
+	const modulePath = sym.modulePath != null ? sym.modulePath : "";
+	if (modulePath.startsWith("std/") || (db.stdPath.length > 0 && modulePath.startsWith(db.stdPath))) return true;
+	return db.preludeCtx != null && db.preludeCtx.preludeExports.has(sym);
+}
 
 export interface LspCursorParams {
 	uri: string;

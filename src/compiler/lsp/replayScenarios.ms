@@ -1494,6 +1494,173 @@ function positionsBuiltByAMacroAnswerNothing(): LspScenario {
 	};
 }
 
+const SHADOWED_DOC_SOURCE = "function f(): int32 {\n\tconst JSON: int32 = 3;\n\treturn JSON;\n}\nconst s = JSON.stringify(1);\n";
+
+function hoverDocFollowsTheSymbol(): LspScenario {
+	const uri = "file:///lspwire/shadowdoc.ms";
+	const intrinsic = "intrinsic object that provides functions to convert JavaScript values";
+	return {
+		name: "hover shows the built-in doc for the std JSON and none for a user binding spelled JSON",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SHADOWED_DOC_SOURCE))]),
+			frames([
+				request("10", "textDocument/hover", positionParams(uri, 1, 8)),
+				request("11", "textDocument/hover", positionParams(uri, 2, 9)),
+				request("12", "textDocument/hover", positionParams(uri, 4, 11)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			lacksText("hover on the user declaration", intrinsic, hoverSummary(r, "n:10")),
+			lacksText("hover on the user use", intrinsic, hoverSummary(r, "n:11")),
+			containsText("hover on the std JSON", intrinsic, hoverSummary(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+const SHADOWED_CALL_SOURCE = "function pick(a: int32): int32 { return a; }\nfunction outer(): int32 {\n\tconst pick = (x: int32, y: int32): int32 => x + y;\n\treturn pick(1, 2);\n}\n";
+
+function signatureHelpFollowsTheCalleeSymbol(): LspScenario {
+	const uri = "file:///lspwire/shadowcall.ms";
+	return {
+		name: "signature help names the local binding a call resolves to, not the module function of the same name",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SHADOWED_CALL_SOURCE))]),
+			frames([request("10", "textDocument/signatureHelp", positionParams(uri, 3, 13))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("local pick shadows the module pick",
+				"signatures 1, activeSignature 0, activeParameter 0, label pick(x: int32, y: int32): int32, parameters [x: int32, y: int32]",
+				signatureSummary(r, "n:10")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function referenceRows(r: LspReplay, key: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	const rows: string[] = [];
+	for (const location of result.items) rows.push(scalarText(location.getDynamicField("uri")) + " " + spanOf(location));
+	return rows.join("; ");
+}
+
+function referencesFollowTheImportedSymbol(): LspScenario {
+	const dep = "file:///lspwire/refs/b.ms";
+	const user = "file:///lspwire/refs/a.ms";
+	const depText = "export function f(): int32 { return 1; }";
+	const userText = "import { f as g } from \"./b\";\nexport const t = g();";
+	return {
+		name: "references of an export include its uses under an import alias",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
+			frames([notification("textDocument/didOpen", openParams(user, userText))]),
+			frames([request("10", "textDocument/references", positionParams(dep, 0, 16))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			containsText("the declaration", dep + " 0:16-0:17", referenceRows(r, "n:10")),
+			containsText("the use through the alias g", user + " 1:17-1:18", referenceRows(r, "n:10")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function renameParams(uri: string, line: int32, character: int32, newName: string): string {
+	const at = positionParams(uri, line, character);
+	return at.slice(0, at.length - 1) + `,"newName":${lspJsonString(newName)}}`;
+}
+
+function renameRows(r: LspReplay, key: string, uri: string): string {
+	const changes = answerResult(r, key).getDynamicField("changes");
+	const edits = changes.getDynamicField(uri);
+	if (edits.kind != JsonKind.Array) return "none";
+	const rows: string[] = [];
+	for (const edit of edits.items) rows.push(spanOf(edit) + " " + scalarText(edit.getDynamicField("newText")));
+	return rows.join("; ");
+}
+
+function renameFollowsTheBindingOfAnImport(): LspScenario {
+	const dep = "file:///lspwire/rename/b.ms";
+	const user = "file:///lspwire/rename/a.ms";
+	const depText = "export function f(): int32 { return 1; }";
+	const userText = "import { f as g } from \"./b\";\nexport const t = g();";
+	return {
+		name: "rename through an import alias renames the local binding, and from the export keeps the alias",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
+			frames([notification("textDocument/didOpen", openParams(user, userText))]),
+			frames([
+				request("10", "textDocument/rename", renameParams(user, 1, 17, "h")),
+				request("11", "textDocument/rename", renameParams(dep, 0, 16, "h")),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("rename at the alias use, the importer", "0:14-0:15 h; 1:17-1:18 h", renameRows(r, "n:10", user)),
+			sameText("rename at the alias use, the exporter", "none", renameRows(r, "n:10", dep)),
+			sameText("rename at the export, the declaration", "0:16-0:17 h", renameRows(r, "n:11", dep)),
+			sameText("rename at the export, the importer", "0:9-0:10 h", renameRows(r, "n:11", user)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function renameEditsEachCallOnce(): LspScenario {
+	const uri = "file:///lspwire/rename/calls.ms";
+	const text = "function q(): int32 { return 1; }\nconst t = q() + q();\nconsole.log(t);";
+	return {
+		name: "rename of a called function edits each call once",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+			frames([request("10", "textDocument/rename", renameParams(uri, 1, 10, "h"))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("rename at a call", "0:9-0:10 h; 1:10-1:11 h; 1:16-1:17 h", renameRows(r, "n:10", uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
+
+function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
+	const uri = "file:///lspwire/enumdef.ms";
+	return {
+		name: "go to definition of an enum member lands on the member, not on text spelled like the enum",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, COMMENTED_ENUM_SOURCE))]),
+			frames([request("10", "textDocument/definition", positionParams(uri, 5, 17))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("definition of Color.Blue", "3:1-3:5", definitionSpan(r, "n:10")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
@@ -1612,6 +1779,12 @@ export function lspScenarios(): LspScenario[] {
 		hoverShowsDeclarations(),
 		hoverShowsTheFieldDocAtItsUses(),
 		positionsBuiltByAMacroAnswerNothing(),
+		hoverDocFollowsTheSymbol(),
+		signatureHelpFollowsTheCalleeSymbol(),
+		referencesFollowTheImportedSymbol(),
+		renameEditsEachCallOnce(),
+		enumMemberDefinitionIsTheMembersDeclaration(),
+		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
 	];

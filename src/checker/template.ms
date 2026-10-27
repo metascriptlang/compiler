@@ -163,6 +163,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	callNode.kind = expandedExpr.kind;
 	callNode.data = expandedExpr.data;
 	if (expandedExpr.typeArg != "") callNode.typeArg = expandedExpr.typeArg;
+	if (expandedExpr.typeExprs != null) callNode.typeExprs = expandedExpr.typeExprs;
 	callNode.nodeType = expandedExpr.nodeType;
 	callNode.resolvedSym = expandedExpr.resolvedSym;
 	callNode.flags = callNode.flags.has(NodeFlag.Parenthesized) ? expandedExpr.flags.incl(NodeFlag.Parenthesized) : expandedExpr.flags;

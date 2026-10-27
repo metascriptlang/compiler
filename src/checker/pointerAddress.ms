@@ -34,7 +34,8 @@ export function pointerAddressElement(source: Type | null, target: Type | null):
 	const src = bareSource(source);
 	const elem = pointee(target);
 	if (src == null || elem == null) return null;
-	if (src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr || src.kind == TypeKind.Null) return null;
+	if (src.kind == TypeKind.Ref || src.kind == TypeKind.Null) return null;
+	if (src.kind == TypeKind.Ptr) return sameType(src, elem) ? src : null;
 	if (src.kind == TypeKind.Span) {
 		const item = skipModifier(src.typeReturn);
 		if (item != null && item.kind == TypeKind.Ref) return null;
@@ -93,7 +94,12 @@ export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node,
 		return;
 	}
 	const refusal = writeRefusal(place, WriteSite.RefArg);
-	if (refusal == "" || node.nodeType == null || isReadonlyView(node.nodeType)) return;
+	if (refusal == null) return;
+	if (node.nodeType == null) {
+		addError(ctx, refusal, expr.location.line, expr.location.column);
+		return;
+	}
+	if (isReadonlyView(node.nodeType)) return;
 	const view = createReadonlyView(node.nodeType);
 	if (isReadonlyView(view)) {
 		node.nodeType = view;
@@ -123,13 +129,18 @@ function throughHeap(t: Type | null): boolean {
 	return held.kind == TypeKind.Ref || held.kind == TypeKind.Ptr || held.kind == TypeKind.Span || held.kind == TypeKind.Unknown;
 }
 
+function holdsHeapView(t: Type | null): boolean {
+	const held = skipModifier(t);
+	return held == null || held.kind == TypeKind.Ref || held.kind == TypeKind.Span || held.kind == TypeKind.Unknown;
+}
+
 function frameRoot(node: Node | null): Symbol | null {
 	let n = node;
 	while (n != null) {
 		match (n.kind) {
 			NodeKind.Identifier => {
 				const sym = n.resolvedSym;
-				if (sym == null || hasFlag(sym, SymbolFlag.Global) || throughHeap(sym.symbolType)) return null;
+				if (sym == null || hasFlag(sym, SymbolFlag.Global) || holdsHeapView(sym.symbolType)) return null;
 				if (sym.symbolKind == SymbolKind.Parameter && sym.symbolType != null && sym.symbolType.kind == TypeKind.Var) return null;
 				if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return null;
 				return sym;

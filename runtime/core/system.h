@@ -248,6 +248,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayCopy_GET(_1, _2, NAME, ...) NAME
 #define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
 #define msArraySetLen(d, s)            msGenericArraySetLen(&(d), (s).len)
+#define msArrayCopyPayload(d, s)       do { \
+	if ((d).p != (s).p && (s).len > 0) memcpy((d).p->data, (s).p->data, (size_t)(s).len * sizeof((s).p->data[0])); \
+} while(0)
 
 /* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)

@@ -93,8 +93,7 @@ function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext)
 		decl.resolvedSym = sym;
 		decl.nodeType = ty;
 		hoisted.push(decl);
-		let i = 0;
-		while (i < args.length) {
+		for (let i = 0; i < args.length; i += 1) {
 			const recv = makeIdentResolved(sym, loc);
 			recv.nodeType = ty;
 			const target = makeMember(recv, inner.typeNames[i], loc);
@@ -102,7 +101,6 @@ function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext)
 				target.nodeType = inner.typeChildren[i];
 			}
 			hoisted.push(makeExprStmt(makeAssign(target, args[i], loc), loc));
-			i += 1;
 		}
 		const ref = makeIdentResolved(sym, loc);
 		ref.nodeType = ty;
