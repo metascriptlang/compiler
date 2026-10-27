@@ -1536,7 +1536,7 @@ test "prepared Windows configurations keep their platform baseline instead of th
 	opts.ccCompiler = CC_PREPARED;
 	assert !cliCompileFlags(opts).contains("-D_WIN32_WINNT=");
 	opts.ccCompiler = 1;
-	assert cliCompileFlags(opts).contains("-D_WIN32_WINNT=0x0600");
+	assert cliCompileFlags(opts).contains("-D_WIN32_WINNT=0x0A00");
 }
 
 test "the default math library follows the link target, not the host" {

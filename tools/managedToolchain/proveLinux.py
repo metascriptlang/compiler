@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from prepareRuntime import elfProblem, elfInterpreterProblem, glibcSymbolProblem
+from prepareRuntime import elfProblem, elfInterpreterProblem, elfSharedProblem, glibcSymbolProblem
 from proveDefault import COMPILER_ROOT, FIXTURES, SUPPORT_TREES, build, run, sandboxProfile
 
 
@@ -22,7 +22,7 @@ def prove(compiler, control, bundle):
         shutil.copy2(control, old)
         source = work / "consumer.ms"
         shutil.copyfile(FIXTURES / "consumer.ms", source)
-        sandbox = sandboxProfile(work / "deny.sb", ["/opt/homebrew", str(Path.home() / ".metascript")])
+        sandbox = sandboxProfile(work / "deny.sb", ["/opt/homebrew", "/usr/bin/ar", str(Path.home() / ".metascript")])
         environment = {"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"], "TMPDIR": str(work),
                        "MSC_NATIVE_TOOLCHAIN": str(bundle), "MSC_NO_GLOBAL_CACHE": "1",
                        "MSC_CACHE_DIR": str(work / "cache")}
@@ -40,10 +40,22 @@ def prove(compiler, control, bundle):
             if problem:
                 raise RuntimeError(problem)
             print("%s: ELF64 architecture/interpreter and GLIBC<=2.31 verified; linked, not run" % cpu)
-            for flag, reason in (("--hcr", "HCR"), ("--app=lib", "lib"), ("--app=staticlib", "staticlib")):
-                run(sandbox + build(new, source, work / "unsupported", *flags, flag), environment,
-                    expected=1, contains="does not supply " + reason + " startup")
-        print("both architectures: unsupported GNU shared/HCR/static startup refused explicitly")
+            archive = work / (cpu + ".a")
+            run(sandbox + build(new, source, archive, *flags, "--app=staticlib"), environment)
+            if archive.read_bytes()[:8] != b"!<arch>\n":
+                raise RuntimeError("msc did not produce a static archive for " + cpu)
+            profile = bundle / "runtime" / (target + ".so.cfg")
+            if not profile.is_file():
+                raise RuntimeError("missing shared runtime profile: " + str(profile))
+            for mode, flag in (("shared", "--app=lib"), ("hcr", "--hcr")):
+                image = work / (cpu + "-" + mode + ".so")
+                run(sandbox + build(new, source, image, *flags, flag), environment)
+                images = (image, image.with_suffix(".core.so")) if mode == "hcr" else (image,)
+                for artifact in images:
+                    problem = elfSharedProblem(str(artifact), target)
+                    if problem:
+                        raise RuntimeError(str(artifact) + ": " + problem)
+            print("%s: static archive, shared object and HCR entry/core ELF64 shared images verified; not run" % cpu)
 
 
 if __name__ == "__main__":

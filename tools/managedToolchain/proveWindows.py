@@ -24,7 +24,7 @@ def prove(compiler, control, bundle):
             shutil.copyfile(FIXTURES / name, work / name)
         library = work / "library.ms"
         library.write_text('@compile("./runtimeWindowsDll.c");\n' + (FIXTURES / "consumer.ms").read_text())
-        sandbox = sandboxProfile(work / "deny.sb", ["/opt/homebrew", str(Path.home() / ".metascript")])
+        sandbox = sandboxProfile(work / "deny.sb", ["/opt/homebrew", "/usr/bin/ar", str(Path.home() / ".metascript")])
         environment = {"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"], "TMPDIR": str(work),
                        "MSC_NATIVE_TOOLCHAIN": str(bundle), "MSC_NO_GLOBAL_CACHE": "1",
                        "MSC_CACHE_DIR": str(work / "cache")}
@@ -52,10 +52,19 @@ def prove(compiler, control, bundle):
             if imports.read_bytes()[:8] != b"!<arch>\n":
                 raise RuntimeError("msc did not produce an import archive for " + cpu)
             print("%s: console exe, DLL/addNumbers/Win32+CRT imports and import library verified; not run" % cpu)
-            for flag, reason in (("--hcr", "HCR"), ("--app=staticlib", "staticlib")):
-                run(sandbox + build(new, work / "consumer.ms", work / "unsupported", *flags, flag),
-                    environment, expected=1, contains="does not supply " + reason + " startup")
-        print("both architectures: unsupported prepared Windows HCR/static startup refused explicitly")
+            archive = work / (cpu + "-static.a")
+            run(sandbox + build(new, work / "consumer.ms", archive, *flags, "--app=staticlib"), environment)
+            if archive.read_bytes()[:8] != b"!<arch>\n":
+                raise RuntimeError("msc did not produce a static archive for " + cpu)
+            image = work / (cpu + "-hcr.dll")
+            run(sandbox + build(new, work / "consumer.ms", image, *flags, "--hcr"), environment)
+            for artifact in (image, image.with_suffix(".core.dll")):
+                pe = readPe(artifact)
+                if pe["machine"] != expected["machine"] or not pe["characteristics"] & DLL_CHARACTERISTIC:
+                    raise RuntimeError("msc did not produce a %s HCR DLL: %s: %r" % (cpu, artifact, pe))
+            if image.with_suffix(".core.lib").read_bytes()[:8] != b"!<arch>\n":
+                raise RuntimeError("msc did not produce an HCR core import archive for " + cpu)
+            print("%s: static archive and HCR entry/core DLLs with core import archive verified; not run" % cpu)
 
 
 if __name__ == "__main__":
