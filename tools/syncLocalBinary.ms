@@ -384,6 +384,58 @@ for (const lib of VENDOR_LIBS) {
 	syncTree(`vendor/${lib}`);
 }
 
+function bundleIdentity(root: string): string {
+	const text = readFile(`${root}/IDENTITY`);
+	return text.ok ? text.value.trim() : "";
+}
+
+function syncToolchain(): void {
+	const from = `${SRC}/msc-toolchain`;
+	if (!isDir(from)) {
+		console.log(`msc-toolchain/: none beside ${SRC}, installed bundle left as it is`);
+		return;
+	}
+	const to = `${DEST}/msc-toolchain`;
+	const identity = bundleIdentity(from);
+	if (identity == "") die(`${from} has no IDENTITY; prepare it with tools/managedToolchain/prepareBundle.py`);
+	if (bundleIdentity(to) == identity) {
+		console.log(`msc-toolchain/: ${identity.slice(0, 12)} already installed`);
+		return;
+	}
+	if (check) {
+		console.log(`would: publish msc-toolchain ${identity.slice(0, 12)} → ${to}`);
+		return;
+	}
+	if (windows) die(`publishing ${from} is not supported on Windows yet; move it aside to sync`);
+	const next = `${to}.next`;
+	removeAll(next);
+	const copied = execFileResult("cp", ["-a", from, next]);
+	if (!copied.started || copied.exitCode != 0) die(`cannot stage ${from} at ${next}: ${copied.errorOutput}`);
+	const probe = `${DEST}/out/toolchainProbe`;
+	removeAll(probe);
+	ensureDir(probe);
+	writeFile(`${probe}/probe.ms`, "console.log(42);\n");
+	const previous = env.get("MSC_NATIVE_TOOLCHAIN");
+	env.set("MSC_NATIVE_TOOLCHAIN", next);
+	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "probe.ms", "--no-color"], probe);
+	if (previous != "") env.set("MSC_NATIVE_TOOLCHAIN", previous);
+	else env.delete("MSC_NATIVE_TOOLCHAIN");
+	removeAll(probe);
+	if (!run.started || run.exitCode != 0 || run.output.trim().split("\n").pop() != "42") {
+		removeAll(next);
+		die(`the installed msc refused the staged bundle ${identity.slice(0, 12)}:\n${run.output}${run.errorOutput}`);
+	}
+	const old = `${to}.old`;
+	removeAll(old);
+	if (exists(to) && !rename(to, old).ok) die(`cannot move ${to} aside to ${old}`);
+	if (!rename(next, to).ok) {
+		if (exists(old)) rename(old, to);
+		die(`cannot publish ${next} as ${to}`);
+	}
+	removeAll(old);
+	console.log(`synced msc-toolchain ${identity.slice(0, 12)} → ${to}`);
+}
+
 function recordBuild(key: string): void {
 	const stamp = git(["log", "-1", "--format=%h %cI"]);
 	const path = `${DEST}/BUILD`;
@@ -396,6 +448,8 @@ function recordBuild(key: string): void {
 	}
 	writeFile(path, `${text}${key} ${stamp}\n`);
 }
+
+syncToolchain();
 
 if (!check) {
 	if (syncBinary) recordBuild("binary");
