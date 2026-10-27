@@ -3854,8 +3854,13 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 // Phase 5: resolve `super` identifier to the parent class symbol.
 // `super` is only valid inside an instance method (where "this" is in scope).
 // Walks: this → enclosing class type → typeExtra → parent class.
+function isStringArm(arm: Node): boolean {
+	return arm.nodeType != null && (arm.nodeType.kind == TypeKind.String || arm.nodeType.kind == TypeKind.StringLiteral);
+}
+
 function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null, converting: boolean): Type | null {
-	if (expectedType != null && !hasGenericParams(expectedType) && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
+	const stringIntoCString = expectedType != null && expectedType.kind == TypeKind.CString && isStringArm(d.ternaryConsequent) && isStringArm(d.ternaryAlternate);
+	if (expectedType != null && !stringIntoCString && !hasGenericParams(expectedType) && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
 		|| (branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
 		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
 		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);

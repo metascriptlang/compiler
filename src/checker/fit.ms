@@ -18,6 +18,7 @@ import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 import { checkSendableSource } from "./sendable";
 import { forEachChild } from "../ast/visitor";
+import { isFunctionLike } from "./freestanding";
 import { hasFlag, isFrameValue } from "./symbol";
 
 // ===== Operator Inference =====
@@ -1212,10 +1213,18 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 // Wrap a string arg passed to a cstring param in a HiddenStdConv so the FFI
 // boundary conversion (msStringToCString on C; none on JS, cstring ≡ string)
 // is inserted — mirrors an explicit `as cstring` cast, for implicit call args.
-export function refuseDanglingCString(ctx: CheckerContext, expr: Node, livesForTheCall: boolean): void {
+export function refuseDanglingCString(ctx: CheckerContext, expr: Node, callArgs: Node[] | null): void {
 	const source = stringBehindAssertions(expr);
-	if (outlivesItsCString(source)) return;
-	if (!livesForTheCall || !livesThroughCall(ctx, source)) reportDanglingCString(ctx, expr, source);
+	if (!outlastsItsCString(ctx, source, callArgs)) reportDanglingCString(ctx, expr, source);
+}
+
+function outlastsItsCString(ctx: CheckerContext, source: Node, callArgs: Node[] | null): boolean {
+	if (source.kind == NodeKind.ConditionalExpr) {
+		const arms = source.data as ConditionalExprData;
+		return outlastsItsCString(ctx, stringBehindAssertions(arms.ternaryConsequent), callArgs)
+			&& outlastsItsCString(ctx, stringBehindAssertions(arms.ternaryAlternate), callArgs);
+	}
+	return outlivesItsCString(source) || (callArgs != null && livesThroughCall(ctx, source, callArgs));
 }
 
 function stringBehindAssertions(expr: Node): Node {
@@ -1228,22 +1237,31 @@ function stringBehindAssertions(expr: Node): Node {
 	return at;
 }
 
-function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
+function livesThroughCall(ctx: CheckerContext, expr: Node, callArgs: Node[]): boolean {
 	match (expr.kind) {
 		NodeKind.CallExpr | NodeKind.NewExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess => { return true; },
 		NodeKind.BinaryExpr => { return (expr.data as BinaryExprData).operator == "+"; },
-		NodeKind.Identifier => { return unchangedDuringCall(ctx, expr.resolvedSym); },
+		NodeKind.Identifier => { return unchangedDuringCall(ctx, expr.resolvedSym, callArgs); },
 		_ => { return false; },
 	};
 }
 
-function unchangedDuringCall(ctx: CheckerContext, sym: Symbol | null): boolean {
+function unchangedDuringCall(ctx: CheckerContext, sym: Symbol | null, callArgs: Node[]): boolean {
 	if (sym == null) return false;
 	if (!isFrameValue(sym)) return true;
 	if (sym.symbolKind != SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Mutable)) return true;
 	const body = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
-	if (body == null || assignsName(body, sym.name)) return false;
-	return sym.symbolKind == SymbolKind.Parameter || contains(body, sym.declNode);
+	if (body == null) return false;
+	if (sym.symbolKind == SymbolKind.Parameter) return !assignsName(body, sym.name);
+	if (!contains(body, sym.declNode)) return false;
+	return !assignsInNestedFunction(body, sym.name, true) && !callArgs.some((a: Node): boolean => assignsName(a, sym.name));
+}
+
+function assignsInNestedFunction(n: Node, name: string, isRoot: boolean): boolean {
+	if (!isRoot && isFunctionLike(n)) return assignsName(n, name);
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && assignsInNestedFunction(c, name, false)) found = true; });
+	return found;
 }
 
 function contains(n: Node, target: Node | null): boolean {
@@ -1277,7 +1295,7 @@ function writesItsLeft(op: string): boolean {
 
 function reportDanglingCString(ctx: CheckerContext, expr: Node, source: Node): void {
 	const what = source.kind == NodeKind.Identifier ? "'" + (source.data as IdentifierData).name + "'" : "this expression";
-	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or a call argument, which the call keeps alive unless it is a parameter or local the function assigns; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
+	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or a call argument, which the call keeps alive unless it is a parameter the function assigns, or a local that a nested function or the call's own arguments assign; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
 		expr.location.line, expr.location.column);
 }
 
@@ -3774,7 +3792,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	if ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
 		&& formal.kind == TypeKind.CString) {
-		refuseDanglingCString(ctx, expr, false);
+		refuseDanglingCString(ctx, expr, null);
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;

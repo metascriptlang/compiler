@@ -2589,7 +2589,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			const cpt = calleeType.typeChildren[ci];
 			if (cpt != null && cpt.kind == TypeKind.CString && ci < argTypes.length && argTypes[ci] != null
 					&& (argTypes[ci].kind == TypeKind.String || argTypes[ci].kind == TypeKind.StringLiteral)) {
-				refuseDanglingCString(ctx, d.arguments[ci], true);
+				refuseDanglingCString(ctx, d.arguments[ci], d.arguments);
 				d.arguments[ci] = synthCStringConv(d.arguments[ci], cpt);
 				argTypes[ci] = cpt;
 			} else if (cpt != null && ci < argTypes.length && argTypes[ci] != null && !hasGenericParams(cpt)
@@ -3104,7 +3104,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			}
 			if (paramType.kind == TypeKind.CString
 					&& (argTypes[pi].kind == TypeKind.String || argTypes[pi].kind == TypeKind.StringLiteral)) {
-				refuseDanglingCString(ctx, args[pi], true);
+				refuseDanglingCString(ctx, args[pi], args);
 				args[pi] = synthCStringConv(args[pi], paramType);
 				argTypes[pi] = paramType;
 			}
