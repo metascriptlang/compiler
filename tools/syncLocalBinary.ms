@@ -395,13 +395,14 @@ function probeBundle(bundle: string, scratch: string): string {
 	if (!writeFile(`${dir}/probe.ms`, "console.log(42);\n").ok) die(`cannot write ${dir}/probe.ms`);
 	const previous = env.get("MSC_NATIVE_TOOLCHAIN");
 	env.set("MSC_NATIVE_TOOLCHAIN", `${bundle}/absent`);
-	const absent = execFileResult(`${DEST}/bin/msc${EXE}`, ["build", "probe.ms", "--no-color"], dir);
+	const absent = execFileResult(`${DEST}/bin/msc${EXE}`, ["build", "--no-color", "probe.ms"], dir);
 	env.set("MSC_NATIVE_TOOLCHAIN", bundle);
-	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "probe.ms", "--no-color"], dir);
+	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "--no-color", "probe.ms"], dir);
 	if (previous != "") env.set("MSC_NATIVE_TOOLCHAIN", previous);
 	else env.delete("MSC_NATIVE_TOOLCHAIN");
 	removeAll(dir);
-	if (absent.started && absent.exitCode == 0) return `${DEST}/bin/msc${EXE} builds without the toolchain it was given, so it does not select prepared bundles; sync a binary that does`;
+	if (!absent.started) return `cannot run ${DEST}/bin/msc${EXE}`;
+	if (absent.exitCode == 0 || !`${absent.output}${absent.errorOutput}`.includes(`native toolchain: missing bundle ${bundle}/absent`)) return `${DEST}/bin/msc${EXE} does not select the prepared bundle it is given; sync a binary that does`;
 	if (!run.started || run.exitCode != 0 || run.output.trim().split("\n").pop() != "42") return `${DEST}/bin/msc${EXE} refused ${bundle}:\n${run.output}${run.errorOutput}`;
 	return "";
 }
