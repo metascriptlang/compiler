@@ -836,7 +836,7 @@ export function collectGlobalCache(): void {
 	const now = nowSeconds();
 	collectStaleEntries(`${root}/store`, now, [".m", ".o"]);
 	collectStaleEntries(`${root}/headers`, now, [".hi"]);
-	collectStaleFlatEntries(stampMemoRoot(), now, [".sum", ".files", ".exe"]);
+	collectStaleFlatEntries(stampMemoRoot(), now, [".sum", ".files", ".exe", ".bundle"]);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
@@ -1672,6 +1672,30 @@ test "a backdated dependency keeps the header manifest and the project record fr
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
 	});
+}
+
+test "global collection removes a stale bundle verify memo and keeps a fresh one and a foreign file" {
+	if (platform == "windows") return;
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const root = `${base}/msc-collect-bundle-${performance.now()}`;
+	const savedGlobal = env.get("MSC_GLOBAL_CACHE_DIR");
+	const savedOff = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_GLOBAL_CACHE_DIR", root);
+	env.set("MSC_NO_GLOBAL_CACHE", "");
+	try {
+		ensureDir(stampMemoRoot());
+		assert backdated(`${stampMemoRoot()}/old.bundle`, "seal");
+		assert writeFile(`${stampMemoRoot()}/new.bundle`, "seal").ok;
+		assert backdated(`${stampMemoRoot()}/notes.txt`, "foreign");
+		collectGlobalCache();
+		assert !exists(`${stampMemoRoot()}/old.bundle`);
+		assert exists(`${stampMemoRoot()}/new.bundle`);
+		assert exists(`${stampMemoRoot()}/notes.txt`);
+	} finally {
+		env.set("MSC_GLOBAL_CACHE_DIR", savedGlobal);
+		env.set("MSC_NO_GLOBAL_CACHE", savedOff);
+		removeAll(root);
+	}
 }
 
 test "a settled file is remembered by its change stamp" {
