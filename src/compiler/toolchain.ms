@@ -2,7 +2,7 @@
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, writeFile, removeAll, symlink } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { sha256, toHex } from "std/crypto/sha256";
 import { nowSeconds } from "../utils/stampDirs";
@@ -273,8 +273,9 @@ function bundleDigest(text: string): string {
 
 // Taken before verification, so a file that changes while it is hashed fails
 // the next comparison instead of sealing content nobody checked. A file written
-// within the settle window seals nothing: a coarse-clock filesystem can give a
-// second same-size write in that window the same change stamp.
+// within the settle window of its change time seals nothing: a coarse-clock
+// filesystem can give a second same-size write in that window the same change
+// stamp, and only the change time is out of a writer's reach (mtime is settable).
 function bundleSeal(root: string, identity: string, lines: string[]): string {
 	const names = ["IDENTITY", "FILES.sha256"];
 	for (let i = 0; i < lines.length - 1; i++) names.push(lines[i].slice(66));
@@ -283,8 +284,8 @@ function bundleSeal(root: string, identity: string, lines: string[]): string {
 	for (const name of names) {
 		const path = join(root, name);
 		const stamp = changeStamp(path);
-		const modified = modifiedTime(path);
-		if (stamp == "" || modified < 0 || modified > settledBefore) return "";
+		const changed = changedTime(path);
+		if (stamp == "" || changed < 0 || changed > settledBefore) return "";
 		stamps.push(`${name}\t${stamp}`);
 	}
 	return bundleDigest(stamps.join("\n"));
@@ -312,18 +313,39 @@ function backdate(root: string, names: string[]): boolean {
 
 const SEAL_LINES = ["0000000000000000000000000000000000000000000000000000000000000000  bin/clang", ""];
 
+function settle(root: string, names: string[]): void {
+	const deadline = nowSeconds() + 10;
+	for (const name of names) {
+		const path = join(root, name);
+		while (changedTime(path) > nowSeconds() - BUNDLE_SETTLED_SECONDS) {
+			if (nowSeconds() > deadline) throw new Error(`${path} did not settle`);
+			execFileCapture("sleep", ["0.2"]);
+		}
+	}
+}
+
+test "a bundle seal is withheld for a payload changed within the settle window, whatever its mtime says" {
+	if (platform == "windows") return;
+	const root = sealProbe();
+	assert root != "";
+	assert backdate(root, SEAL_PAYLOAD);
+	assert bundleSeal(root, "id", SEAL_LINES) == "";
+	assert removeAll(root).ok;
+}
+
 test "a bundle seal moves when a payload is rewritten to the same size under a preserved mtime" {
 	if (platform == "windows") return;
 	const root = sealProbe();
 	assert root != "";
 	assert backdate(root, SEAL_PAYLOAD);
+	settle(root, SEAL_PAYLOAD);
 	const before = bundleSeal(root, "id", SEAL_LINES);
 	assert before != "";
 	assert bundleSeal(root, "id", SEAL_LINES) == before;
 	assert bundleSeal(root, "other", SEAL_LINES) != before;
 	assert writeFile(join(root, "bin/clang"), "other").ok;
 	assert backdate(root, ["bin/clang"]);
-	assert bundleSeal(root, "id", SEAL_LINES) != before;
+	assert bundleSeal(root, "id", SEAL_LINES) == "";
 	assert removeAll(root).ok;
 }
 
@@ -343,6 +365,7 @@ test "a matching bundle seal never skips payload containment" {
 	assert remove(join(root, "bin/clang")).ok;
 	assert symlink(outside, join(root, "bin/clang")).ok;
 	assert backdate(root, ["HOST", "VERSION", "IDENTITY", "FILES.sha256", "bin/clang"]);
+	settle(root, SEAL_PAYLOAD);
 	const seal = bundleSeal(real, identity, SEAL_LINES);
 	assert seal != "";
 	assert ensureDir(stamps).ok;
@@ -361,6 +384,7 @@ test "a bundle with a missing or freshly written payload seals nothing" {
 	assert root != "";
 	assert bundleSeal(root, "id", SEAL_LINES) == "";
 	assert backdate(root, SEAL_PAYLOAD);
+	settle(root, SEAL_PAYLOAD);
 	assert bundleSeal(root, "id", SEAL_LINES) != "";
 	assert remove(join(root, "bin/clang")).ok;
 	assert bundleSeal(root, "id", SEAL_LINES) == "";
