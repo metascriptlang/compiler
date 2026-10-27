@@ -1,7 +1,7 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
 import {
-	appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile,
+	appendFile, changeStamp, chmod, copyFile, ensureDir, exists, readDir, readFile,
 	remove, removeAll, writeFile,
 } from "std/fs";
 
@@ -901,9 +901,11 @@ function projectDriver(dir: string): string {
 		const source = `${dir}/project-cc.c`;
 		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
 		put(source,
-			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
+			"#include <process.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
+			+ "  const char *log = getenv(\"MSC_BOUNDARY_CC_LOG\");\n"
+			+ "  if (log) { FILE *f = fopen(log, \"a\"); if (f) { fprintf(f, \"%s\\n\", argc > 1 ? argv[1] : \"\"); fclose(f); } }\n"
 			+ "  if (getenv(\"MSC_BOUNDARY_REJECT_DISPATCH\")) {\n"
 			+ "    int compile = 0;\n"
 			+ "    for (int i = 1; i < argc; i++) if (strcmp(argv[i], \"-c\") == 0) compile = 1;\n"
@@ -921,6 +923,7 @@ function projectDriver(dir: string): string {
 	}
 	const wrapper = `${dir}/project-cc`;
 	put(wrapper, "#!/bin/sh\n"
+		+ "[ -n \"$MSC_BOUNDARY_CC_LOG\" ] && echo \"$1\" >> \"$MSC_BOUNDARY_CC_LOG\"\n"
 		+ "compile=\nfor a in \"$@\"; do [ \"$a\" = -c ] && compile=1; done\n"
 		+ "if [ -n \"$compile\" ] && [ -n \"$MSC_BOUNDARY_REJECT_DISPATCH\" ]; then\n"
 		+ "  for a in \"$@\"; do case \"$a\" in *_dispatch.*) exit 98 ;; esac; done\n"
@@ -928,6 +931,15 @@ function projectDriver(dir: string): string {
 		+ "exec clang \"$@\"\n");
 	need(chmod(wrapper, 493).ok, "chmod project driver");
 	return wrapper;
+}
+
+function compilerCalls(dir: string, label: string, output: string, flags: string[], driver: string): string {
+	const log = `${dir}/${label}.cc.log`;
+	env.set("MSC_BOUNDARY_CC_LOG", log);
+	need(build(dir, label, output, flags, driver) == 0, `${label} build`);
+	env.delete("MSC_BOUNDARY_CC_LOG");
+	const calls = readFile(log);
+	return calls.ok ? calls.value.split("\n").filter((line) => line != "").join(" ") : "";
 }
 
 function runProjectCache(): void {
@@ -946,6 +958,11 @@ function runProjectCache(): void {
 		need(build(dir, "debug-a-settled", "probe", [], driver) == 0, "project debug settled");
 		need(build(dir, "release-b", "probe-b", ["--release"], driver) == 0, "project release output");
 		need(value(dir, "probe-b") == "163", "project release value");
+		need(build(dir, "release-b-settled", "probe-b", ["--release"], driver) == 0, "project release settled");
+		const cacheBefore = changeStamp(`${dir}/local`);
+		record(`an unchanged debug project runs only the compiler identity check ${name}`, "--version", compilerCalls(dir, "debug-a-unchanged", "probe", [], driver));
+		record(`an unchanged project leaves its cache directory unchanged ${name}`, cacheBefore, changeStamp(`${dir}/local`));
+		record(`an unchanged release project runs only the compiler identity check ${name}`, "--version", compilerCalls(dir, "release-b-unchanged", "probe-b", ["--release"], driver));
 		env.set("MSC_BOUNDARY_REJECT_DISPATCH", "1");
 		const returned = build(dir, "return-debug-a", "probe", [], driver);
 		env.delete("MSC_BOUNDARY_REJECT_DISPATCH");
