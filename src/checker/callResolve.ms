@@ -2548,16 +2548,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, ctx, node);
 			}
 		}
-		// Assertion function narrowing: `asserts x is T`. Applied on the
-		// general return path (not just extensions) so direct calls like
-		// `assertString(val)` narrow `val` for subsequent statements.
-		if (calleeType != null && calleeType.kind == TypeKind.Function
-				&& calleeType.typeExtra != null
-				&& calleeType.typeExtra.kind == TypeKind.None
-				&& calleeType.typeExtra.typeName.length > 8
-				&& calleeType.typeExtra.typeName.slice(0, 8) == "asserts:") {
-			applyAssertionNarrowing(calleeType, d.arguments);
-		}
 		return inferGenericReturn(ctx, calleeType!, argTypes, expectedType, node);
 	}
 	return getReturnType(calleeType!);
@@ -3192,28 +3182,6 @@ function findFirstGenericParamName(t: Type): string {
 // argument's Symbol.symbolType so all subsequent checker references see the
 // narrowed type. Safe because assertion functions are contracts — if they
 // pass, the type holds unconditionally; if they fail, they throw/abort.
-function applyAssertionNarrowing(calleeType: Type, args: Node[]): void {
-	const sentinel = calleeType.typeExtra;
-	if (sentinel == null) return;
-	const assertParamName = sentinel.typeName.slice(8, sentinel.typeName.length);
-	const targetType = sentinel.typeReturn;
-	if (targetType == null || assertParamName == "") return;
-	// Find the matching parameter index.
-	if (calleeType.typeNames == null) return;
-	let paramIdx: int32 = -1;
-	let pi: int32 = 0;
-	while (pi < calleeType.typeNames.length) {
-		if (calleeType.typeNames[pi] == assertParamName) { paramIdx = pi; break; }
-		pi = pi + 1;
-	}
-	if (paramIdx < 0 || paramIdx >= args.length) return;
-	const arg = args[paramIdx];
-	if (arg == null || arg.kind != NodeKind.Identifier) return;
-	const argSym = arg.resolvedSym;
-	if (argSym == null) return;
-	argSym.symbolType = targetType;
-}
-
 export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: Type[], expectedType: Type | null, callNode: Node | null): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType == null) return inferredType();

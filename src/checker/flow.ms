@@ -448,6 +448,10 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				result = state.declaredFlow;
 				break;
 			}
+			if (assertionTargetOf(current.node) != null) {
+				if (pending == null) pending = [];
+				pending.push(current);
+			}
 			current = current.antecedent;
 			continue;
 		}
@@ -520,8 +524,9 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	let pi = pending == null ? -1 : pending.length - 1;
 	while (pi >= 0) {
 		const cnode = pending![pi];
-		const assumeTrue = cnode.flags.has(FlowFlag.TrueCondition);
-		const narrowed = narrowType(result.t, cnode.node, state.reference, assumeTrue);
+		const narrowed = cnode.flags.has(FlowFlag.Call)
+			? narrowTypeByAssertion(result.t, cnode.node!, state.reference)
+			: narrowType(result.t, cnode.node, state.reference, cnode.flags.has(FlowFlag.TrueCondition));
 		result = flowType(narrowed, result.incomplete);
 		pi = pi - 1;
 	}
@@ -1112,20 +1117,36 @@ function narrowTypeByPredicate(t: Type | null, callExpr: Node, refNode: Node, as
 	if (sentinel == null || sentinel.kind != TypeKind.None) return t;
 	const predicateTarget = sentinel.typeReturn;
 	if (predicateTarget == null) return t;
-	const paramName = sentinel.typeName;
-	if (paramName == "") return t;
-	// Find the positional index of the predicate parameter.
-	let paramIdx: int32 = -1;
-	if (fnType.typeNames != null) {
-		let pi: int32 = 0;
-		while (pi < fnType.typeNames.length) {
-			if (fnType.typeNames[pi] == paramName) { paramIdx = pi; break; }
-			pi = pi + 1;
-		}
-	}
-	if (paramIdx < 0 || paramIdx >= cd.arguments.length) return t;
-	const predicateArg = cd.arguments[paramIdx];
+	const predicateArg = predicateArgument(fnType, sentinel.typeName, cd);
 	if (predicateArg == null || !isMatchingReference(predicateArg, refNode)) return t;
+	return narrowToPredicateTarget(t, predicateTarget, assumeTrue);
+}
+
+function predicateArgument(fnType: Type, paramName: string, cd: CallExprData): Node | null {
+	if (paramName == "" || fnType.typeNames == null) return null;
+	const paramIdx = fnType.typeNames.indexOf(paramName);
+	return paramIdx >= 0 && paramIdx < cd.arguments.length ? cd.arguments[paramIdx] : null;
+}
+
+function assertionTargetOf(call: Node | null): Type | null {
+	if (call == null || call.kind != NodeKind.CallExpr) return null;
+	const fnType = calleeType((call.data as CallExprData).callee);
+	if (fnType == null) return null;
+	const sentinel = fnType.typeExtra;
+	if (sentinel == null || sentinel.kind != TypeKind.None || !sentinel.typeName.startsWith("asserts:")) return null;
+	return sentinel.typeReturn;
+}
+
+function narrowTypeByAssertion(t: Type | null, call: Node, refNode: Node): Type | null {
+	const target = assertionTargetOf(call);
+	if (t == null || target == null) return t;
+	const fnType = calleeType((call.data as CallExprData).callee)!;
+	const arg = predicateArgument(fnType, fnType.typeExtra!.typeName.slice(8), call.data as CallExprData);
+	if (arg == null || !isMatchingReference(arg, refNode)) return t;
+	return narrowToPredicateTarget(t, target, true);
+}
+
+function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boolean): Type {
 	// TrueCondition: narrow to the predicate target, but only if it's
 	// compatible with the current type `t` (intersection semantics).
 	// Returning predicateTarget for a type outside `t` would widen past
