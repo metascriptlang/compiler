@@ -48,6 +48,7 @@ import "./cases/abstractClass";
 import "./cases/conditionalTypeSpacing";
 import "./cases/trailingBlockComment";
 import "./cases/commentInCapturedType";
+import "./cases/commentPlacement";
 import "./cases/bigIntRegex";
 import "./cases/missingPrinters";
 import "./cases/asyncFlags";
