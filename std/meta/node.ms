@@ -250,6 +250,7 @@ export enum SymbolFlag {
 	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
 	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
+	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 }
 
 // ===== Symbol =====
