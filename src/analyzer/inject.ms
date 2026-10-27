@@ -1666,7 +1666,7 @@ function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[],
 	const d = stmt.data as VariableDeclData;
 	const vi = findVarInfo(scope, stmt.resolvedSym);
 	if (vi == null || !vi.rcInfo.needsCleanup) return false;
-	const hoistDecl = makeVarDecl(d.declName, makeNull(loc), DeclKind.Let, loc);
+	const hoistDecl = makeVarDecl(d.declName, d.initializer == null ? null as unknown as Node : makeNull(loc), DeclKind.Let, loc);
 	if (stmt.nodeType != null) {
 		hoistDecl.nodeType = stmt.nodeType;
 	}
