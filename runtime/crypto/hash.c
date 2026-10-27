@@ -317,7 +317,8 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
 	msCryptoHmacCtx* ctx = (msCryptoHmacCtx*)msMemAlloc0(sizeof(msCryptoHmacCtx));
 
 	mbedtls_md_init(&ctx->ctx);
-	if (mbedtls_md_setup(&ctx->ctx, md_info, 1) != 0) { /* 1 = HMAC mode */
+	if (mbedtls_md_setup(&ctx->ctx, md_info, 0) != 0 || mbedtls_md_hmac_setup(&ctx->ctx, md_info) != 0) {
+		mbedtls_md_free(&ctx->ctx);
 		free(ctx);
 		return NULL;
 	}
