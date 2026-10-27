@@ -18,7 +18,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteLoweredUnit, restoreContracts, reuseClones } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -3113,9 +3113,7 @@ resetLiftedOps();
 		} else {
 			staged.push({ at, job, tree: transformModuleA2(program, ctx, job) });
 		}
-		noteLoweredUnit(liftTables, modPath);
 	}
-	for (const at of lowerOrder) noteLoweredUnit(writeTables, checkedMods[at].modPath);
 	for (const st of staged) {
 		const cm = checkedMods[st.at];
 		const modPath = cm.modPath;
@@ -3813,10 +3811,8 @@ resetLiftedOps();
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
-		noteLoweredUnit(liftTables, modPath);
 		stagedTests.push({ cm, nativeCtx, tree: hcrResult });
 	}
-	for (const cm of checkedMods) noteLoweredUnit(writeTables, cm.modPath);
 	for (const st of stagedTests) {
 		const cm = st.cm;
 		const ctx = cm.ctx;
