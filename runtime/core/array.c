@@ -522,13 +522,6 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 	arr->len++;
 }
 
-/* Copying exit kernel (cstrToNimstr shape): the result OWNS a fresh payload,
-   so it may outlive the source array. Zero-copy move is a later analyzer arc. */
-msString msAsString(msUint8Array* arr) {
-	if (arr == NULL || arr->p == NULL || arr->len == 0) return MS_EMPTY_STRING;
-	return msStringNew((const char*)arr->p->data, arr->len);
-}
-
 /* ===== Ref Array ===== */
 
 static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {

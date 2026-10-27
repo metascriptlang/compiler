@@ -171,7 +171,6 @@ typedef struct {
 
 void msUint8ArrayDestroy(msUint8Array* arr);
 void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
-msString msAsString(msUint8Array* arr);
 void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, uint8_t item);
 
 /* ===== Generic Typed Array Macro (Standard reference sequence pattern) ===== */

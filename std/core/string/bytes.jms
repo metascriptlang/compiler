@@ -2,6 +2,9 @@
 // A hand-rolled WTF-8 encode cached per string — TextEncoder is banned: it
 // rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
 
+import { wellFormedPrefix, repairedLength, writeRepaired } from "./utf8Repair";
+import { newEncodingOutput } from "std/crypto/encodingOutput";
+
 // ===== WTF-8 byte tier =====
 
 export function wtf8Cached(s: string): uint8[] {
@@ -31,8 +34,8 @@ export function asBytes(this s: string): Readonly<Span<uint8>> {
 	unreachable;
 }
 
-// WTF-8 decode — 3-byte sequences may decode to lone surrogates (round-trip).
-export function asString(this arr: Readonly<uint8[]>): string {
+// Well-formed WTF-8 only: 3-byte sequences may decode to lone surrogates (round-trip).
+function decodeWellFormed(arr: Readonly<uint8[]>): string {
 	@emit(`var b = ${arr}, r = "", i = 0;
 	while (i < b.length) {
 		var x = b[i];
@@ -43,6 +46,16 @@ export function asString(this arr: Readonly<uint8[]>): string {
 	}
 	return r;`);
 	unreachable;
+}
+
+/** Decodes the bytes as WTF-8: an ill-formed sequence becomes U+FFFD per maximal subpart, as TextDecoder reads it; an encoded surrogate stays. */
+export function asString(this arr: Readonly<uint8[]>): string {
+	const valid = wellFormedPrefix(arr, 0, true);
+	if (valid == arr.length) return decodeWellFormed(arr);
+	const out = newEncodingOutput(repairedLength(arr, valid, true));
+	for (let i = 0; i < valid; i++) out[i] = arr[i];
+	writeRepaired(arr, valid, true, out);
+	return decodeWellFormed(out);
 }
 
 export function asString(this view: Readonly<Span<uint8>>): string {

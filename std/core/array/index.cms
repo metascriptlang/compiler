@@ -22,6 +22,7 @@ export class Array<T> {
 
 export { toString } from "./shared";
 import { spliceStart, spliceCount } from "./shared";
+import { utf8String } from "../string/bytes";
 
 // ===== Number Array =====
 
@@ -498,12 +499,13 @@ export function concat<T>(this arr: Vec<T>, other: T[]): T[] {
 	return out;
 }
 
-// ===== Zero-Copy Bridge (uint8[] → string) =====
+// ===== Bridge (uint8[] → string) =====
 
-/** Returns the byte array as a string (zero-copy). */
-@builtin("AsString")
-export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";
+/** Decodes the bytes as WTF-8: an ill-formed sequence becomes U+FFFD per maximal subpart, as TextDecoder reads it; an encoded surrogate stays. */
+export function asString(this arr: Readonly<uint8[]>): string {
+	return utf8String(arr, true);
+}
 
 export function asString(this view: Readonly<Span<uint8>>): string {
-	return view.slice(0).asString();
+	return utf8String(view, true);
 }
