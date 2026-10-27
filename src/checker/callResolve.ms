@@ -1846,8 +1846,8 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 // A macro replacement owns its type arguments as bound typed operands: the callee
 // `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
 function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
+	if (d.callee.kind != NodeKind.TypeGeneric) return true;
 	const callee = d.callee;
-	if (callee.kind != NodeKind.TypeGeneric) return true;
 	const g = callee.data as TypeGenericData;
 	for (const operand of g.typExprArgs) {
 		if (operand.nodeType == null) {
