@@ -55,8 +55,8 @@ generated files and restored all 97 native objects. Table and commands:
   mode, flags and header resolution are in the key because a hit across them could produce a
   different program. Removing one of them from a key needs a measurement that output stays
   identical across it.
-- **A hit is only as correct as its recorded inputs.** See the false hit below before trusting a
-  hit across a header that appeared after the first build.
+- **A hit is only as correct as its recorded inputs.** A header that appears later is an input
+  only through a literal `__has_include` name; see below.
 
 ## Controls
 
@@ -107,17 +107,27 @@ owned suffixes, mtime refreshed on use at most hourly, trim at most once per per
 
 ## Known limits, measured
 
-**A header that appears later is not seen (false hit).** A native source with
-`#if __has_include("optional.h")` built while `optional.h` was absent, then rebuilt with a new
-local cache after creating it, restored the old object and printed `11` instead of `22`.
-Details: [BUILD-PERF.md](BUILD-PERF.md) "Measured 2026-10-08". The local cache misses it too:
-on installed `e5c088569` with `MSC_NO_GLOBAL_CACHE=1` and one `MSC_CACHE_DIR`, the rebuild
-after creating `optional.h` printed `Up to date` and still `11`; only an empty local cache with
-the store off printed `22` (2026-10-27, macOS arm64, the same consumer, sources aged before
-the first build). Every layer records the
-headers a compile read, not the ones it looked for and missed. Until that is fixed, a build that
-adds a header found through `__has_include` or an include path searched before an existing one
-needs an edited source, or an empty `MSC_CACHE_DIR` together with `MSC_NO_GLOBAL_CACHE=1`.
+**A header that appears later.** Every layer records the headers a compile read; a header it
+looked for and missed is recorded too, from the `__has_include` and `__has_include_next` names
+written as literals in the source and the headers it read. Beside each dependency file, `<dep>.q`
+lists the searched directories and those names; the object fingerprint, the project record
+(`?` entries) and the store manifest hash which of them exist. The searched directories include
+the compiler's own list (`<cc> -E -v`, remembered per compiler, flags and the environment that
+moves it: `CPATH`, `C_INCLUDE_PATH`, `SDKROOT`, `DEVELOPER_DIR` and their kin), and that list is
+part of every key, so switching such a variable misses. Names match case-insensitively and record
+the spelling on disk. Three shapes are never trusted, so their object is recompiled on every
+build and never published to the store: a name only a macro supplies (`__has_include(NAME)`), a
+name outside ASCII (two Unicode normal forms can name one file), and a compiler whose search list
+could not be read.
+
+`src/test/cache/run.ms` is the cache lane (`tools/gate.sh` lane `cache`, chosen when
+`cache`/`cc`/`compile`/`toolchain` or the lane changes, and in the release ladder): 22
+input changes on the project record, the local objects and the store, each warm build compared
+with a build from an empty cache, 132 checks. On macOS arm64, 2026-10-27, the compiler before
+this arc (`6b7294f60`) failed 38 of them and the arc before the search-list fix (`98474fe84`)
+23; on RTX Linux the fix (`660433d89`) failed none, in 377 s. The fix has not run the lane on
+macOS yet, so its macOS-only rows (framework headers, a case-insensitive volume) are unmeasured. Older compilers still miss these; with one of them, a build that adds such a
+header needs an edited source, or an empty `MSC_CACHE_DIR` together with `MSC_NO_GLOBAL_CACHE=1`.
 
 **Older compilers delete files they do not own.** A compiler built before the collector above
 deletes any entry in `objects/`, `store/` and `headers/` (and `prelude/`) whose modification
