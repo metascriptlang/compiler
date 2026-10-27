@@ -76,6 +76,14 @@ extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "ms
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
 
 @compilerFunc
+export function msRaiserAsyncStart(retFut: Promise<void>, stepper: () => Promise<void> | null): void {
+	const next = stepper();
+	if (next == null) return;
+	const resume = (): void => { msRaiserAsyncStart(retFut, stepper); };
+	next.then(resume, resume);
+}
+
+@compilerFunc
 @builtin("PromisePending")
 export extern function msActorReplyNew<T>(): Promise<T> from "msActorReplyNew";
 @compilerFunc
@@ -111,11 +119,15 @@ export function promiseOfValue<T>(value: T): Promise<T> {
 @compilerFunc
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
-	try {
-		callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
-	} catch (e) {
-		msPromiseFail(promise, e);
-	}
+	const nextJob: Promise<int32> = msPromisePending<int32>();
+	msPromiseSettle<int32>(nextJob, 0);
+	nextJob.then((ready: int32): void => {
+		try {
+			callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		} catch (e) {
+			msPromiseFail<T>(promise, e);
+		}
+	});
 	return promise;
 }
 

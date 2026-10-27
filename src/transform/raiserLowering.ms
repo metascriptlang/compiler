@@ -34,7 +34,7 @@ import { planModuleTdz, guardModuleTdzRaiser } from "./lowering/moduleTdz";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerActorClasses, registerActorTerminators } from "./lowering/actorClassLower";
-import { lowerTimers } from "./lowering/timerLower";
+import { lowerRuntimeNames } from "./lowering/timerLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
@@ -53,16 +53,21 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
-import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
+import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind, setValueFutures } from "./util";
+import { lowerAsync } from "./lowering/asyncDesugar";
+import { lowerAsyncBridge } from "./lowering/asyncBridge";
+import { lowerAwaitSpill } from "./lowering/awaitSpill";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
+	const priorValueFutures = setValueFutures(true);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
+		setValueFutures(priorValueFutures);
 		leaveCompilerFuncs(outer);
 	}
 }
@@ -110,7 +115,10 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerTailCall(result, ctx);
 	if (placed) result = lowerParamReassign(result, ctx);
 	result = lowerActorClasses(result, ctx);
-	result = lowerTimers(result, ctx);
+	result = lowerAwaitSpill(result, ctx);
+	result = lowerAsync(result, ctx);
+	result = lowerAsyncBridge(result, ctx);
+	result = lowerRuntimeNames(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = registerActorTerminators(result, ctx);

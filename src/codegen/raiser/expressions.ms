@@ -1956,6 +1956,13 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
+	if (asyncKind == "FutureRead" || asyncKind == "FutureCheck" || asyncKind == "FutureFinished") {
+		const mode = asyncKind == "FutureRead" ? 0 : asyncKind == "FutureCheck" ? 1 : 2;
+		const dest = callBlock(s, node.nodeType, d.arguments, null);
+		emitCallArgs(s, dest, d.arguments);
+		emitInst(s, raiserABC(RaiserOpcode.FutureRead, dest, mode, d.arguments.length));
+		return dest;
+	}
 	if (asyncKind == "PromisePending") {
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
@@ -1977,7 +1984,8 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			valueReg = allocRef(s);
 			emitLoadConst(s, valueReg, raiserNil());
 		}
-		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
+		const consumes = asyncKind == "PromiseSettle" && settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
+		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, consumes));
 		return futReg;
 	}
 	const combine = combineOf(asyncKind);
@@ -2839,10 +2847,30 @@ function combineOf(builtinKind: string): int32 {
 	return -1;
 }
 
+function settleValueIsSunk(callee: Symbol | null): boolean {
+	if (callee == null || callee.symbolType == null || callee.symbolType.typeChildren.length < 2) return false;
+	return callee.symbolType.typeChildren[1].kind == TypeKind.Sink;
+}
+
+function futureRuntimeKind(sym: Symbol | null): string {
+	if (sym == null) return "";
+	const n = sym.nativeName;
+	if (n == "msFutureCreate") return "PromisePending";
+	if (n == "msFutureComplete" || n == "msFutureCompleteT" || n == "msFutureCompleteVoid") return "PromiseSettle";
+	if (n == "msFutureFail") return "PromiseFail";
+	if (n == "msFutureFinished") return "FutureFinished";
+	if (n == "msFutureCheckErr") return "FutureCheck";
+	if (n.startsWith("msFutureRead")) return "FutureRead";
+	return "";
+}
+
 function callBuiltinKind(node: Node): string {
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind != "") return node.resolvedSym.builtinKind;
 	const d = node.data as CallExprData;
-	if (d.callee.resolvedSym != null) return d.callee.resolvedSym.builtinKind;
+	if (d.callee.resolvedSym != null) {
+		if (d.callee.resolvedSym.builtinKind != "") return d.callee.resolvedSym.builtinKind;
+		return futureRuntimeKind(d.callee.resolvedSym);
+	}
 	return "";
 }
 

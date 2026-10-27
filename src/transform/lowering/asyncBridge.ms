@@ -368,7 +368,7 @@ function storeYieldedFuture(yfs: YieldFuture[], state: number, yfType: Type, yie
 	return [decl, makeExprStmt(assign, loc)];
 }
 
-function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation): Node {
+function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	// Default (terminal) state: return null (stepper done)
 	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
 
@@ -429,6 +429,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					readExpr.nodeType = varType;
 				} else {
 					readExpr = rawRead;
+					if (ctx.raiserBackend) rawRead.nodeType = varType;
 				}
 			}
 			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
@@ -532,7 +533,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	const retFutType = promiseTypeFor(fnReturnInner);
 	const retFutSym = mintSym(ctx, SymbolKind.Variable, retFutName, retFutType);
 	const promiseVoidType = createPromise(voidType());
-	const stepperRetType = createClosureType([], [], createPtr(voidType()));  // returns void* (msFutureBase* or NULL)
+	const stepperRetType = createClosureType([], [], ctx.raiserBackend ? createPromise(voidType()) : createPtr(voidType()));  // returns void* (msFutureBase* or NULL)
 	const closureType = stepperRetType;
 
 	// 1. Extract body statements
@@ -607,7 +608,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	}
 
 	// 6. Build async state dispatch (stepper pattern instead of iterator pattern)
-	const dispatch = buildAsyncStateDispatch(sc, yfs, promiseVoidType, closureType, loc);
+	const dispatch = buildAsyncStateDispatch(sc, yfs, promiseVoidType, closureType, loc, ctx);
 
 	// 6b. Inner exceptionTable routing (closureiters tầng 1): route a raised state
 	// to its landing; the terminal re-raises `$curExc` out to the outer
