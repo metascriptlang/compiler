@@ -23,8 +23,8 @@ function main(): void {
 
 	const ka = node();
 	const kb = node();
-	rcIncref(arr, obj, raiserObject(kb)); heapObjectSetField(obj, ka, "next", raiserObject(kb));
-	rcIncref(arr, obj, raiserObject(ka)); heapObjectSetField(obj, kb, "next", raiserObject(ka));
+	rcIncref(arr, obj, raiserObject(kb)); heapObjectSetField(arr, obj, ka, "next", raiserObject(kb));
+	rcIncref(arr, obj, raiserObject(ka)); heapObjectSetField(arr, obj, kb, "next", raiserObject(ka));
 	rcIncref(arr, obj, raiserObject(ka));
 
 	let totalFreed = 0;
@@ -32,8 +32,8 @@ function main(): void {
 	while (round < 100000) {
 		const a = node();
 		const b = node();
-		rcIncref(arr, obj, raiserObject(b)); heapObjectSetField(obj, a, "next", raiserObject(b));
-		rcIncref(arr, obj, raiserObject(a)); heapObjectSetField(obj, b, "next", raiserObject(a));
+		rcIncref(arr, obj, raiserObject(b)); heapObjectSetField(arr, obj, a, "next", raiserObject(b));
+		rcIncref(arr, obj, raiserObject(a)); heapObjectSetField(arr, obj, b, "next", raiserObject(a));
 		orcRegisterCandidate(arr, obj, a);
 		orcRegisterCandidate(arr, obj, ka);
 		totalFreed = (totalFreed + orcCollect(arr, obj, free)) as int32;

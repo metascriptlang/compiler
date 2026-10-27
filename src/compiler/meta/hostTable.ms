@@ -816,7 +816,7 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
 		if (isNodeWireMetaField(heapObjectFieldNameAt(objHeap, h, i))) continue;
-		const v = heapObjectFieldValueAt(objHeap, h, i);
+		const v = heapObjectFieldValueAt(arrHeap, objHeap, h, i);
 		if (_isNodeShaped(objHeap, v)) {
 			out.push(v);
 		} else if (v.kind == RaiserValueKind.Array) {
@@ -1495,12 +1495,12 @@ function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
 	return v;
 }
 
-function closureAdaptee(objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
+function closureAdaptee(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
 	let c = closure;
 	while (c.kind == RaiserValueKind.Object) {
-		const env = heapObjectGetField(objHeap, c.intVal, "env");
+		const env = heapObjectGetField(arrHeap, objHeap, c.intVal, "env");
 		if (env.kind != RaiserValueKind.Object) break;
-		const adaptee = heapObjectGetField(objHeap, env.intVal, ADAPTEE_FIELD);
+		const adaptee = heapObjectGetField(arrHeap, objHeap, env.intVal, ADAPTEE_FIELD);
 		if (adaptee.kind != RaiserValueKind.Object) break;
 		c = adaptee;
 	}
@@ -1511,11 +1511,11 @@ function _bridgeMsClosureSame(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	const arrHeap = activeHostArrayHeap();
 	if (objHeap == null || arrHeap == null) throw new Error("internal: msClosureSame called with no active host heap");
-	const a = closureAdaptee(objHeap, args[0]);
-	const b = closureAdaptee(objHeap, args[1]);
+	const a = closureAdaptee(arrHeap, objHeap, args[0]);
+	const b = closureAdaptee(arrHeap, objHeap, args[1]);
 	if (a.kind != RaiserValueKind.Object || b.kind != RaiserValueKind.Object) return boxBool(raiserEqual(arrHeap, a, b));
-	return boxBool(raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "fn"), heapObjectGetField(objHeap, b.intVal, "fn"))
-		&& raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "env"), heapObjectGetField(objHeap, b.intVal, "env")));
+	return boxBool(raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "fn"), heapObjectGetField(arrHeap, objHeap, b.intVal, "fn"))
+		&& raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "env"), heapObjectGetField(arrHeap, objHeap, b.intVal, "env")));
 }
 
 function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {

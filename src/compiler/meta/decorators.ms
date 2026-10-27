@@ -826,22 +826,22 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	}
 	const h = res.intVal;
 	const gensym = nextQuoteGensymSuffix();
-	plan.metaKeys = readStrings(arrHeap, heapObjectGetField(objHeap, h, "metaKeys"));
-	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc, gensym);
-	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc, gensym);
+	plan.metaKeys = readStrings(arrHeap, heapObjectGetField(arrHeap, objHeap, h, "metaKeys"));
+	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(arrHeap, objHeap, h, "metaValues"), loc, gensym);
+	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(arrHeap, objHeap, h, "initializers"), loc, gensym);
 	const friends = isMacro ? expansionOf(ctx, target, sym.modulePath) : ([] as string[]);
 	for (const s of inits) markExpansion(ctx, s, friends);
 	for (const s of inits) {
 		if (info.kind == "class" || plan.activeInits == null) plan.staticInits.push(s);
 		else plan.activeInits.stmts.push(s);
 	}
-	const rv = heapObjectGetField(objHeap, h, "result");
+	const rv = heapObjectGetField(arrHeap, objHeap, h, "result");
 	let outNode = target;
 	if (accessor) {
 		if (shape != shapeVoid) {
 			const parts = plan.accessorParts;
 			for (let slot = 1; slot <= 2; slot += 1) {
-				const v = heapObjectGetField(objHeap, h, slot == 1 ? "accGet" : "accSet");
+				const v = heapObjectGetField(arrHeap, objHeap, h, slot == 1 ? "accGet" : "accSet");
 				if (v.kind == RaiserValueKind.Nil) continue;
 				const part = valueToExpansion(v, objHeap, arrHeap, loc, gensym);
 				const wantName = (parts[slot].data as MethodDeclData).methodName;
@@ -854,7 +854,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 				markExpansion(ctx, part, friends);
 				parts[slot] = part;
 			}
-			const iv = heapObjectGetField(objHeap, h, "accInit");
+			const iv = heapObjectGetField(arrHeap, objHeap, h, "accInit");
 			(parts[0].data as PropertyDeclData).propInitializer = iv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToExpansion(iv, objHeap, arrHeap, loc, gensym);
 			markExpansion(ctx, parts[0], friends);
 		}

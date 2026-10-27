@@ -12,7 +12,7 @@ import {
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
 	handleHeapKind, raiserNil, rcDecrefHandle, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
-	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
+	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, objectCellFieldValue, objectCellStoreField, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
 import { cellRootIdx, setCellRootIdx, liveCellBlocks } from "./memory";
 import { objectCellNew, objectCellSlot, objectCellSetSlot } from "./objectCell";
@@ -101,9 +101,10 @@ function pushSlot(env: OrcEnv, owner: int64, index: int32, held: RaiserValue): v
 function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64): void {
 	const kind = handleHeapKind(h);
 	if (isObjectCell(h)) {
-		const cyclic = objectCellClass(h).cyclic;
-		for (let i = 0; i < cyclic.length; i += 1) {
-			if (cyclic[i]) pushSlot(env, h, i as int32, handleValue(objectCellSlot(seqCellOf(h), i)));
+		const t = objectCellClass(h);
+		for (let i = 0; i < t.cyclic.length; i += 1) {
+			if (!t.cyclic[i]) continue;
+			pushSlot(env, h, i as int32, t.kinds[i] == RaiserRegClass.Dyn ? objectCellFieldValue(arrHeap, h, i) : handleValue(objectCellSlot(seqCellOf(h), i)));
 		}
 	} else if (kind == RaiserHeapKind.Seq || kind == RaiserHeapKind.Array) {
 		if (!heapArrayCyclic(arrHeap, h) || !arrayHoldsHandles(arrHeap, h)) return;
@@ -120,7 +121,8 @@ function traceCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: Orc
 
 function clearSlot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, owner: int64, index: int32): void {
 	if (isObjectCell(owner)) {
-		objectCellSetSlot(seqCellOf(owner), index, 0);
+		if (objectCellClass(owner).kinds[index] == RaiserRegClass.Dyn) objectCellStoreField(arrHeap, owner, index, raiserNil());
+		else objectCellSetSlot(seqCellOf(owner), index, 0);
 		return;
 	}
 	if (isSeqHandle(owner)) {
@@ -302,7 +304,7 @@ function allocNode(obj: RaiserObjectHeap): int64 {
 
 function linkObjects(arr: RaiserArrayHeap, obj: RaiserObjectHeap, from: int64, to: int64, name: string): void {
 	rcIncref(arr, obj, raiserObject(to));
-	heapObjectSetField(obj, from, name, raiserObject(to));
+	heapObjectSetField(arr, obj, from, name, raiserObject(to));
 }
 
 function freeByCount(arr: RaiserArrayHeap, obj: RaiserObjectHeap): OrcDestroy {
@@ -402,7 +404,7 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	const words = heapAllocArrayOf(arr, RaiserRegClass.Ref);
 	arr.arrays[handleIndex(items)].elemCyclic = true;
 	heapArraySetFlags(arr, words, true, false);
-	heapObjectSetField(obj, o, "items", raiserArray(items));
+	heapObjectSetField(arr, obj, o, "items", raiserArray(items));
 	heapArrayPush(arr, items, raiserArray(words));
 	heapArrayPush(arr, words, handleValue(o));
 	rcIncref(arr, obj, raiserObject(o));

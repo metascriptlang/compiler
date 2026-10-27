@@ -1809,7 +1809,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	for (let i = 0; i < count; i += 1) {
 		const name = heapObjectFieldNameAt(objHeap, handle, i as int64);
 		keys.push(name);
-		values.push(valueToTypedNode(heapObjectFieldValueAt(objHeap, handle, i as int64), record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
+		values.push(valueToTypedNode(heapObjectFieldValueAt(arrHeap, objHeap, handle, i as int64), record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
 	}
 	return fromTemplate(createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc));
 }
