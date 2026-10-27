@@ -5,28 +5,28 @@ import {
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
-	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData,
+	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData, makeLoc,
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
-	Doc, docText, docGroup, docIndent, docLineSuffix,
+	Doc, docText, docGroup, docIndent,
 	docLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
-import { Token } from "../../../lexer/token";
+import { SourceComment } from "../comments";
+import { withComments, danglingOf, danglingLines, commentsWithin, markWithin, interleave, boxed } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, isSynthesized, takeStructAccessors } from "./statements";
+
+function bodyComments(node: Node): SourceComment[] {
+	const loc = node.location;
+	if (loc.endLine == 0) return danglingOf(node);
+	return commentsWithin(loc, makeLoc(loc.endLine, loc.endColumn));
+}
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
-	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
-	const firstLine = locs.length > 0 ? locs[0].line : node.location.line;
-	const inner: Token[] = [];
-	const rest: Token[] = [];
-	for (const c of node.comments) {
-		if ((c.line > node.location.line || c.line >= firstLine) && c.line < endLine) inner.push(c); else rest.push(c);
-	}
+	const inner = bodyComments(node);
 	if (inner.length == 0) return null;
-	node.comments = rest;
 	return commentedList(names, locs, inner, "{", "}");
 }
 
@@ -114,26 +114,6 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	if (!isDefault && d.exportedDecl != null && d.exportedDecl.kind == NodeKind.ImportDecl) {
 		return printReExport(d.exportedDecl, node, options);
 	}
-	// Forward inner-body comments to the inner decl so its printer can
-	// pair them with members/fields. The parser attaches body comments to
-	// the OUTER ExportDecl (the wrapping node), but the inner printer
-	// (printEnumDecl, printStructLikeDecl, etc.) is what needs them.
-	if (d.exportedDecl != null) {
-		if (d.exportedDecl.location.endLine == 0) {
-			d.exportedDecl.location.endLine = node.location.endLine;
-			d.exportedDecl.location.endColumn = node.location.endColumn;
-		}
-		const innerStart = d.exportedDecl.location.line;
-		const remaining: Token[] = [];
-		for (const c of node.comments) {
-			if (c.line >= innerStart) {
-				d.exportedDecl.comments.push(c);
-			} else {
-				remaining.push(c);
-			}
-		}
-		node.comments = remaining;
-	}
 	const prefix = isDefault ? "export default " : "export ";
 	return docGroup([docText(prefix), callPrintNode(d.exportedDecl, options)]);
 }
@@ -184,17 +164,10 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 function aliasWithInnerComments(node: Node, options: FormatOptions): string {
 	const loc = node.location;
 	if (loc.endLine == 0) return "";
-	const inner: Token[] = [];
-	const rest: Token[] = [];
-	for (const c of node.comments) {
-		const after = c.line > loc.line || (c.line == loc.line && c.column > loc.column);
-		const before = c.line < loc.endLine || (c.line == loc.endLine && c.column < loc.endColumn);
-		if (after && before) inner.push(c); else rest.push(c);
-	}
-	if (inner.length == 0) return "";
+	const end = makeLoc(loc.endLine, loc.endColumn);
+	if (commentsWithin(loc, end).length == 0) return "";
 	const text = sourceSpan(options.source, loc.line, loc.column, loc.endLine, loc.endColumn);
-	if (text == "") return "";
-	node.comments = rest;
+	if (text != "") markWithin(loc, end);
 	return text;
 }
 
@@ -234,59 +207,22 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 
 export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as EnumDeclData;
-	if (d.enumMembers.length == 0) return docText("enum " + d.enumName + " {}");
-
-	// Trailing comments on individual members are stored on the EnumDecl
-	// node (parser doesn't have per-member nodes). Pair them with members
-	// by source line — same trick as printStructLikeDecl.
-	const inline: Token[] = [];
-	const remaining: Token[] = [];
-	for (const c of node.comments) {
-		if (c.line > node.location.line) inline.push(c);
-		else remaining.push(c);
+	const inner = bodyComments(node);
+	if (d.enumMembers.length == 0) {
+		if (inner.length == 0) return docText("enum " + d.enumName + " {}");
+		return boxed("enum " + d.enumName + " {", danglingLines(inner), "}");
 	}
-	node.comments = remaining;
 
 	const members: Doc[] = [];
+	const lines: int32[] = [];
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		const memberLine = i < d.memberLocations.length ? d.memberLocations[i].line : 0;
 		const init = i < d.memberLocations.length
 			? writtenInitializer(options.source, d.memberLocations[i].line, d.memberLocations[i].column, d.enumMembers[i])
 			: "";
-		const baseText = d.enumMembers[i] + (init != "" ? " = " + init : "") + ",";
-		for (let j = 0; j < inline.length; j += 1) {
-			if (inline[j] != null && inline[j].line < memberLine) {
-				members.push(docText(inline[j].value));
-				inline[j] = null as unknown as Token;
-			}
-		}
-		// Find a comment whose line matches this member.
-		let attached: Token = null as unknown as Token;
-		for (let j = 0; j < inline.length; j += 1) {
-			if (inline[j] != null && inline[j].line == memberLine) {
-				attached = inline[j];
-				inline[j] = null as unknown as Token;
-				break;
-			}
-		}
-		if (attached != null) {
-			members.push(docGroup([
-				docText(baseText),
-				docLineSuffix([docText(" " + attached.value)]),
-			]));
-		} else {
-			members.push(docText(baseText));
-		}
+		members.push(docText(d.enumMembers[i] + (init != "" ? " = " + init : "") + ","));
+		lines.push(i < d.memberLocations.length ? d.memberLocations[i].line : 0);
 	}
-	for (const c of inline) {
-		if (c != null) members.push(docText(c.value));
-	}
-	return docGroup([
-		docText("enum " + d.enumName + " {"),
-		docIndent([docHardLine(), docJoin(members, docHardLine())]),
-		docHardLine(),
-		docText("}"),
-	]);
+	return boxed("enum " + d.enumName + " {", interleave(members, lines, inner), "}");
 }
 
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
@@ -295,51 +231,21 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause + (d.nativeName != "" ? " from \"" + d.nativeName + "\"" : "");
 	const accessors = keyword == "struct" ? takeStructAccessors() : [];
 	let accessorIdx = 0;
-	if (d.interfaceFields.length == 0 && accessors.length == 0) return docText(head + " {}");
-
-	// Field source positions are stored on node.paramLocations
-	// (parser repurposes that slot — see declaration.ms parseInterfaceLikeDecl).
-	// Pair body comments to fields by line number — same trick as printEnumDecl.
-	// Comments that don't match any field's line are kept on node.comments and
-	// rendered as standalone lines (between fields, after the body) by the
-	// dedicated standalone-comment loop below.
-	const fieldLocs = node.paramLocations!;
-	const inline: Token[] = [];
-	const remaining: Token[] = [];
-	const standalone: Token[] = [];
-	const loc = node.location;
-	for (const comment of node.comments) {
-		const afterClose = loc.endLine > 0 && (comment.line > loc.endLine || (comment.line == loc.endLine && comment.column >= loc.endColumn));
-		if (comment.line > loc.line && !afterClose) {
-			// Body comment: try to match a field by line.
-			let matched = false;
-			for (let i = 0; i < d.interfaceFields.length; i += 1) {
-				const fl = i < fieldLocs.length ? fieldLocs[i].line : 0;
-				if (fl == comment.line) {
-					inline.push(comment);
-					matched = true;
-					break;
-				}
-			}
-			if (!matched) standalone.push(comment);
-		} else {
-			remaining.push(comment);
-		}
+	if (d.interfaceFields.length == 0 && accessors.length == 0) {
+		const orphans = bodyComments(node);
+		return orphans.length == 0 ? docText(head + " {}") : boxed(head + " {", danglingLines(orphans), "}");
 	}
-	node.comments = remaining;
 
+	const fieldLocs = node.paramLocations!;
+	const inner = bodyComments(node);
 	const fields: Doc[] = [];
-	let standaloneIdx = 0;
+	const lines: int32[] = [];
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		const fieldLine = i < fieldLocs.length ? fieldLocs[i].line : 0;
 		while (accessorIdx < accessors.length && accessors[accessorIdx].location.line < fieldLine) {
 			fields.push(printStructGetter(accessors[accessorIdx], options));
+			lines.push(accessors[accessorIdx].location.line);
 			accessorIdx = accessorIdx + 1;
-		}
-		// Emit any standalone comments that appear BEFORE this field's line.
-		while (standaloneIdx < standalone.length && standalone[standaloneIdx].line < fieldLine) {
-			fields.push(docText(standalone[standaloneIdx].value));
-			standaloneIdx = standaloneIdx + 1;
 		}
 		let field = d.interfaceFields[i];
 		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
@@ -349,15 +255,6 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
 		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] != "") field = d.interfaceFieldVisibility[i] + " " + field;
-		// Find a trailing comment for this field.
-		let attached: Token = null as unknown as Token;
-		for (let j = 0; j < inline.length; j += 1) {
-			if (inline[j] != null && inline[j].line == fieldLine) {
-				attached = inline[j];
-				inline[j] = null as unknown as Token;
-				break;
-			}
-		}
 		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		const lead: Doc[] = [];
 		if (i < d.interfaceFieldDecorators.length) {
@@ -371,36 +268,16 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 				lead.push(ownLine ? docHardLine() : docLine());
 			}
 		}
-		if (attached != null) {
-			lead.push(docText(field + sep));
-			lead.push(docLineSuffix([docText(" " + attached.value)]));
-			fields.push(docGroup(lead));
-		} else if (lead.length > 0) {
-			lead.push(docText(field + sep));
-			fields.push(docGroup(lead));
-		} else {
-			fields.push(docText(field + sep));
-		}
+		lead.push(docText(field + sep));
+		fields.push(lead.length > 1 ? docGroup(lead) : lead[0]);
+		lines.push(fieldLine);
 	}
 	while (accessorIdx < accessors.length) {
-		while (standaloneIdx < standalone.length && standalone[standaloneIdx].line < accessors[accessorIdx].location.line) {
-			fields.push(docText(standalone[standaloneIdx].value));
-			standaloneIdx = standaloneIdx + 1;
-		}
 		fields.push(printStructGetter(accessors[accessorIdx], options));
+		lines.push(accessors[accessorIdx].location.line);
 		accessorIdx = accessorIdx + 1;
 	}
-	// Any standalone comments after the last field — emit at end of body.
-	while (standaloneIdx < standalone.length) {
-		fields.push(docText(standalone[standaloneIdx].value));
-		standaloneIdx = standaloneIdx + 1;
-	}
-	return docGroup([
-		docText(head + " {"),
-		docIndent([docHardLine(), docJoin(fields, docHardLine())]),
-		docHardLine(),
-		docText("}"),
-	]);
+	return boxed(head + " {", interleave(fields, lines, inner), "}");
 }
 
 function printStructGetter(getter: Node, options: FormatOptions): Doc {
@@ -418,7 +295,7 @@ function printStructGetter(getter: Node, options: FormatOptions): Doc {
 	const ret = fd.fnReturnType != "" ? ": " + fd.fnReturnType : "";
 	parts.push(docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "));
 	parts.push(callPrintNode(fd.fnBody, options));
-	return docGroup(parts);
+	return withComments(getter, docGroup(parts));
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
@@ -440,12 +317,11 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" implements " + d.classImplements.join(", ")));
 	}
 	parts.push(docText(" {"));
+	if (d.classBody.length == 0 && danglingOf(node).length > 0) {
+		parts.push(docIndent([docHardLine(), docJoin(danglingLines(danglingOf(node)), docHardLine())]));
+		parts.push(docHardLine());
+	}
 	if (d.classBody.length > 0) {
-		// Body comments are attached to the ClassDecl node (not to
-		// individual members). Distribute them: each member with
-		// matching line gets the comment as a trailing one; comments
-		// without a line match become standalone lines between members.
-		distributeBodyComments(node, d.classBody);
 		const members: Doc[] = [];
 		for (const m of d.classBody) {
 			members.push(printBodyMember(m, options));
@@ -457,50 +333,9 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
-// Move body comments from `containerNode` onto the matching child node
-// (by line), so each child's printNode wrapper can render them. Comments
-// that don't match any child are kept on containerNode as "below"
-// comments — they'll be emitted after the closing brace by the wrapper.
-// This is the right behavior for class/actor bodies where members are
-// real Nodes (each carrying its own location and comment list).
-function distributeBodyComments(containerNode: Node, children: Node[]): void {
-	if (containerNode.comments.length == 0) return;
-	const remaining: Token[] = [];
-	for (const c of containerNode.comments) {
-		if (c.line <= containerNode.location.line) {
-			remaining.push(c);
-			continue;
-		}
-		// Find a child whose lines hold the comment.
-		let attached = false;
-		for (let i = 0; i < children.length; i += 1) {
-			const at = children[i].location;
-			if (at.line == c.line || (at.line < c.line && c.line <= at.endLine)) {
-				children[i].comments.push(c);
-				attached = true;
-				break;
-			}
-		}
-		if (!attached) {
-			// Standalone comment — attach to next child (so it appears
-			// as a "leading" comment of that child).
-			let assigned = false;
-			for (let i = 0; i < children.length; i += 1) {
-				if (children[i].location.line > c.line) {
-					children[i].comments.push(c);
-					assigned = true;
-					break;
-				}
-			}
-			if (!assigned) remaining.push(c);
-		}
-	}
-	containerNode.comments = remaining;
-}
-
 function printBodyMember(m: Node, options: FormatOptions): Doc {
 	if (m.kind == NodeKind.BlockStmt) {
-		return wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)]));
+		return withComments(m, docGroup([docText("static "), printBlock(m, options)]));
 	}
 	return callPrintNode(m, options);
 }
@@ -509,8 +344,11 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ActorDeclData;
 	const parts: Doc[] = [docText("actor " + d.actorName)];
 	parts.push(docText(" {"));
+	if (d.actorBody.length == 0 && danglingOf(node).length > 0) {
+		parts.push(docIndent([docHardLine(), docJoin(danglingLines(danglingOf(node)), docHardLine())]));
+		parts.push(docHardLine());
+	}
 	if (d.actorBody.length > 0) {
-		distributeBodyComments(node, d.actorBody);
 		const members: Doc[] = [];
 		for (const m of d.actorBody) {
 			members.push(printBodyMember(m, options));
@@ -564,18 +402,6 @@ export function printDecoratedDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(callPrintNode((d.decoratedNode.data as ExportDeclData).exportedDecl, options));
 		return docGroup(parts);
 	}
-	const kept: Token[] = [];
-	for (const c of node.comments) {
-		let owner: Node | null = null;
-		if (c.line < d.decoratedNode.location.line) {
-			for (const dec of d.decorators) {
-				if (dec.location.line == c.line) owner = dec;
-			}
-		}
-		if (owner != null) owner.comments.push(c);
-		else kept.push(c);
-	}
-	node.comments = kept;
 	for (const dec of d.decorators) {
 		parts.push(callPrintNode(dec, options));
 		parts.push(docHardLine());

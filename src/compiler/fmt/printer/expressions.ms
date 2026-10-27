@@ -10,7 +10,8 @@ import {
 	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
-import { Token } from "../../../lexer/token";
+import { SourceComment } from "../comments";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
@@ -19,7 +20,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl, headerAsWritten, typedAsWritten } from "./statements";
+import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -137,31 +138,18 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 	}
 
 	const callParts: Doc[] = [printAtom(d.callee, options), docText((node.flags.has(NodeFlag.OptionalLink) ? "?." : "") + writtenTypeArgs(node, d.callee, options) + "(")];
-	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), danglingOf(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
 }
 
-function innerComments(node: Node): Token[] {
-	const inner: Token[] = [];
-	const outer: Token[] = [];
-	for (const c of node.comments) {
-		if (c.line > node.location.line || (c.line == node.location.line && c.column > node.location.column)) {
-			inner.push(c);
-		} else {
-			outer.push(c);
-		}
-	}
-	node.comments = outer;
-	return inner;
-}
-
-function listBody(items: Doc[], trailing: boolean, endComments: Token[]): Doc[] {
+function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[]): Doc[] {
 	if (items.length == 0 && endComments.length == 0) return [];
 	const body = docCommaSepList(items, trailing);
 	for (const c of endComments) {
 		body.push(docHardLine());
-		body.push(docText(c.value));
+		body.push(docText(c.text));
+		c.markFormatted();
 	}
 	return [docIndent(body), docSoftLine()];
 }
@@ -262,13 +250,13 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 			if (prop != null && (prop.kind == NodeKind.ObjectLiteral || prop.kind == NodeKind.ArrayLiteral || prop.kind == NodeKind.ArrowFunction)) {
 				forceBreak = true;
 			}
-			if (prop != null && prop.comments.length > 0) {
+			if (prop != null && hasCommentsOutside(prop)) {
 				forceBreak = true;
 			}
 		}
 	}
 	// Also check the object node itself for trailing comments
-	if (!forceBreak && node.comments.length > 0) {
+	if (!forceBreak && danglingOf(node).length > 0) {
 		forceBreak = true;
 	}
 
@@ -277,19 +265,8 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		const prop = d.properties[i];
 		// Extract leading comments (e.g., commented-out properties) and group them
 		// with the following entry so they don't get separator commas.
-		const leadingComments: Doc[] = [];
-		if (prop != null && prop.comments.length > 0) {
-			const remaining: Token[] = [];
-			for (const comment of prop.comments) {
-				if (comment.line < prop.location.line) {
-					leadingComments.push(docText(comment.value));
-					leadingComments.push(docHardLine());
-				} else {
-					remaining.push(comment);
-				}
-			}
-			prop.comments = remaining;
-		}
+		const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
+		const leadingComments: Doc[] = prop != null && keyLoc != null ? commentLeadingBefore(prop, keyLoc) : [];
 		let entryDoc: Doc;
 		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
 		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
@@ -323,8 +300,9 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	}
 	// Collect trailing comments on the object node (before closing brace)
 	const trailingComments: Doc[] = [];
-	for (const comment of innerComments(node)) {
-		trailingComments.push(docText(comment.value));
+	for (const comment of danglingOf(node)) {
+		trailingComments.push(docText(comment.text));
+		comment.markFormatted();
 	}
 
 	// When forced to break, separators must not be wrapped in a group
@@ -362,7 +340,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 
 export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayLiteralData;
-	const endComments = innerComments(node);
+	const endComments = danglingOf(node);
 	if (d.elements.length == 0 && endComments.length == 0) return docText("[]");
 	const elems: Doc[] = [];
 	for (const el of d.elements) {
@@ -395,7 +373,7 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const asWritten = blockBody ? headerAsWritten(node, d.arrowBody, options, null) : null;
 	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, callPrintNode(writtenArrowBody(d.arrowBody, options), options)]);
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
-	const typed = d.arrowReturnType != "" ? typedAsWritten(node, node.location.line, node.location.column, node.typeExpr, options) : "";
+	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
 	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
@@ -447,7 +425,7 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(writtenTypeArgs(node, d.newCallee, options) + "(")];
-	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) newParts.push(p);
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), danglingOf(node))) newParts.push(p);
 	newParts.push(docText(")"));
 	return docGroup(newParts);
 }
@@ -472,7 +450,7 @@ export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const cases: Doc[] = [];
 	for (let i = 0; i < d.matchCases.length; i += 1) {
 		const c = d.matchCases[i];
-		cases.push(wrapNodeComments(c, printMatchCase(c, options, i == d.matchCases.length - 1)));
+		cases.push(withComments(c, printMatchCase(c, options, i == d.matchCases.length - 1)));
 	}
 	return docGroup([
 		docText("match ("),

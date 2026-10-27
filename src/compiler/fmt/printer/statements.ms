@@ -7,60 +7,88 @@ import {
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
 } from "../../../ast/node";
-import { Token } from "../../../lexer/token";
+import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
+import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 
-export function printProgram(node: Node, options: FormatOptions): Doc {
-	const d = node.data as ProgramData;
-	const written = unpicked(d.programStmts);
+class ListItem {
+	line: int32;
+	column: int32;
+	startLine: int32;
+	endLine: int32;
+	stmt: Node | null;
+	chain: WhenChain | null;
+	broken: boolean;
+}
+
+function chainItem(chain: WhenChain): ListItem {
+	const lead = chain.placed.leading;
+	const trail = chain.placed.trailing;
+	const startLine = lead.length > 0 ? lead[0].line : chain.line;
+	const endLine = trail.length > 0 ? Math.max(trail[trail.length - 1].endLine, chain.endLine) as int32 : chain.endLine;
+	return { line: chain.line, column: chain.column, startLine, endLine, stmt: null, chain, broken: true };
+}
+
+function stmtItem(stmt: Node): ListItem {
+	const trail = commentsOfRun().trailing(stmt);
+	const lead = commentsOfRun().leading(stmt);
+	const startLine = lead.length > 0 ? lead[0].line : stmt.location.line;
+	const endLine = trail.length > 0 ? Math.max(trail[trail.length - 1].endLine, lastLineOf(stmt)) as int32 : lastLineOf(stmt);
+	return { line: stmt.location.line, column: stmt.location.column, startLine, endLine, stmt, chain: null, broken: lead.length > 0 || trail.length > 0 };
+}
+
+function printChain(chain: WhenChain, options: FormatOptions): Doc {
+	const text = sourceSpan(options.source, chain.line, chain.column, chain.endLine, chain.endColumn);
 	const parts: Doc[] = [];
-	for (let i = 0; i < written.length; i += 1) {
-		const stmt = written[i];
+	for (const d of leadingDocs(chain.placed.leading)) parts.push(d);
+	parts.push(docText(text));
+	for (const d of trailingDocs(chain.placed.trailing)) parts.push(d);
+	return docGroup(parts);
+}
 
-		// Extract inter-statement comments: comments AFTER this statement
-		// (line > stmt.endLine) but before the next statement. These are
-		// standalone comments between sibling stmts. Comments INSIDE the
-		// stmt's body (line ≤ endLine) belong to inner nodes (enum members,
-		// interface fields, etc.) — leave them on stmt.comments so the
-		// inner printers can attach them.
-		const interComments: Token[] = [];
-		if (stmt.comments.length > 0) {
-			const stmtEnd = stmt.location.endLine > 0 ? stmt.location.endLine : stmt.location.line;
-			const nextLine = (i + 1 < written.length) ? written[i + 1].location.line : 999999;
-			const remaining: Token[] = [];
-			for (const comment of stmt.comments) {
-				if (comment.line > stmtEnd && comment.line < nextLine) {
-					interComments.push(comment);
-				} else {
-					remaining.push(comment);
-				}
-			}
-			stmt.comments = remaining;
+function listItems(container: Node, stmts: Node[]): ListItem[] {
+	const items: ListItem[] = [];
+	for (const s of unpicked(stmts)) items.push(stmtItem(s));
+	for (const chain of commentsOfRun().chainsIn(container)) items.push(chainItem(chain));
+	for (let i = 1; i < items.length; i += 1) {
+		const moved = items[i];
+		let j = i - 1;
+		while (j >= 0 && (items[j].line > moved.line || (items[j].line == moved.line && items[j].column > moved.column))) {
+			items[j + 1] = items[j];
+			j -= 1;
 		}
+		items[j + 1] = moved;
+	}
+	return items;
+}
 
+function printListItem(item: ListItem, stmts: Node[], options: FormatOptions): Doc {
+	if (item.chain != null) return printChain(item.chain, options);
+	noteFollowers(stmts, item.stmt!);
+	return callPrintNode(item.stmt!, options);
+}
+
+function printItems(items: ListItem[], stmts: Node[], keepBlankLines: boolean, options: FormatOptions): Doc[] {
+	const parts: Doc[] = [];
+	for (let i = 0; i < items.length; i += 1) {
 		if (i > 0) {
 			parts.push(docHardLine());
-			// Preserve one blank line between statement groups (Prettier convention)
-			const prev = written[i - 1].location;
-			const prevEnd = prev.endLine > 0 ? prev.endLine : prev.line;
-			const currLine = written[i].location.line;
-			if (currLine - prevEnd > 1) {
-				parts.push(docHardLine());
-			}
+			if (keepBlankLines && items[i].startLine - items[i - 1].endLine > 1) parts.push(docHardLine());
 		}
-		noteFollowers(d.programStmts, stmt);
-		parts.push(callPrintNode(stmt, options));
-
-		// Emit inter-statement comments: blank line before first, single newline between
-		for (let ci = 0; ci < interComments.length; ci += 1) {
-			parts.push(docHardLine());
-			if (ci == 0) parts.push(docHardLine());
-			parts.push(docText(interComments[ci].value));
-		}
+		parts.push(printListItem(items[i], stmts, options));
 	}
+	return parts;
+}
+
+export function printProgram(node: Node, options: FormatOptions): Doc {
+	const d = node.data as ProgramData;
+	const items = listItems(node, d.programStmts);
+	const parts = printItems(items, d.programStmts, true, options);
+	const orphans = danglingOf(node);
+	if (items.length == 0) return docGroup([danglingBlock(orphans)]);
 	return docGroup(parts);
 }
 
@@ -127,81 +155,21 @@ export function isParamPatternDecl(s: Node): boolean {
 		&& init.location.line == s.location.line && init.location.column == s.location.column;
 }
 
-export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
-	// Wrap with comments if present.
-	// 3 buckets by relative line:
-	//   - leading: comment.line < node.line (before)
-	//   - trailing: comment.line === node.line (same line, end-of-line comment)
-	//   - below: comment.line > node.line (standalone line(s) after the stmt)
-	if (node.comments.length > 0) {
-		const leading: Doc[] = [];
-		const trailing: Doc[] = [];
-		const below: Doc[] = [];
-		for (const comment of node.comments) {
-			if (comment.line < node.location.line) {
-				leading.push(docText(comment.value));
-				leading.push(docHardLine());
-			} else if (comment.line == node.location.line
-				|| (node.location.endLine > 0 && comment.line == node.location.endLine && comment.column >= node.location.endColumn)) {
-				trailing.push(docLineSuffix([docText(" " + comment.value)]));
-				if (comment.value.startsWith("//")) trailing.push(docBreakParent());
-			} else {
-				below.push(docHardLine());
-				below.push(docText(comment.value));
-			}
-		}
-		if (leading.length > 0 || trailing.length > 0 || below.length > 0) {
-			const parts: Doc[] = [];
-			for (const l of leading) { parts.push(l); }
-			parts.push(innerDoc);
-			for (const t of trailing) { parts.push(t); }
-			for (const b of below) { parts.push(b); }
-			return docGroup(parts);
-		}
-	}
-
-	return innerDoc;
-}
-
 export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
-	const inner: Token[] = [];
-	const outer: Token[] = [];
-	const loc = node.location;
-	for (const c of node.comments) {
-		const afterOpen = c.line > loc.line || (c.line == loc.line && c.column > loc.column);
-		const beforeClose = loc.endLine == 0 || c.line < loc.endLine || (c.line == loc.endLine && c.column < loc.endColumn);
-		if (afterOpen && beforeClose) {
-			inner.push(c);
-		} else {
-			outer.push(c);
-		}
+	const items = listItems(node, d.statements);
+	const orphans = danglingOf(node);
+	if (items.length == 0) {
+		if (orphans.length == 0) return docText("{}");
+		return boxed("{", danglingLines(orphans), "}");
 	}
-	node.comments = outer;
-	const written = unpicked(d.statements);
-	if (written.length == 0 && inner.length == 0) return docText("{}");
-	const stmts: Doc[] = [];
-	for (const s of written) {
-		noteFollowers(d.statements, s);
-		stmts.push(callPrintNode(s, options));
-	}
-	for (const c of inner) {
-		stmts.push(docText(c.value));
-	}
-	if (inner.length > 0) {
-		return docGroup([
-			docText("{"),
-			docIndent([docHardLine(), docJoin(stmts, docHardLine())]),
-			docHardLine(),
-			docText("}"),
-		]);
-	}
+	const stmts = printItems(items, d.statements, false, options);
 
 	// Single-statement block can stay inline (`{ stmt }`) when it fits
 	// printWidth. Multi-stmt blocks always break — flattening multiple
-	// statements onto one line is unreadable. Statements with leading
-	// comments also break, so the comments don't get smushed inline.
-	if (written.length == 1 && written[0].comments.length == 0) {
+	// statements onto one line is unreadable. Statements with comments
+	// also break, so the comments don't get smushed inline.
+	if (items.length == 1 && !items[0].broken) {
 		return docGroup([
 			docText("{"),
 			docIndent([docLine(), stmts[0]]),
@@ -212,7 +180,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 
 	return docGroup([
 		docText("{"),
-		docIndent([docHardLine(), docJoin(stmts, docHardLine())]),
+		docIndent([docHardLine(), ...stmts]),
 		docHardLine(),
 		docText("}"),
 	]);
@@ -251,7 +219,7 @@ function pushDeclarator(parts: Doc[], node: Node, options: FormatOptions): void 
 		return;
 	}
 	const d = node.data as VariableDeclData;
-	const typed = d.declType != "" ? typedAsWritten(node, d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
+	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
 	parts.push(docText(d.declName + typed));
 	if (d.declType != "" && typed == "") {
 		parts.push(docText(": " + d.declType));
@@ -289,9 +257,7 @@ function bracelessStatement(body: Node, options: FormatOptions): Node | null {
 	const block = body.data as BlockStmtData;
 	if (block.statements.length != 1) return null;
 	const stmt = block.statements[0];
-	for (const c of stmt.comments) {
-		if (c.line < stmt.location.line) return null;
-	}
+	if (commentsOfRun().leading(stmt).length > 0) return null;
 	if (sourceByteAt(options.source, body.location.line, body.location.column) == "{".code) return null;
 	return stmt;
 }
@@ -301,40 +267,48 @@ function printBody(body: Node, options: FormatOptions): Doc {
 	return callPrintNode(single != null ? single : body, options);
 }
 
+function commentsBeforeElse(d: IfStmtData, options: FormatOptions): SourceComment[] {
+	const alt = d.alternate!;
+	const out: SourceComment[] = [];
+	const comments = commentsOfRun();
+	for (const owner of [d.consequent, bracelessStatement(d.consequent, options)]) {
+		if (owner == null) continue;
+		for (const c of comments.trailing(owner)) {
+			if (!c.formatted) out.push(c);
+		}
+	}
+	for (const c of comments.leading(alt)) {
+		if (!c.formatted && c.line < alt.location.line) out.push(c);
+	}
+	for (const c of out) c.markFormatted();
+	return out;
+}
+
+function isEmptyBlock(node: Node): boolean {
+	return node.kind == NodeKind.BlockStmt && (node.data as BlockStmtData).statements.length == 0;
+}
+
 export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as IfStmtData;
+	const hasElse = d.alternate != null && !isEmptyBlock(d.alternate);
+	const beforeElse = hasElse ? commentsBeforeElse(d, options) : [];
 	const parts: Doc[] = [
 		docText("if ("),
 		callPrintNode(d.condition, options),
 		docText(") "),
 		printBody(d.consequent, options),
 	];
-	// Skip empty else blocks (parser may create a BlockStmt with 0 statements)
-	if (d.alternate != null) {
-		let isEmpty = false;
-		if (d.alternate.kind == NodeKind.BlockStmt) {
-			const altData = d.alternate.data as BlockStmtData;
-			if (altData.statements.length == 0) { isEmpty = true; }
+	if (hasElse) {
+		const alt = d.alternate!;
+		for (const c of beforeElse) {
+			parts.push(docHardLine());
+			parts.push(docText(c.text));
 		}
-		if (!isEmpty) {
-			const beforeElse: Token[] = [];
-			const kept: Token[] = [];
-			for (const c of d.alternate.comments) {
-				if (c.line < d.alternate.location.line) beforeElse.push(c); else kept.push(c);
-			}
-			d.alternate.comments = kept;
-			for (const c of beforeElse) {
-				parts.push(docHardLine());
-				parts.push(docText(c.value));
-			}
-			const braceless = bracelessStatement(d.consequent, options);
-			const elseOnOwnLine = beforeElse.length > 0
-				|| (braceless != null && d.alternate.location.line > lastLineOf(braceless));
-			parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
-			parts.push(d.alternate.kind == NodeKind.IfStmt
-				? callPrintNode(d.alternate, options)
-				: printBody(d.alternate, options));
-		}
+		const braceless = bracelessStatement(d.consequent, options);
+		const elseOnOwnLine = beforeElse.length > 0
+			|| (braceless != null && alt.location.line > lastLineOf(braceless));
+		parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
+		parts.push(alt.kind == NodeKind.IfStmt ? callPrintNode(alt, options) : printBody(alt, options));
 	}
 	return docGroup(parts);
 }
@@ -424,7 +398,7 @@ export function printSwitchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SwitchStmtData;
 	const cases: Doc[] = [];
 	for (const c of d.switchCases) {
-		cases.push(printSwitchCase(c, options));
+		cases.push(withComments(c, printSwitchCase(c, options)));
 	}
 	return docGroup([
 		docText("switch ("),
@@ -641,38 +615,41 @@ function spellParamModifiers(name: string): string {
 	return spelled + rest;
 }
 
-export function commentedList(items: Doc[], locs: SourceLocation[], inner: Token[], open: string, close: string): Doc {
-	const lines: Doc[] = [];
-	let ci = 0;
+export function commentedList(items: Doc[], locs: SourceLocation[], inner: SourceComment[], open: string, close: string): Doc {
+	const lines: int32[] = [];
+	const entries: Doc[] = [];
 	for (let i = 0; i < items.length; i += 1) {
-		const line = i < locs.length ? locs[i].line : 0;
-		while (ci < inner.length && inner[ci].line < line) {
-			lines.push(docText(inner[ci].value));
-			ci += 1;
-		}
-		const lastOnLine = i + 1 >= items.length || (i + 1 < locs.length && locs[i + 1].line != line);
-		const entry: Doc[] = [items[i], docText(",")];
-		while (lastOnLine && ci < inner.length && inner[ci].line == line) {
-			entry.push(docLineSuffix([docText(" " + inner[ci].value)]));
-			ci += 1;
-		}
-		lines.push(docGroup(entry));
+		lines.push(i < locs.length ? locs[i].line : 0);
+		entries.push(docGroup([items[i], docText(",")]));
 	}
-	while (ci < inner.length) {
-		lines.push(docText(inner[ci].value));
-		ci += 1;
-	}
-	return docGroup([docText(open), docIndent([docHardLine(), docJoin(lines, docHardLine())]), docHardLine(), docText(close)]);
+	return boxed(open, interleave(entries, lines, inner), close);
 }
 
-export function paramListComments(node: Node, body: Node): Token[] {
-	if (body == null || isSynthesized(node, body)) return [];
-	const inner: Token[] = [];
-	takeSignatureComments(node, node, body, inner);
-	takeSignatureComments(body, node, body, inner);
+function pushPlaced(holder: Node, out: SourceComment[]): void {
+	const comments = commentsOfRun();
+	for (const list of [comments.leading(holder), comments.dangling(holder), comments.trailing(holder)]) {
+		for (const c of list) {
+			if (!c.formatted) out.push(c);
+		}
+	}
+}
+
+function before(c: SourceComment, line: int32, column: int32): boolean {
+	return c.line < line || (c.line == line && c.column < column);
+}
+
+function signatureComments(decl: Node, body: Node): SourceComment[] {
+	const holders: Node[] = [decl, body];
 	if (body.kind == NodeKind.BlockStmt) {
 		const stmts = (body.data as BlockStmtData).statements;
-		if (stmts.length > 0) takeSignatureComments(stmts[0], node, body, inner);
+		if (stmts.length > 0) holders.push(stmts[0]);
+	}
+	const all: SourceComment[] = [];
+	for (const h of holders) pushPlaced(h, all);
+	const inner: SourceComment[] = [];
+	for (const c of all) {
+		const afterStart = c.line > decl.location.line || (c.line == decl.location.line && c.column > decl.location.column);
+		if (afterStart && before(c, body.location.line, body.location.column)) inner.push(c);
 	}
 	for (let i = 1; i < inner.length; i += 1) {
 		const c = inner[i];
@@ -686,21 +663,16 @@ export function paramListComments(node: Node, body: Node): Token[] {
 	return inner;
 }
 
-function takeSignatureComments(holder: Node, decl: Node, body: Node, into: Token[]): void {
-	const rest: Token[] = [];
-	for (const c of holder.comments) {
-		const beforeBody = c.line < body.location.line || (c.line == body.location.line && c.column < body.location.column);
-		if (c.line > decl.location.line && beforeBody) into.push(c); else rest.push(c);
+export function paramListComments(node: Node, body: Node): SourceComment[] {
+	if (body == null || isSynthesized(node, body)) return [];
+	const inner: SourceComment[] = [];
+	for (const c of signatureComments(node, body)) {
+		if (c.line > node.location.line) inner.push(c);
 	}
-	holder.comments = rest;
+	return inner;
 }
 
-function isBetween(c: Token, start: SourceLocation, end: SourceLocation): boolean {
-	const after = c.line > start.line || (c.line == start.line && c.column > start.column);
-	return after && (c.line < end.line || (c.line == end.line && c.column < end.column));
-}
-
-function onParamLines(comments: Token[], decl: Node, paramLocs: SourceLocation[] | null): boolean {
+function onParamLines(comments: SourceComment[], decl: Node, paramLocs: SourceLocation[] | null): boolean {
 	if (paramLocs == null || paramLocs.length == 0) return false;
 	const lastLine = paramLocs[paramLocs.length - 1].line;
 	for (const c of comments) {
@@ -711,27 +683,13 @@ function onParamLines(comments: Token[], decl: Node, paramLocs: SourceLocation[]
 
 export function headerAsWritten(decl: Node, body: Node, options: FormatOptions, paramLocs: SourceLocation[] | null): Doc | null {
 	if (options.source == "" || body == null || isSynthesized(decl, body)) return null;
-	const holders: Node[] = [decl, body];
-	if (body.kind == NodeKind.BlockStmt) {
-		const stmts = (body.data as BlockStmtData).statements;
-		if (stmts.length > 0) holders.push(stmts[0]);
-	}
-	const inner: Token[] = [];
-	for (const h of holders) {
-		for (const c of h.comments) {
-			if (isBetween(c, decl.location, body.location)) inner.push(c);
-		}
-	}
-	if (inner.length == 0 || onParamLines(inner, decl, paramLocs)) return null;
+	const written = commentsWithin(decl.location, body.location);
+	if (written.length == 0) return null;
+	const inner = signatureComments(decl, body);
+	if (inner.length == written.length && onParamLines(inner, decl, paramLocs)) return null;
 	const text = sourceSpan(options.source, decl.location.line, decl.location.column, body.location.line, body.location.column);
 	if (text == "") return null;
-	for (const h of holders) {
-		const rest: Token[] = [];
-		for (const c of h.comments) {
-			if (!isBetween(c, decl.location, body.location)) rest.push(c);
-		}
-		h.comments = rest;
-	}
+	markWithin(decl.location, body.location);
 	const head = text.trimEnd();
 	const gap = text.byteSlice(head.byteLength, text.byteLength);
 	return docGroup([docText(head), gap.includes("\n") ? docHardLine() : docText(" ")]);
@@ -745,19 +703,15 @@ function prefixAt(names: string[], positions: string, word: string): void {
 	}
 }
 
-// A type is captured as text, which skips its comments; when the holder keeps one written between
-// `line:column` and the type's end, the span is returned as written and the holder lets go of it.
-export function typedAsWritten(holder: Node, line: int32, column: int32, typeExpr: Node | null, options: FormatOptions): string {
+// A type is captured as text, which skips its comments; when one is written between
+// `line:column` and the type's end, the span is returned as written.
+export function typedAsWritten(line: int32, column: int32, typeExpr: Node | null, options: FormatOptions): string {
 	if (options.source == "" || typeExpr == null || typeExpr.location.endLine == 0) return "";
 	const start = makeLoc(line, column);
 	const end = makeLoc(typeExpr.location.endLine, typeExpr.location.endColumn);
-	const rest: Token[] = [];
-	for (const c of holder.comments) {
-		if (!isBetween(c, start, end)) rest.push(c);
-	}
-	if (rest.length == holder.comments.length) return "";
+	if (commentsWithin(start, end).length == 0) return "";
 	const text = sourceSpan(options.source, line, column, end.line, end.column);
-	if (text != "") holder.comments = rest;
+	if (text != "") markWithin(start, end);
 	return text;
 }
 
