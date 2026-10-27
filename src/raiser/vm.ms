@@ -4220,7 +4220,7 @@ function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int
 }
 
 function vmNoteSite(vm: RaiserVM, func: RaiserFunction, pc: int32): void {
-	if (vm.error.startsWith("expected a") && !vm.error.includes(" (in ")) vm.error = `internal: ${vm.error} (in ${func.name} at instruction ${pc})`;
+	if ((vm.error.startsWith("expected a") || vm.error.startsWith("array handle out of bounds")) && !vm.error.includes(" (in ")) vm.error = `internal: ${vm.error} (in ${func.name} at instruction ${pc})`;
 }
 
 function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expected: string): int64 {
