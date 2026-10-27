@@ -85,10 +85,15 @@ function collectTreeFiles(dir: string, prefix: string, paths: string[], names: s
 const HASH_MEMO_MAGIC = "MSHM1";
 let _hashMemoWrites = 0;
 
-function hashMemoPath(subject: string, kind: string): string {
+export function stampMemoRoot(): string {
 	const root = globalCacheRoot();
+	return root == "" ? "" : `${root}/stamps`;
+}
+
+function hashMemoPath(subject: string, kind: string): string {
+	const root = stampMemoRoot();
 	if (root == "") return "";
-	return `${root}/stamps/${hashContent(subject)}.${kind}`;
+	return `${root}/${hashContent(subject)}.${kind}`;
 }
 
 function readSealed(path: string): string[] {

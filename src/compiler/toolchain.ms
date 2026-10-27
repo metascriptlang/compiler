@@ -1,9 +1,11 @@
 // MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
 
-import { stopBuild } from "./io";
+import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, modifiedTime, writeFile, removeAll } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
+import { hashContent } from "../utils/contentHash";
+import { nowSeconds } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
@@ -211,7 +213,7 @@ function validateBundleTree(root: string, directory: string, names: HashSet<stri
 	return Result.ok(null);
 }
 
-function validateNativeToolchain(path: string): Result<NativeToolchain, string> {
+function validateNativeToolchain(path: string, stampRoot: string): Result<NativeToolchain, string> {
 	const root = realpath(path).replaceAll("\\", "/");
 	if (root == "") return Result.err(`native toolchain: missing bundle ${path}`);
 	const hostText = try bundleText(root, "HOST");
@@ -233,8 +235,6 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 	}
 	const identity = identityText.trim();
 	if (!isSha256(identity) || identityText != `${identity}\n`) return Result.err("native toolchain: invalid IDENTITY");
-	const actualIdentity = try fileSha256(join(root, "FILES.sha256"));
-	if (actualIdentity != identity) return Result.err("native toolchain: FILES.sha256 identity mismatch");
 	if (!manifest.endsWith("\n")) return Result.err("native toolchain: unterminated FILES.sha256");
 	const names = new HashSet<string>();
 	const lines = manifest.split("\n");
@@ -246,12 +246,6 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 		}
 		if (name == "FILES.sha256" || name == "IDENTITY" || names.has(name)) return Result.err(`native toolchain: duplicate or reserved manifest entry ${name}`);
 		names.add(name);
-		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
-		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
-		if (platform == "windows") {
-			const digest = try fileSha256(join(root, name));
-			if (digest != line.slice(0, 64)) return Result.err(`native toolchain: checksum mismatch for ${name}`);
-		}
 	}
 	const tree = try validateBundleTree(root, "", names);
 	const suffix = platform == "windows" ? ".exe" : "";
@@ -262,19 +256,113 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 		const name = `bin/${tool}${suffix}`;
 		if (!names.has(name) || !isExecutable(join(root, name))) return Result.err(`native toolchain: missing executable ${name}`);
 	}
-	if (platform != "windows") {
+	const memo = stampRoot == "" ? "" : `${stampRoot}/${hashContent(root)}.bundle`;
+	const seal = bundleSeal(root, identity, lines);
+	if (seal == "" || memo == "" || (try readFile(memo) catch "") != seal) {
+		const verified = try verifyBundlePayload(root, identity, version, lines);
+		if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
+	}
+	return Result.ok({ root, version, identity });
+}
+
+// Taken before verification, so a file that changes while it is hashed fails
+// the next comparison instead of sealing content nobody checked. The stamp
+// follows symlinks, so a payload swapped for a link moves its device and inode
+// and sends the bundle back through containment. A file written
+// within the settle window seals nothing: a coarse-clock filesystem can give a
+// second same-size write in that window the same change stamp.
+function bundleSeal(root: string, identity: string, lines: string[]): string {
+	const names = ["IDENTITY", "FILES.sha256"];
+	for (let i = 0; i < lines.length - 1; i++) names.push(lines[i].slice(66));
+	const settledBefore = nowSeconds() - BUNDLE_SETTLED_SECONDS;
+	const stamps: string[] = [identity];
+	for (const name of names) {
+		const path = join(root, name);
+		const stamp = changeStamp(path);
+		const modified = modifiedTime(path);
+		if (stamp == "" || modified < 0 || modified > settledBefore) return "";
+		stamps.push(`${name}\t${stamp}`);
+	}
+	return hashContent(stamps.join("\n"));
+}
+
+const BUNDLE_SETTLED_SECONDS = 2;
+
+const SEAL_PAYLOAD = ["IDENTITY", "FILES.sha256", "bin/clang"];
+
+function sealProbe(): string {
+	const root = join(cwd(), `out/bundleSealProbe-${performance.now()}`);
+	if (!ensureDir(join(root, "bin")).ok) return "";
+	for (const name of SEAL_PAYLOAD) {
+		if (!writeFile(join(root, name), "first").ok) return "";
+	}
+	return root;
+}
+
+function backdate(root: string, names: string[]): boolean {
+	for (const name of names) {
+		if (!execFileCapture("touch", ["-t", "202001010000", join(root, name)]).ok) return false;
+	}
+	return true;
+}
+
+const SEAL_LINES = ["0000000000000000000000000000000000000000000000000000000000000000  bin/clang", ""];
+
+test "a bundle seal moves when a payload is rewritten to the same size under a preserved mtime" {
+	if (platform == "windows") return;
+	const root = sealProbe();
+	assert root != "";
+	assert backdate(root, SEAL_PAYLOAD);
+	const before = bundleSeal(root, "id", SEAL_LINES);
+	assert before != "";
+	assert bundleSeal(root, "id", SEAL_LINES) == before;
+	assert bundleSeal(root, "other", SEAL_LINES) != before;
+	assert writeFile(join(root, "bin/clang"), "other").ok;
+	assert backdate(root, ["bin/clang"]);
+	assert bundleSeal(root, "id", SEAL_LINES) != before;
+	assert removeAll(root).ok;
+}
+
+test "a bundle with a missing or freshly written payload seals nothing" {
+	if (platform == "windows") return;
+	const root = sealProbe();
+	assert root != "";
+	assert bundleSeal(root, "id", SEAL_LINES) == "";
+	assert backdate(root, SEAL_PAYLOAD);
+	assert bundleSeal(root, "id", SEAL_LINES) != "";
+	assert remove(join(root, "bin/clang")).ok;
+	assert bundleSeal(root, "id", SEAL_LINES) == "";
+	assert removeAll(root).ok;
+}
+
+function verifyBundlePayload(root: string, identity: string, version: string, lines: string[]): Result<void, string> {
+	for (let i = 0; i < lines.length - 1; i++) {
+		const name = lines[i].slice(66);
+		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
+		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
+	}
+	const actualIdentity = try fileSha256(join(root, "FILES.sha256"));
+	if (actualIdentity != identity) return Result.err("native toolchain: FILES.sha256 identity mismatch");
+	if (platform == "windows") {
+		for (let i = 0; i < lines.length - 1; i++) {
+			const name = lines[i].slice(66);
+			const digest = try fileSha256(join(root, name));
+			if (digest != lines[i].slice(0, 64)) return Result.err(`native toolchain: checksum mismatch for ${name}`);
+		}
+	} else {
 		const checked = platform == "darwin"
 			? execFileCapture("shasum", ["-a", "256", "-c", "FILES.sha256"], root)
 			: execFileCapture("sha256sum", ["-c", "FILES.sha256"], root);
 		if (!checked.ok) return Result.err(`native toolchain: payload checksum verification failed: ${checked.error.output}${checked.error.errorOutput}`);
 	}
+	const suffix = platform == "windows" ? ".exe" : "";
 	const compiler = execFileCapture(join(root, `bin/clang${suffix}`), ["--version"]);
 	if (!compiler.ok) return Result.err("native toolchain: cannot execute bundled clang");
 	const firstLine = compiler.value.split("\n")[0];
 	if (!firstLine.endsWith(`clang version ${version}`) && !firstLine.contains(`clang version ${version} `)) {
 		return Result.err(`native toolchain: compiler version does not match ${version}`);
 	}
-	return Result.ok({ root, version, identity });
+	return Result.ok(null);
 }
 
 function nativeRuntimeConfig(targetOs: string, cpu: string): string {
@@ -286,8 +374,8 @@ function nativeRuntimeConfig(targetOs: string, cpu: string): string {
 	return "";
 }
 
-function selectNativeToolchain(opts: CliOptions, path: string): Result<void, string> {
-	const bundle = try validateNativeToolchain(path);
+function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string): Result<void, string> {
+	const bundle = try validateNativeToolchain(path, stampRoot);
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
 	if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
@@ -361,7 +449,7 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 // do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
 // cc.ms (ltoBroken/resolveLto) and run right after this, once the compiler is
 // known.
-export function resolveCC(opts: CliOptions): void {
+export function resolveCC(opts: CliOptions, stampRoot: string): void {
 	if (opts.ccBinary == "zig") opts.ccBinary = "zig cc";
 
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
@@ -369,7 +457,7 @@ export function resolveCC(opts: CliOptions): void {
 
 	const native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
 	if (native != "") {
-		const selected = selectNativeToolchain(opts, native);
+		const selected = selectNativeToolchain(opts, native, stampRoot);
 		if (!selected.ok) {
 			eprintln(`error: ${selected.error}`);
 			stopBuild();
