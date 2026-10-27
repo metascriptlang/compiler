@@ -1,5 +1,5 @@
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
-import { hasFlag, makeSymbol } from "../../checker/symbol";
+import { makeSymbol, symbolKey } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
 import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod } from "../../checker/context";
 import { combine as mix, hS as mixString, hI as mixInt, hB as mixBool, taHashNode, transAmHashSurface } from "./hash";
@@ -13,19 +13,6 @@ class DigestState {
 	modulePath: string;
 	memo: HashMap<Type, int64>;
 	open: HashSet<Type>;
-}
-
-function symbolKey(sym: Symbol): string {
-	if (hasFlag(sym, SymbolFlag.Anon)) throw new Error(`internal: digest: anonymous symbol ${sym.name} has no key`);
-	if (sym.instantiatedFrom != null) return `${sym.name}.0.${sym.modulePath}`;
-	return match (sym.symbolKind) {
-		SymbolKind.Variable | SymbolKind.Function | SymbolKind.Class | SymbolKind.Interface | SymbolKind.TypeAlias | SymbolKind.Enum | SymbolKind.Struct | SymbolKind.Actor | SymbolKind.Macro => `${sym.name}.${sym.disamb}.${sym.modulePath}`,
-		_ => keyless(sym),
-	};
-}
-
-function keyless(sym: Symbol): string {
-	throw new Error(`internal: digest: ${sym.symbolKind.toString()} symbol ${sym.name} has no key`);
 }
 
 function shapeOf(kind: TypeKind): TypeShape {
@@ -385,5 +372,5 @@ test "an anonymous foreign symbol has no key" {
 	ctx.interf[0].symbolType.typeNames.push("far");
 	let message = "";
 	try { ifaceDigest(ctx, []); } catch (e) { message = (e as Error).message; }
-	assert message == "internal: digest: anonymous symbol Far has no key";
+	assert message.contains("is local to its module and has no key"), message;
 }

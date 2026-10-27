@@ -17,6 +17,7 @@ export enum TaQueryKind {
 	Analyze,      // derived: transformed -> DRC-injected AST
 	ModuleDeps,   // derived: parse -> import list
 	Lower,
+	Impl,         // derived: module implementation digest, the NeedsImpl edge target
 }
 
 // ===== Query State — red-green verification state =====
