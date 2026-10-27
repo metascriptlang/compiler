@@ -586,7 +586,19 @@ function ownExpressionsNeedPass(stmt: Node): boolean {
 	let found = false;
 	forEachChild(stmt, (child: Node): void => {
 		if (found || isCompoundStmt(child)) return;
-		found = anyDescendant(child, (n: Node): Visit => n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr ? Visit.Hit : isFunctionNode(n) ? Visit.Skip : Visit.Descend);
+		found = expressionNeedsPass(child, false);
+	});
+	return found;
+}
+
+function expressionNeedsPass(n: Node, inCall: boolean): boolean {
+	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr) return true;
+	if (isFunctionNode(n)) return false;
+	if (inCall && n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=") return true;
+	const call = inCall || n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr;
+	let found = false;
+	forEachChild(n, (child: Node): void => {
+		if (!found) found = expressionNeedsPass(child, call);
 	});
 	return found;
 }
