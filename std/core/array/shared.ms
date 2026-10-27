@@ -1,3 +1,10 @@
+@compilerFunc
+export function msFilledArray<T>(count: int32, value: T): T[] {
+	const out: T[] = [];
+	for (let i = 0; i < count; i += 1) out.push(value);
+	return out;
+}
+
 export function toString<T>(this arr: T[]): string {
 	let out = "";
 	for (let i = 0; i < arr.length; i += 1) {
