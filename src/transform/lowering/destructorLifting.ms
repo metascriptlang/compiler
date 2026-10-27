@@ -676,15 +676,22 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
-function beginHookLift(lctx: LiftCtx): boolean {
-	const outer = lctx.callsUnavailableCopy;
+interface HookLiftScope {
+	callsUnavailableCopy: boolean;
+	dropOwner: Symbol | null;
+}
+
+function beginHookLift(lctx: LiftCtx): HookLiftScope {
+	const outer: HookLiftScope = { callsUnavailableCopy: lctx.callsUnavailableCopy, dropOwner: lctx.dropOwner };
 	lctx.callsUnavailableCopy = false;
+	lctx.dropOwner = null;
 	return outer;
 }
 
-function endHookLift(lctx: LiftCtx, outer: boolean, hook: string, sym: Symbol, unavailable: boolean): void {
+function endHookLift(lctx: LiftCtx, outer: HookLiftScope, hook: string, sym: Symbol, unavailable: boolean): void {
 	if (hook == "copy" && (unavailable || lctx.callsUnavailableCopy)) setFlag(sym, SymbolFlag.UnavailableOp);
-	lctx.callsUnavailableCopy = outer;
+	lctx.callsUnavailableCopy = outer.callsUnavailableCopy;
+	lctx.dropOwner = outer.dropOwner;
 }
 
 // --- Standard value-type object hook generator ---
@@ -1359,7 +1366,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
 	const releasesAfterHook = hookSym != null && hook == "destroy";
 	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
-	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
@@ -1431,7 +1437,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	} else if (held != null) {
 		buf.items.push(leftNoRef(s1, held, loc));
 	}
-	lctx.dropOwner = outerDropOwner;
 
 	const suffix = hookSuffix(hook);
 
