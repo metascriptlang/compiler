@@ -1058,7 +1058,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	instSym.nativeName = "";
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
-	stampItem(bodyCtx, instSym);
+	stampItem(host, instSym);
 	instSym.declNode = cloned;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
@@ -1337,7 +1337,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const substStruct = instanceStruct(structBase, mangledClass, params, dedup.types);
 	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
-	const instSym = newSym(bodyCtx, SymbolKind.Class, mangledClass, concreteClassType);
+	const instSym = newSym(host, SymbolKind.Class, mangledClass, concreteClassType);
 	instSym.state = SymbolState.Shaped;
 	instSym.symFlags = classSym.symFlags;
 	instSym.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
@@ -1434,7 +1434,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
-	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
+	const ctorSym = mintCtorRoutine(host, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
 	ctorSym.instanceArgs = types;

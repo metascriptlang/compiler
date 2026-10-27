@@ -1647,9 +1647,14 @@ export function boundRead(sym: Symbol, loc: SourceLocation): Node {
 }
 
 export function stampItem(ctx: CheckerContext, sym: Symbol): void {
-	ctx.nextItem += 1;
-	sym.itemModule = ctx.itemModule;
-	sym.item = ctx.nextItem;
+	const minter = mintingCtx(ctx);
+	minter.nextItem += 1;
+	sym.itemModule = minter.itemModule;
+	sym.item = minter.nextItem;
+}
+
+export function mintingCtx(ctx: CheckerContext): CheckerContext {
+	return ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 }
 
 export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symType: Type | null): Symbol {
@@ -1660,8 +1665,9 @@ export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symT
 
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
 	const key = modulePath + "\t" + mangle(name);
-	const next = ctx.disambTable.get(key) ?? 0;
-	ctx.disambTable.set(key, next + 1);
+	const table = mintingCtx(ctx).disambTable;
+	const next = table.get(key) ?? 0;
+	table.set(key, next + 1);
 	return next;
 }
 

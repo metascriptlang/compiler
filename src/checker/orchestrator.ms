@@ -278,6 +278,7 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { writeFile, ensureDir } from "std/fs";
 import { lookupSymbol } from "./symbol";
+import { ctorRoutineOf } from "./ctorRoutine";
 import { findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { stringType } from "./types";
 test "single file checked" {
@@ -483,6 +484,41 @@ test "a declaration carries its module's index and an ordinal unique in that mod
 	const first = itemsOfModuleB();
 	assert first != "";
 	assert itemsOfModuleB() == first;
+}
+
+const GENERIC_OWNER = "export function g<T>(x: T): T { function inner(): int32 { return 7; } const y = inner(); return x; }\nexport class Cell<T> { v: T; constructor(v: T) { function seed(): int32 { return 1; } const s = seed(); this.v = v; } get(): T { return this.v; } }";
+
+function ownerCountersAfter(importer: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: GENERIC_OWNER });
+	entries.push({ entryPath: "/src/a.ms", entrySource: importer });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const owner = lookupModuleCtx("/src/b.ms");
+	const user = lookupModuleCtx("/src/a.ms");
+	if (owner == null || user == null) return "unchecked";
+	let instances = 0;
+	for (const cache of [user.procInstCache, user.typeInstCache]) {
+		for (const list of cache.values()) {
+			for (const inst of list) {
+				instances += 1;
+				if (inst.sym.itemModule != user.itemModule) return `instance ${inst.sym.name} minted by module ${inst.sym.itemModule}, not its instantiator ${user.itemModule}`;
+				const ctor = ctorRoutineOf(inst.sym);
+				if (ctor != null && ctor.itemModule != user.itemModule) return `constructor ${ctor.name} minted by module ${ctor.itemModule}, not its instantiator ${user.itemModule}`;
+			}
+		}
+	}
+	return `${instances > 0 ? "instantiated" : "idle"} ${owner.nextItem} ${owner.disambTable.size}`;
+}
+
+test "instantiating a generic mints in the instantiating module and leaves the generic's module counters where its own check left them" {
+	const idle = ownerCountersAfter("import { g, Cell } from \"./b\";\nexport const n = 1;");
+	assert idle.startsWith("idle "), idle;
+	const counters = idle.slice(5, idle.length);
+	const forward = ownerCountersAfter("import { g, Cell } from \"./b\";\nconst a = g<int32>(1);\nconst b = g<string>(\"s\");\nconst c = new Cell<int32>(1).get();\nconst d = new Cell<string>(\"s\").get();");
+	assert forward == "instantiated " + counters, `${forward} vs ${idle}`;
+	const backward = ownerCountersAfter("import { g, Cell } from \"./b\";\nconst d = new Cell<string>(\"s\").get();\nconst c = new Cell<int32>(1).get();\nconst b = g<string>(\"s\");\nconst a = g<int32>(1);");
+	assert backward == "instantiated " + counters, `${backward} vs ${idle}`;
 }
 
 function fooModuleIdWith(firstModule: string): int32 {
