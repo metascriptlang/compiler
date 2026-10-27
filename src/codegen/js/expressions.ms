@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
-import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
+import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, isSimpleLvalue, jsDefaultValue, jsMovedFromValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
@@ -1128,11 +1128,22 @@ function checkedConversionTarget(node: Node): Symbol | null {
 	return instance;
 }
 
-// ===== Move Expression (no-op in JS) =====
+// ===== Move Expression =====
 
 export function emitMoveExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MoveExprData;
-	emitNode(gen, d.moveArg);
+	const arg = emittedNode(d.moveArg);
+	const zero = arg.kind == NodeKind.MemberExpr && isSimpleLvalue(arg) && arg.resolvedSym != null && arg.resolvedSym.symbolKind == SymbolKind.Property
+		? jsMovedFromValue(arg.nodeType) : "";
+	if (zero == "") {
+		emitNode(gen, d.moveArg);
+		return;
+	}
+	emit(gen, "[");
+	emitNode(gen, arg);
+	emit(gen, ", ");
+	emitNode(gen, arg);
+	emit(gen, ` = ${zero}][0]`);
 }
 
 // ===== Await Expression (fallback if not lowered) =====

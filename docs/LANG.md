@@ -2016,7 +2016,11 @@ take(move arr[0]);               // ok when `take` has a plain parameter: nothin
 ```
 
 Measured on C (msc b899f456). The JS backend does not check moves yet. It accepts the refused lines
-above, keeps the element, and does not empty a moved field (`h.f` still holds its value).
+above and keeps the element. A move out of a field with an identifier-rooted receiver (`h.f`, `h.g.f`)
+leaves what C leaves: a string `""`, a struct holding a string or array its zero value, a class ref or an
+array `null`; a number, boolean or plain-number struct keeps its value on both backends (corpus
+`fieldMoveLeavesZero`: `3 0 |`, `8 zz 0 []`, `7 7 5 5`, `true` on C, danger, JS and ESM). A receiver
+that is a call result is not emptied on JS.
 
 A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
 field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside

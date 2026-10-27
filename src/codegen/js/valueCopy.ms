@@ -18,6 +18,30 @@ export function jsDefaultValue(t: Type | null): string {
 	return defaultValueOf(t, []);
 }
 
+export function jsMovedFromValue(t: Type | null): string {
+	return holdsOwnedParts(t, []) ? defaultValueOf(t, []) : "";
+}
+
+function holdsOwnedParts(declared: Type | null, open: Type[]): boolean {
+	if (declared != null && isNullableShape([declared])) return true;
+	const t = valueCopyRepr(declared);
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct && isStructType(t) && !t.typeFlags.has(TypeFlag.IsMaybe)) {
+		if (open.includes(t)) return false;
+		open.push(t);
+		let owned = false;
+		for (const c of t.typeChildren) owned = owned || holdsOwnedParts(c, open);
+		open.pop();
+		return owned;
+	}
+	if (t.kind == TypeKind.SizedArray) return holdsOwnedParts(t.typeReturn, open);
+	return !(t.kind == TypeKind.Number || t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64
+		|| t.kind == TypeKind.Int8 || t.kind == TypeKind.Int16 || t.kind == TypeKind.Int32
+		|| t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32
+		|| t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64 || t.kind == TypeKind.BigInt
+		|| t.kind == TypeKind.Boolean || t.kind == TypeKind.Enum || t.kind == TypeKind.Char);
+}
+
 function defaultValueOf(declared: Type | null, open: Type[]): string {
 	if (declared != null && isNullableShape([declared])) return "null";
 	const t = valueCopyRepr(declared);
@@ -270,7 +294,7 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 		+ "if (d === null || d === void 0) return " + copy + "(v); " + body + "return d; }\n";
 }
 
-function isSimpleLvalue(n: Node): boolean {
+export function isSimpleLvalue(n: Node): boolean {
 	match (n.kind) {
 		NodeKind.Identifier => { return true; },
 		NodeKind.NumberLiteral => { return true; },
