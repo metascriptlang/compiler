@@ -2,7 +2,7 @@
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, modifiedTime, writeFile, removeAll } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { hashContent } from "../utils/contentHash";
 import { nowSeconds } from "../utils/stampDirs";
@@ -246,6 +246,8 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 		}
 		if (name == "FILES.sha256" || name == "IDENTITY" || names.has(name)) return Result.err(`native toolchain: duplicate or reserved manifest entry ${name}`);
 		names.add(name);
+		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
+		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
 	}
 	const tree = try validateBundleTree(root, "", names);
 	const suffix = platform == "windows" ? ".exe" : "";
@@ -266,9 +268,7 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 }
 
 // Taken before verification, so a file that changes while it is hashed fails
-// the next comparison instead of sealing content nobody checked. The stamp
-// follows symlinks, so a payload swapped for a link moves its device and inode
-// and sends the bundle back through containment. A file written
+// the next comparison instead of sealing content nobody checked. A file written
 // within the settle window seals nothing: a coarse-clock filesystem can give a
 // second same-size write in that window the same change stamp.
 function bundleSeal(root: string, identity: string, lines: string[]): string {
@@ -323,6 +323,34 @@ test "a bundle seal moves when a payload is rewritten to the same size under a p
 	assert removeAll(root).ok;
 }
 
+test "a matching bundle seal never skips payload containment" {
+	if (platform == "windows") return;
+	const root = sealProbe();
+	assert root != "";
+	const real = realpath(root).replaceAll("\\", "/");
+	const identity = SEAL_LINES[0].slice(0, 64);
+	const outside = `${root}-outside`;
+	const stamps = `${root}-stamps`;
+	assert writeFile(join(root, "HOST"), `${hostKey()}\n`).ok;
+	assert writeFile(join(root, "VERSION"), "1.2.3\n").ok;
+	assert writeFile(join(root, "IDENTITY"), `${identity}\n`).ok;
+	assert writeFile(join(root, "FILES.sha256"), SEAL_LINES.join("\n")).ok;
+	assert writeFile(outside, "first").ok;
+	assert remove(join(root, "bin/clang")).ok;
+	assert symlink(outside, join(root, "bin/clang")).ok;
+	assert backdate(root, ["HOST", "VERSION", "IDENTITY", "FILES.sha256", "bin/clang"]);
+	const seal = bundleSeal(real, identity, SEAL_LINES);
+	assert seal != "";
+	assert ensureDir(stamps).ok;
+	assert writeFile(`${stamps}/${hashContent(real)}.bundle`, seal).ok;
+	const validated = validateNativeToolchain(root, stamps);
+	assert !validated.ok;
+	assert validated.error.contains("escaping payload bin/clang");
+	assert removeAll(root).ok;
+	assert removeAll(stamps).ok;
+	assert remove(outside).ok;
+}
+
 test "a bundle with a missing or freshly written payload seals nothing" {
 	if (platform == "windows") return;
 	const root = sealProbe();
@@ -336,11 +364,6 @@ test "a bundle with a missing or freshly written payload seals nothing" {
 }
 
 function verifyBundlePayload(root: string, identity: string, version: string, lines: string[]): Result<void, string> {
-	for (let i = 0; i < lines.length - 1; i++) {
-		const name = lines[i].slice(66);
-		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
-		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
-	}
 	const actualIdentity = try fileSha256(join(root, "FILES.sha256"));
 	if (actualIdentity != identity) return Result.err("native toolchain: FILES.sha256 identity mismatch");
 	if (platform == "windows") {
