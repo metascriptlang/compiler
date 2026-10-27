@@ -212,6 +212,7 @@ extern "C" {
 
 #if defined(__APPLE__)
 #include <crt_externs.h>
+#include <mach-o/dyld.h>
 #endif
 
 /**
@@ -2081,6 +2082,41 @@ static inline msString msProcessArch(void) {
 	return msStringFromCStr("riscv64");
 #else
 	return msStringFromCStr("other");
+#endif
+}
+
+/**
+ * Absolute path of the running executable, as the OS reports it (uv_exepath):
+ * independent of how argv[0] was spelled. "" where the OS has no answer.
+ */
+static inline msString msProcessExecPath(void) {
+#if defined(_WIN32)
+	wchar_t wbuf[32768];
+	DWORD n = GetModuleFileNameW(NULL, wbuf, 32768);
+	if (n == 0 || n >= 32768) return MS_EMPTY_STRING;
+	int needed = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, NULL, 0, NULL, NULL);
+	if (needed <= 0) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc(needed);
+	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, needed, NULL, NULL);
+	msString result = msStringFromCStr(buf);
+	free(buf);
+	return result;
+#elif defined(__APPLE__)
+	uint32_t size = 0;
+	_NSGetExecutablePath(NULL, &size);
+	char* buf = (char*)msMemAlloc(size + 1);
+	if (_NSGetExecutablePath(buf, &size) != 0) { free(buf); return MS_EMPTY_STRING; }
+	msString result = msStringFromCStr(buf);
+	free(buf);
+	return result;
+#elif defined(__linux__)
+	char buf[4096];
+	ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+	if (n <= 0) return MS_EMPTY_STRING;
+	buf[n] = '\0';
+	return msStringFromCStr(buf);
+#else
+	return MS_EMPTY_STRING;
 #endif
 }
 

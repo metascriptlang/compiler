@@ -64,7 +64,7 @@ import {
 	mkdir, rmdir, remove, rename, symlink, readDir,
 	ensureDir, removeAll, readLines, writeLines, copyFile,
 } from "std/fs";
-import { cwd, platform, arch, env, exec, argv, execFile, execFileResult } from "std/process";
+import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
@@ -371,6 +371,10 @@ function _bridgeMsProcessPlatform(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcessArch(args: RaiserValue[]): RaiserValue {
 	return boxString(arch);
+}
+
+function _bridgeMsProcessExecPath(args: RaiserValue[]): RaiserValue {
+	return boxString(execPath);
 }
 
 function _bridgeMsProcessGetEnv(args: RaiserValue[]): RaiserValue {
@@ -1290,6 +1294,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);
 	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform);
 	registerHostFn("msProcessArch",      _bridgeMsProcessArch);
+	registerHostFn("msProcessExecPath",  _bridgeMsProcessExecPath);
 	registerHostFn("msProcessGetEnv",    _bridgeMsProcessGetEnv);
 	// process spawn/exec
 	registerHostFn("msProcessSpawnSync",    _bridgeMsProcessSpawnSync);

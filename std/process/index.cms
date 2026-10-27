@@ -39,6 +39,7 @@ extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
 extern function msProcessPlatform(): string;
 extern function msProcessArch(): string;
+extern function msProcessExecPath(): string;
 
 const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
 
@@ -58,6 +59,9 @@ function buildArgv(): string[] {
 }
 
 export const argv: string[] = buildArgv();
+
+// The running executable as the OS reports it, however argv[0] was spelled; "" where the OS has no answer.
+export const execPath: string = msProcessExecPath();
 
 // =============================================================================
 // Process control

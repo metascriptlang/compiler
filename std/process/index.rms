@@ -18,6 +18,7 @@ extern function msProcessGetEnv(name: string): string from "msProcessGetEnv";
 extern function msProcessSetEnv(name: string, value: string): number from "msProcessSetEnv";
 extern function msProcessUnsetEnv(name: string): number from "msProcessUnsetEnv";
 extern function msProcessArgv(): string[] from "msProcessArgv";
+extern function msProcessExecPath(): string from "msProcessExecPath";
 extern function msProcessSpawnSync(command: string): string from "msProcessSpawnSync";
 extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string): string from "msProcessSpawnSyncArgv";
 extern function msProcessExecFile(path: string, args: string[]): number from "msProcessExecFile";
@@ -32,6 +33,7 @@ extern function msProcSpawnGetErrno(): int32 from "msProcSpawnGetErrno";
 export extern function exit(code: number): never;
 
 export const argv: string[] = msProcessArgv();
+export const execPath: string = msProcessExecPath();
 
 export function cwd(): string {
 	return msProcessCwd();
