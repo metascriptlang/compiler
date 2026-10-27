@@ -15,7 +15,7 @@
 
 import { env, platform, argv, cwd, execFileCapture, execFileResult, findOnPath } from "std/process";
 import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir, realpath } from "std/fs";
-import { join, dirname, normalize, isAbsolute } from "std/fs/path";
+import { join, dirname, basename, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
@@ -611,7 +611,11 @@ function absoluteSlashed(path: string): string {
 }
 
 function foldName(name: string): string {
-	return name.toLowerCase();
+	for (let i = 0; i < name.length; i++) {
+		const code = name.charCodeAt(i);
+		if ((code >= 65 && code <= 90) || code > 127) return name.toLowerCase();
+	}
+	return name;
 }
 
 function dirNames(dir: string): HashSet<string> {
@@ -756,17 +760,44 @@ function existingCandidate(dir: string, name: string, full: string, spelledPrefi
 	if (tree.get(full) != null && knownDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, spelled, tree, rels, found, walked);
 }
 
-function presenceSignature(searched: string[], rels: string[], walked: string[]): string {
-	const tree = relTree(rels);
+struct DirPresence {
+	found: string;
+	walked: string[];
+}
+
+struct RememberedPresence {
+	presence: string;
+	dirs: HashMap<string, DirPresence>;
+}
+
+const UNSETTLED_STAMP = "unsettled";
+
+function dirPresence(dir: string, tree: HashMap<string, string[]>, folded: HashSet<string>): DirPresence {
+	const found: string[] = [];
+	const walked: string[] = [];
+	existingCandidates(dir, "", "", tree, folded, found, walked);
+	found.sort();
+	return { found: found.join("|"), walked };
+}
+
+function signatureLine(dir: string, found: string): string {
+	return found == "" ? "" : `s\t${dir}\t${found}\n`;
+}
+
+function foldedRels(rels: string[]): HashSet<string> {
 	const folded = new HashSet<string>();
 	for (const rel of rels) folded.add(foldName(rel));
+	return folded;
+}
+
+function presenceSignature(searched: string[], rels: string[], walked: string[]): string {
+	const tree = relTree(rels);
+	const folded = foldedRels(rels);
 	let signature = "";
 	for (const dir of searched) {
-		const found: string[] = [];
-		existingCandidates(dir, "", "", tree, folded, found, walked);
-		if (found.length == 0) continue;
-		found.sort();
-		signature = `${signature}s\t${dir}\t${found.join("|")}\n`;
+		const part = dirPresence(dir, tree, folded);
+		for (const path of part.walked) walked.push(path);
+		signature = `${signature}${signatureLine(dir, part.found)}`;
 	}
 	return signature;
 }
@@ -1052,38 +1083,70 @@ function queryPresence(depFile: string): string {
 	const known = _presenceByRecord.get(text);
 	if (known != null) return known;
 	const key = hashContent(text);
-	let presence = rememberedPresence(depFile, key);
-	if (presence == "") presence = presenceOfRecord(depFile, text, key);
+	const remembered = rememberedPresence(depFile, key);
+	let presence = remembered.presence;
+	if (presence == "") presence = presenceOfRecord(depFile, text, key, remembered.dirs);
 	_presenceByRecord.set(text, presence);
 	return presence;
 }
 
-function rememberedPresence(depFile: string, key: string): string {
-	const lines = (try readFile(`${depFile}.qs`) catch "").split("\n");
-	if (lines.length < 2 || lines[0] != key) return "";
-	for (let i = 2; i < lines.length; i++) {
-		const line = lines[i];
+function presenceMemo(depFile: string): string {
+	return `${dirname(depFile)}/presence/${basename(depFile)}.qs`;
+}
+
+function rememberedPresence(depFile: string, key: string): RememberedPresence {
+	const dirs = new HashMap<string, DirPresence>();
+	const lines = (try readFile(presenceMemo(depFile)) catch "").split("\n");
+	if (lines.length < 2 || lines[0] != key) return { presence: "", dirs };
+	let allCurrent = true;
+	let open = false;
+	let fresh = true;
+	let dir = "";
+	let found = "";
+	let walked: string[] = [];
+	for (let i = 2; i <= lines.length; i++) {
+		const line = i < lines.length ? lines[i] : "p";
 		if (line == "") continue;
-		const tab = line.lastIndexOf("\t");
-		if (tab < 0 || dirStamp(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return "";
+		const tab = line.indexOf("\t", 0);
+		const last = line.lastIndexOf("\t");
+		const kind = tab < 0 ? line : line.slice(0, tab);
+		if (kind == "w" && last > tab) {
+			const path = line.slice(tab + 1, last);
+			if (dirStamp(path) != line.slice(last + 1, line.length)) {
+				fresh = false;
+				allCurrent = false;
+			}
+			walked.push(path);
+			continue;
+		}
+		if (open && fresh) dirs.set(dir, { found, walked });
+		open = false;
+		fresh = true;
+		walked = [];
+		if (kind == "s" && last > tab) {
+			open = true;
+			dir = line.slice(tab + 1, last);
+			found = line.slice(last + 1, line.length);
+		} else if (kind != "p") {
+			return { presence: "", dirs: new HashMap<string, DirPresence>() };
+		}
 	}
-	return lines[1];
+	return { presence: allCurrent ? lines[1] : "", dirs };
 }
 
-function rememberPresence(depFile: string, key: string, presence: string, walked: string[]): void {
-	let text = `${key}\n${presence}\n`;
+function stampLines(walked: string[]): string {
+	let text = "";
 	const seen = new HashSet<string>();
-	for (const dir of walked) {
-		if (seen.has(dir)) continue;
-		seen.add(dir);
-		const stamp = dirStamp(dir);
-		if (stamp == "") return;
-		text = `${text}${dir}\t${stamp}\n`;
+	for (const path of walked) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		const stamp = dirStamp(path);
+		text = `${text}w\t${path}\t${stamp == "" ? UNSETTLED_STAMP : stamp}\n`;
 	}
-	atomicWriteFile(`${depFile}.qs`, text);
+	return text;
 }
 
-function presenceOfRecord(depFile: string, text: string, key: string): string {
+function presenceOfRecord(depFile: string, text: string, key: string, remembered: HashMap<string, DirPresence>): string {
 	const lines = text.split("\n");
 	if (lines[0] != QUERY_RECORD_FORMAT) return HEADER_QUERY_UNRECORDED;
 	const record: QueryRecord = { dirs: [], rels: [], paths: [], bounded: true };
@@ -1101,9 +1164,25 @@ function presenceOfRecord(depFile: string, text: string, key: string): string {
 			_ => { return HEADER_QUERY_UNRECORDED; },
 		}
 	}
-	const walked: string[] = [];
-	const presence = hashContent(presenceText(record, walked));
-	rememberPresence(depFile, key, presence, walked);
+	const walks = record.dirs.some((dir) => !remembered.has(dir));
+	const tree = walks ? relTree(record.rels) : new HashMap<string, string[]>();
+	const folded = walks ? foldedRels(record.rels) : new HashSet<string>();
+	let signature = "";
+	let memo = "";
+	for (const dir of record.dirs) {
+		const part = remembered.get(dir) ?? dirPresence(dir, tree, folded);
+		signature = `${signature}${signatureLine(dir, part.found)}`;
+		memo = `${memo}s\t${dir}\t${part.found}\n${stampLines(part.walked)}`;
+	}
+	const parents: string[] = [];
+	for (const path of record.paths) {
+		parents.push(dirname(path));
+		signature = `${signature}e\t${path}\t${exists(path) ? 1 : 0}\n`;
+	}
+	const presence = hashContent(signature);
+	const memoFile = presenceMemo(depFile);
+	ensureDir(dirname(memoFile));
+	atomicWriteFile(memoFile, `${key}\n${presence}\n${memo}p\n${stampLines(parents)}`);
 	return presence;
 }
 
@@ -2126,7 +2205,7 @@ test "a backdated dependency keeps the header manifest and the project record fr
 		assert writeFile(depFile, `native: ${header}\n`).ok;
 		assert writeFile(out, "output").ok;
 		_buildStartedSeconds = nowSeconds() - 100;
-		assert storeManifest(depFile, `${dir}/entry.c`, [], []) == "";
+		assert storeManifest(depFile, `${dir}/entry.c`, { dirs: [], frameworks: [], complete: true }, []) == "";
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
 		_buildStartedSeconds = 0;
