@@ -45,6 +45,11 @@ Lanes, `msc test src/index.ms`, the tier indexes and corpus sweeps run only in t
 
 ### Edit loop
 
+When a check changes cache state or compares reuse, give it a fresh `MSC_CACHE_DIR` and a
+fresh `HOME` (or `MSC_NO_GLOBAL_CACHE=1`) as [BUILD-CACHE.md](../../docs/BUILD-CACHE.md)
+describes, because a fresh working directory alone still inherits an exported `MSC_CACHE_DIR`
+and the shared global store. Keep the perf runner's cold controls cold.
+
 **Check the changed contract with its smallest real consumer, in under 60 s per check.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. You choose the checks from the diff, and a wrong choice is accepted, because the land gate runs every lane once and catches what the choice missed. When the smallest consumer cannot finish in 60 s, run it once and add it with its measurement to the over-budget list below.
 
 Build the candidate once per compiler edit: `msc build src/index.ms --danger --lto=off --output=msc`. It takes 2–2.5 min on 8 cores and is the only step allowed over the budget. Then run one check per changed contract:

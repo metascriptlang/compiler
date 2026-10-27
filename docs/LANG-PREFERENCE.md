@@ -1930,6 +1930,10 @@ when (coverageExample) { console.log("configured"); }
 settings include entry/output, build target/toolchain, `cc`, `deps`, fmt/LSP options,
 `globalImports`, and named `modulePass` transforms. The public configuration type and old prose
 may lag loader fields; do not assume arbitrary root/alias/search-path options work.
+Cache directories and sharing are job settings, not `build.ms` fields: give each concurrent job
+its own local cache and let worktrees share through the global store
+([BUILD-CACHE.md](BUILD-CACHE.md)).
+
 A modulePass is a build-wide macro transform with an explicit AST contract, not an import resolver;
 it must not rewrite import structure. Additive global imports do not override local/explicit names.
 
