@@ -2,9 +2,8 @@
 // Implementation logic follows Biome/Prettier standards (2026).
 
 import { Node, NodeKind, NodeFlag, makeLoc } from "../../../ast/node";
-import { Token, TokenKind } from "../../../lexer/token";
 import { lex } from "../../../lexer/lexer";
-import { Comments, decorateComments, decorateAround, adjacentComments, assertAllFormatted } from "../comments";
+import { Comments, decorateComments, assertAllFormatted, assertNodeFormatted } from "../comments";
 import { useComments, withComments, markWithin } from "./commentDocs";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup } from "../doc";
@@ -45,36 +44,28 @@ import {
 let unprintedKinds: string[] = [];
 
 export function formatNode(node: Node, options: FormatOptions): Result<string, string> {
-	return formatNodeAt(node, options, "");
+	const placed = try decorateSource(node, options.source);
+	return formatNodeAt(node, options, "", placed);
 }
 
-export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string): Result<string, string> {
+export function decorateSource(root: Node, source: string): Result<Comments, string> {
+	if (source == "") return Result.ok(new Comments());
+	const lexed = lex(source);
+	if (!lexed.ok) return Result.err("fmt cannot lex the source: " + lexed.error);
+	return decorateComments(root, lexed.value);
+}
+
+export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string, placed: Comments): Result<string, string> {
 	unprintedKinds = [];
 	indexSourceLines(options.source);
-	const placed = try placeComments(node, options.source);
 	useComments(placed);
 	const out = formatDocAt(printNode(node, options), options, baseIndent);
 	if (unprintedKinds.length > 0) {
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
 	}
-	try assertAllFormatted(placed);
+	if (node.kind == NodeKind.Program || node.location.endLine == 0) try placed.assertAllFormatted();
+	else try placed.assertNodeFormatted(node);
 	return Result.ok(out);
-}
-
-function placeComments(node: Node, source: string): Result<Comments, string> {
-	if (source == "") return Result.ok(new Comments());
-	const lexed = lex(source);
-	if (!lexed.ok) return Result.err("fmt cannot lex the source: " + lexed.error);
-	if (node.kind == NodeKind.Program || node.location.endLine == 0) return decorateComments(node, lexed.value);
-	const loc = node.location;
-	const adjacent = adjacentComments(lexed.value, loc);
-	const kept: Token[] = [];
-	for (const t of lexed.value) {
-		const inside = !(t.line < loc.line || (t.line == loc.line && t.column < loc.column)
-			|| t.endLine > loc.endLine || (t.endLine == loc.endLine && t.endColumn > loc.endColumn));
-		if (t.kind != TokenKind.Comment || inside || adjacent.includes(t)) kept.push(t);
-	}
-	return decorateAround(node, kept);
 }
 
 function printVerbatimBlock(node: Node, options: FormatOptions): Doc {

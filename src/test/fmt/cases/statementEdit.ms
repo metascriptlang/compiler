@@ -66,3 +66,13 @@ test "fmt edit: the statement's own comments are rewritten once, not duplicated"
 test "fmt edit: a position outside every statement finds none" {
 	assert stmtKindAt("const a = 1;\n\n", 2, 1) == "none";
 }
+
+test "fmt edit: a range over a statement keeps its leading and trailing comments once" {
+	const source = "const a = 1;\n// lead\nlet   b=2; // tail\nconst c = 3;\n";
+	assert reformatAt(source, 3, 3) == "const a = 1;\n// lead\nlet b = 2; // tail\nconst c = 3;\n";
+}
+
+test "fmt edit: the same holds one block deeper" {
+	const source = "function f(): void {\n\tconst a = 1;\n\t// lead\n\tlet   b=2; // tail\n\tconst c = 3;\n}\n";
+	assert reformatAt(source, 4, 3) == "function f(): void {\n\tconst a = 1;\n\t// lead\n\tlet b = 2; // tail\n\tconst c = 3;\n}\n";
+}

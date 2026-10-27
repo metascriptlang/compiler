@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, SourceLocation } from "../../ast/node";
+import { Node, NodeKind, NodeFlag } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { Token, TokenKind } from "../../lexer/token";
 
@@ -278,37 +278,6 @@ export function decorateComments(program: Node, tokens: Token[]): Result<Comment
 	return decorateFrom(buildSpan(program), program, tokens);
 }
 
-export function decorateAround(node: Node, tokens: Token[]): Result<Comments, string> {
-	const root = new Span(node);
-	root.children.push(buildSpan(node));
-	return decorateFrom(root, node, tokens);
-}
-
-export function adjacentComments(tokens: Token[], loc: SourceLocation): Token[] {
-	const start = posKey(loc.line, loc.column);
-	const end = posKey(loc.endLine, loc.endColumn);
-	let first = -1;
-	let last = -1;
-	for (let i = 0; i < tokens.length; i += 1) {
-		const t = tokens[i];
-		if (t.kind == TokenKind.Comment || t.kind == TokenKind.Eof) continue;
-		if (first < 0 && posKey(t.line, t.column) >= start) first = i;
-		if (posKey(t.line, t.column) >= start && posKey(t.endLine, t.endColumn) <= end) last = i;
-	}
-	const found: Token[] = [];
-	if (first < 0 || last < first) return found;
-	let j = first - 1;
-	while (j >= 0 && tokens[j].kind == TokenKind.Comment) j -= 1;
-	const priorLine = j >= 0 ? tokens[j].endLine : 0;
-	for (let i = j + 1; i < first; i += 1) {
-		if (tokens[i].line > priorLine) found.push(tokens[i]);
-	}
-	for (let i = last + 1; i < tokens.length && tokens[i].kind == TokenKind.Comment; i += 1) {
-		if (tokens[i].line == tokens[last].endLine) found.push(tokens[i]);
-	}
-	return found;
-}
-
 function decorateFrom(root: Span, program: Node, tokens: Token[]): Result<Comments, string> {
 	const comments = new Comments();
 	const found = findChains(tokens);
@@ -386,8 +355,20 @@ export function markFormatted(this comment: SourceComment): void {
 }
 
 export function assertAllFormatted(this comments: Comments): Result<void, string> {
+	return reportUnformatted(comments.all);
+}
+
+export function assertNodeFormatted(this comments: Comments, node: Node): Result<void, string> {
+	const loc = node.location;
+	const missed = comments.unformattedWithin(loc.line, loc.column, loc.endLine, loc.endColumn);
+	for (const c of comments.leading(node)) if (!c.formatted) missed.push(c);
+	for (const c of comments.trailing(node)) if (!c.formatted) missed.push(c);
+	return reportUnformatted(missed);
+}
+
+function reportUnformatted(list: SourceComment[]): Result<void, string> {
 	const missed: string[] = [];
-	for (const c of comments.all) {
+	for (const c of list) {
 		if (!c.formatted) missed.push(`${c.line.toString()}:${c.column.toString()}`);
 	}
 	if (missed.length == 0) return Result.ok(null);
