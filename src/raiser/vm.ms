@@ -3693,7 +3693,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmAssignInPlace(vm, ia, ib, func.copyPlans, ic);
 		},
 		RaiserOpcode.RcHeld => {
-			vm.regs.slots[vm.base + ib] = rcCountOf(vm.arrayHeap, vm.objectHeap, innerHandle(vm, vm.regs.slots[vm.base + ia]));
+			vm.regs.slots[absOf(vm, ib)] = rcCountOf(vm.arrayHeap, vm.objectHeap, innerHandle(vm, vm.regs.slots[vm.base + ia]));
 		},
 		RaiserOpcode.RcKeptCheck => {
 			vmRcKeptCheck(vm, ia, ib);
@@ -3963,7 +3963,7 @@ function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
 
 function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 	const handle = innerHandle(vm, vm.regs.slots[vm.base + ia]);
-	if (rcCountOf(vm.arrayHeap, vm.objectHeap, handle) <= vm.regs.slots[vm.base + ib]) return;
+	if (rcCountOf(vm.arrayHeap, vm.objectHeap, handle) <= vm.regs.slots[absOf(vm, ib)]) return;
 	const name = handleKind(handle) == RaiserValueKind.Object ? heapObjectClass(vm.objectHeap, handle).name : "cell";
 	vmError(vm, `onDestroy kept a reference to the ${name} it destroys; that reference would dangle once the object is freed`);
 }
