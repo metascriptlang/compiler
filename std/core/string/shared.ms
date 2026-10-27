@@ -108,10 +108,14 @@ function isCombiningAt(sb: Readonly<Span<uint8>>, start: int32, width: int32): b
 	return (c >= 0x1AB0 && c <= 0x1AFF) || (c >= 0x1DC0 && c <= 0x1DFF) || (c >= 0x20D0 && c <= 0x20FF) || (c >= 0xFE20 && c <= 0xFE2F);
 }
 
+@inline
 export function equalsIgnoreCase(this s: string, other: string): boolean {
+	return s.asBytes().length == other.asBytes().length && sameIgnoringCase(s, other);
+}
+
+function sameIgnoringCase(s: string, other: string): boolean {
 	const ab = s.asBytes();
 	const bb = other.asBytes();
-	if (ab.length != bb.length) return false;
 	let i = 0;
 	while (i < ab.length) {
 		if (asciiLower(ab[i] as int32) != asciiLower(bb[i] as int32)) return false;
