@@ -460,14 +460,28 @@ function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
 // ===== Define + Error Helper =====
 
 export function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
-	const adopted = ctx.adoptedDecls.get(node);
-	const sym = adopted ?? makeSymbol(name, kind, symType, mutable);
-	if (adopted != null) {
-		ctx.adoptedDecls.delete(node);
-		initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
-	}
+	const sym = takeSymbol(ctx, node, name, kind, symType, mutable);
 	stampItem(ctx, sym);
 	return sym;
+}
+
+function takeSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
+	const adopted = ctx.adoptedDecls.get(node);
+	if (adopted == null) return makeSymbol(name, kind, symType, mutable);
+	ctx.adoptedDecls.delete(node);
+	if (adopted.declNode != null && adopted.symbolKind != kind) {
+		throw new Error(`internal: adoption: '${adopted.name}' is a symbol of kind ${adopted.symbolKind as int32} and its declaration is now kind ${kind as int32}; a kind change is a new symbol`);
+	}
+	initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
+	adopted.instanceArgs = null;
+	adopted.instanceParams = null;
+	adopted.ctorRoutine = null;
+	return adopted;
+}
+
+function resetViews(t: Type): void {
+	t.readonlyView = null;
+	t.mutableView = null;
 }
 
 function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
@@ -476,6 +490,7 @@ function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
 	const prior = adopted.symbolType;
 	if (fresh.kind != TypeKind.Inferred && prior.kind != fresh.kind) return fresh;
 	assignType(prior, fresh);
+	resetViews(prior);
 	return prior;
 }
 
@@ -488,6 +503,8 @@ function retainedRef(ctx: CheckerContext, node: Node, inner: Type, ref: Type): T
 	assignType(priorInner, inner);
 	assignType(prior, ref);
 	prior.typeReturn = priorInner;
+	resetViews(prior);
+	resetViews(priorInner);
 	return prior;
 }
 
@@ -730,7 +747,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
+				const staticSym = takeSymbol(ctx, member, d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				member.resolvedSym = staticSym;
@@ -803,7 +820,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
+				const staticSym = takeSymbol(ctx, member, d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				member.resolvedSym = staticSym;
@@ -1012,6 +1029,7 @@ function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, is
 		sym.nativeName = d.nativeName != "" ? formatExternName(ctx, "declaration", d.interfaceName, d.nativeName, node.location) : d.interfaceName;
 	}
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 }
 
 export function collectInterface(ctx: CheckerContext, node: Node): void {
@@ -1156,6 +1174,7 @@ export function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.aliasName, SymbolKind.TypeAlias, aliasType, false);
 	aliasType.sym = sym;
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 }
 
 export function collectExtern(ctx: CheckerContext, node: Node): void {
@@ -1190,6 +1209,7 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		sym.nativeName = d.externName;
 	}
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 	if (cTag != "") ctx.exportRegistry.cTags.set(cTag, sym);
 }
 
