@@ -57,6 +57,29 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-10-27 — the check stops cloning the parse tree
+
+Mac `sample` of `check src/index.ms` on `e5c088569`: the per-file parse tree clone was 15.4%
+(a third of it the cycle collector triggered by its allocations), the collector 13.3% overall
+(owned by the collector work, not here), `checkViewBorrows` 3.6% (four pre-walks per body).
+Three fixes, landed as `58b52d63b`: a db that is not kept (`msc check`) checks the parse tree
+itself; a clone no longer registers each fresh node as a cycle root; `checkUnit` walks a body
+once. Emitted C of `src/index.ms` is identical (0 of 824 files differ).
+
+lc-1, both two-stage builds with `--mm=drc --danger --lto=off --cc=clang`, interleaved, wall:
+
+| cell | rounds | main `e5c088569` | cand |
+|---|---|---|---|
+| `check src/index.ms` | 7 / 7 | 19.04 s [17.14–19.63] | 15.58 s [14.96–17.10] |
+| emit-only | 5 / 5 | 66.38 s | 65.05 s (ranges overlap) |
+
+- `check` is 18% faster; emit-only does not move beyond noise.
+- Also skipping the clone inside `msc build` took `phase.graph` from 16.6 to 14.9 s under
+  `MSC_FLOWS`, but the collector's work moved into later passes (`b.raises`, `lowerLambda`,
+  `lowerActorHandles`) and emit-only stayed at 62.68 → 62.70 s (5 rounds), so it was not kept.
+  A faster build needs the collector's own cost to fall first.
+- Not verified: Windows; the LSP path (a kept db still clones).
+
 ## Measured 2026-10-22 — four more front-end fixes
 
 Same methods as 2026-10-21 below. All four leave emitted C of `src/index.ms` identical
