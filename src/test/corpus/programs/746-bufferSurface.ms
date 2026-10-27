@@ -1,9 +1,7 @@
 // @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: buffer surface ok
 
-// Pins the Buffer byte-container surface as it behaves on the C backend
-// (Buffer = string alias). The js backend must match these outputs exactly
-// once std/core/buffer/index.jms lands.
+// Pins the Buffer byte-container surface, the same on C and JS.
 
 function check(name: string, ok: boolean): boolean {
 	if (!ok) { console.log("FAIL " + name); }

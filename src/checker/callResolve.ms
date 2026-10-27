@@ -5641,7 +5641,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
 	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
-	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
+	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = uint8[]`.
 	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object, d.property);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
 	if (!isStaticClassAccess && isUnresolvedType(propType) && fieldOwnerSym != null) {

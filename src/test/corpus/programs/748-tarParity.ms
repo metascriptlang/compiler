@@ -3,8 +3,7 @@
 
 // Pins the USTAR bytes produced by writeTar on the C backend: total layout,
 // header field placement (magic/typeflag/name/size), data offset and the
-// checksum arithmetic recomputed from raw bytes. The js backend must match
-// once std/core/buffer/index.jms lands.
+// checksum arithmetic recomputed from raw bytes.
 
 import { writeTar, TarEntry, DEFAULT_FILE_MODE } from "std/archive/tar";
 import { Buffer } from "std/core/buffer";

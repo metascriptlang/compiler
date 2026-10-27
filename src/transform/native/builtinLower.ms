@@ -332,8 +332,8 @@ function textFn(param: Symbol, pt: Type, body: Node, loc: SourceLocation, ctx: T
 }
 
 // The reverse direction (AsString) is NOT intercepted: a borrow escaping the
-// array's scope dangles (bug065), so the call falls through to the plain extern
-// msAsString — a copying kernel (cstrToNimstr shape) returning a fresh owned string.
+// array's scope dangles (bug065), so the call falls through to std `asString`, which
+// decodes into a fresh owned string.
 function rewriteZeroCopyBridge(node: Node): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
