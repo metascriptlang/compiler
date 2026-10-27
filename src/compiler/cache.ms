@@ -222,6 +222,10 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_queryRecordDeps = [];
 	_queryRecordDepSet = new HashSet<string>();
 	_dirNames = new HashMap<string, HashSet<string>>();
+	_presenceByRecord = new HashMap<string, string>();
+	_subdirs = new HashMap<string, boolean>();
+	_dirEntries = new HashMap<string, string[]>();
+	_dirStamps = new HashMap<string, string>();
 	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
 }
@@ -531,6 +535,10 @@ struct StoreHit {
 let _ccIdentity = "";
 let _ccIdentityName = "";
 let _dirNames: HashMap<string, HashSet<string>> = new HashMap<string, HashSet<string>>();
+let _presenceByRecord: HashMap<string, string> = new HashMap<string, string>();
+let _subdirs: HashMap<string, boolean> = new HashMap<string, boolean>();
+let _dirEntries: HashMap<string, string[]> = new HashMap<string, string[]>();
+let _dirStamps: HashMap<string, string> = new HashMap<string, string>();
 
 function storeRoot(): string {
 	const root = globalCacheRoot();
@@ -594,14 +602,36 @@ function foldName(name: string): string {
 function dirNames(dir: string): HashSet<string> {
 	const known = _dirNames.get(dir);
 	if (known != null) return known;
+	dirStamp(dir);
 	const names = new HashSet<string>();
+	const entries: string[] = [];
 	if (exists(dir)) {
 		for (const entry of readDir(dir)) {
-			names.add(foldName(entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry));
+			const name = foldName(entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry);
+			if (names.has(name)) continue;
+			names.add(name);
+			entries.push(name);
 		}
 	}
 	_dirNames.set(dir, names);
+	_dirEntries.set(dir, entries);
 	return names;
+}
+
+function dirStamp(dir: string): string {
+	const known = _dirStamps.get(dir);
+	if (known != null) return known;
+	const stamp = !exists(dir) ? "absent" : settled(dir) ? changeStamp(dir) : "";
+	_dirStamps.set(dir, stamp);
+	return stamp;
+}
+
+function knownDir(path: string): boolean {
+	const known = _subdirs.get(path);
+	if (known != null) return known;
+	const found = isDir(path);
+	_subdirs.set(path, found);
+	return found;
 }
 
 function underAnyDir(path: string, dirs: string[]): boolean {
@@ -628,48 +658,63 @@ function headerRels(path: string, dirs: string[]): string[] {
 	return rels;
 }
 
-function relTree(rels: string[]): HashMap<string, HashSet<string>> {
-	const tree = new HashMap<string, HashSet<string>>();
+function relTree(rels: string[]): HashMap<string, string[]> {
+	const tree = new HashMap<string, string[]>();
+	const placed = new HashSet<string>();
 	for (const rel of rels) {
 		let prefix = "";
 		let rest = rel;
 		while (rest != "") {
 			const slash = rest.indexOf("/");
 			const head = foldName(slash < 0 ? rest : rest.slice(0, slash));
-			let children = tree.get(prefix);
-			if (children == null) {
-				children = new HashSet<string>();
-				tree.set(prefix, children);
+			const full = prefix == "" ? head : `${prefix}/${head}`;
+			if (!placed.has(full)) {
+				placed.add(full);
+				let children = tree.get(prefix);
+				if (children == null) {
+					children = [];
+					tree.set(prefix, children);
+				}
+				children.push(head);
 			}
-			children.add(head);
-			prefix = prefix == "" ? head : `${prefix}/${head}`;
+			prefix = full;
 			rest = slash < 0 ? "" : rest.slice(slash + 1, rest.length);
 		}
 	}
 	return tree;
 }
 
-function existingCandidates(dir: string, prefix: string, tree: HashMap<string, HashSet<string>>, rels: HashSet<string>, found: string[]): void {
+function existingCandidates(dir: string, prefix: string, tree: HashMap<string, string[]>, rels: HashSet<string>, found: string[], walked: string[]): void {
 	const wanted = tree.get(prefix);
 	if (wanted == null) return;
+	walked.push(dir);
 	const names = dirNames(dir);
-	for (const name of wanted) {
-		if (names.has(name)) {
+	const entries = _dirEntries.get(dir) ?? [];
+	if (entries.length < wanted.length) {
+		for (const name of entries) {
 			const full = prefix == "" ? name : `${prefix}/${name}`;
-			if (rels.has(full)) found.push(full);
-			if (tree.get(full) != null && isDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, tree, rels, found);
+			if (rels.has(full) || tree.get(full) != null) existingCandidate(dir, name, full, tree, rels, found, walked);
+		}
+	} else {
+		for (const name of wanted) {
+			if (names.has(name)) existingCandidate(dir, name, prefix == "" ? name : `${prefix}/${name}`, tree, rels, found, walked);
 		}
 	}
 }
 
-function presenceSignature(searched: string[], rels: string[]): string {
+function existingCandidate(dir: string, name: string, full: string, tree: HashMap<string, string[]>, rels: HashSet<string>, found: string[], walked: string[]): void {
+	if (rels.has(full)) found.push(full);
+	if (tree.get(full) != null && knownDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, tree, rels, found, walked);
+}
+
+function presenceSignature(searched: string[], rels: string[], walked: string[]): string {
 	const tree = relTree(rels);
 	const folded = new HashSet<string>();
 	for (const rel of rels) folded.add(foldName(rel));
 	let signature = "";
 	for (const dir of searched) {
 		const found: string[] = [];
-		existingCandidates(dir, "", tree, folded, found);
+		existingCandidates(dir, "", tree, folded, found, walked);
 		if (found.length == 0) continue;
 		found.sort();
 		signature = `${signature}s\t${dir}\t${found.join("|")}\n`;
@@ -764,8 +809,8 @@ function queryRecord(sources: string[], deps: string[], argDirs: string[], inclu
 	return { dirs, rels, paths, bounded };
 }
 
-function presenceText(record: QueryRecord): string {
-	let text = presenceSignature(record.dirs, record.rels);
+function presenceText(record: QueryRecord, walked: string[]): string {
+	let text = presenceSignature(record.dirs, record.rels, walked);
 	for (const path of record.paths) text = `${text}e\t${path}\t${exists(path) ? 1 : 0}\n`;
 	return text;
 }
@@ -777,7 +822,7 @@ function newestCandidate(record: QueryRecord): number {
 	let newest: number = -1;
 	for (const dir of record.dirs) {
 		const found: string[] = [];
-		existingCandidates(dir, "", tree, folded, found);
+		existingCandidates(dir, "", tree, folded, found, []);
 		for (const rel of found) newest = Math.max(newest, changedTime(`${dir}/${rel}`));
 	}
 	for (const path of record.paths) newest = Math.max(newest, changedTime(path));
@@ -803,7 +848,43 @@ function recordQueries(depFile: string, sources: string[], deps: string[], argDi
 }
 
 function queryPresence(depFile: string): string {
-	const lines = (try readFile(`${depFile}.q`) catch "").split("\n");
+	const text = try readFile(`${depFile}.q`) catch "";
+	const known = _presenceByRecord.get(text);
+	if (known != null) return known;
+	const key = hashContent(text);
+	let presence = rememberedPresence(depFile, key);
+	if (presence == "") presence = presenceOfRecord(depFile, text, key);
+	_presenceByRecord.set(text, presence);
+	return presence;
+}
+
+function rememberedPresence(depFile: string, key: string): string {
+	const lines = (try readFile(`${depFile}.qs`) catch "").split("\n");
+	if (lines.length < 2 || lines[0] != key) return "";
+	for (let i = 2; i < lines.length; i++) {
+		const line = lines[i];
+		if (line == "") continue;
+		const tab = line.lastIndexOf("\t");
+		if (tab < 0 || dirStamp(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return "";
+	}
+	return lines[1];
+}
+
+function rememberPresence(depFile: string, key: string, presence: string, walked: string[]): void {
+	let text = `${key}\n${presence}\n`;
+	const seen = new HashSet<string>();
+	for (const dir of walked) {
+		if (seen.has(dir)) continue;
+		seen.add(dir);
+		const stamp = dirStamp(dir);
+		if (stamp == "") return;
+		text = `${text}${dir}\t${stamp}\n`;
+	}
+	atomicWriteFile(`${depFile}.qs`, text);
+}
+
+function presenceOfRecord(depFile: string, text: string, key: string): string {
+	const lines = text.split("\n");
 	if (lines[0] != QUERY_RECORD_FORMAT) return HEADER_QUERY_UNRECORDED;
 	const record: QueryRecord = { dirs: [], rels: [], paths: [], bounded: true };
 	for (let i = 1; i < lines.length; i++) {
@@ -820,7 +901,10 @@ function queryPresence(depFile: string): string {
 			_ => { return HEADER_QUERY_UNRECORDED; },
 		}
 	}
-	return hashContent(presenceText(record));
+	const walked: string[] = [];
+	const presence = hashContent(presenceText(record, walked));
+	if (record.paths.length == 0) rememberPresence(depFile, key, presence, walked);
+	return presence;
 }
 
 function trackQueryRecord(depFile: string): void {
@@ -866,7 +950,7 @@ function storeManifest(dependencyFile: string, source: string, argDirs: string[]
 		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
-	return `${text}${presenceText(record)}`;
+	return `${text}${presenceText(record, [])}`;
 }
 
 function readStoreManifest(text: string, argDirs: string[], includers: string[]): StoreManifest | null {
@@ -910,7 +994,7 @@ function readStoreManifest(text: string, argDirs: string[], includers: string[])
 		if (!dirs.includes(dir)) dirs.push(dir);
 	}
 	const queries: QueryRecord = { dirs, rels, paths, bounded: true };
-	if (presenceText(queries) != recorded) return null;
+	if (presenceText(queries, []) != recorded) return null;
 	return { deps, queries };
 }
 
