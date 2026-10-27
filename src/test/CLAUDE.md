@@ -84,6 +84,8 @@ Build the candidate once per compiler edit: `msc build src/index.ms --danger --l
 - **Over budget now, warm:**
   - `src/compiler/compile.ms`: 79 s.
   - `src/codegen/raiser/eval.ms`: 62 s, mostly `numericCondsFailure`.
+  - `src/compiler/lsp/handlers/lifecycle.ms`: 76 s warm, 151 s first run after a candidate build (lc-1, 2026-10-27, tree 103e61415).
+  - `src/compiler/lsp/server.ms`: 82 s warm, 105 s first run; it runs `lifecycle.ms`'s tests too (same run).
   - A first run of a compiler-module test is over 60 s for every file that imports most of the compiler, because its test build redoes the front end of that graph. Making the front end reachability-driven, as the reference transforms a routine only when codegen first needs it, saves an estimated 3–4 s: the `inject.ms` test build still reaches 72% of the function-body nodes. The remaining lever is reusing each module's front-end output across builds.
 - **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 
