@@ -4674,6 +4674,42 @@ override whose `sink` positions differ from the one it is matched against is an 
 actor method refuses `sink`, `ref` and `out`. Literal fitting, generic binding and `sink`
 as a parameter name: `src/test/handoff/sinkParam.ms`.
 
+### Isolated values (`std/isolation`)
+
+A function that receives a value holding a class reference cannot hand it to an actor: `move` of a
+parameter is refused (E148, the caller still owns it), and a plain send is refused too. `Isolated<T>`
+is the spelling that carries such a value through any number of layers.
+
+```ms
+import { Isolated, isolate, extract } from "std/isolation";
+
+async function layer(exec: Exec, sink req: Isolated<Req>): Promise<int32> {
+    return await exec.run(move req);          // a parameter, moved on: allowed for this type
+}
+const req = isolate({ name: "a", node: new Node() } as Req);   // proven unshared here
+await layer(exec, move req);
+```
+
+- `isolate(x)` is checked like a `move` into an actor call: `x` is a fresh value (a literal, `new`, a
+  call whose receiver and arguments are fresh) or `move local` of a binding that is its sole owner.
+  A parameter, an aliased local, a bare name (`isolate(n)`) and a literal holding a live local are
+  errors with the E148 text. A value made only of plain data and `Sendable<F>` closures needs no proof.
+- `Isolated<T>` has no copy: the type declares `onDestroy` and no `onCopy`, so a copy that is not the
+  last use of a binding is `cannot copy 'iso': 'Isolated<Req>' declares onDestroy and no onCopy …`, and
+  moving a plain (borrowed) parameter on is the same error. Hand it on with `move`, in a function that
+  takes it as a `sink` parameter. Because the type cannot be copied, a binding of it is the sole owner,
+  so E148 does not refuse `move iso` of such a parameter; a plain `Req` parameter stays refused.
+- An actor method takes the wrapper as a plain parameter and reads `req.value`; `extract(move iso)`
+  moves the value out elsewhere. A struct with an `Isolated<T>` field can be sent by `move` as a whole.
+- The copy error comes from the analyzer, so it appears on a C build and not under `--target=js`, where
+  nothing is reference counted; `isolate` and the E148 errors are checker errors on every target.
+
+Measured 2026-10-28 with a candidate of `wt/fix-sole-owner-ref-free`: a two-layer forward of
+`Isolated<Req>` (`Req` holds a class), the same inside a message struct, an `Isolated<Sendable<…>>`
+and `extract` run on C and `--target=js` (guard `isolatedForwardRuns`); the refusals above are
+pinned by `isolatedIsolateRejects` and `isolatedCopyRejects`. Not measured: `Isolated<T>` captured
+by a closure, held in an array or a class field, or sent across `spawn`.
+
 ## Proxy
 
 `new Proxy(target, handler)` intercepts every member read and write of `target` through

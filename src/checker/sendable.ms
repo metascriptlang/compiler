@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isIsolatedType, isNumeric, isReadonlyView, stringType, peelSink, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -28,11 +28,13 @@ enum SendLeaf {
 	Array = 2,         // ownership can travel with a MOVE; aliasing it cannot
 	GenericParam = 4,  // unknowable here — re-checked at instantiation
 	Function = 8,      // only a Sendable<F>, whose source was checked where it converted
+	Isolated = 16,     // an Isolated<T> crosses by move only, because it cannot be copied
 }
 
 function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Type) => boolean): boolean {
 	if (t == null) return true;
 	if (isPrimitiveKind(t.kind)) return true;
+	if (isIsolatedType(t)) return (leaves & SendLeaf.Isolated) != 0;
 	return match (t.kind) {
 		TypeKind.String => (leaves & SendLeaf.String) != 0,
 		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) != 0,
@@ -69,7 +71,7 @@ function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Typ
 // A string is copied at the boundary and an array's ownership travels with the
 // message, so both are sendable.
 function isTypeSendable(t: Type | null): boolean {
-	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array | SendLeaf.Function) as int32, declaresNoHook);
+	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array | SendLeaf.Function | SendLeaf.Isolated) as int32, declaresNoHook);
 }
 
 function declaresNoHook(owner: Type): boolean {
@@ -302,6 +304,43 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	if (sym == null || !typeCarriesRef(sym.symbolType)) return;
 	checkMoveSoleOwner(ctx, sym, [sym.name], mv, mv.location);
 	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
+// A Sendable<F> was checked where it was built (its captures are const values, Locked and Arc),
+// so a value made of those and plain data needs no sole-owner proof to be isolated.
+function holdsOnlySendableClosures(t: Type): boolean {
+	return isDeepSendable(peelSink(t), (SendLeaf.String | SendLeaf.Function | SendLeaf.Isolated) as int32, declaresNoHook);
+}
+
+// isolate(x) makes the proof a `move` into an actor call needs: the argument is a fresh value
+// nothing else reaches, or a `move` of a binding that is its sole owner.
+export function checkIsolateArg(ctx: CheckerContext, argNode: Node): void {
+	if (argNode.nodeType == null || !typeCarriesRef(argNode.nodeType) || isRefFree(argNode.nodeType) || holdsOnlySendableClosures(argNode.nodeType)) return;
+	const p = peelView(argNode);
+	if (p.kind == NodeKind.MoveExpr) {
+		recordActorMove(ctx, p);
+		return;
+	}
+	if (p.kind == NodeKind.Identifier) {
+		addError(ctx, `cannot isolate '${describeExpr(p)}': a binding is not proven unshared by naming it — write isolate(move ${describeExpr(p)}) so it is checked as the sole owner${SOLE_OWNER_TAG}`,
+			argNode.location.line, argNode.location.column);
+		return;
+	}
+	const scope: FreshScope = {
+		moveNames: [],
+		table: ctx.table,
+		buildsAlone: (site: Node): boolean => {
+			deferEffectCheck(site, "noSideEffect", (late: CheckerContext): void => {
+				const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
+				if (c != null) addError(late, `cannot isolate the value: a call with side effects may keep an alias of it: ${c.text}${SOLE_OWNER_TAG}`, argNode.location.line, argNode.location.column);
+			});
+			return true;
+		},
+	};
+	if (!isFreshValue(argNode, scope)) {
+		addError(ctx, `cannot isolate '${describeExpr(argNode)}': it is not a fresh value (a literal, \`new\`, \`move\`, or a call whose receiver and arguments are fresh)${SOLE_OWNER_TAG}`,
+			argNode.location.line, argNode.location.column);
+	}
 }
 
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
@@ -1903,8 +1942,12 @@ function isActorRef(t: Type | null): boolean {
 	return bare.kind == TypeKind.Ref && bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor;
 }
 
+function isRefFree(t: Type | null): boolean {
+	return isDeepSendable(t == null ? null : peelSink(t), (SendLeaf.String | SendLeaf.Array | SendLeaf.Isolated) as int32, declaresNoHook);
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
-	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
+	if (!typeCarriesRef(sym.symbolType) || isRefFree(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
