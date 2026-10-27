@@ -526,3 +526,10 @@ export function connectSync(url: string, options: ConnectOptions | null = null):
 		_frag: newFragState(),
 	});
 }
+
+test "bytesToString keeps frame bytes that are not UTF-8" {
+	const frame: uint8[] = [0x81, 0x85, 0xFF, 0x00, 0xC0, 0xED, 0xA0, 0x80];
+	const back = stringToBytes(bytesToString(frame));
+	assert back.length == frame.length;
+	for (let i = 0; i < frame.length; i++) assert back[i] == frame[i];
+}
