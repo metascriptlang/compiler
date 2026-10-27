@@ -6,7 +6,7 @@
 1	msWorkerLoopPump
 2	msActorJobFire
 2	msAwaitGroupFailSlot
-2	msCompletionQueuePushEnvRelease
+2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
 2	msRunOnce
