@@ -73,7 +73,7 @@ function flushSuffixes(lineSuffixes: Doc[]): string {
 
 function trimTrailingBlanks(text: string, floor: int32): string {
 	let end = text.length;
-	while (end > floor && (text[end - 1] == " " || text[end - 1] == "\t")) {
+	while (end > floor && (text.charCodeAt(end - 1) == 32 || text.charCodeAt(end - 1) == 9)) {
 		end -= 1;
 	}
 	return end == text.length ? text : text.slice(0, end);
