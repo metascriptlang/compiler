@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, SymbolState, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
@@ -12,6 +12,7 @@ import { boxString, unboxString } from "../../raiser/marshal";
 import { definedValue } from "../defines";
 import { getParserDefines } from "../../parser/context";
 import { checkFunctionOnDemand } from "../../checker/checkPass";
+import { callDemandBinding } from "../../checker/checkerCallbacks";
 import { readFile } from "std/fs";
 import { resolve } from "std/fs/path";
 import { cwd } from "std/process";
@@ -81,6 +82,9 @@ function typeArgOf(v: RaiserValue): Type | null {
 	if (sym != null && !hasFlag(sym, SymbolFlag.Forward)) {
 		const ctx = activeMetaCtx();
 		if (ctx != null && sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, ctx);
+		if (ctx != null && sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global) && sym.state != SymbolState.Checked) {
+			callDemandBinding(ctx, sym, createNodeAt(NodeKind.Identifier, { name: sym.name }, makeLoc(activeMetaLine(), activeMetaColumn())));
+		}
 		return sym.symbolType;
 	}
 	return null;
