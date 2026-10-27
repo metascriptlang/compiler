@@ -4,11 +4,11 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, FunctionDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, setFlag } from "../checker/symbol";
+import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet, setFlag } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
-import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
+import { calledRoutine, isViewCall, routineBody as declaredBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { containsPointer } from "../checker/varPartitions";
@@ -174,6 +174,11 @@ function markUnknown(s: WriteSummary): boolean {
 function unpackDecl(decl: Node | null): Node | null {
 	if (decl != null && decl.kind == NodeKind.DecoratedDecl) return (decl.data as DecoratedDeclData).decoratedNode;
 	return decl;
+}
+
+function routineBody(decl: Node | null): Node | null {
+	if (decl != null && decl.kind == NodeKind.FunctionDecl && routineFlagSet((decl.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern)) return null;
+	return declaredBody(decl);
 }
 
 function routineDecl(w: WriteEffects, sym: Symbol): Node | null {
