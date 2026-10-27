@@ -1,5 +1,7 @@
 @include("string.h");
 
+import { findBytesFrom } from "./bytes";
+
 extern function newBytes(length: int64): string from "msStringNewUninit";
 extern function copyTo(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
 extern function msStringKnownAscii(s: string): boolean;
@@ -7,20 +9,6 @@ extern function msStringMarkAscii(s: string): void;
 extern function newParts(capacity: int64): string[] from "msStringArrayNew";
 extern function asciiUnit(byte: uint8): string from "msCharTableAt";
 extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
-extern function msMemEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly<Span<uint8>>): boolean;
-
-@inline
-function findFrom(sb: Readonly<Span<uint8>>, xb: Readonly<Span<uint8>>, from: int64): int64 {
-	const limit = sb.length - xb.length;
-	let at = from;
-	while (at <= limit) {
-		const hit = msMemChr(sb, at, limit + 1, xb[0]);
-		if (hit < 0) return -1;
-		if (xb.length == 1 || msMemEqAt(sb, hit, xb)) return hit;
-		at = hit + 1;
-	}
-	return -1;
-}
 
 @inline
 function writable(value: string): Ptr<uint8> {
@@ -118,7 +106,7 @@ function replaceFirst(s: string, search: string, replacement: string): string {
 	const sb = s.asBytes();
 	const xb = search.asBytes();
 	const rb = replacement.asBytes();
-	const at = xb.length == 0 ? 0 : findFrom(sb, xb, 0);
+	const at = xb.length == 0 ? 0 : findBytesFrom(sb, xb, 0);
 	if (at < 0) return s;
 	const end = at + xb.length;
 	if (hasDollar(rb)) return replaceFirstPatterned(sb, rb, at, end);
@@ -237,7 +225,7 @@ function replaceEvery(s: string, search: string, replacement: string): string {
 	let count: int64 = 0;
 	let pos: int64 = 0;
 	while (true) {
-		const found = findFrom(sb, xb, pos);
+		const found = findBytesFrom(sb, xb, pos);
 		if (found < 0) break;
 		count += 1;
 		pos = found + xb.length;
@@ -248,7 +236,7 @@ function replaceEvery(s: string, search: string, replacement: string): string {
 	let src: int64 = 0;
 	let at: int64 = 0;
 	while (true) {
-		const found = findFrom(sb, xb, src);
+		const found = findBytesFrom(sb, xb, src);
 		if (found < 0) break;
 		copyTo(dst, at, sb, src, found - src);
 		at += found - src;
@@ -266,7 +254,7 @@ function replaceEveryPatterned(s: string, sb: Readonly<Span<uint8>>, xb: Readonl
 	let length: int64 = sb.length;
 	let pos: int64 = 0;
 	while (true) {
-		const found = findFrom(sb, xb, pos);
+		const found = findBytesFrom(sb, xb, pos);
 		if (found < 0) break;
 		count += 1;
 		pos = found + xb.length;
@@ -278,7 +266,7 @@ function replaceEveryPatterned(s: string, sb: Readonly<Span<uint8>>, xb: Readonl
 	let src: int64 = 0;
 	let at: int64 = 0;
 	while (true) {
-		const found = findFrom(sb, xb, src);
+		const found = findBytesFrom(sb, xb, src);
 		if (found < 0) break;
 		copyTo(dst, at, sb, src, found - src);
 		at += found - src;
@@ -482,7 +470,7 @@ export function split(this s: string, delimiter: string): string[] {
 	}
 	let pos: int64 = 0;
 	while (true) {
-		const found = findFrom(sb, db, pos);
+		const found = findBytesFrom(sb, db, pos);
 		if (found < 0) {
 			parts.push(byteSliceCopy(s, pos, sb.length));
 			return parts;
