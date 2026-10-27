@@ -460,7 +460,11 @@ export function suppliedTypeArgs(node: Node, ctx: CheckerContext): Type[] | null
 	if (node.typeExprs == null) return null;
 	const out: Type[] = [];
 	for (const operand of node.typeExprs) {
-		if (!operand.flags.has(NodeFlag.BoundSym)) throw new Error("internal: a call's supplied type argument is not bound");
+		if (operand.nodeType != null) {
+			out.push(operand.nodeType);
+			continue;
+		}
+		if (!operand.flags.has(NodeFlag.BoundSym)) throw new Error("internal: a call's supplied type argument carries neither its Type nor its bound names");
 		out.push(annotatedType((operand.data as IdentifierData).name, operand, ctx, operand.location.line, operand.location.column));
 	}
 	return out;
