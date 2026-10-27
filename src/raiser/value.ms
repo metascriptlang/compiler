@@ -1557,6 +1557,7 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 			data.views.length = 0;
 			data.viewOff = -1;
 			data.items.length = 0;
+			data.rc = 0;
 			arrHeap.freeList.push(index);
 		},
 		RaiserHeapKind.Seq => rcFreeSeq(arrHeap, handle),
