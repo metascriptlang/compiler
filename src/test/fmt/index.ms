@@ -128,3 +128,5 @@ import "./cases/headerComments";
 import "./cases/logicalAssignment";
 import "./cases/blankLinesInLists";
 import "./cases/emptySwitch";
+import "./cases/mappedTypeSpace";
+import "./cases/typeLiteralSemicolon";
