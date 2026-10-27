@@ -1601,7 +1601,7 @@ export function representedPayload(inner: Readonly<Type>): Readonly<Type> {
 export function createMaybeType(inner: Type): Type {
 	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind == TypeKind.Ref || inner.kind == TypeKind.Ptr) return inner;
-	const key = maybeCacheKey(inner);
+	const key = (isReadonlyView(inner) ? "ro:" : "") + maybeCacheKey(inner);
 	let i = 0;
 	while (i < _maybeCacheNames.length) {
 		if (_maybeCacheNames[i] == key) {
