@@ -54,6 +54,8 @@ import { macroCompileCount, macroPreprocessCount } from "../meta/expand";
 import { boundHandleCount } from "../meta/bridge"; // also registers the expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
+import { lifecycleHookOp } from "../../checker/context";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
@@ -2507,4 +2509,39 @@ test "an edit that makes a callee resize is seen by the borrow check of its adop
 	assert checkMessages(db, "/r/a.ms") == "";
 	dbSetFileText(db, "/r/a.ms", RESIZE_HEAD.replace("grow(a: S[]): void { }", "grow(a: S[]): void { a.push({ n: 2 }); }"));
 	assert checkMessages(db, "/r/a.ms").indexOf("cannot borrow") >= 0;
+}
+
+const HOOK_BOX = 'export class Box<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n\tonDestroy(): void { }\n}\n';
+const HOOK_USE = 'import { Box } from "./box";\nexport const held: Box<int32> = new Box<int32>(1);\n';
+
+test "a generic class's instance hook is forgotten when its module is edited to drop the hook" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/h/box.ms", HOOK_BOX);
+	dbSetFileText(db, "/h/use.ms", HOOK_USE);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/h/use.ms"), getFileId(db.fileInput, "/h/box.ms"));
+	assert checkMessages(db, "/h/box.ms") == "";
+	assert checkMessages(db, "/h/use.ms") == "";
+	const op = lifecycleHookOp("onDestroy");
+	assert lookupInstanceHook(exportedSym(db, "/h/use.ms", "held").symbolType, op) != null;
+	dbSetFileText(db, "/h/box.ms", HOOK_BOX.replace("\tonDestroy(): void { }\n", ""));
+	assert checkMessages(db, "/h/box.ms") == "";
+	assert checkMessages(db, "/h/use.ms") == "";
+	assert lookupInstanceHook(exportedSym(db, "/h/use.ms", "held").symbolType, op) == null;
+}
+
+test "a method removed from a class is not an overridden method of its subclass in another module" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	const base = "export class C {\n\tm(): void { }\n}\n";
+	dbSetFileText(db, "/d/base.ms", base);
+	dbSetFileText(db, "/d/sub.ms", 'import { C } from "./base";\nexport class D extends C {\n\tm<T>(): void { }\n}\n');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/d/sub.ms"), getFileId(db.fileInput, "/d/base.ms"));
+	assert checkMessages(db, "/d/base.ms") == "";
+	assert checkMessages(db, "/d/sub.ms").indexOf("overrides") >= 0;
+	dbSetFileText(db, "/d/base.ms", "export class C {\n}\n");
+	assert checkMessages(db, "/d/base.ms") == "";
+	assert checkMessages(db, "/d/sub.ms") == "";
 }

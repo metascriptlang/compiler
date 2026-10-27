@@ -847,6 +847,14 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 	_dispBySym.set(sym, e);
 }
 
+export function forgetDispatchOf(classSym: Symbol): void {
+	const own = _dispByClass.get(classSym);
+	if (own == null) return;
+	_dispByClass.delete(classSym);
+	for (const e of own) _dispBySym.delete(e.sym);
+	_dispEntries = _dispEntries.filter((e: DispMethodEntry): boolean => e.classSym != classSym);
+}
+
 export function dispatchEntryCount(): int32 {
 	return _dispEntries.length;
 }

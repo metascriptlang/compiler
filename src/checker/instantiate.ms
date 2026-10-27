@@ -180,6 +180,18 @@ export function resetInstantiationState(): void {
 	_hookScannedInstances = new HashMap<Symbol, Type[]>();
 }
 
+export function forgetInstanceHooks(owner: Symbol): void {
+	_hookScannedInstances.delete(owner);
+	const hooks = _instanceHooks.get(owner);
+	if (hooks == null) return;
+	const kept: InstanceHook[] = [];
+	for (const hook of hooks) {
+		const declared = hook.sym.instantiatedFrom;
+		if (declared == null || declared.modulePath != owner.modulePath) kept.push(hook);
+	}
+	_instanceHooks.set(owner, kept);
+}
+
 interface InstanceHook {
 	concreteTypes: Type[];
 	op: AttachedOp;
