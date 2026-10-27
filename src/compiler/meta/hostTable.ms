@@ -786,7 +786,7 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // typExprFieldDecorators are reachable), in field order. Metadata fields are
 // never children; resolvedSym and nodeType ARE node-shaped, so telling them
 // apart rests on isNodeWireMetaField (wire.ms). childAt returns the live heap ref, not a
-// copy — mutations through it stick.
+// copy — mutations through it stick — and holds it for the caller, as a call result is owned.
 
 function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	if (v.kind != RaiserValueKind.Object) return false;
@@ -836,6 +836,10 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 	const slots = _nodeChildSlots(args[0].intVal);
 	const i = unboxInt(args[1]);
 	if (i < 0 || i >= slots.length) return raiserNil();
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) throw new Error("internal: msNodeChildAt called with no active host heap");
+	rcIncref(arrHeap, objHeap, slots[i]);
 	return slots[i];
 }
 
