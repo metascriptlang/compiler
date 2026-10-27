@@ -1,5 +1,5 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, CallingConvention, ProgramData, ExportDeclData, DecoratedDeclData, FunctionDeclData, BinaryExprData, CallExprData, MemberExprData, ObjectLiteralData, ArrayLiteralData, IfStmtData, ConditionalExprData } from "../ast/node";
-import { forEachChild } from "../ast/visitor";
+import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, Type, TypeKind, CallingConvention, ProgramData, ExportDeclData, DecoratedDeclData, FunctionDeclData, BinaryExprData, CallExprData, MemberExprData, ObjectLiteralData, ArrayLiteralData, IfStmtData, ConditionalExprData } from "../ast/node";
+import { Visit, anyDescendant, forEachChild } from "../ast/visitor";
 import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
 import { dispatchEntryFor, dispatchOverrideTable } from "../checker/context";
 import { calledRoutineType } from "../checker/effects";
@@ -30,6 +30,7 @@ function inferable(decl: Node, overriding: HashSet<Symbol>): boolean {
 	const entry = dispatchEntryFor(sym);
 	if (entry != null && entry.overloaded) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow) || hasFlag(sym, SymbolFlag.CompileTime)) return false;
+	if (sym.instantiatedFrom != null) return false;
 	if (hasFlag(sym, SymbolFlag.Forward) || hasFlag(sym, SymbolFlag.WasForwarded) || hasFlag(sym, SymbolFlag.Async)) return false;
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function || t.callConv == CallingConvention.CcInline || isGeneratorBody(d.fnBody)) return false;
@@ -139,9 +140,11 @@ export function inferSinkParams(trees: Node[], ctxs: TransformContext[]): void {
 		if (observed.has(r.sym)) continue;
 		const params = r.decl.paramSyms!;
 		const formals = r.sym.symbolType.typeChildren;
+		const body = (r.decl.data as FunctionDeclData).fnBody;
+		if (anyDescendant(body, (n: Node): Visit => n.flags.has(NodeFlag.Closure) ? Visit.Hit : Visit.Descend)) continue;
 		const hits: boolean[] = [];
 		for (let i = 0; i < params.length; i += 1) hits.push(false);
-		findSinks((r.decl.data as FunctionDeclData).fnBody, params, hits, false);
+		findSinks(body, params, hits, false);
 		for (let i = 0; i < formals.length; i += 1) {
 			if (hits[i] && r.sym.symbolType.typeNames[i] != "this" && movable(formals[i], r.ctx)) formals[i] = createSink(formals[i]);
 		}
