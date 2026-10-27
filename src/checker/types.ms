@@ -155,10 +155,10 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.kind = TypeKind.Struct;
 	t.typeName = name;
 	t.typeNames = propNames;
-	t.typeChildren = propTypes;
 	if (isInterface) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct); }
 	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
 	for (const pt of propTypes) { propagateToOwner(t, pt); }
+	t.typeChildren = propTypes;
 	return t;
 }
 
