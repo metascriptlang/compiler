@@ -130,3 +130,4 @@ import "./cases/blankLinesInLists";
 import "./cases/emptySwitch";
 import "./cases/mappedTypeSpace";
 import "./cases/typeLiteralSemicolon";
+import "./cases/commentTrailingBlanks";
