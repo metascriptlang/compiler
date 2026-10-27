@@ -21,7 +21,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -37,6 +37,11 @@ function typeIdentity(t: Type): string {
 	}
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
+}
+
+function heldKey(held: Type): string {
+	const named = held.typeName != "" && !isAnonTypeName(held.typeName);
+	return hasGenericParams(held) || (named && !hasTypeIdentity(held)) ? "" : typeIdentity(held);
 }
 
 function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
@@ -147,7 +152,7 @@ function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: Nam
 // closing one.
 function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || typeIdentity(held) == "" || cfaAux(held, origKey, withRef, marker)) return true;
+		if (heldKey(held) == "" || cfaAux(held, origKey, withRef, marker)) return true;
 	}
 	return false;
 }
@@ -211,8 +216,8 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
 		if (body == null || body.kind != TypeKind.Struct) continue;
 		for (const held of heldBeyond(body)) {
-			const key = typeIdentity(held);
-			if (hasGenericParams(held) || key == "") return true;
+			const key = heldKey(held);
+			if (key == "") return true;
 			if (nameSetContains(seen, key)) continue;
 			nameSetAdd(seen, key);
 			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createNameSet())) return true;
@@ -340,7 +345,7 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || typeIdentity(held) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
+		if (heldKey(held) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
@@ -414,7 +419,7 @@ function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker
 		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	for (const held of heldBeyond(t)) {
-		if (hasGenericParams(held) || typeIdentity(held) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
+		if (heldKey(held) == "" || addsAux(held, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
