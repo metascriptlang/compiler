@@ -1,7 +1,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
-	heapAllocArray, heapAllocArrayLike, heapArrayUncounted, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	heapAllocArray, heapSeqHandles, heapAllocArrayLike, heapArrayUncounted, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
 	isObjectCell, objectCellClass, objectCellHandle, seqCellOf, handleValue, rcCountOf, OWNED_BY_RECEIVER_RC,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
 	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, heapBoxValue, raiserFloat, raiserBool
@@ -193,7 +193,7 @@ test "typed copy releases owned children and retained shared references" {
 	rcDecref(arrays, objects, copied);
 	assert objects.objects[handleIndex(shared.intVal)].rc == 1;
 	rcDecref(arrays, objects, source);
-	assert arrays.freeList.length == 2;
+	assert heapSeqHandles(arrays).length == 0;
 	assert objects.freeList.length == 3;
 }
 

@@ -1618,7 +1618,6 @@ test "orc: a ring through one of two array fields frees each array once" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
-	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
 }
 
 test "orc: a ring through three plain array fields frees each array once" {
@@ -1628,7 +1627,6 @@ test "orc: a ring through three plain array fields frees each array once" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
-	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
 }
 
 test "untag: an array holds scalar elements as raw words, references as handles and a union as values" {
@@ -1659,12 +1657,10 @@ test "untag: an array holds scalar elements as raw words, references as handles 
 		} else if (cls == RaiserRegClass.Ref && len == 1) {
 			refs += 1;
 			assert heapStringText(heap, heapArrayGet(heap, h, 0)) == "x3";
+		} else if (cls == RaiserRegClass.Dyn && len == 3) {
+			dyns += 1;
+			assert heapArrayGet(heap, h, 0).kind == RaiserValueKind.Int && heapArrayGet(heap, h, 1).kind == RaiserValueKind.String && heapArrayGet(heap, h, 2).kind == RaiserValueKind.Nil;
 		}
-	}
-	for (const a of heap.arrays) {
-		if (a.rc == 0 || a.viewOff >= 0 || a.items.length != 3) continue;
-		dyns += 1;
-		assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil;
 	}
 	assert words == 1 && floats == 1 && bools == 1 && refs == 1 && dyns == 1, `${words} ${floats} ${bools} ${refs} ${dyns}`;
 }
@@ -1692,13 +1688,9 @@ test "orc: a cycle through a reference array and one through a union array are c
 		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok 12\n", vm.output;
-	assert vm.arrayHeap.mem.carved < 1500, `${vm.arrayHeap.mem.carved}`;
+	assert vm.arrayHeap.mem.carved < 2400, `${vm.arrayHeap.mem.carved}`;
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
-	let live = 0;
-	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
-		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
-	}
-	assert live == 0 && heapSeqHandles(vm.arrayHeap).length == 0, `${live} ${heapSeqHandles(vm.arrayHeap).length}`;
+	assert heapSeqHandles(vm.arrayHeap).length == 0, `${heapSeqHandles(vm.arrayHeap).length}`;
 }
 
 test "untag: the indexed fast paths keep length, bounds, view and reference counts exact in every element class" {

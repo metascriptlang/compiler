@@ -15,7 +15,6 @@ import { objectCellNew, objectCellSetSlot } from "./objectCell";
 interface LedgerTally {
 	strings: HashMap<int64, int32>;
 	seqs: HashMap<int64, int32>;
-	arrays: int32[];
 	objects: int32[];
 	boxes: int32[];
 }
@@ -32,7 +31,6 @@ function tallyRef(tally: LedgerTally, v: RaiserValue): void {
 	match (handleHeapKind(v.intVal)) {
 		RaiserHeapKind.String => { const held = tally.strings.get(v.intVal); tally.strings.set(v.intVal, (held != null ? held : 0) + 1); },
 		RaiserHeapKind.Seq => { const held = tally.seqs.get(v.intVal); tally.seqs.set(v.intVal, (held != null ? held : 0) + 1); },
-		RaiserHeapKind.Array => { tally.arrays[index] += 1; },
 		RaiserHeapKind.Object => { tally.objects[index] += 1; },
 		RaiserHeapKind.Box => { tally.boxes[index] += 1; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
@@ -51,10 +49,9 @@ function freeFlags(count: int32, freeList: int64[]): boolean[] {
 // make to it; otherwise the message that names the first disagreement.
 export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string): string {
 	const tally: LedgerTally = {
-		strings: new HashMap<int64, int32>(), seqs: new HashMap<int64, int32>(), arrays: zeros(arr.arrays.length),
+		strings: new HashMap<int64, int32>(), seqs: new HashMap<int64, int32>(),
 		objects: zeros(obj.objects.length), boxes: zeros(arr.boxes.items.length),
 	};
-	const freeArrays = freeFlags(arr.arrays.length, arr.freeList);
 	const freeObjects = freeFlags(obj.objects.length, obj.freeList);
 	const freeBoxes = freeFlags(arr.boxes.items.length, arr.boxes.freeList);
 	const stringBytes = stringBytesHandles(arr);
@@ -63,12 +60,6 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		tallyRef(tally, root);
 	}
 	for (const bytes of stringBytes) tallyRef(tally, raiserArray(bytes));
-	for (let i = 0; i < arr.arrays.length; i += 1) {
-		const handle = makeHandle(i, RaiserHeapKind.Array);
-		if (freeArrays[i] || !arrayHoldsHandles(arr, handle)) continue;
-		const held = arrayHeldCount(arr, handle);
-		for (let k = 0; k < held; k += 1) tallyRef(tally, arrayHeldAt(arr, handle, k));
-	}
 	const seqHandles = heapSeqHandles(arr);
 	for (const handle of seqHandles) {
 		if (heapArrayIsView(arr, handle)) continue;
@@ -120,11 +111,6 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		const counted = heapArrayRc(arr, handle);
 		if (counted < holders) return `internal: object ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
 		if (counted > holders) leakedObjects += 1;
-	}
-	for (let i = 0; i < tally.arrays.length; i += 1) {
-		if (freeArrays[i]) continue;
-		if (arr.arrays[i].rc < tally.arrays[i]) return `internal: array ${i} counts ${arr.arrays[i].rc} holders but ${tally.arrays[i]} hold it at ${where} end`;
-		if (arr.arrays[i].rc > tally.arrays[i]) leakedArrays += 1;
 	}
 	for (let i = 0; i < tally.objects.length; i += 1) {
 		if (freeObjects[i]) continue;
