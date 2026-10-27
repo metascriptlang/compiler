@@ -447,12 +447,12 @@ function captureOperand(n: Node, captured: Node[], writes: Symbol[], dctx: DrcCo
 }
 
 function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
-	const pre = currentScope(dctx).preStmts;
+	const scope = currentScope(dctx);
 	let i = marks.length - 1;
 	while (i >= 0) {
 		let at = 0;
-		while (at < pre.length && pre[at] != marks[i]) at += 1;
-		if (at == pre.length) {
+		while (at < scope.preStmts.length && scope.preStmts[at] != marks[i]) at += 1;
+		if (at == scope.preStmts.length) {
 			dctx.ctx.checkerCtx.errors.push({
 				message: "DRC internal error: a hoist flushed the statement's pre-list between two operands, so their order cannot be kept",
 				line: marks[i].location.line, column: marks[i].location.column, fatal: false,
@@ -460,13 +460,13 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 			return;
 		}
 		const captured: Node[] = [];
-		if (at + 1 < pre.length && kids[i] != null) {
+		if (at + 1 < scope.preStmts.length && kids[i] != null) {
 			const writes: Symbol[] = [];
-			for (let w = at + 1; w < pre.length; w += 1) { collectWrites(pre[w], writes); }
+			for (let w = at + 1; w < scope.preStmts.length; w += 1) { collectWrites(scope.preStmts[w], writes); }
 			kids[i] = captureOperand(kids[i], captured, writes, dctx);
 		}
-		pre.splice(at, 1);
-		for (let c = 0; c < captured.length; c += 1) { pre.splice(at + c, 0, captured[c]); }
+		scope.preStmts.splice(at, 1);
+		for (let c = 0; c < captured.length; c += 1) { scope.preStmts.splice(at + c, 0, captured[c]); }
 		for (const r of dctx.stmtBorrowReads) {
 			if (r.preStmtIdx > at) r.preStmtIdx += captured.length - 1;
 		}
