@@ -370,7 +370,7 @@ export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): in
 }
 
 export function heapStringLive(arr: RaiserArrayHeap): number {
-	return liveCellBlocks(arr.mem).length;
+	return heapStringHandles(arr).length;
 }
 
 // The handle of every live string cell on the heap, for the ledger.
@@ -379,7 +379,7 @@ export function heapStringHandles(arr: RaiserArrayHeap): int64[] {
 	for (const block of liveCellBlocks(arr.mem)) {
 		const cell = block + refBlockOffset(8);
 		const typeIndex = cellTypeIndex(cell);
-		if (typeIndex < 0 && typeIndex != SEQ_TYPE_INDEX) handles.push(heapTextHandle(cell));
+		if (typeIndex < 0 && typeIndex != SEQ_TYPE_INDEX && typeIndex != BOX_TYPE_INDEX) handles.push(heapTextHandle(cell));
 	}
 	return handles;
 }
@@ -559,7 +559,6 @@ export interface RaiserArrayHeap {
 	mem: VmMemory;
 	stringBytes: HashMap<int64, int64>;
 	seqViews: HashMap<int64, int64[]>;
-	boxes: RaiserBoxHeap;
 	orcRoots: int64[];
 	orcThreshold: number;
 }
@@ -570,7 +569,7 @@ export const OWNED_BY_RECEIVER_RC: int32 = 1;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const orcRoots: int64[] = [];
-	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), boxes: createBoxHeap(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
 }
 
 @inline
@@ -908,48 +907,64 @@ test "array value kind" {
 	assert raiserToBool(createArrayHeap(), v);
 }
 
-// --- Box Heap ---
-// A box holds one dynamic value for a Dyn register. It is immutable once made, so any
-// number of registers can share it; under orc its count is the number of holders.
+// --- Boxes ---
+// A box holds one dynamic value for a Dyn register or slot, in a cell of VM memory: the value's kind word and payload,
+// as a Dyn array element holds them. It can be shared by any number of registers; under orc its count is the number of
+// holders. A box handle carries the Box tag so that a stale word in a register is told from a box without reading memory.
 
-export interface RaiserBoxData {
-	value: RaiserValue;
-	rc: int32;
-}
+export const BOX_TYPE_INDEX: int64 = -3;
+const BOX_CELL_SIZE: int64 = 16;
 
-export interface RaiserBoxHeap {
-	items: RaiserBoxData[];
-	freeList: int64[];
-}
-
-export function createBoxHeap(): RaiserBoxHeap {
-	const items: RaiserBoxData[] = [];
-	const freeList: int64[] = [];
-	return { items, freeList };
+@inline
+function boxCellOf(handle: int64): int64 {
+	return (handle >> HEAP_KIND_BITS) << HEAP_KIND_BITS;
 }
 
 // The box holds the value's reference; the caller counts it where the heaps are counted.
 export function heapAllocBox(heap: RaiserArrayHeap, value: RaiserValue): int64 {
-	const boxes = heap.boxes;
-	const copy: RaiserValue = { kind: value.kind, intVal: value.intVal, floatVal: value.floatVal };
-	if (boxes.freeList.length > 0) {
-		const reused = boxes.freeList[boxes.freeList.length - 1];
-		boxes.freeList.length = boxes.freeList.length - 1;
-		boxes.items[reused].value = copy;
-		boxes.items[reused].rc = OWNED_BY_RECEIVER_RC;
-		return makeHandle(reused, RaiserHeapKind.Box);
-	}
-	const index = boxes.items.length;
-	boxes.items.push({ value: copy, rc: OWNED_BY_RECEIVER_RC });
-	return makeHandle(index, RaiserHeapKind.Box);
+	const cell = newCell(heap.mem, BOX_CELL_SIZE, 8, BOX_TYPE_INDEX, true);
+	setCellRc(cell, OWNED_BY_RECEIVER_RC as int64);
+	setCellRootIdx(cell, 0);
+	st64(cell, dynKindWord(value));
+	st64(cell + 8, dynBits(value));
+	return cell | (RaiserHeapKind.Box as int64);
 }
 
 export function heapBoxValue(heap: RaiserArrayHeap, handle: int64): RaiserValue {
-	return heap.boxes.items[handleIndex(handle)].value;
+	const cell = boxCellOf(handle);
+	return dynValue(ld64(cell), ld64(cell + 8));
+}
+
+export function heapBoxSetValue(handle: int64, value: RaiserValue): void {
+	const cell = boxCellOf(handle);
+	st64(cell, dynKindWord(value));
+	st64(cell + 8, dynBits(value));
+}
+
+export function heapBoxRc(handle: int64): int32 {
+	return cellRc(boxCellOf(handle)) as int32;
+}
+
+export function heapBoxSetRc(handle: int64, rc: int32): void {
+	setCellRc(boxCellOf(handle), rc as int64);
+}
+
+function heapFreeBox(heap: RaiserArrayHeap, handle: int64): void {
+	if (!disposeCell(heap.mem, boxCellOf(handle), 8)) throw new Error(`internal: box ${handle} is not a live cell`);
+}
+
+// The handle of every live box on the heap, for the ledger.
+export function heapBoxHandles(heap: RaiserArrayHeap): int64[] {
+	const handles: int64[] = [];
+	for (const block of liveCellBlocks(heap.mem)) {
+		const cell = block + refBlockOffset(8);
+		if (cellTypeIndex(cell) == BOX_TYPE_INDEX) handles.push(cell | (RaiserHeapKind.Box as int64));
+	}
+	return handles;
 }
 
 export function heapBoxLive(heap: RaiserArrayHeap): number {
-	return heap.boxes.items.length - heap.boxes.freeList.length;
+	return heapBoxHandles(heap).length;
 }
 
 // --- Object Heap ---
@@ -1177,7 +1192,7 @@ export function objectCellStoreField(arr: RaiserArrayHeap, handle: int64, index:
 	if (cls == RaiserRegClass.Dyn) {
 		const box = ld64(at);
 		if (box == 0) { if (val.kind != RaiserValueKind.Nil) st64(at, heapAllocBox(arr, val)); }
-		else arr.boxes.items[handleIndex(box)].value = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
+		else heapBoxSetValue(box, val);
 		return;
 	}
 	st64(at, slotWord(cls, val));
@@ -1363,7 +1378,7 @@ export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc += 1; },
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) + 1); },
-		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc += 1; },
+		RaiserHeapKind.Box => { const cell = boxCellOf(handle); setCellRc(cell, cellRc(cell) + 1); },
 		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) + 1); },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1385,9 +1400,10 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 			if (left <= 0) { rcDestroyString(arrHeap, handle); }
 		},
 		RaiserHeapKind.Box => {
-			const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index];
-			data.rc = data.rc - 1;
-			if (data.rc <= 0) { rcDestroyBox(arrHeap, objHeap, index); }
+			const cell = boxCellOf(handle);
+			const left = cellRc(cell) - 1;
+			setCellRc(cell, left);
+			if (left <= 0) { rcDestroyBox(arrHeap, objHeap, handle); }
 		},
 		RaiserHeapKind.Seq => {
 			const cell = seqCellOf(handle);
@@ -1409,7 +1425,7 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) - 1); last = textRc(cell) <= 0; },
-		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.Box => { const cell = boxCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
 		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1424,7 +1440,7 @@ export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Object => { count = objHeap.objects[index].rc; },
 		RaiserHeapKind.String => { count = textRc(textAddress(handle)) as int32; },
-		RaiserHeapKind.Box => { count = arrHeap.boxes.items[index].rc; },
+		RaiserHeapKind.Box => { count = heapBoxRc(handle); },
 		RaiserHeapKind.Seq => { count = cellRc(seqCellOf(handle)) as int32; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1446,10 +1462,7 @@ export function rcFreeHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 			objHeap.freeList.push(index);
 		},
 		RaiserHeapKind.String => rcDestroyString(arrHeap, handle),
-		RaiserHeapKind.Box => {
-			arrHeap.boxes.items[index].value = raiserNil();
-			arrHeap.boxes.freeList.push(index);
-		},
+		RaiserHeapKind.Box => heapFreeBox(arrHeap, handle),
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => { throw new Error(`internal: handle ${handle} names no cell to free`); },
 	}
 }
@@ -1504,8 +1517,7 @@ function rcFreeSeq(arrHeap: RaiserArrayHeap, handle: int64): void {
 			if (kinds[i] != RaiserRegClass.Dyn) continue;
 			const box = ld64(c + (i as int64) * OBJECT_CELL_SLOT_BYTES);
 			if (box == 0) continue;
-			arrHeap.boxes.items[handleIndex(box)].value = raiserNil();
-			arrHeap.boxes.freeList.push(handleIndex(box));
+			heapFreeBox(arrHeap, box);
 		}
 		if (!disposeCell(arrHeap.mem, c, 8)) throw new Error(`internal: object cell ${c} is not a live cell`);
 		return;
@@ -1555,11 +1567,9 @@ function rcDestroyObjectCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap
 }
 
 @noinline
-function rcDestroyBox(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
-	const data = arrHeap.boxes.items[index];
-	rcDecref(arrHeap, objHeap, data.value);
-	data.value = raiserNil();
-	arrHeap.boxes.freeList.push(index);
+function rcDestroyBox(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	rcDecref(arrHeap, objHeap, heapBoxValue(arrHeap, handle));
+	heapFreeBox(arrHeap, handle);
 }
 
 // --- Cross-heap graph copy ---
@@ -1624,7 +1634,7 @@ function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: 
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Object => { dstObj.objects[index].rc = 0; },
 		RaiserHeapKind.String => { setTextRc(textAddress(handle), 0); },
-		RaiserHeapKind.Box => { dstArr.boxes.items[index].rc = 0; },
+		RaiserHeapKind.Box => { heapBoxSetRc(handle, 0); },
 		RaiserHeapKind.Seq => { setCellRc(seqCellOf(handle), 0); },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
 	}
@@ -1721,7 +1731,7 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 	if (val.kind == RaiserValueKind.Box) {
 		const inner = copyShell(srcArr, srcObj, dstArr, dstObj, heapBoxValue(srcArr, val.intVal), map);
 		const copy = heapAllocBox(dstArr, inner);
-		dstArr.boxes.items[handleIndex(copy)].rc = 0;
+		heapBoxSetRc(copy, 0);
 		rcIncref(dstArr, dstObj, inner);
 		return { kind: RaiserValueKind.Box, intVal: copy, floatVal: 0.0 };
 	}
@@ -2049,7 +2059,6 @@ export function heapObjectGetObjectHandle(arr: RaiserArrayHeap, heap: RaiserObje
 export function clearArrayHeap(heap: RaiserArrayHeap): void {
 	heap.mem = createVmMemory();
 	heap.stringBytes.clear();
-	heap.boxes = createBoxHeap();
 }
 
 export function clearObjectHeap(heap: RaiserObjectHeap): void {
@@ -2263,7 +2272,7 @@ test "a graph copy into another heap keeps each value's kind and the handle that
 	}
 	assert heapStringText(dArr, heapObjectGetField(dArr, dObj, copied.intVal, "text")) == "heap";
 	assert heapStringText(dArr, heapBoxValue(dArr, heapObjectGetField(dArr, dObj, copied.intVal, "box").intVal)) == "boxed";
-	assert dArr.boxes.items.length == 1 && sArr.boxes.items.length == 1;
+	assert heapBoxLive(dArr) == 1 && heapBoxLive(sArr) == 1;
 }
 
 test "a box shares through its handle and frees its held value when its last holder lets go" {
