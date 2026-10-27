@@ -1131,6 +1131,62 @@ function _bridgeMsStringByteLastIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
 }
 
+function _bridgeMsStringIsAscii(args: RaiserValue[]): RaiserValue {
+	for (const byte of unboxString(args[0]).asBytes()) {
+		if (byte >= 0x80) return boxBool(false);
+	}
+	return boxBool(true);
+}
+
+function spanByte(heap: RaiserArrayHeap, span: RaiserValue, i: int64): int64 {
+	return heapArrayGet(heap, span.intVal, i).intVal;
+}
+
+function spanMismatch(heap: RaiserArrayHeap, a: RaiserValue, aAt: int64, b: RaiserValue, n: int64): int64 {
+	let i: int64 = 0;
+	while (i < n && spanByte(heap, a, aAt + i) == spanByte(heap, b, i)) i = i + 1;
+	return i;
+}
+
+function _bridgeMsMemChr(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull == null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const byte = unboxInt(args[3]) as int64;
+	let i = unboxInt(args[1]) as int64;
+	const end = unboxInt(args[2]) as int64;
+	while (i < end) {
+		if (spanByte(heap, args[0], i) == byte) return boxInt(i as number);
+		i = i + 1;
+	}
+	return boxInt(-1);
+}
+
+function _bridgeMsMemEqAt(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull == null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const n = heapArrayLen(heap, args[2].intVal);
+	return boxBool(spanMismatch(heap, args[0], unboxInt(args[1]) as int64, args[2], n) == n);
+}
+
+function _bridgeMsEqualMem(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull == null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const n = heapArrayLen(heap, args[0].intVal);
+	return boxBool(spanMismatch(heap, args[0], 0, args[1], n) == n);
+}
+
+function _bridgeMsMemMismatch(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull == null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const aLen = heapArrayLen(heap, args[0].intVal);
+	const bLen = heapArrayLen(heap, args[1].intVal);
+	return boxInt(spanMismatch(heap, args[0], 0, args[1], aLen < bLen ? aLen : bLen) as number);
+}
+
 // --- Registry init ---
 // Idempotent: subsequent calls are no-ops. Phase 5 invokes this on first
 // @comptime block entry.
@@ -1385,6 +1441,11 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
 	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
 	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
+	registerHostFn("msStringIsAscii",       _bridgeMsStringIsAscii, HostCapability.Pure);
+	registerHostFn("msMemChr",              _bridgeMsMemChr, HostCapability.Pure);
+	registerHostFn("msMemEqAt",             _bridgeMsMemEqAt, HostCapability.Pure);
+	registerHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
+	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
