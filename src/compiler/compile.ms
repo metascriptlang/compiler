@@ -17,6 +17,7 @@ import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, err
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
+import { scanJsCells } from "../transform/lowering/jsVarParamLower";
 import { analyzeProgram } from "../analyzer/index";
 import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
@@ -1646,6 +1647,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	let entryExports = "";
 	const helpers = createJSHelpers();
 	setJsProgramScope(true);
+	for (let ui = 0; ui < unitPaths.length; ui += 1) scanJsCells(unitPrograms[ui], unitCtxs[ui]);
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
@@ -4268,6 +4270,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const fileForced: string[][] = [];
 	const instanceOwners: string[] = [];
 	const instanceOutRels: string[] = [];
+	for (let ui = 0; ui < unitPaths.length; ui += 1) scanJsCells(unitPrograms[ui], unitCtxs[ui]);
 	const moduleTestNames: string[][] = [];
 	const moduleTestFuncs: string[][] = [];
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
