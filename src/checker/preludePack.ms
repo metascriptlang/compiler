@@ -515,7 +515,7 @@ export interface PreludeTables {
 	dispatch: DispatchRecords;
 }
 
-function emptyPreludeTables(): PreludeTables {
+export function emptyPreludeTables(): PreludeTables {
 	return { duVariants: [], ctorRoutines: [], dispatch: { classSyms: [], methodNames: [], methodSyms: [] } };
 }
 
