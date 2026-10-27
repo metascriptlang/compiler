@@ -3,7 +3,7 @@
 
 import { platform } from "std/process";
 import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
-import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
+import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym, moduleItemId } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, bindModulePassesFrom, setSlowTrace } from "./checkPass";
@@ -466,7 +466,7 @@ function itemsOfModuleB(): string {
 	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
 	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
 	checkModuleGraph(graph, "");
-	const moduleB = graph.loadOrder.indexOf("/src/b.ms") as int32;
+	const moduleB = moduleItemId("/src/b.ms");
 	const seen: int32[] = [];
 	let out = "";
 	for (const name of ["foo", "k", "helper", "Box"]) {
@@ -483,6 +483,23 @@ test "a declaration carries its module's index and an ordinal unique in that mod
 	const first = itemsOfModuleB();
 	assert first != "";
 	assert itemsOfModuleB() == first;
+}
+
+function fooModuleIdWith(firstModule: string): int32 {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): number { return n; }" });
+	entries.push({ entryPath: "/src/z.ms", entrySource: "export const z = 1;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: firstModule == "z" ? "import { z } from \"./z\";\nimport { foo } from \"./b\";\nconst x = foo(z);" : "import { foo } from \"./b\";\nconst x = foo(1);" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const foo = scopeSymbolOf("/src/b.ms", "foo");
+	return foo != null ? foo.itemModule : -2;
+}
+
+test "a module's item id is interned by its path, not by its place in the load order" {
+	const alone = fooModuleIdWith("b");
+	assert alone >= 0;
+	assert fooModuleIdWith("z") == alone, `${fooModuleIdWith("z")} vs ${alone}`;
 }
 
 function showCallOwners(generic: boolean): string {

@@ -1591,8 +1591,18 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
-	ctx.itemModule = graph.loadOrder.indexOf(mod.path) as int32;
+	ctx.itemModule = moduleItemId(mod.path);
 	return ctx;
+}
+
+const _moduleItemIds = new HashMap<string, int32>();
+
+export function moduleItemId(path: string): int32 {
+	const known = _moduleItemIds.get(path);
+	if (known != null) return known;
+	const id = _moduleItemIds.size as int32;
+	_moduleItemIds.set(path, id);
+	return id;
 }
 
 // Mints the ordinal that separates same-named routines of one module in the
