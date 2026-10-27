@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, stampEnd } from "../cursor";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -91,14 +91,16 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const keyword = current(state);
 	advance(state);
 	const first = try parseDeclarator(state, keyword, keyword);
+	let last = first;
 	while (current(state).kind == TokenKind.Comma) {
 		advance(state);
 		const next = try parseDeclarator(state, keyword, current(state));
-		stampEnd(state, next);
 		next.flags = next.flags.incl(NodeFlag.ContinuesList);
 		state.trailingDecls.push(next);
+		last = next;
 	}
 	consumeSemicolon(state);
+	finishNode(state, last);
 	return Result.ok(first);
 }
 
@@ -112,11 +114,11 @@ function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeRes
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(createNode(NodeKind.DestructuringDecl, {
+		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at));
+		}, at)));
 	}
 
 	if (current(state).kind == TokenKind.LBracket) {
@@ -127,11 +129,11 @@ function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeRes
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(createNode(NodeKind.DestructuringDecl, {
+		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at));
+		}, at)));
 	}
 
 	const nameToken = current(state);
@@ -155,13 +157,13 @@ function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeRes
 		return Result.err(`'const' declaration must be initialized at line ${current(state).line}`);
 	}
 
-	const varNode = createNode(NodeKind.VariableDecl, {
+	const varNode = finishNode(state, createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
 		declType,
 		initializer: init as Node,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 		nameLocation: makeLocFromToken(nameToken),
-	}, at);
+	}, at));
 	varNode.typeExpr = declTypeExpr;
 	return Result.ok(varNode);
 }
@@ -442,9 +444,14 @@ export function parseExportDecl(state: ParserState): NodeResult {
 			decorators.push(dec);
 		}
 		const exported = try parseExportBody(state, exportToken);
-		return Result.ok(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: exported }, exportToken));
+		return Result.ok(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: finishOnce(state, exported) }, exportToken));
 	}
 	return parseExportBody(state, exportToken);
+}
+
+// An export ends where the declaration it wraps ends, which the declaration's parser may have left open.
+function exportOf(state: ParserState, decl: Node, exportToken: Token): Node {
+	return finishAfter(createNode(NodeKind.ExportDecl, { exportedDecl: finishOnce(state, decl) }, exportToken), decl);
 }
 
 function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
@@ -477,7 +484,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
 			importNames: ["*"], importAliases: [nsAlias], importSource: source, nameLocations: [], aliasLocations: [], importTypeNames: [],
 		}, exportToken), typeModifier);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
+		return Result.ok(exportOf(state, importNode, exportToken));
 	}
 	// Re-export: export { X, Y } from "module";
 	if (nextKind == TokenKind.LBrace) {
@@ -499,31 +506,31 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
 			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations, aliasLocations: specs.aliasLocations, importTypeNames: specs.typeNames,
 		}, exportToken), typeModifier);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
+		return Result.ok(exportOf(state, importNode, exportToken));
 	}
 
 	if (nextKind == TokenKind.Function) {
 		const decl = try parseFunctionDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Const || nextKind == TokenKind.Let) {
 		const mark = state.trailingDecls.length;
 		const decl = try parseVariableDecl(state);
 		for (let i = mark; i < state.trailingDecls.length; i += 1) {
-			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+			state.trailingDecls[i] = exportOf(state, state.trailingDecls[i], exportToken);
 		}
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Enum) {
 		const decl = try parseEnumDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Interface) {
 		const decl = try parseInterfaceDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Struct) {
@@ -533,17 +540,17 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 			const getter = state.trailingDecls[i];
 			if (getter.kind == NodeKind.DecoratedDecl) {
 				const dd = getter.data as DecoratedDeclData;
-				dd.decoratedNode = createNode(NodeKind.ExportDecl, { exportedDecl: dd.decoratedNode }, exportToken);
+				dd.decoratedNode = exportOf(state, dd.decoratedNode, exportToken);
 			} else {
-				state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: getter }, exportToken);
+				state.trailingDecls[i] = exportOf(state, getter, exportToken);
 			}
 		}
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Type) {
 		const decl = try parseTypeAliasDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Distinct) {
@@ -552,22 +559,22 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 
 	if (nextKind == TokenKind.Class || nextKind == TokenKind.Abstract) {
 		const decl = try parseClassDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Actor) {
 		const decl = try parseActorDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Macro) {
 		const decl = try parseMacroDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Converter) {
 		const decl = try parseConverterDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	if (nextKind == TokenKind.Template) {
@@ -575,19 +582,19 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const decl = try parseFunctionDecl(state);
 		const fd = decl.data as FunctionDeclData;
 		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	// export async function f() {}
 	if (nextKind == TokenKind.Async) {
 		const decl = try parseFunctionDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	// export extern function f(): void;
 	if (nextKind == TokenKind.Extern) {
 		const decl = try parseExternDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return Result.ok(exportOf(state, decl, exportToken));
 	}
 
 	// export default <expr>;
@@ -597,7 +604,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const afterDefault = current(state).kind;
 		if (afterDefault == TokenKind.Function) {
 			const decl = try parseFunctionDecl(state);
-			const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken);
+			const exportNode = exportOf(state, decl, exportToken);
 			exportNode.flags = exportNode.flags.incl(NodeFlag.ExportDefault);
 			return Result.ok(exportNode);
 		}
@@ -605,7 +612,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const expr = try callExprParser(state);
 		consumeSemicolon(state);
 		const exprStmt = createNode(NodeKind.ExprStmt, { expr }, exportToken);
-		const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken);
+		const exportNode = exportOf(state, exprStmt, exportToken);
 		exportNode.flags = exportNode.flags.incl(NodeFlag.ExportDefault);
 		return Result.ok(exportNode);
 	}
@@ -670,6 +677,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	state.position = typeStart;
 	const aliasTypeExpr = parseTypeExpr(state);
 	state.position = savedPos;
+	finishNode(state, aliasTypeExpr);
 	consumeSemicolon(state);
 
 	const aliasNode = createNode(NodeKind.TypeAliasDecl, {
@@ -932,7 +940,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		if (decorators.length > 0 && nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
 			const getter = try parseStructAccessor(state, name, genericNames);
-			state.trailingDecls.push(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: getter }, decoratorToken));
+			state.trailingDecls.push(finishNode(state, createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: getter }, decoratorToken)));
 			continue;
 		}
 		let visibility = "";
@@ -1155,7 +1163,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 			continue;
 		}
 		const member = try parseClassMember(state);
-		stampEnd(state, member);
+		finishNode(state, member);
 		members.push(member);
 	}
 
@@ -1213,7 +1221,7 @@ export function parseActorDecl(state: ParserState): NodeResult {
 			continue;
 		}
 		const member = try parseClassMember(state);
-		stampEnd(state, member);
+		finishNode(state, member);
 		const refusal = autoAccessorRefusal(member, "an actor");
 		if (refusal != "") return Result.err(refusal);
 		members.push(member);
@@ -1246,7 +1254,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		const member = try parseClassMember(state);
 		return Result.ok(createNode(NodeKind.DecoratedDecl, {
 			decorators,
-			decoratedNode: member,
+			decoratedNode: finishOnce(state, member),
 		}, memberToken));
 	}
 
@@ -1483,7 +1491,7 @@ function parseStructAccessor(state: ParserState, structName: string, genericName
 	const fnReturnTypeExpr = getLastTypeExpr();
 	const fnBody = try callBlockParser(state);
 	const nameLoc = makeLocFromToken(accNameToken);
-	const fnNode = createNode(NodeKind.FunctionDecl, {
+	const fnNode = finishNode(state, createNode(NodeKind.FunctionDecl, {
 		fnName: `get_${accNameToken.value}`,
 		params: ["this"],
 		fnParamTypes: [structName],
@@ -1493,7 +1501,7 @@ function parseStructAccessor(state: ParserState, structName: string, genericName
 		fnDefaults: [null as unknown as Node],
 		nativeName: "",
 		nameLocation: nameLoc,
-	}, accToken);
+	}, accToken));
 	fnNode.typeExpr = fnReturnTypeExpr;
 	fnNode.typeExprs = [null as unknown as Node];
 	fnNode.paramLocations = [nameLoc];
@@ -1607,9 +1615,9 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			const restIdent = current(state);
 			if (isIdentLike(restIdent)) {
 				advance(state);
-				elements.push(createNode(NodeKind.SpreadExpr, {
-					spreadArg: createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent),
-				}, spreadToken));
+				elements.push(finishNode(state, createNode(NodeKind.SpreadExpr, {
+					spreadArg: finishToken(createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent), restIdent),
+				}, spreadToken)));
 			}
 		} else if (current(state).kind == TokenKind.LBracket) {
 			// Nested array pattern
@@ -1622,7 +1630,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 		} else if (isIdentLike(current(state))) {
 			const elemToken = current(state);
 			advance(state);
-			elements.push(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken));
+			elements.push(finishToken(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken), elemToken));
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
 				const dIdx = elements.length - 1;
@@ -1643,11 +1651,11 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 		}
 	}
 	if (current(state).kind == TokenKind.RBracket) { advance(state); }
-	return Result.ok(createNode(NodeKind.ArrayPattern, {
+	return Result.ok(finishNode(state, createNode(NodeKind.ArrayPattern, {
 		patternElements: elements,
 		hasRestElement: hasRest,
 		patternDefaults: defaults,
-	}, bracketToken));
+	}, bracketToken)));
 }
 
 export function parseObjectPattern(state: ParserState): NodeResult {
@@ -1664,9 +1672,9 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 			const restIdent = current(state);
 			if (isIdentLike(restIdent)) {
 				advance(state);
-				props.push(createNode(NodeKind.SpreadExpr, {
-					spreadArg: createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent),
-				}, spreadToken));
+				props.push(finishNode(state, createNode(NodeKind.SpreadExpr, {
+					spreadArg: finishToken(createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent), restIdent),
+				}, spreadToken)));
 			}
 		} else if (isIdentLike(current(state))) {
 			const keyToken = current(state);
@@ -1676,18 +1684,18 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 				advance(state); // consume ':'
 				if (current(state).kind == TokenKind.LBrace) {
 					const nested = try parseObjectPattern(state);
-					props.push(createNode(NodeKind.ObjectPatternProp, {
+					props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
 						propDefault: null,
-					}, keyToken));
+					}, keyToken)));
 				} else if (current(state).kind == TokenKind.LBracket) {
 					const nested = try parseArrayPattern(state);
-					props.push(createNode(NodeKind.ObjectPatternProp, {
+					props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
 						propDefault: null,
-					}, keyToken));
+					}, keyToken)));
 				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
 					advance(state);
@@ -1696,11 +1704,11 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 						advance(state);
 						aliasDefault = try callExprParser(state);
 					}
-					props.push(createNode(NodeKind.ObjectPatternProp, {
+					props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
-						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
+						propAlias: finishToken(createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken), aliasToken),
 						propDefault: aliasDefault,
-					}, keyToken));
+					}, keyToken)));
 				}
 			} else {
 				// Shorthand: { key } — alias is same as key
@@ -1709,11 +1717,11 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					advance(state);
 					shorthandDefault = try callExprParser(state);
 				}
-				props.push(createNode(NodeKind.ObjectPatternProp, {
+				props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 					propKey: keyToken.value,
-					propAlias: createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken),
+					propAlias: finishToken(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken), keyToken),
 					propDefault: shorthandDefault,
-				}, keyToken));
+				}, keyToken)));
 			}
 		} else {
 			break;
@@ -1725,10 +1733,10 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 		}
 	}
 	if (current(state).kind == TokenKind.RBrace) { advance(state); }
-	return Result.ok(createNode(NodeKind.ObjectPattern, {
+	return Result.ok(finishNode(state, createNode(NodeKind.ObjectPattern, {
 		patternProps: props,
 		hasRestProp: hasRest,
-	}, braceToken));
+	}, braceToken)));
 }
 
 // skipDefaultValue imported from ../util
@@ -1752,7 +1760,7 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 	// @comptime { ... } — produce ComptimeBlock instead of MacroInvocation
 	if (macroName == "comptime" && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const comptimeBody = try callBlockParser(state);
-		return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody }, atToken));
+		return Result.ok(finishNode(state, createNode(NodeKind.ComptimeBlock, { comptimeBody }, atToken)));
 	}
 
 	// Optional arguments: @name(arg1, arg2)
@@ -1775,11 +1783,11 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 		}
 	}
 
-	return Result.ok(createNode(NodeKind.MacroInvocation, {
+	return Result.ok(finishNode(state, createNode(NodeKind.MacroInvocation, {
 		macroName,
 		macroArgs: args,
 		macroHasParens: hasParens,
-	}, atToken));
+	}, atToken)));
 }
 
 // ===== Extern Declaration =====
@@ -1948,7 +1956,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			const members: Node[] = [];
 			while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 				if (current(state).kind == TokenKind.Semicolon) { advance(state); continue; }
-				const member = try parseClassMember(state);
+				const member = finishNode(state, try parseClassMember(state));
 				const refusal = autoAccessorRefusal(member, "an extern class");
 				if (refusal != "") return Result.err(refusal);
 				members.push(member);

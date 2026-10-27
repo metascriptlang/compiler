@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../cursor";
+import { ParserState, current, advance, isAtEnd, finishAfter, finishToken } from "../cursor";
 import { parseOk } from "./testUtil";
 
 
@@ -16,7 +16,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 	advance(state); // consume TemplateHead
 	const parts: Node[] = [];
 	if (headToken.value.length > 0) {
-		parts.push(createNode(NodeKind.StringLiteral, { value: headToken.value }, headToken));
+		parts.push(finishToken(createNode(NodeKind.StringLiteral, { value: headToken.value }, headToken), headToken));
 	}
 
 	// Parse first interpolated expression
@@ -28,7 +28,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		const midToken = current(state);
 		advance(state);
 		if (midToken.value.length > 0) {
-			parts.push(createNode(NodeKind.StringLiteral, { value: midToken.value }, midToken));
+			parts.push(finishToken(createNode(NodeKind.StringLiteral, { value: midToken.value }, midToken), midToken));
 		}
 		const midExpr = try parsePrec(state, 0);
 		parts.push(midExpr);
@@ -39,7 +39,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 	}
 	const tailToken = current(state);
 	if (tailToken.value.length > 0) {
-		parts.push(createNode(NodeKind.StringLiteral, { value: tailToken.value }, tailToken));
+		parts.push(finishToken(createNode(NodeKind.StringLiteral, { value: tailToken.value }, tailToken), tailToken));
 	}
 	advance(state);
 
@@ -57,7 +57,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		first = 0;
 	}
 	for (let i = first; i < parts.length; i++) {
-		result = createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken);
+		result = finishAfter(createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken), parts[i]);
 	}
 	return Result.ok(result);
 }

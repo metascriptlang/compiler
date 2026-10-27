@@ -3,7 +3,7 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, IfStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, parenGroupThen, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, finishNode, finishOnce, finishAfter, finishToken, takePendingComments, parenGroupThen, takeTrailingDecls } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
@@ -44,11 +44,11 @@ function parseStatementCore(state: ParserState): NodeResult {
 	if (token.kind == TokenKind.Async) {
 		if (peek(state, 1).kind == TokenKind.Function) {
 			const asyncFn = try parseFunctionDecl(state);
-			stampEnd(state, asyncFn);
+			finishNode(state, asyncFn);
 			return Result.ok(attachComments(state, asyncFn));
 		}
 		const asyncExpr = try parseExprStmt(state);
-		stampEnd(state, asyncExpr);
+		finishNode(state, asyncExpr);
 		return Result.ok(attachComments(state, asyncExpr));
 	}
 
@@ -60,7 +60,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			advance(state); // consume 'comptime'
 			const comptimeBody = try parseBlockStmt(state);
 			const node = createNode(NodeKind.ComptimeBlock, { comptimeBody }, token);
-			stampEnd(state, node);
+			finishNode(state, node);
 			return Result.ok(attachComments(state, node));
 		}
 	}
@@ -71,7 +71,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		const fn = try parseFunctionDecl(state);
 		const fd = fn.data as FunctionDeclData;
 		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
-		stampEnd(state, fn);
+		finishNode(state, fn);
 		return Result.ok(attachComments(state, fn));
 	}
 
@@ -86,7 +86,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		if (decorators.length == 1 && !isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 			consumeSemicolon(state);
 			const node = createNode(NodeKind.ExprStmt, { expr: decorators[0] }, token);
-			stampEnd(state, node);
+			finishNode(state, node);
 			return Result.ok(attachComments(state, node));
 		}
 		const decl = try parseStatement(state);
@@ -94,7 +94,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			decorators,
 			decoratedNode: decl,
 		}, token);
-		stampEnd(state, node);
+		finishNode(state, node);
 		const inside: Token[] = [];
 		for (const comment of decl.comments) {
 			if (comment.line > decl.location.endLine) node.comments.push(comment);
@@ -140,7 +140,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 	};
 
 	if (!res.ok) return res;
-	stampEnd(state, res.value);
+	finishOnce(state, res.value);
 	return Result.ok(attachComments(state, res.value));
 }
 
@@ -241,8 +241,8 @@ function parseWhenTrait(state: ParserState, nameTok: Token): NodeResult {
 		return Result.err(`A type trait in a 'when' condition takes only its type argument: write '${nameTok.value}<${typeArg}>()' at line ${current(state).line}`);
 	}
 	advance(state);
-	const callee = createNode(NodeKind.Identifier, { name: nameTok.value }, nameTok);
-	const call = createNode(NodeKind.CallExpr, { callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, nameTok);
+	const callee = finishToken(createNode(NodeKind.Identifier, { name: nameTok.value }, nameTok), nameTok);
+	const call = finishNode(state, createNode(NodeKind.CallExpr, { callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, nameTok));
 	call.typeArg = typeArg;
 	return Result.ok(call);
 }
@@ -262,7 +262,7 @@ function parseWhenPrimary(state: ParserState): NodeResult {
 		advance(state);
 		const v = try parseWhenPrimary(state);
 		if (isWhenFlag(v)) return Result.ok(whenFlag(!whenFlagValue(v), tok));
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "!", operand: v }, tok));
+		return Result.ok(finishAfter(createNode(NodeKind.UnaryExpr, { unaryOp: "!", operand: v }, tok), v));
 	}
 	if (tok.kind == TokenKind.Ident) {
 		const name = tok.value;
@@ -289,7 +289,7 @@ function whenJoin(left: Node, right: Node, op: string, at: Token): Node {
 		const b = whenFlagValue(right);
 		return whenFlag(op == "&&" ? a && b : a || b, at);
 	}
-	return createNode(NodeKind.BinaryExpr, { operator: op, left, right }, at);
+	return finishAfter(createNode(NodeKind.BinaryExpr, { operator: op, left, right }, at), right);
 }
 
 function parseWhenAnd(state: ParserState): NodeResult {
@@ -340,6 +340,7 @@ function deferWhen(conds: Node[], blocks: Node[], elseBlock: Node | null, from: 
 			continue;
 		}
 		const node = createNode(NodeKind.IfStmt, { condition: conds[i], consequent: blocks[i], alternate: alternate as unknown as Node }, at);
+		finishAfter(node, alternate != null ? alternate : blocks[i]);
 		node.flags = node.flags.incl(NodeFlag.WhenDeferred);
 		alternate = node;
 	}
@@ -422,7 +423,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 
 	const block = createNode(NodeKind.BlockStmt, { statements: stmts }, token);
 	block.comments = dangling;
-	stampEnd(state, block);
+	finishNode(state, block);
 	return Result.ok(block);
 }
 
@@ -471,7 +472,7 @@ export function parseProgram(state: ParserState): NodeResult {
 			synchronize(state);
 		}
 	}
-	const node = createNode(NodeKind.Program, { programStmts: stmts }, token);
+	const node = finishToken(createNode(NodeKind.Program, { programStmts: stmts }, token), current(state));
 	return Result.ok(attachComments(state, node));
 }
 

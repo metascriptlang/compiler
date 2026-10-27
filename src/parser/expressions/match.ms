@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, takePendingComments } from "../cursor";
+import { ParserState, current, advance, isAtEnd, takePendingComments, finishNode, finishToken } from "../cursor";
 import { parseMemberChain, tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";
@@ -120,11 +120,11 @@ function parseMatchCase(
 	// Parse body: block ({ ... }) or expression
 	let body = try parseMatchBody(state, exprParser, blockParser);
 
-	return Result.ok(createNode(NodeKind.MatchCase, {
+	return Result.ok(finishNode(state, createNode(NodeKind.MatchCase, {
 		casePatterns: patterns,
 		caseGuard: guard,
 		caseBody: body,
-	}, arrowToken));
+	}, arrowToken)));
 }
 
 // ===== Match Body =====
@@ -175,7 +175,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// String literal — with optional .code suffix ("a".code → MemberExpr)
 	if (token.kind == TokenKind.String) {
 		advance(state);
-		let node = createNode(NodeKind.StringLiteral, { value: token.value }, token);
+		let node = finishToken(createNode(NodeKind.StringLiteral, { value: token.value }, token), token);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 			advance(state);
 			if (isAtEnd(state) || !isIdentOrKeyword(current(state).kind)) {
@@ -183,7 +183,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 			}
 			const prop = current(state);
 			advance(state);
-			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
+			node = finishNode(state, createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token));
 		}
 		return Result.ok(node);
 	}
@@ -197,7 +197,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// Identifier (including _ wildcard, enum members, binding patterns)
 	if (isIdentLike(token)) {
 		advance(state);
-		const base = createNode(NodeKind.Identifier, { name: token.value }, token);
+		const base = finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
 		return Result.ok(parseMemberChain(state, base));
 	}
 
@@ -205,7 +205,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Minus) {
 		advance(state);
 		const operand = try parseSinglePattern(state);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token));
+		return Result.ok(finishNode(state, createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token)));
 	}
 
 	return Result.err(`Unexpected token in match pattern: ${token.value} at line ${token.line}`);

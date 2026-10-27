@@ -2,7 +2,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../cursor";
+import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, takePendingComments, parenGroupThen, expectCloser } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
@@ -28,9 +28,7 @@ export function parseExpression(tokens: Token[]): ExprResult {
 }
 
 export function parseExpressionFromState(state: ParserState): ExprResult {
-	const result = parseExprWithPrec(state, 0);
-	if (result.ok) stampEnd(state, result.value);
-	return result;
+	return parseExprWithPrec(state, 0);
 }
 
 
@@ -41,7 +39,7 @@ function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	const captured = captureType(state);
 	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: captured.text }, token);
 	asNode.typeExpr = captured.expr;
-	return asNode;
+	return finishNode(state, asNode);
 }
 
 // After `a op b as T`, an operator that binds tighter than `op` would have taken
@@ -95,7 +93,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				property: propName,
 				isOptional: false
 			};
-			left = createNode(NodeKind.MemberExpr, memberData, token);
+			left = finishNode(state, createNode(NodeKind.MemberExpr, memberData, token));
 			continue;
 		}
 
@@ -121,7 +119,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				advance(state);
 			}
 			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
-			left = createNode(NodeKind.MemberExpr, { object: left, property: optPropName, isOptional: true }, token);
+			left = finishNode(state, createNode(NodeKind.MemberExpr, { object: left, property: optPropName, isOptional: true }, token));
 			chainOpen = true;
 			continue;
 		}
@@ -134,7 +132,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			advance(state);
 			if (current(state).kind == TokenKind.RBracket) {
 				advance(state);
-				left = createNode(NodeKind.HiddenDeref, { expr: left }, token);
+				left = finishNode(state, createNode(NodeKind.HiddenDeref, { expr: left }, token));
 				left.flags = left.flags.incl(NodeFlag.ExplicitDeref);
 				continue;
 			}
@@ -144,14 +142,14 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				const rangeTok = current(state);
 				advance(state);
 				const endIdx = try parseExprWithPrec(state, 0);
-				idx = createNode(NodeKind.BinaryExpr, { operator: rangeTok.value, left: idx, right: endIdx }, rangeTok);
+				idx = finishNode(state, createNode(NodeKind.BinaryExpr, { operator: rangeTok.value, left: idx, right: endIdx }, rangeTok));
 			}
 			expectCloser(state, token, TokenKind.RBracket);
 			const accessData: NodeData = {
 				array: left,
 				index: idx
 			};
-			left = createNode(NodeKind.ArrayAccess, accessData, token);
+			left = finishNode(state, createNode(NodeKind.ArrayAccess, accessData, token));
 			if (optionalIndex) {
 				left.flags = left.flags.incl(NodeFlag.OptionalLink);
 				chainOpen = true;
@@ -165,14 +163,14 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
 			chainOpen = false;
 			advance(state);
-			left = createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: left, isPrefix: false }, token);
+			left = finishNode(state, createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: left, isPrefix: false }, token));
 			continue;
 		}
 
 		// Non-null assertion: expr! — sentinel asType "!" strips the nullable
 		if (token.kind == TokenKind.Bang) {
 			advance(state);
-			left = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: "!" }, token);
+			left = finishNode(state, createNode(NodeKind.TypeAssertion, { asExpr: left, asType: "!" }, token));
 			continue;
 		}
 
@@ -217,7 +215,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			left,
 			right
 		};
-		left = createNode(NodeKind.BinaryExpr, data, op);
+		left = finishNode(state, createNode(NodeKind.BinaryExpr, data, op));
 		lastPrec = prec;
 	}
 
@@ -234,11 +232,11 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			}
 			state.noArrowReturnType = arrowReturnTypeBan;
 			const alternate = try parseExprWithPrec(state, ternaryPrec);
-			left = createNode(NodeKind.ConditionalExpr, {
+			left = finishNode(state, createNode(NodeKind.ConditionalExpr, {
 				ternaryCondition: left,
 				ternaryConsequent: consequent,
 				ternaryAlternate: alternate,
-			}, qToken);
+			}, qToken));
 		}
 	}
 
@@ -298,6 +296,12 @@ function prefixed(operand: Node, wrap: (inner: Node) => Node): Node {
 }
 
 function parsePrimary(state: ParserState): ExprResult {
+	const result = parsePrimaryNode(state);
+	if (result.ok && !result.value.flags.has(NodeFlag.Parenthesized)) finishNode(state, result.value);
+	return result;
+}
+
+function parsePrimaryNode(state: ParserState): ExprResult {
 	const token = current(state);
 	const allowArrowReturnType = state.noArrowReturnType == 0;
 	state.noArrowReturnType = 0;
@@ -417,7 +421,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		advance(state);
 		const operand = try parseExprWithPrec(state, 99);
 		return Result.ok(prefixed(operand, (inner: Node): Node => {
-			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+			return finishAfter(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token), inner);
 		}));
 	}
 
@@ -432,7 +436,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			const prop = current(state);
 			if (isIdentOrKeyword(prop.kind)) {
 				advance(state);
-				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value, isOptional: false }, dotToken);
+				callee = finishNode(state, createNode(NodeKind.MemberExpr, { object: callee, property: prop.value, isOptional: false }, dotToken));
 			}
 		}
 		// Capture generic type args: new Box<number>(42)
@@ -466,7 +470,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		advance(state);
 		const awaitOperand = try parseExprWithPrec(state, 70);
 		return Result.ok(prefixed(awaitOperand, (inner: Node): Node => {
-			return createNode(NodeKind.AwaitExpr, { awaitArg: inner }, token);
+			return finishAfter(createNode(NodeKind.AwaitExpr, { awaitArg: inner }, token), inner);
 		}));
 	}
 
@@ -513,7 +517,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		advance(state);
 		const updateTarget = try parseExprWithPrec(state, 99);
 		const wrapUpdate = (inner: Node): Node => {
-			return createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: inner, isPrefix: true }, token);
+			return finishAfter(createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: inner, isPrefix: true }, token), inner);
 		};
 		return Result.ok(prefixed(updateTarget, wrapUpdate));
 	}
@@ -620,7 +624,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		// This ensures !result.ok → !(result.ok), not (!result).ok
 		const operand = try parseExprWithPrec(state, 70);
 		return Result.ok(prefixed(operand, (inner: Node): Node => {
-			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+			return finishAfter(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token), inner);
 		}));
 	}
 

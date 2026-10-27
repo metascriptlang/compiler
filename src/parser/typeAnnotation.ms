@@ -10,7 +10,7 @@
 
 import { TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, stampEnd } from "./cursor";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, finishNode, finishToken } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
 
@@ -78,7 +78,7 @@ export function captureType(state: ParserState): CapturedType {
 	state.position = start;
 	const expr = parseTypeExpr(state);
 	state.position = end;
-	stampEnd(state, expr);
+	finishNode(state, expr);
 	return { text, expr };
 }
 
@@ -103,7 +103,7 @@ function parseIntersectionTail(state: ParserState, first: Node): Node {
 			advance(state);
 			members.push(parseTypeAtom(state));
 		}
-		return createNodeAt(NodeKind.TypeIntersection, { typExprMembers: members }, members[0].location);
+		return finishNode(state, createNodeAt(NodeKind.TypeIntersection, { typExprMembers: members }, makeLoc(first.location.line, first.location.column)));
 	}
 	return first;
 }
@@ -123,12 +123,12 @@ export function parseTypeExpr(state: ParserState): Node {
 			advance(state);
 			members.push(parseIntersectionTail(state, parseTypeAtom(state)));
 		}
-		return createNodeAt(NodeKind.TypeUnion, {
+		return finishNode(state, createNodeAt(NodeKind.TypeUnion, {
 			typExprMembers: members,
 			discFieldName: "",
 			variantKeys: [],
 			discKind: "",
-		}, first.location);
+		}, makeLoc(first.location.line, first.location.column)));
 	}
 
 	return first;
@@ -151,7 +151,7 @@ function parseTypeAtom(state: ParserState): Node {
 		const operandAt = state.position;
 		skipTypeQueryOperand(state);
 		const operandText = collectTokenText(state, operandAt, state.position);
-		return createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt)));
+		return finishNode(state, createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt))));
 	}
 
 	// Function type: (a: T, b: U) => R
@@ -170,25 +170,25 @@ function parseTypeAtom(state: ParserState): Node {
 	// (Positioned tuple AST as a dedicated NodeKind is a future enhancement.)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
-		return applyArraySuffix(state, createNode(NodeKind.Identifier, { name: "[tuple]" }, token));
+		return applyArraySuffix(state, finishNode(state, createNode(NodeKind.Identifier, { name: "[tuple]" }, token)));
 	}
 
 	if (isNegativeNumberAhead(state)) {
 		advance(state);
 		const digits = current(state);
 		advance(state);
-		return createNode(NodeKind.Identifier, { name: "-" + digits.value }, token);
+		return finishToken(createNode(NodeKind.Identifier, { name: "-" + digits.value }, token), digits);
 	}
 
 	// Named type: identifier (possibly with generics and array suffix)
 	if (!isIdentLikeKind(token.kind)) {
 		// Fallback: create an Identifier with whatever token we have
 		advance(state);
-		return createNode(NodeKind.Identifier, { name: token.value }, token);
+		return finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
 	}
 
 	advance(state);
-	let result = createNode(NodeKind.Identifier, { name: token.value }, token);
+	let result = finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
 
 	// Enum literal type: K.A — consume "." Ident chain and produce a MemberExpr-shaped node
 	// in type position. The checker's resolveAnnotation handles the string path ("K.A") via
@@ -198,14 +198,14 @@ function parseTypeAtom(state: ParserState): Node {
 		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		const memberToken = current(state);
 		advance(state);
-		result = createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token);
+		result = finishToken(createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token), memberToken);
 	}
 
 	// Generic type args: Type<A, B>
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 		const args = parseGenericTypeArgs(state);
 		if (args.length > 0) {
-			result = createNode(NodeKind.TypeGeneric, { typExprBase: result, typExprArgs: args }, token);
+			result = finishNode(state, createNode(NodeKind.TypeGeneric, { typExprBase: result, typExprArgs: args }, token));
 		}
 	}
 
@@ -215,6 +215,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// Optional marker: T? — treat as union with null (skip but preserve base)
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 		advance(state);
+		finishNode(state, result);
 	}
 
 	return result;
@@ -226,7 +227,7 @@ function applyArraySuffix(state: ParserState, result: Node): Node {
 		const literalSize = peek(state, 1).kind == TokenKind.Number && peek(state, 2).kind == TokenKind.RBracket;
 		const size = literalSize ? parseFloat(peek(state, 1).value) as int32 : -1;
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
-		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
+		result = finishNode(state, createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken));
 	}
 	return result;
 }
@@ -342,11 +343,11 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 		advance(state);
 		skipReturnPredicateHead(state);
 		const returnType = parseTypeAtom(state);
-		return createNode(NodeKind.TypeFunction, {
+		return finishNode(state, createNode(NodeKind.TypeFunction, {
 			typExprParams: paramTypes,
 			typExprReturn: returnType,
 			typExprParamNames: paramNames,
-		}, parenToken);
+		}, parenToken));
 	}
 
 	// Parenthesized type: (T) → unwrap to inner type
@@ -356,11 +357,11 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 
 	// Fallback: treat as function type with void return
 	const voidNode = createNode(NodeKind.Identifier, { name: "void" }, parenToken);
-	return createNode(NodeKind.TypeFunction, {
+	return finishNode(state, createNode(NodeKind.TypeFunction, {
 		typExprParams: paramTypes,
 		typExprReturn: voidNode,
 		typExprParamNames: paramNames,
-	}, parenToken);
+	}, parenToken));
 }
 
 function parseTypeObjectLiteral(state: ParserState): Node {
@@ -461,7 +462,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		typExprOptionalFields: optionalFields,
 	}, braceToken);
 	objectNode.paramLocations = fieldLocations;
-	return objectNode;
+	return finishNode(state, objectNode);
 }
 
 // Tier 3: skip a type atom WITHOUT consuming the trailing '?' (needed for conditional types

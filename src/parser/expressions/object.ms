@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ObjectLiteralData, StringLiteralData, SourceLocation, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, takePendingComments, expectCloser } from "../cursor";
+import { ParserState, createState, current, advance, isAtEnd, takePendingComments, expectCloser, finishNode, finishToken } from "../cursor";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./testUtil";
 import { isPropertyName, attachComments } from "../util";
@@ -38,7 +38,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			const spreadVal = try exprParser(state, 0);
 			keys.push("...");
 			keyLocs.push(makeLoc(spreadToken.line, spreadToken.column));
-			values.push(withLeading(createNode(NodeKind.SpreadExpr, { spreadArg: spreadVal }, spreadToken), leading));
+			values.push(withLeading(finishNode(state, createNode(NodeKind.SpreadExpr, { spreadArg: spreadVal }, spreadToken)), leading));
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
@@ -57,7 +57,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 				values.push(withLeading(compVal, leading));
 			} else {
 				keys.push("__computed__");
-				values.push(withLeading(createNode(NodeKind.ComputedProperty, { computedKey: keyExpr, computedValue: compVal }, compToken), leading));
+				values.push(withLeading(finishNode(state, createNode(NodeKind.ComputedProperty, { computedKey: keyExpr, computedValue: compVal }, compToken)), leading));
 			}
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
@@ -98,7 +98,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			// Shorthand property: { key } means { key: key }
 			keys.push(keyToken.value);
 			keyLocs.push(keyLoc);
-			const ident = createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken);
+			const ident = finishToken(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken), keyToken);
 			attachComments(state, ident);
 			values.push(withLeading(ident, leading));
 		}

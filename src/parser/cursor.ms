@@ -83,16 +83,60 @@ export function takeTrailingDecls(state: ParserState, mark: int32): Node[] {
 	return taken;
 }
 
-// Stamp a node's end position from the last consumed token (position - 1).
-// Call AFTER the node is fully parsed. Safe to call multiple times.
-export function stampEnd(state: ParserState, node: Node): void {
-	if (node == null || node.location == null) return;
-	const prevIdx = state.position - 1;
-	if (prevIdx < 0 || prevIdx >= state.tokens.length) return;
-	const prev = state.tokens[prevIdx];
-	node.location.endLine = prev.line as int32;
-	const width = prev.kind == TokenKind.String ? prev.rawValue.byteLength + 2 : prev.value.byteLength;
-	node.location.endColumn = (prev.column + width) as int32;
+// The source text the lexer consumed for a token. Strings keep their raw escapes; a template
+// token's value excludes its delimiters. A number with digit separators or a template with
+// escapes consumed more or fewer bytes than its value holds, so those ends are not exact.
+function tokenText(token: Token): string {
+	return match (token.kind) {
+		TokenKind.String => "\"" + token.rawValue + "\"",
+		TokenKind.TemplateHead => "`" + token.value + "${",
+		TokenKind.TemplateMiddle => token.value + "${",
+		TokenKind.TemplateTail => token.value + "`",
+		TokenKind.TemplateNoSub => "`" + token.value + "`",
+		TokenKind.OperatorIdent => "`" + token.value + "`",
+		_ => token.value,
+	};
+}
+
+// Ends a node where `token` ends, counting columns in bytes and line breaks as the lexer does.
+export function finishToken(node: Node, token: Token): Node {
+	const text = tokenText(token);
+	let line = token.line;
+	let column = token.column;
+	for (let i = 0; i < text.byteLength; i += 1) {
+		const byte = text.byteAt(i);
+		if (byte == "\n".code && i > 0 && text.byteAt(i - 1) == "\r".code) {
+			column = 1;
+		} else if (byte == "\n".code || byte == "\r".code) {
+			line += 1;
+			column = 1;
+		} else {
+			column += 1;
+		}
+	}
+	const empty = line < node.location.line || (line == node.location.line && column < node.location.column);
+	node.location.endLine = empty ? node.location.line : line;
+	node.location.endColumn = empty ? node.location.column : column;
+	return node;
+}
+
+// Ends a node at the last token consumed; call once the node is fully parsed, and again if it grows.
+// A node that consumed nothing past its own start is empty: it ends where it starts.
+export function finishNode(state: ParserState, node: Node): Node {
+	if (state.position == 0) return finishToken(node, { kind: TokenKind.Eof, value: "", line: node.location.line, column: node.location.column, rawValue: "" });
+	return finishToken(node, state.tokens[state.position - 1]);
+}
+
+// Ends a node its callee left open; a node the callee already ended keeps that end.
+export function finishOnce(state: ParserState, node: Node): Node {
+	return node.location.endLine == 0 ? finishNode(state, node) : node;
+}
+
+// Ends a node where its last child ends, for a node built after the cursor moved past it.
+export function finishAfter(node: Node, last: Node): Node {
+	node.location.endLine = last.location.endLine;
+	node.location.endColumn = last.location.endColumn;
+	return node;
 }
 
 function eofToken(): Token {
