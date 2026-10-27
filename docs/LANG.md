@@ -3150,7 +3150,7 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 
 - **`s[i]` behaves like TypeScript**: it is equivalent to `charAt(i)` and yields the i-th UTF-16 code unit as a `string`. Sole documented deviation: out-of-range yields `""`, not `undefined`.
 - **ASCII fast path**: when the is-ASCII flag holds, byte index == code-unit index and both tiers run at byte speed. Non-ASCII TS-tier calls pay a UTF-8 decode walk.
-- **Bridge**: `asBytes()` is a zero-copy borrow of the buffer (C: Cursor bit-cast; JS: identity). `asString()` is a copying kernel returning a fresh owned string.
+- **Bridge**: `asBytes()` is a zero-copy borrow of the buffer (C: Cursor bit-cast; JS: identity). `asString()` on a `uint8[]` or a `Readonly<Span<uint8>>` decodes WTF-8 into a fresh owned string: an ill-formed sequence becomes one U+FFFD per maximal subpart, as `TextDecoder` reads it, while an encoded surrogate stays and a split surrogate pair joins, so `s.asBytes().asString()` gives back `s` even with a lone surrogate. `[0x61, 0xE2, 0x62, 0xFF, 0xC3].asString()` has the code units `61 fffd 62 fffd fffd` on C and JS (measured 2026-10-28; corpus `bytesAsStringDecodesWtf8` covers C, JS and the Raiser).
 - Index **assignment** (`s[i] = c`) is byte-space legacy and slated to move to an explicit byte-tier form; treat it as byte-tier today.
 
 ### 1. The `char` Primitive
@@ -3174,8 +3174,8 @@ Strings in MetaScript are mutable when declared with `let`. All standard TypeScr
 
 - **`.length`**: Returns the number of characters (UTF-16 code units), matching TypeScript behavior.
 - **`.byteLength`**: Returns the raw number of bytes in the UTF-8 buffer (Systems-optimized).
-  On a `Buffer` use the call form `buf.byteLength()`: `Buffer` is `string` on the C target but
-  `uint8[]` on the JS target, and the call form is the surface both share.
+  A `Buffer` is `uint8[]` on every target, so `buf.length` and `buf.byteLength()` count its bytes:
+  `Buffer.fromArray([0xE2, 0x82, 0xAC, 0x41]).length` is 4 on C and JS (measured 2026-10-28).
 - **`.unicodeLength`**: Returns the number of actual Unicode code points.
 
 ```typescript
