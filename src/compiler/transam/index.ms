@@ -55,10 +55,11 @@ import { boundHandleCount } from "../meta/bridge"; // also registers the expandM
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
-import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
+import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
+import { Adoption, adoptDecls, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
-import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../../ast/node";
+import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
@@ -651,10 +652,12 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
 		tmpCtx.currentModule = depMod;
 		const collected = cloneNodeForCheck(depProgram);
-		tmpCtx.adoptedDecls = earlyAdoptions(db, depPath, collected);
+		const adoption = earlyAdoptions(db, depPath, collected);
+		tmpCtx.adoptedDecls = adoption.decls;
 		collectTopLevel(tmpCtx, collected);
 		db.cache.collected += 1;
 		resolveDeclarations(tmpCtx, collected);
+		if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 		db.trees.set(exportNodeKey(depId), collected);
 
 		const earlyExports = collectExports(tmpCtx, depPath);
@@ -723,33 +726,23 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 	return entries;
 }
 
-function earlyAdoptions(db: TransAmDb, filePath: string, program: Node): HashMap<Node, Symbol> {
-	const adopted = new HashMap<Node, Symbol>();
+function checkOutputHash(ctx: CheckerContext, inputHashes: int64[]): int64 {
+	let h: int64 = ctx != null ? checkErrorCount(ctx) : 0;
+	for (const input of inputHashes) h = (h * 31 + input) % 2147483647;
+	return h;
+}
+
+function earlyAdoptions(db: TransAmDb, filePath: string, program: Node): Adoption {
+	const fileId = getFileId(db.fileInput, filePath);
+	const checked = dbTree(db, checkNodeKey(fileId));
+	const checkedCtx = db.contexts.get(checkCtxKey(fileId));
+	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), program, filePath);
 	const entry = findModuleExports(db.exportRegistry, filePath);
-	const parsed = dbTree(db, exportNodeKey(getFileId(db.fileInput, filePath)));
-	if (entry == null || parsed == null) return adopted;
-	const early = new HashMap<Node, Symbol>();
-	for (const info of entry.symbols) {
-		if (info.sym.declNode != null && info.sym.modulePath == filePath) early.set(info.sym.declNode, info.sym);
-	}
-	const parsedStmts = (parsed.data as ProgramData).programStmts;
-	const stmts = (program.data as ProgramData).programStmts;
-	if (parsedStmts.length != stmts.length) return adopted;
-	for (let i = 0; i < stmts.length; i += 1) {
-		const parsedDecl = declOfStatement(parsedStmts[i]);
-		const decl = declOfStatement(stmts[i]);
-		const sym = early.get(parsedDecl);
-		if (sym != null) adopted.set(decl, sym);
-		if (decl.kind != NodeKind.ClassDecl || parsedDecl.kind != NodeKind.ClassDecl) continue;
-		const parsedBody = (parsedDecl.data as ClassDeclData).classBody;
-		const body = (decl.data as ClassDeclData).classBody;
-		if (parsedBody.length != body.length) continue;
-		for (let m = 0; m < body.length; m += 1) {
-			const method = early.get(parsedBody[m]);
-			if (method != null) adopted.set(body[m], method);
-		}
-	}
-	return adopted;
+	const parsed = dbTree(db, exportNodeKey(fileId));
+	if (entry == null || parsed == null) return new Adoption();
+	const exported: Symbol[] = [];
+	for (const info of entry.symbols) exported.push(info.sym);
+	return adoptDecls(parsed, exported, program, filePath);
 }
 
 function exportsMacro(db: TransAmDb, modulePath: string): boolean {
@@ -853,13 +846,15 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 	resetCapturedAssignments();
 	registerModuleProgram(filePath, program);
 	db.cache.bound += 1;
+	const adoption = earlyAdoptions(db, filePath, program);
 	const unit = bindModuleForCheck(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
-		earlyAdoptions(db, filePath, program),
+		adoption.decls,
 		true,
 		globalImportsLayer(db, globals)
 	);
+	if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputs: bindInputs(db, filePath), unit });
 	return unit;
 }
