@@ -613,8 +613,8 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				genShrinkLoop(elem, xf, yf, lctx, buf, loc);
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
-			} else if (isU8Elem) {
-				genCall("msArrayUint8Copy", hook, xf, yf, buf, loc);
+			} else if (isU8Elem || lctx.raiserBackend) {
+				genCall(isU8Elem ? "msArrayUint8Copy" : "msArrayCopy", hook, xf, yf, buf, loc);
 			} else {
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genCall("msArrayCopyPayload", hook, clonePath(xf, loc), clonePath(yf, loc), buf, loc);
