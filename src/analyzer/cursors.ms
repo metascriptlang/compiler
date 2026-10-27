@@ -719,8 +719,23 @@ function levelHolders(body: Node, out: Symbol[]): void {
 	step(body);
 }
 
+function moduleRoutines(body: Node): HashSet<Node> {
+	const own = new HashSet<Node>();
+	if (body.kind != NodeKind.Program) return own;
+	for (const stmt of (body.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl.kind == NodeKind.FunctionDecl || decl.kind == NodeKind.ClassDecl || decl.kind == NodeKind.ActorDecl) own.add(decl);
+		else if (decl.kind == NodeKind.VariableDecl) {
+			const lit = closureLiteral((decl.data as VariableDeclData).initializer);
+			if (lit != null) own.add(lit!);
+		}
+	}
+	return own;
+}
+
 function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: HashSet<Symbol>[]): void {
 	if (body == null || (!top && envEscapes)) return;
+	const moduleScope = top ? moduleRoutines(body) : new HashSet<Node>();
 	const level: Symbol[] = [];
 	levelHolders(body, level);
 	const holders = new HashSet<Symbol>();
@@ -736,7 +751,7 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: H
 	};
 	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
 	const routine = (lit: Node, holder: Symbol | null): void => {
-		if (top) {
+		if (top && !moduleScope.has(lit)) {
 			const names = namesOf(lit);
 			closureNames.set(lit, names);
 			if (holder != null) holderNames.set(holder!, names);
