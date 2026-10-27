@@ -1,10 +1,7 @@
 // WebSocket Handshake — RFC 6455 §4.
 //
 // Pure string work: build the HTTP/1.1 upgrade request, parse the 101 response,
-// derive the expected Sec-WebSocket-Accept key. The actual SHA-1 + Base64
-// primitives come from std/crypto via local extern bindings — the C linker
-// resolves the symbols at compile time through the .cms wrapper that pulls
-// in std/crypto separately.
+// derive the expected Sec-WebSocket-Accept key.
 //
 // Inline tests cover the pure-string paths (request building, response parsing,
 // header validation, base64 key generation). The cryptographic accept-key
@@ -13,10 +10,9 @@
 
 @include("runtime/crypto/hash.h");
 
+import "../../crypto/encodingNative";
 import { WsError, wsHandshakeFailed, wsInvalidUrl } from "./errors";
 
-// Local externs into std/crypto's runtime — the C link resolves these via
-// the .cms wrapper that imports std/crypto.
 extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
 extern function msCryptoToBase64(data: string): string;
 extern function msCryptoRandomBytes(size: number): string;
