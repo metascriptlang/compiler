@@ -959,11 +959,13 @@ interface QueryRecord {
 
 const _queriesByHash = new HashMap<string, HeaderQueries>();
 
-function queriesIn(path: string): HeaderQueries {
+function queriesIn(path: string): HeaderQueries | null {
 	const hash = hashFile(path);
 	const known = _queriesByHash.get(hash);
 	if (known != null) return known;
-	const found = headerQueries(try readFile(path) catch "");
+	const text = readFile(path);
+	if (!text.ok) return null;
+	const found = headerQueries(text.value);
 	_queriesByHash.set(hash, found);
 	return found;
 }
@@ -993,7 +995,10 @@ function queryRecord(sources: string[], spelledDeps: string[], search: HeaderSea
 	for (const path of deps) scanned.push(path);
 	for (const path of scanned) {
 		const queries = queriesIn(path);
-		if (queries.macroForm) bounded = false;
+		if (queries == null || queries.macroForm) {
+			bounded = false;
+			continue;
+		}
 		if (queries.quoteForm) {
 			const own = dirname(absoluteSlashed(path));
 			if (!dirs.includes(own)) dirs.push(own);
