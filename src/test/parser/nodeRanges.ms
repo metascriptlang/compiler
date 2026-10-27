@@ -147,3 +147,32 @@ test "an end column counts bytes after non-ASCII text" {
 	assert call.location.endColumn == 25;
 	assert expectClean(source) == "";
 }
+
+function endsWhereSourceEnds(source: string): boolean {
+	const loc = programStmt(source, 0).location;
+	return loc.endLine == 1 && loc.endColumn == source.byteLength + 1;
+}
+
+test "a template with escapes and substitutions ends at its closing backtick" {
+	assert endsWhereSourceEnds("const s = `a\\n${x}b\\tc`");
+	assert endsWhereSourceEnds("const s = `\\u0041${x}${y}\\\\`");
+}
+
+test "a number with digit separators ends at its last digit" {
+	assert endsWhereSourceEnds("const n = 1_000_000");
+	assert endsWhereSourceEnds("const n = 0xff_ffn");
+	assert endsWhereSourceEnds("const n = 1_0.2_5e1_0");
+}
+
+test "a multi-line template and an escaped string end at their closing quote" {
+	const stmt = programStmt("const s = `a\\n\nb ${x}\nc\\t`", 0);
+	assert stmt.location.endLine == 3 && stmt.location.endColumn == 5;
+	assert endsWhereSourceEnds("const s = \"a\\u0041\\n\\\"\"");
+}
+
+test "a statement does not end at a comment the cursor stepped over after it" {
+	const stmt = programStmt("if (a) return 1;\n// c\nf();", 0);
+	assert stmt.location.endLine == 1 && stmt.location.endColumn == 17;
+	const decl = programStmt("const a = 1 // c\n// d\n", 0);
+	assert decl.location.endLine == 1 && decl.location.endColumn == 12;
+}
