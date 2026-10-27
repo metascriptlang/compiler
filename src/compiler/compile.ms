@@ -2574,15 +2574,26 @@ function collectCFunctionNames(node: Node, exports: HashMap<string, string>, ext
 	forEachChild(node, (child: Node): void => { collectCFunctionNames(child, exports, externs, compilerCalls, path); });
 }
 
+function hcrCoreUserModules(graph: ModuleGraph, entryPath: string, opts: CliOptions, stdPath: string): string[] {
+	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const deps = depRoots(opts.projectRoot != "" ? opts.projectRoot : root);
+	const users: string[] = [];
+	for (const path of graph.loadOrder) {
+		if (!isUnder(path, stdPath) && hcrModuleId(path, root, stdPath, deps, []) == "") users.push(path);
+	}
+	return users;
+}
+
 function hcrCoreModules(
 	graph: ModuleGraph,
 	stdPath: string,
 	session: BuildSession,
+	coreUsers: string[],
 ): string[] {
 	if (session.hcrCoreModules.length > 0) {
 		let changed = false;
 		for (const path of session.check.rechecked) {
-			if (isUnder(path, stdPath)) changed = true;
+			if (isUnder(path, stdPath) || coreUsers.includes(path)) changed = true;
 		}
 		if (!changed) return session.hcrCoreModules;
 	}
@@ -2593,6 +2604,14 @@ function hcrCoreModules(
 		const program = lookupModuleProgram(path);
 		if (program == null) {
 			throw new Error(`internal: HCR standard module '${path}' was not checked`);
+		}
+		paths.push(path);
+		programs.push(program);
+	}
+	for (const path of coreUsers) {
+		const program = lookupModuleProgram(path);
+		if (program == null) {
+			throw new Error(`internal: HCR core module '${path}' was not checked`);
 		}
 		paths.push(path);
 		programs.push(program);
@@ -2611,6 +2630,7 @@ function hcrCoreModules(
 	const cExterns = new HashMap<string, string[]>();
 	const compilerCalls: string[] = [];
 	for (let i = 0; i < paths.length; i += 1) {
+		if (!isUnder(paths[i], stdPath)) continue;
 		const externs: string[] = [];
 		collectCFunctionNames(programs[i], cExports, externs, compilerCalls, paths[i]);
 		cExterns.set(paths[i], externs);
@@ -2622,14 +2642,15 @@ function hcrCoreModules(
 		const owner = cExports.get(name);
 		if (owner != null && !group.includes(owner) && !raiserOnlyStd(owner, stdPath)) group.push(owner);
 	}
-	if (group.length == 0) return [];
+	if (group.length == 0 && coreUsers.length == 0) return [];
 	group.sort();
 	while (true) {
-		const alive = computeAliveSet(programs, paths, group[0], false, graph, group,
+		const roots = coreUsers.concat(group);
+		const alive = computeAliveSet(programs, paths, roots[0], false, graph, roots,
 			[], [], true, true);
 		const next: string[] = [];
 		for (const path of paths) {
-			if (aliveSetHasModule(alive, path) && !raiserOnlyStd(path, stdPath)) next.push(path);
+			if (isUnder(path, stdPath) && aliveSetHasModule(alive, path) && !raiserOnlyStd(path, stdPath)) next.push(path);
 		}
 		for (let i = 0; i < next.length; i += 1) {
 			for (const name of cExterns.get(next[i]) ?? []) {
@@ -3486,7 +3507,7 @@ resetLiftedOps();
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of linkInputs(opts)) projectDeps.push(path);
-	const hcrCore = opts.isHcr ? hcrCoreModules(graph, config.stdPath, session) : [] as string[];
+	const hcrCore = opts.isHcr ? hcrCoreModules(graph, config.stdPath, session, hcrCoreUserModules(graph, entryPath, opts, config.stdPath)) : [] as string[];
 	if (opts.verbose && opts.isHcr) {
 		for (const path of hcrCore) verboseLog(`hcr-core ${relative(config.stdPath, path)}`);
 	}
