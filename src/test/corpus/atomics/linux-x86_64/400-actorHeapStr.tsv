@@ -1,12 +1,13 @@
-1	main__SsrcZtestZcorpusZprogramsZ40045actor72eap83trOms_u0
+1	main__SsrcZtestZcorpusZprogramsZ400U2DactorU48eapU53trOms_u0
 1	msActorJobAbandon
 1	msActorJobTick
 1	msChannelDrain
+1	msGetDispatcher
 1	msThreadChannel
 1	msWorkerLoopPump
 11	msActorDestroyWithReason
 11	msCDDispatch
-2	SsrcZtestZcorpusZprogramsZ40045actor72eap83trOms__Init000
+2	SsrcZtestZcorpusZprogramsZ400U2DactorU48eapU53trOms__Init000
 2	msActorCreate
 2	msActorFromPid
 2	msActorJobFire
@@ -16,9 +17,10 @@
 2	msActorStop
 2	msAwaitGroupFailSlot
 2	msCancelTimer
-2	msCompletionQueuePushEnvRelease
+2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
+2	msMainLoopIdle
 2	msPidTableFull
 2	msPoolRunEdge
 2	msRunOnce
@@ -31,7 +33,7 @@
 4	msPoolRunQueued
 4	msProcessTimers
 5	msActorProcess
-6	msActorSend
+6	msActorSendOrDrop
 6	msActorVisitEnd
 6	msPoolWorkerLoop
 7	msActorPostJob
