@@ -682,6 +682,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// resolveLto ran right after resolveCC.
 	flags = appendFlag(flags, ltoFlags(opts.lto, getCompilerName(opts.ccCompiler, opts.ccBinary)));
 	if (opts.isHcr || opts.appMode == "lib" || opts.appMode == "staticlib") flags = appendFlag(flags, "-fPIC");
+	if (opts.isHcr && !isGnuGcc(getCompilerName(opts.ccCompiler, opts.ccBinary))) flags = appendFlag(flags, "-fdebug-compilation-dir=.");
 	flags = appendFlag(flags, opts.passC);
 	return flags;
 }
@@ -1101,17 +1102,28 @@ export function objectCompileArgsKey(ccOption: number, ccBinary: string, isCpp: 
 	return `${withoutIncludeDirs(parts.value.lead).join(" ")} | ${withoutIncludeDirs(parts.value.trail).join(" ")}`;
 }
 
-function includeDirKind(arg: string): string {
-	for (const kind of ["-iquote", "-isystem", "-idirafter", "-I"]) {
+const INCLUDE_DIR_KINDS: string[] = ["-iquote", "-isystem", "-idirafter", "-I"];
+const PREPROCESSOR_KINDS: string[] = ["-iquote", "-isystem", "-idirafter", "-I", "-D", "-U"];
+
+function argKind(arg: string, kinds: string[]): string {
+	for (const kind of kinds) {
 		if (arg.startsWith(kind)) return kind;
 	}
 	return "";
 }
 
-export function withoutIncludeDirs(args: string[]): string[] {
+function withoutIncludeDirs(args: string[]): string[] {
+	return withoutArgKinds(args, INCLUDE_DIR_KINDS);
+}
+
+export function withoutPreprocessorArgs(args: string[]): string[] {
+	return withoutArgKinds(args, PREPROCESSOR_KINDS);
+}
+
+function withoutArgKinds(args: string[], kinds: string[]): string[] {
 	const kept: string[] = [];
 	for (let i = 0; i < args.length; i++) {
-		const kind = includeDirKind(args[i]);
+		const kind = argKind(args[i], kinds);
 		if (kind == "") {
 			kept.push(quoteCcArg(args[i]));
 		} else if (args[i] == kind) {
@@ -1145,7 +1157,7 @@ export function objectSearchDirs(ccOption: number, ccBinary: string, isCpp: bool
 	if (parts.value.quote != "") args.push(`-iquote${parts.value.quote}`);
 	for (const arg of parts.value.trail) args.push(arg);
 	for (let i = 0; i < args.length; i++) {
-		const kind = includeDirKind(args[i]);
+		const kind = argKind(args[i], INCLUDE_DIR_KINDS);
 		if (kind == "") continue;
 		let dir = args[i].slice(kind.length, args[i].length);
 		if (dir == "" && i + 1 < args.length) {
