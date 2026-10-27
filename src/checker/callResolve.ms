@@ -370,8 +370,15 @@ export function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): vo
 	}
 }
 
+// A name pinned by a macro argument names the declaration written where the call is. The instance a
+// first check chose is that check's result: the re-check instantiates again, and an instance has no
+// type parameters to accept an explicit type argument.
+function writtenDeclaration(sym: Symbol): Symbol {
+	return sym.symbolKind == SymbolKind.Function && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+}
+
 export function resolveCalleeIdent(ctx: CheckerContext, callee: Node): Symbol {
-	if (callee.flags.has(NodeFlag.BoundSym) && callee.resolvedSym != null) return callee.resolvedSym;
+	if (callee.flags.has(NodeFlag.BoundSym) && callee.resolvedSym != null) return writtenDeclaration(callee.resolvedSym);
 	return lookupSymbol(ctx.table, (callee.data as IdentifierData).name);
 }
 
