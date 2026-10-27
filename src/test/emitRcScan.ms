@@ -108,7 +108,7 @@ function collect(dir: string, into: CProgram): void {
 		if (!name.endsWith(".c")) continue;
 		const text = readFile(`${dir}/${name}`);
 		if (!text.ok) continue;
-		const lines = text.value.split("\n");
+		const lines = text.value.replaceAll("\r\n", "\n").split("\n");
 		let i = 0;
 		while (i < lines.length) {
 			const st = definedStruct(lines[i]);
