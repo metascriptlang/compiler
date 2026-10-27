@@ -17,12 +17,16 @@ import {
 	TaRevision, createRevision, incrementRevision, nextRevision, TA_REVISION_MAX,
 	createQueryKey, queryKeysEqual
 } from "./revision";
+import { taHashString } from "./hash";
+import { ifaceDigest, implDigest } from "./digest";
+import { installBodyReadSink } from "../../checker/bodyReads";
 import {
 	TaCacheEntry, createCacheEntry,
 	TaDependencyStack,
 	createDependencyStack, pushFrame, popFrame, recordDependency, recordDurability,
 } from "./query";
 import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
+import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
 import {
 	TaFileInputStore, createFileInputStore,
 	setFileText, getFileText, getFileId, getFilePath, hasFile,
@@ -144,6 +148,7 @@ export class TransAmDb {
 	fileInput: TaFileInputStore;
 	depStack: TaDependencyStack;
 	cache: TaCacheStore;
+	outputs: TaOutputStore;
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: CancelCtx;
 	exportRegistry: ExportRegistry;
@@ -152,6 +157,7 @@ export class TransAmDb {
 	preludeCtx: CheckerContext;
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
+	verifying: HashSet<string>;                // modules whose recorded imports are being rechecked for early cutoff
 	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
 	editGraph: ModuleGraph;                    // the graph of every module bound outside `graph`; one compilation for the db's life, a rebind replaces the module
 	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
@@ -205,6 +211,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		fileInput: createFileInputStore(),
 		depStack: createDependencyStack(),
 		cache: createCacheStore(cacheCapacity),
+		outputs: createOutputStore(),
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
 		exportRegistry: createExportRegistry(),
@@ -213,6 +220,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		preludeCtx: null as unknown as CheckerContext,
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
+		verifying: new HashSet<string>(),
 		graph: null,
 		editGraph: createModuleGraph(),
 		trees: new HashMap<int32, Node>(),
@@ -729,12 +737,6 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 	return entries;
 }
 
-function checkOutputHash(ctx: CheckerContext, inputHashes: int64[]): int64 {
-	let h: int64 = ctx != null ? checkErrorCount(ctx) : 0;
-	for (const input of inputHashes) h = (h * 31 + input) % 2147483647;
-	return h;
-}
-
 function earlyAdoptions(db: TransAmDb, filePath: string): Adoption {
 	const fileId = getFileId(db.fileInput, filePath);
 	const checked = dbTree(db, checkNodeKey(fileId));
@@ -926,6 +928,9 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
+	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+		return dbContext(db, checkCtxKey(fileId));
+	}
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
 
@@ -957,25 +962,22 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	recordDependency(db.depStack, pKey);
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 
-	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
-	// Parse dep: structural changes (new/removed declarations).
-	// TypeCheck dep: semantic changes (export type signatures, error state).
-	// Without TypeCheck dep, changing an export's type in B wouldn't invalidate A if AST shape is same.
 	const importDepIds = getDirectImports(db.moduleDeps, fileId);
+	const interfaceDeps: TaQueryKey[] = [];
 	const reached = new HashSet<int32>();
 	reached.add(fileId);
 	for (const depId of importDepIds) reached.add(depId);
 	for (let di = 0; di < importDepIds.length; di = di + 1) {
 		const depId = importDepIds[di];
-		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
-		recordDependency(db.depStack, depParseKey);
-		if (checkedElsewhere(db, getFilePath(db.fileInput, depId))) continue;
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
-		if (cacheGet(db.cache, depCheckKey) != null) {
+		const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
+		if (depCheckEntry != null) {
 			recordDependency(db.depStack, depCheckKey);
-		} else {
-			recordBoundImportReads(db, depId, reached);
+			if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
+			continue;
 		}
+		recordParseRead(db, depId);
+		if (!checkedElsewhere(db, getFilePath(db.fileInput, depId))) recordBoundImportReads(db, depId, reached);
 	}
 
 	if (!modulePassExempt(filePath)) {
@@ -989,9 +991,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const outerDb = _checkingDb;
 	_checkingDb = db;
 	if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
+	const bodyReads = new HashSet<string>();
+	const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
 	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
 	const checkerCtx = finishModuleCheck(unit);
 	for (const message of unchecked) addError(checkerCtx, message, 1, 1);
+	installBodyReadSink(outerSink);
 	_checkingDb = outerDb;
 	db.bound.delete(filePath);
 
@@ -1007,9 +1012,70 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
+	for (const read of bodyReads) {
+		const readId = getFileId(db.fileInput, read);
+		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
+	}
+	const kept = db.handedToCheck == null;
+	const iface = kept ? String(ifaceDigest(checkerCtx, [])) : null;
+	const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
+	if (kept) storeImpl(db, fileId, String(implDigest(cachedProgram, 0)));
 	db.checkInProgress.delete(filePath);
 	return checkerCtx;
+}
+
+function recordImplRead(db: TransAmDb, readId: int32): void {
+	const implKey = createQueryKey(TaQueryKind.Impl, readId);
+	if (cacheGet(db.cache, implKey) == null) recordParseRead(db, readId);
+	else recordDependency(db.depStack, implKey);
+}
+
+function recordParseRead(db: TransAmDb, readId: int32): void {
+	recordDependency(db.depStack, createQueryKey(TaQueryKind.Parse, readId));
+}
+
+function storeImpl(db: TransAmDb, fileId: int32, impl: string): void {
+	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
+	const implKey = createQueryKey(TaQueryKind.Impl, fileId);
+	pushFrame(db.depStack, implKey);
+	recordDependency(db.depStack, checkKey);
+	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+	const changedAt = outputChangedAt(db.outputs, db.cache, implKey, impl, [checkKey], db.revision.value);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, implKey, db.revision.value, changedAt, true);
+}
+
+// A module in an import cycle with another leaves that one's digest out of its own, so two modules never chain each other's.
+function importReaches(db: TransAmDb, fromId: int32, targetId: int32): boolean {
+	const seen = new HashSet<int32>();
+	const pending: int32[] = [fromId];
+	while (pending.length > 0) {
+		const id = pending.pop()!;
+		if (id == targetId) return true;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		for (const next of getDirectImports(db.moduleDeps, id)) pending.push(next);
+	}
+	return false;
+}
+
+// Salsa's deep verify: a check that is not green yet rechecks the modules it depends on first, so each one's
+// recomputed output hash is there for the early cutoff to compare. Only modules this db already checked are visited.
+function recheckImports(db: TransAmDb, key: TaQueryKey): boolean {
+	const entry = cacheGet(db.cache, key);
+	if (entry == null) return false;
+	const path = getFilePath(db.fileInput, key.fileId);
+	db.verifying.add(path);
+	for (const dep of entry.dependencies) {
+		const kind = dep.queryKind;
+		if (kind != TaQueryKind.TypeCheck && kind != TaQueryKind.Impl) continue;
+		if (dep.fileId == key.fileId || cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, dep.fileId)) == null) continue;
+		const depPath = getFilePath(db.fileInput, dep.fileId);
+		if (db.verifying.has(depPath) || db.checkInProgress.has(depPath) || checkedElsewhere(db, depPath)) continue;
+		dbTypeCheck(db, depPath);
+	}
+	db.verifying.delete(path);
+	return true;
 }
 
 // Get the checked program (has resolvedSym/nodeType on AST nodes).
@@ -1041,26 +1107,54 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
 	const ctx = dbTypeCheck(db, filePath);
 	if (ctx == null) return null as unknown as Node;
+	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
 	pushFrame(db.depStack, key);
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, checkKey);
+	recordInputsOfBackdatedCheck(db, checkKey);
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 	const afterCheck = ctx.disambAfterCheck;
 	if (afterCheck == null) throw new Error(`internal: ${filePath} is lowered from a context with no post-check disambiguation table`);
 	const checkTable = ctx.disambTable;
 	ctx.disambTable = copyDisambTable(afterCheck);
+	const lowerReads = new HashSet<string>();
+	const outerSink = installBodyReadSink((modulePath: string): void => { lowerReads.add(modulePath); });
 	const lowered = lower(checked, ctx, arg);
+	installBodyReadSink(outerSink);
 	ctx.disambTable = checkTable;
+	for (const read of lowerReads) {
+		const readId = getFileId(db.fileInput, read);
+		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
+	}
 	db.trees.set(lowerNodeKey(fileId), lowered);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
 	return lowered;
+}
+
+function recordInputsOfBackdatedCheck(db: TransAmDb, checkKey: TaQueryKey): void {
+	const checkEntry = cacheGet(db.cache, checkKey);
+	if (checkEntry != null) for (const dep of checkEntry.dependencies) recordDependency(db.depStack, dep);
 }
 
 export function dbStoreLowered(db: TransAmDb, filePath: string, lowered: Node): void {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) throw new Error(`internal: no file id for lowered module ${filePath}`);
 	db.trees.set(lowerNodeKey(fileId), lowered);
+}
+
+// Transform and analysis read the module's text and, through call summaries, the bodies of any module it reaches.
+function recordSourceAndImplClosure(db: TransAmDb, fileId: int32): void {
+	recordParseRead(db, fileId);
+	const seen = new HashSet<int32>();
+	const pending: int32[] = getDirectImports(db.moduleDeps, fileId);
+	while (pending.length > 0) {
+		const id = pending.pop()!;
+		if (id == fileId || seen.has(id)) continue;
+		seen.add(id);
+		recordImplRead(db, id);
+		for (const next of getDirectImports(db.moduleDeps, id)) pending.push(next);
+	}
 }
 
 // Execute full pipeline: parse → check → transform → analyze
@@ -1088,6 +1182,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	pushFrame(db.depStack, key);
 	const ckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, ckKey);
+	recordSourceAndImplClosure(db, fileId);
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(db.routineDecls, []));
@@ -1119,6 +1214,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	pushFrame(db.depStack, key);
 	const tckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, tckKey);
+	recordSourceAndImplClosure(db, fileId);
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	db.trees.set(transformNodeKey(fileId), transformed);
@@ -1909,7 +2005,7 @@ export const viaFar = farValue();');
 	}
 }
 
-test "a line shift in a dependency moves the declaration its importer resolves in either check order" {
+test "a line shift in a dependency moves the declaration its importer resolves without rechecking the importer" {
 	const paths = ["/moved/dep.ms", "/moved/user.ms"];
 	const source = "export function one(): int32 { return 1; }";
 	const snapshots = [source, "\n\n" + source, source];
@@ -1932,7 +2028,9 @@ export const n = one();');
 				assert one.location.line == lines[i];
 				assert one.declNode != null && one.declNode.location.line == lines[i];
 				dbLower(db, paths[j], countLowering, counts[j]);
-				assert counts[j].n == i + 1;
+				// An importer checked before its dependency has no digest to read at first and reads the dependency's text once.
+				const importerCount = order[0] == 0 || i == 0 ? 1 : 2;
+				assert counts[j].n == (j == 0 ? i + 1 : importerCount), `${j} ${i}: ${counts[j].n}`;
 			}
 		}
 	}
