@@ -1868,14 +1868,13 @@ function int64LiteralFits(d: NumberLiteralData, negated: boolean): boolean {
 // parsed token is a magnitude, because the lexer never eats the sign, while a
 // literal built by compile-time evaluation or a macro carries its sign in `value`.
 export function literalFitsInType(node: Node, target: Type, negated: boolean): boolean {
-	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
-		return literalFitsInType(node, target.typeReturn, negated);
-	}
+	let t = target;
+	while ((t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) t = t.typeReturn;
 	if (!isNodeIntLit(node)) return false;
 	const d = node.data as NumberLiteralData;
 	const mag = d.value;
 	if (d.isBitPattern) {
-		return match (target.kind) {
+		return match (t.kind) {
 			TypeKind.Int8   => mag <= 255,
 			TypeKind.Int16  => mag <= 65535,
 			TypeKind.Int32  => mag <= 4294967295,
@@ -1888,7 +1887,7 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 		};
 	}
 	const v = negated ? 0 - mag : mag;
-	return match (target.kind) {
+	return match (t.kind) {
 		TypeKind.Int8   => v >= -128 && v <= 127,
 		TypeKind.Int16  => v >= -32768 && v <= 32767,
 		TypeKind.Int32  => v >= -2147483648 && v <= 2147483647,
