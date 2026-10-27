@@ -109,11 +109,15 @@ owned suffixes, mtime refreshed on use at most hourly, trim at most once per per
 
 **A header that appears later is not seen (false hit).** A native source with
 `#if __has_include("optional.h")` built while `optional.h` was absent, then rebuilt with a new
-local cache after creating it, restored the old object and printed `11` instead of `22`;
-`MSC_NO_GLOBAL_CACHE=1` printed `22`. The store records the headers a compile read, not the
-ones it looked for and missed. Details: [BUILD-PERF.md](BUILD-PERF.md) "Measured 2026-10-08".
-Until that is fixed, a build that adds a header found through `__has_include` or an include
-path searched before an existing one needs `MSC_NO_GLOBAL_CACHE=1` or a changed source.
+local cache after creating it, restored the old object and printed `11` instead of `22`.
+Details: [BUILD-PERF.md](BUILD-PERF.md) "Measured 2026-10-08". The local cache misses it too:
+on installed `e5c088569` with `MSC_NO_GLOBAL_CACHE=1` and one `MSC_CACHE_DIR`, the rebuild
+after creating `optional.h` printed `Up to date` and still `11`; only an empty local cache with
+the store off printed `22` (2026-10-27, macOS arm64, the same consumer, sources aged before
+the first build). Every layer records the
+headers a compile read, not the ones it looked for and missed. Until that is fixed, a build that
+adds a header found through `__has_include` or an include path searched before an existing one
+needs an edited source, or an empty `MSC_CACHE_DIR` together with `MSC_NO_GLOBAL_CACHE=1`.
 
 **Older compilers delete files they do not own.** A compiler built before the collector above
 deletes any entry in `objects/`, `store/` and `headers/` (and `prelude/`) whose modification
