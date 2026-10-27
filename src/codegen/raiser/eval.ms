@@ -8,6 +8,7 @@ import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancell
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
+import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
@@ -2080,11 +2081,11 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	assert layoutOf(wire.symbolType).length == 0 && slotKindsOf(createCompState(), wire.symbolType).length == 0;
 	assert layoutOf(plain.symbolType).join(",") == "kind";
 	wire.builtinKind = "";
-	wire.modulePath = "std/meta/node.ms";
+	wire.modulePath = metaNodeModulePath();
 	assert layoutOf(wire.symbolType).length == 0;
 	const opaque = lookupSymbol(ctx.table, "Opaque");
 	assert layoutOf(opaque.symbolType).join(",") == "kind";
-	opaque.modulePath = "std/meta/node.ms";
+	opaque.modulePath = metaNodeModulePath();
 	assert layoutOf(opaque.symbolType).length == 0;
 }
 
