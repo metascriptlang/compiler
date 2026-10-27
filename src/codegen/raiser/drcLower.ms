@@ -236,15 +236,15 @@ function isSizedArrayCopy(call: CallExprData): boolean {
 	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedAsgn) == sym;
 }
 
-function isSizedArraySink(call: CallExprData): boolean {
+function isArraySink(call: CallExprData): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedSink) == sym;
+	return type != null && (isSizedArrayType(type) || isArrayType(type)) && !runsDistinctHook(call, type) && getOpByKey(type, AttachedOp.AttachedSink) == sym;
 }
 
 function isLiftedCellSink(call: CallExprData): boolean {
-	if (isSizedArraySink(call)) return true;
+	if (isArraySink(call)) return true;
 	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookOf(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
 }
 
