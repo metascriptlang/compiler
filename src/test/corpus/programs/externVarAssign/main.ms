@@ -4,7 +4,7 @@
 // plain assignment, compound assignment and increment, at top level and inside a function.
 //
 // @skip-js: these externs bind C symbols; the JS backend has no C linkage
-// @xfail(raiser): Raiser evaluates no extern variable, read or written (`cannot evaluate at comptime: declaration node is ExternDecl`)
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @stdout: 7|8|9|0|5|6
 // @exit: 0
 

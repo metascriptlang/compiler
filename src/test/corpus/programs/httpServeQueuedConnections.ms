@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @skip-raiser: std/http/server has no Raiser module; the server runs on C
 // @stdout: queued 2 threads: HTTP/1.1 200 OK /a | HTTP/1.1 200 OK /b
 // @stdout: queued 2 threads: served=2 running=false
 // @stdout: queued 4 threads: HTTP/1.1 200 OK /q0 | HTTP/1.1 200 OK /q1 | HTTP/1.1 200 OK /q2 | HTTP/1.1 200 OK /q3

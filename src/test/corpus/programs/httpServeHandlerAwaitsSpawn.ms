@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @skip-raiser: std/http/server has no Raiser module; the server runs on C
 // @stdout: threads=1 answered all 40, sum=1600
 // @stdout: threads=4 answered all 40, sum=1600
 // @exit: 0
