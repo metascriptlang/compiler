@@ -4,7 +4,7 @@ import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, se
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx } from "./memory";
+import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx, cellRootIdx } from "./memory";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -1391,7 +1391,7 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		RaiserHeapKind.Object => {
 			const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 			data.rc = data.rc - 1;
-			if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, index); }
+			if (data.rc <= 0) { rcForgetRoot(arrHeap, objHeap, handle); rcDestroyObject(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.String => {
 			const cell = textAddress(handle);
@@ -1485,8 +1485,36 @@ function removeSeqView(arrHeap: RaiserArrayHeap, base: int64, view: int64): void
 	if (held.length == 0) arrHeap.seqViews.delete(base);
 }
 
+export const ORC_COLOR_MASK = 3;
+export const ORC_ROOT_SHIFT = 2;
+
+function orcField(objHeap: RaiserObjectHeap, handle: int64): int32 {
+	return handleHeapKind(handle) == RaiserHeapKind.Seq ? cellRootIdx(seqCellOf(handle)) as int32 : objHeap.objects[handleIndex(handle)].color;
+}
+
+function setOrcField(objHeap: RaiserObjectHeap, handle: int64, field: int32): void {
+	if (handleHeapKind(handle) == RaiserHeapKind.Seq) setCellRootIdx(seqCellOf(handle), field as int64);
+	else objHeap.objects[handleIndex(handle)].color = field;
+}
+
+// A cell whose last count is gone leaves the registered roots before it is freed, so a later collection never reaches it:
+// the last root takes its slot.
+export function rcForgetRoot(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	const field = orcField(objHeap, handle);
+	if ((field >> ORC_ROOT_SHIFT) <= 0) return;
+	const roots = arrHeap.orcRoots;
+	const slot = (field >> ORC_ROOT_SHIFT) - 1;
+	const last = roots.length - 1;
+	const moved = roots[last];
+	roots[slot] = moved;
+	roots.length = last;
+	if (moved != handle) setOrcField(objHeap, moved, (orcField(objHeap, moved) & ORC_COLOR_MASK) | ((slot + 1) << ORC_ROOT_SHIFT));
+	setOrcField(objHeap, handle, field & ORC_COLOR_MASK);
+}
+
 @noinline
 function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	rcForgetRoot(arrHeap, objHeap, handle);
 	const c = seqCellOf(handle);
 	if (cellTypeIndex(c) >= 0) {
 		rcDestroyObjectCell(arrHeap, objHeap, c);
