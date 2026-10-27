@@ -8,19 +8,22 @@ rules, the reasons and the measurements.
 
 | Layer | Where | Who shares it |
 |---|---|---|
-| Local project cache | `out/debug/.cache` or `out/release/.cache` under the working directory, or `MSC_CACHE_DIR` | one working directory, one job |
-| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows): `store/`, `objects/`, `headers/`, `prelude/` | every worktree and job of that user on that host |
+| Local project cache | `out/debug/.cache` or `out/release/.cache` under the working directory, unless a root is chosen (see Controls) | one working directory, one job |
+| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows) unless a root is chosen: `store/`, `headers/`, `prelude/`, `stamps/`, `cc/` | every worktree and job that resolves the same root |
 
 The local cache holds per-file fingerprints, emitted C, objects and link records for one tree.
 The global store holds native objects keyed by content, header records and the prelude pack, so
 a second worktree restores what the first compiled instead of compiling it again.
 
-Code: `src/compiler/cache.ms` (`initCache`, `globalCacheRoot`, `objectStoreKey`,
+Code: `src/utils/cachePaths.ms` (`localCacheDir`, `globalCacheRoot`: the one place a root is
+resolved), `src/compiler/options.ms` (`applyCacheConfig`), `src/compiler/cache.ms` (`initCache`, `objectStoreKey`,
 `nativeStoreSource`, `moduleStoreSource`, `storeManifest`, `restoreModuleObject`,
-`publishToStore`, `collectGlobalCache`), `src/checker/preludePack.ms` (`packBase`, `packRoot`).
+`publishToStore`, `collectGlobalCache`), `src/utils/stampDirs.ms` (`collectStaleEntries`,
+`markUsed`), `src/checker/preludePack.ms` (`packBase`, `packRoot`).
 Package downloads in `$HOME/.metascript/cache/extracted` belong to the package manager
 (`src/compiler/package/cache.ms`), and `$HOME/.metascript/cache/gate-ctl` to `tools/gate.sh`
-(`CTL_CACHE`); neither is part of the compiler cache.
+(`CTL_CACHE`); neither is part of the compiler cache, and neither moves with a chosen global
+root. `objects/` is written by older compilers only.
 
 ## What a worktree reuses from another
 
@@ -57,15 +60,50 @@ generated files and restored all 97 native objects. Table and commands:
 
 ## Controls
 
-| Variable | Effect |
-|---|---|
-| `MSC_CACHE_DIR=<dir>` | local cache in `<dir>` instead of `out/<mode>/.cache`; one directory for both debug and release |
-| `MSC_NO_GLOBAL_CACHE=<nonempty>` | no global store and no prelude pack: nothing read from or written to `$HOME/.metascript/cache` by the compiler cache |
-| `MSC_NO_PRELUDE_PACK=<nonempty>` | no prelude pack; the global store stays on |
+Each root is chosen by the first source that names it; a relative path resolves against the
+working directory for the command line and the environment, and against the project root for
+`build.ms`:
 
-There is no `build.ms` or CLI option for cache directories or sharing on `main` yet; a job that
-needs another root sets these variables. The perf runner (`src/test/perf/run.ms`) disables the
-global store on purpose to time compilation itself; keep it so.
+| What | Command line | Environment | `build.ms` `build:` | Default |
+|---|---|---|---|---|
+| local cache | `--cache-dir=<dir>` | `MSC_CACHE_DIR` | `cacheDir` | `out/<mode>/.cache` |
+| global store | `--global-cache-dir=<dir>` | `MSC_GLOBAL_CACHE_DIR` | `globalCacheDir` | `$HOME/.metascript/cache` |
+| sharing | `--global-cache` / `--no-global-cache` | — | `globalCache: false` | on |
+
+`MSC_NO_GLOBAL_CACHE=<nonempty>` turns the global store and the prelude pack off and wins over
+every source above, so a job can always isolate itself. `MSC_NO_PRELUDE_PACK=<nonempty>` turns
+only the prelude pack off. A chosen local root holds both debug and release.
+
+```ts
+// build.ms
+const config = { build: { cacheDir: "out/cache", globalCacheDir: "/fast/msc-cache" } };
+export default config;
+```
+
+`build.ms` cache fields must be direct string or boolean literals; an empty string, a control
+character, a spread or a computed value is an error naming the field, not a silent default.
+The perf runner (`src/test/perf/run.ms`) disables the global store on purpose to time
+compilation itself; keep it so.
+
+## Collection
+
+The global store has no byte budget; an age sweep bounds it. On each invocation, at most once an
+hour per bucket, `collectGlobalCache` removes an entry not written or used for seven days, and
+a temporary file of an entry left over an hour:
+
+| Bucket | Entry | Refreshed on use |
+|---|---|---|
+| `store/<shard>/` | `<key>.m` with its `<key>.o` | yes, at most hourly |
+| `headers/<shard>/` | `<key>.hi` | yes, at most hourly |
+| `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
+| `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write | no |
+
+The collector deletes only files with those names, record before companion, so a reader never
+finds a companion without its record; it never enters a directory whose real path leaves the
+bucket, and it removes a shard only when `rmdir` finds it empty. A foreign file, a symlinked
+directory and anything outside the buckets are left alone. `cc/` (compiler identity memos,
+about a megabyte) is not collected. The model is the build cache trim of a mainstream toolchain:
+owned suffixes, mtime refreshed on use at most hourly, trim at most once per period.
 
 ## Known limits, measured
 
@@ -77,12 +115,11 @@ ones it looked for and missed. Details: [BUILD-PERF.md](BUILD-PERF.md) "Measured
 Until that is fixed, a build that adds a header found through `__has_include` or an include
 path searched before an existing one needs `MSC_NO_GLOBAL_CACHE=1` or a changed source.
 
-**Startup collection deletes files the compiler does not own.** Every invocation, including
-`msc version`, runs `collectGlobalCache` (and prelude publication runs the same collector on
-`prelude/`): it deletes any entry in `objects/`, `store/` and `headers/` whose modification
-time is over seven days old, without checking that the compiler wrote it, and it follows a
-directory symlink in those buckets. Measured on installed `e5c088569` (tree `1306fdabb`,
-binary SHA-256 `337aa628…f89a3`), macOS arm64, fresh `HOME`, one `msc version` each:
+**Older compilers delete files they do not own.** A compiler built before the collector above
+deletes any entry in `objects/`, `store/` and `headers/` (and `prelude/`) whose modification
+time is over seven days old, without checking that it wrote it, and follows a directory symlink
+in those buckets. Measured on installed `e5c088569` (tree `1306fdabb`, binary SHA-256
+`337aa628…f89a3`), macOS arm64, fresh `HOME`, one `msc version` each:
 
 | Fixture | Result |
 |---|---|
@@ -92,13 +129,15 @@ binary SHA-256 `337aa628…f89a3`), macOS arm64, fresh `HOME`, one `msc version`
 | symlink in `objects/` to an old directory outside the cache | file outside the cache deleted, exit 0 |
 | symlink to a young directory holding an old file | file outside the cache deleted, exit 0 |
 
-So never keep anything but compiler output under `$HOME/.metascript/cache/{objects,store,headers,prelude}`,
-and never link those buckets to anything else. The deletion follows the link because
-`collectStaleEntries` (`src/utils/stampDirs.ms`) and `removeAll` (`std/fs/index.cms`) both
-classify an entry by its target, not by the link itself.
+While any such compiler can run against a root, keep nothing but compiler output in its
+buckets and link nothing into them. `nativeBuildBoundary.ms` groups `cache-preservation`,
+`cache-symlink` and `cache-local-preservation` pin both sides: red on the old compiler, green on
+the current one. `removeAll` in std still follows a directory symlink; the collector no longer
+calls it.
 
 **No byte budget.** The only bound on the global store is the seven-day age above; a busy week
-of worktrees grows it without limit. Gate hosts run their own disk-pressure cleanup between
+of worktrees grows it without limit (this Mac, 2026-10-27: `store/` 17 GB, `prelude/` 7.0 GB,
+`stamps/` 182 MB, `headers/` 179 MB). Gate hosts run their own disk-pressure cleanup between
 jobs, owned by `~/metascript/.gate-host/README.md`.
 
 ## Rejected
