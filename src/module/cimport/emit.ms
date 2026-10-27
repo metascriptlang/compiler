@@ -6,7 +6,7 @@
 import { Obj, ObjKind } from "../cparse/obj";
 import { CType, CTypeKind } from "../cparse/type";
 import { TargetInfo, hostTarget, targetFor } from "../cparse/target";
-import { Diagnostic } from "../cparse/error";
+import { Diagnostic, DiagSeverity, makeDiag } from "../cparse/error";
 import { parseHeader } from "./index";
 import { writeFile, ensureDir, readFile } from "std/fs";
 
@@ -360,6 +360,13 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 		const file = fileOf(obj.file);
 		const mine = file == own;
 		if (mine ? declaredNames.has(obj.name) : seenInFile.has(`${file}\t${obj.name}`)) continue;
+		if (mine && obj.kind == ObjKind.TypedefName && obj.type.kind == CTypeKind.Enum && obj.type.size != tg.intSize) {
+			if (outDiags != null) {
+				outDiags.push(makeDiag(DiagSeverity.Error, obj.file, obj.line, 1,
+					`enum ${obj.name} has a ${obj.type.size}-byte underlying type; a C enum imports only at int width (${tg.intSize} bytes)`));
+			}
+			continue;
+		}
 		const text = emitObj(obj, parsed.objs, tg, emittedEnums, mine ? outCompleteKeys : null, mine);
 		if (text == "") continue;
 		if (mine) {
@@ -863,4 +870,20 @@ test "a header declares what its own file writes and imports and re-exports what
 	const shape = t.includedShapes.get("/tmp/mscparse-split/common.h") ?? "";
 	const common = try readFile("/tmp/mscparse-split/common.h") catch "";
 	assert shape == translateHeaderModule(common, "/tmp/mscparse-split/common.h").ownShape, shape;
+}
+
+test "an enum whose fixed underlying type is not int width is refused, naming it and its size" {
+	const diags: Diagnostic[] = [];
+	const src = "typedef enum : unsigned char { A = 1 } Byte;\n"
+		+ "typedef enum : short { B = 1 } Half;\n"
+		+ "typedef enum : long long { C = 1 } Wide;\n"
+		+ "typedef enum : int { D = 1 } Plain;\n"
+		+ "typedef enum : unsigned int { E = 1 } Unsigned;\n";
+	const ms = translateHeaderModule(src, "fixed.h", [], diags).source;
+	assert diags.length == 3, `${diags.length}`;
+	assert diags[0].message.includes("enum Byte has a 1-byte"), diags[0].message;
+	assert diags[1].message.includes("enum Half has a 2-byte"), diags[1].message;
+	assert diags[2].message.includes("enum Wide has a 8-byte"), diags[2].message;
+	assert ms.includes("enum Plain {") && ms.includes("enum Unsigned {"), ms;
+	assert !ms.includes("enum Byte") && !ms.includes("enum Half") && !ms.includes("enum Wide"), ms;
 }
