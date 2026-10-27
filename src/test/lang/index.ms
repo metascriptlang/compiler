@@ -86,6 +86,7 @@ import "./arrayIteration";
 import "./iteratorHelpers";
 import "./iteratorStatics";
 import "./sequentialTypeof";
+import "./typePredicateRoutines";
 import "./cborNestedTypeIdentity";
 import "./structFieldDecorators";
 import "./enumNames";
