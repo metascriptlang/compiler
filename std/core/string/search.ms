@@ -13,7 +13,13 @@ function unitWidth(lead: uint8): int32 {
  * @param sub The substring to search for in the string.
  * @param start The index at which to begin searching the String object. If omitted, search starts at the beginning of the string.
  */
+@inline
 export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	if (sub.asBytes().length != 0 && byteIsAscii(s)) return s.byteIndexOf(sub, start < 0 ? 0 : start);
+	return indexOfUnits(s, sub, start);
+}
+
+function indexOfUnits(s: string, sub: string, start: int32): int32 {
 	const from = start < 0 ? 0 : start;
 	const hb = s.asBytes();
 	const nb = sub.asBytes();
