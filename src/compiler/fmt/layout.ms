@@ -79,6 +79,50 @@ function trimTrailingBlanks(text: string, floor: int32): string {
 	return end == text.length ? text : text.slice(0, end);
 }
 
+const wideRanges: int32[] = [
+	0x1100, 0x115f, 0x2e80, 0x303e, 0x3041, 0x33ff, 0x3400, 0x4dbf, 0x4e00, 0x9fff,
+	0xa000, 0xa4cf, 0xac00, 0xd7a3, 0xf900, 0xfaff, 0xfe30, 0xfe6f, 0xff00, 0xff60,
+	0xffe0, 0xffe6, 0x1f300, 0x1f64f, 0x1f680, 0x1f6ff, 0x1f900, 0x1faff, 0x20000, 0x3fffd,
+];
+
+function charWidth(code: int32, tabWidth: int32): int32 {
+	if (code == 9) return tabWidth;
+	if (code < 32 || (code >= 0x7f && code <= 0x9f)) return 0;
+	if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+	for (let i = 0; i < wideRanges.length; i += 2) {
+		if (code >= wideRanges[i] && code <= wideRanges[i + 1]) return 2;
+	}
+	return 1;
+}
+
+// Columns `text` occupies when it holds no line break; the wide ranges cover CJK and emoji only.
+function displayWidth(text: string, tabWidth: int32): int32 {
+	let width = 0;
+	let i = 0;
+	while (i < text.length) {
+		let code = text.charCodeAt(i);
+		i += 1;
+		if (code >= 0xd800 && code <= 0xdbff && i < text.length) {
+			const low = text.charCodeAt(i);
+			if (low >= 0xdc00 && low <= 0xdfff) {
+				code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+				i += 1;
+			}
+		}
+		width += charWidth(code, tabWidth);
+	}
+	return width;
+}
+
+function firstLineWidth(text: string, tabWidth: int32): int32 {
+	const newline = text.indexOf("\n");
+	return displayWidth(newline < 0 ? text : text.slice(0, newline), tabWidth);
+}
+
+function lastLineWidth(text: string, tabWidth: int32): int32 {
+	return displayWidth(text.slice(text.lastIndexOf("\n") + 1), tabWidth);
+}
+
 function indentString(levels: int32, options: FormatOptions): string {
 	return options.useTabs ? "\t".repeat(levels) : " ".repeat(levels * options.tabWidth);
 }
@@ -93,7 +137,7 @@ function indentWidth(prefix: string, options: FormatOptions): int32 {
 
 // Whether `next` fits in `width` columns, then whether the rest of the line (the commands left
 // on `rest` up to `restIdx`) still fits behind it, each rest command measured in its own mode.
-function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32): boolean {
+function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32, tabWidth: int32): boolean {
 	const stack: Cmd[] = [next];
 	let remaining = width;
 	let restLeft = restIdx;
@@ -112,7 +156,11 @@ function fits(next: Cmd, rest: Cmd[], restIdx: int32, width: int32): boolean {
 		const doc = cmd.doc;
 		match (doc.kind) {
 			DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => {},
-			DocKind.Text => { remaining = remaining - textOf(doc).length; },
+			DocKind.Text => {
+				const text = textOf(doc);
+				remaining = remaining - firstLineWidth(text, tabWidth);
+				if (text.indexOf("\n") >= 0) return remaining >= 0;
+			},
 			DocKind.Group => {
 				if (doc.shouldBreak && !inRest) return false;
 				pushChildren(stack, doc, cmd.indent, doc.shouldBreak ? Mode.Break : cmd.mode);
@@ -161,14 +209,18 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Text => {
 				const text = textOf(d);
 				result = result + text;
-				column = column + text.length;
-				if (text.indexOf("\n") >= 0) literalEnd = result.length;
+				if (text.indexOf("\n") >= 0) {
+					column = lastLineWidth(text, options.tabWidth);
+					literalEnd = result.length;
+				} else {
+					column = column + displayWidth(text, options.tabWidth);
+				}
 			},
 			DocKind.Group => {
 				let childMode = Mode.Break;
 				if (!d.shouldBreak) {
 					const flatCmd: Cmd = { indent: cmd.indent, mode: Mode.Flat, doc: d };
-					if (fits(flatCmd, stack, stack.length - 1, options.printWidth - column)) {
+					if (fits(flatCmd, stack, stack.length - 1, options.printWidth - column, options.tabWidth)) {
 						childMode = Mode.Flat;
 					}
 				}
@@ -280,6 +332,33 @@ test "layout: a nested conditional in the rest queue is measured too" {
 		docSoftLine(),
 	]);
 	assert formatDoc(doc, narrow) == "\n  a(\n  bcde);;\n";
+}
+
+test "layout: width counts display columns, a tab as the tab width" {
+	const call = (arg: string): Doc => docGroup([
+		docText("f("),
+		docIndent([docSoftLine(), docText(arg)]),
+		docSoftLine(),
+		docText(")"),
+	]);
+	assert formatDoc(call("日日日"), narrow) == "f(日日日)\n";
+	assert formatDoc(call("日日日日"), narrow) == "f(\n  日日日日\n)\n";
+	assert formatDoc(call("🚀🚀🚀🚀"), narrow) == "f(\n  🚀🚀🚀🚀\n)\n";
+	assert formatDoc(call("é\u0301éé"), narrow) == "f(é\u0301éé)\n";
+	assert formatDoc(call("\t\t\t\ta"), narrow) == "f(\n  \t\t\t\ta\n)\n";
+}
+
+test "layout: a multi-line text fits by its first line and continues the column from its last" {
+	const call = (arg: string): Doc => docGroup([
+		docText("f("),
+		docIndent([docSoftLine(), docText(arg), docText(",")]),
+		docSoftLine(),
+		docText(")"),
+	]);
+	assert formatDoc(call("`a\nb`"), narrow) == "f(`a\nb`,)\n";
+	assert formatDoc(call("`aaaaaaaaa\nb`"), narrow) == "f(\n  `aaaaaaaaa\nb`,\n)\n";
+	const after = docGroupBreak([docText("`a\nb`"), docGroup([docLine(), docText("ccccc")])]);
+	assert formatDoc(after, narrow) == "`a\nb` ccccc\n";
 }
 
 test "layout: formatDocAt indents continuation lines by the base prefix" {
