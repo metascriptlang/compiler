@@ -3,6 +3,7 @@ import { declOfStatement, getDeclName, classMemberDecl } from "../../checker/col
 import { ScopeKind, SymbolTable, SymbolFlag, lookupLocal, openScope, symbolKey } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
 import { collectTopLevel } from "../../checker/collectPass";
+import { resetResizeSummaries } from "../../checker/varPartitions";
 import { parseSource } from "../../parser/statements/validation";
 
 class Declared {
@@ -27,6 +28,7 @@ export class Adoption {
 	old: OldSide = new OldSide();
 	index: HashMap<string, Declared> = new HashMap<string, Declared>();
 	seen: HashMap<string, int32> = new HashMap<string, int32>();
+	summariesDropped: boolean = false;
 }
 
 function memberKey(owner: Symbol | null, name: string, sym: Symbol): string {
@@ -139,6 +141,10 @@ export function adoptStmt(out: Adoption, stmt: Node): void {
 	const was = out.index.get(ordinalKey(now, out.seen));
 	if (was == null) return;
 	const sym = pair(out, was, now, null);
+	if (sym != null && !out.summariesDropped) {
+		out.summariesDropped = true;
+		resetResizeSummaries();
+	}
 	const wasBody = classBodyOf(was.key);
 	const nowBody = classBodyOf(decl);
 	if (sym == null || wasBody == null || nowBody == null) return;
@@ -331,4 +337,16 @@ test "every kind of top-level declaration keeps its Symbol and its Type object a
 		assert syms[i].symbolType == types[i] || names[i] == "v" || names[i] == "ext";
 		assert syms[i].location.line == i + 3;
 	}
+}
+
+test "a top-level name equal to a method's mangled name keeps both keys apart across a shift" {
+	const src = "export class C { m(): int32 { return 1; } }\nexport function C_m(): int32 { return 2; }";
+	const first = collectText(src, null);
+	const c = symbolOf(first, "C");
+	const cm = symbolOf(first, "C_m");
+	const m = methodSymbol(first, "C", "m");
+	const second = collectText("\n" + src, first);
+	assert symbolOf(second, "C") == c;
+	assert symbolOf(second, "C_m") == cm;
+	assert methodSymbol(second, "C", "m") == m;
 }

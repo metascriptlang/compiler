@@ -2496,3 +2496,15 @@ test "a declaration a macro generated keeps its Symbol when its module is edited
 	assert checkMessages(db, "/m/use.ms") == "";
 	assert exportedSym(db, "/m/use.ms", "a") == held;
 }
+
+const RESIZE_HEAD = 'struct S { n: int32; }\nfunction grow(a: S[]): void { }\nfunction run(): int32 { let xs: S[] = [{ n: 1 }]; const sp: Span<S> = xs; grow(xs); return sp[0].n; }\nrun();\n';
+
+test "an edit that makes a callee resize is seen by the borrow check of its adopted Symbol" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/r/a.ms", RESIZE_HEAD);
+	assert checkMessages(db, "/r/a.ms") == "";
+	dbSetFileText(db, "/r/a.ms", RESIZE_HEAD.replace("grow(a: S[]): void { }", "grow(a: S[]): void { a.push({ n: 2 }); }"));
+	assert checkMessages(db, "/r/a.ms").indexOf("cannot borrow") >= 0;
+}
