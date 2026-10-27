@@ -584,9 +584,9 @@ test "range formatting keeps one blank line between covered statements and squee
 	assert rangeFormatted(source, 0, 0, 4, 3) == "const a = 1;\n\nconst b = 2;\nconst c = 3;\n";
 }
 
-test "range formatting joins covered statements of a block without blank lines, as the document does" {
+test "range formatting keeps one blank line between covered statements of a block, as the document does" {
 	const source = "export function f(): int32 {\n\tconst  x=1;\n\n\n\tconst   y=2;\n\treturn x+y;\n}\n";
-	assert rangeFormatted(source, 1, 0, 4, 14) == TWO_TIDY;
+	assert rangeFormatted(source, 1, 0, 4, 14) == "export function f(): int32 {\n  const x = 1;\n\n  const y = 2;\n\treturn x+y;\n}\n";
 }
 
 test "range over two class members formats the whole class declaration" {
