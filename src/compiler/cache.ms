@@ -17,7 +17,7 @@ import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/proce
 import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir } from "std/fs";
 import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
-import { localCacheDir, globalCacheRoot } from "../utils/cachePaths";
+import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
@@ -90,11 +90,6 @@ function collectTreeFiles(dir: string, prefix: string, paths: string[], names: s
 
 const HASH_MEMO_MAGIC = "MSHM1";
 let _hashMemoWrites = 0;
-
-export function stampMemoRoot(): string {
-	const root = globalCacheRoot();
-	return root == "" ? "" : `${root}/stamps`;
-}
 
 function hashMemoPath(subject: string, kind: string): string {
 	const root = stampMemoRoot();
@@ -841,7 +836,7 @@ export function collectGlobalCache(): void {
 	const now = nowSeconds();
 	collectStaleEntries(`${root}/store`, now, [".m", ".o"]);
 	collectStaleEntries(`${root}/headers`, now, [".hi"]);
-	collectStaleFlatEntries(`${root}/stamps`, now, [".sum", ".files", ".exe"]);
+	collectStaleFlatEntries(stampMemoRoot(), now, [".sum", ".files", ".exe"]);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).

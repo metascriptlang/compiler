@@ -32,6 +32,11 @@ export function globalCacheRoot(): string {
 	return home == "" ? "" : join(home, "cache");
 }
 
+export function stampMemoRoot(): string {
+	const root = globalCacheRoot();
+	return root == "" ? "" : `${root}/stamps`;
+}
+
 when (testBuild) {
 	struct CachePathsTestState {
 		localDir: string;
