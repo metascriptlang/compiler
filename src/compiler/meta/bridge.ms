@@ -1631,9 +1631,29 @@ function rebindRedeclaredLocals(params: Symbol[], body: Node): void {
 	unbindDeclared(body, declared);
 }
 
+function collectPatternDeclared(pattern: Node | null, into: Symbol[]): void {
+	if (pattern == null) return;
+	const targets: Node[] = [];
+	if (pattern.kind == NodeKind.ArrayPattern) {
+		for (const elem of (pattern.data as ArrayPatternData).patternElements) {
+			targets.push(elem.kind == NodeKind.SpreadExpr ? (elem.data as SpreadExprData).spreadArg : elem);
+		}
+	} else if (pattern.kind == NodeKind.ObjectPattern) {
+		for (const prop of (pattern.data as ObjectPatternData).patternProps) {
+			if (prop.kind == NodeKind.SpreadExpr) targets.push((prop.data as SpreadExprData).spreadArg);
+			else if (prop.kind == NodeKind.ObjectPatternProp) targets.push((prop.data as ObjectPatternPropData).propAlias);
+		}
+	}
+	for (const t of targets) {
+		if (t != null && t.kind == NodeKind.Identifier && t.resolvedSym != null) into.push(t.resolvedSym);
+	}
+}
+
 function collectWireDeclared(node: Node, into: Symbol[]): void {
 	const sym = _wireDeclared.get(node);
 	if (sym != null) into.push(sym);
+	if (node.kind == NodeKind.DestructuringDecl) collectPatternDeclared((node.data as DestructuringDeclData).destrPattern, into);
+	else if (node.kind == NodeKind.ForOfStmt) collectPatternDeclared((node.data as ForOfStmtData).forOfPattern, into);
 	forEachChild(node, (child: Node): void => { if (child != null) collectWireDeclared(child, into); });
 }
 
