@@ -468,6 +468,7 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	if (ctx.jsxMacroArgDepth > 0) return false;
 	const convSym = macroConverterFor(ctx, converterSlotTarget(expectedType));
 	if (convSym == null || macroDeclOf(convSym) == null) return false;
+	markUsedIn(ctx, convSym);
 	const jsxArg = createNodeAt(node.kind, node.data, node.location);
 	jsxArg.typeExpr = node.typeExpr;
 	node.kind = NodeKind.MacroInvocation;

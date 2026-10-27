@@ -117,3 +117,26 @@ export class Host<T> {
 	assert occurrences(messages, "'div' is imported but never used") == 1, messages.join("\n");
 	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
 }
+
+test "compileTimeNameUse: a converter that lowers JSX at a typed boundary counts as a use; a dead import still warns" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/ui.ms", entrySource: `import { Node } from "std/meta";
+export type View = (depth: int32) => void;
+export converter view(n: Node): View {
+	return quote { (depth: int32): void => { console.log(depth); } };
+}
+export function Spare(): int32 { return 5; }
+` },
+		{ entryPath: "src/screen.ms", entrySource: `import { View, view, Spare } from "./ui";
+export function detail(): View {
+	return <p>detail</p>;
+}
+const shown: View = <p>shown</p>;
+shown(1);
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/screen.ms");
+	assert occurrences(messages, "'view' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "must be consumed by a macro") == 0, messages.join("\n");
+	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
+}
