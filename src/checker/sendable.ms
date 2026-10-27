@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -46,12 +46,13 @@ function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Typ
 			}
 			return true;
 		},
-		TypeKind.Tuple => {
+		TypeKind.Tuple | TypeKind.Union => {
 			for (const et of t.typeChildren) {
 				if (!isDeepSendable(et, leaves, declaresHook)) return false;
 			}
 			return true;
 		},
+		TypeKind.Set | TypeKind.SizedArray | TypeKind.Distinct | TypeKind.Alias => isDeepSendable(t.typeReturn, leaves, declaresHook),
 		TypeKind.GenericInstance => {
 			if (declaresHook(t)) return false;
 			if (t.typeReturn != null && !isDeepSendable(t.typeReturn, leaves, declaresHook)) return false;
@@ -309,9 +310,10 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
-	if (argNode.kind == NodeKind.MoveExpr) recordActorMove(ctx, argNode);
+	const sent = peelView(argNode);
+	if (sent.kind == NodeKind.MoveExpr) recordActorMove(ctx, sent);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
-		&& argNode.kind != NodeKind.MoveExpr;
+		&& sent.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
 		const path = plainFunctionPath(t, []);
 		if (path != null) {
@@ -322,12 +324,12 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 		}
 	}
 	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
-	if (isSendable(t, argNode, sendClass)) {
+	if (isSendable(t, sent, sendClass)) {
 		if (isPlainRefBorrow) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
 	}
-	const argLabel = argNode.kind == NodeKind.Identifier
-		? "'" + (argNode.data as IdentifierData).name + "'"
+	const argLabel = sent.kind == NodeKind.Identifier
+		? "'" + (sent.data as IdentifierData).name + "'"
 		: `arg ${pi}`;
 	const typedesc = typeDisplayName(t);
 	if (sendClass && t.kind == TypeKind.Ref) {
@@ -335,14 +337,10 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 			argNode.location.line, argNode.location.column);
 		return false;
 	}
-	const hint = match (t.kind) {
-		TypeKind.Ref => {
-			const varName = argNode.kind == NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
-			return ` — use \`move${varName}\` to transfer ownership`;
-		},
-		TypeKind.Function => " — closures may capture mutable state; take a Sendable<F> instead",
-		_ => "",
-	};
+	const varName = sent.kind == NodeKind.Identifier ? " " + (sent.data as IdentifierData).name : "";
+	const hint = t.kind == TypeKind.Function ? " — closures may capture mutable state; take a Sendable<F> instead"
+		: typeCarriesRef(t) ? ` — use \`move${varName}\` to transfer ownership`
+		: "";
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 	return false;
@@ -1614,6 +1612,22 @@ test "a lifecycle hook anywhere in a payload fails only the walks given a hook p
 	assert isArcPointeeSendable(outer);
 	assert isLockedPayloadSendable(outer);
 	assert isTypeSendable(outer);
+}
+
+test "a BitSet, a fixed array, a distinct and a union of value structs cross by value; a union with an object variant does not" {
+	const mod = createEnum("Mod", ["Shift", "Ctrl"]);
+	const hit = createStruct("Hit", ["x"], [int32Type()], true);
+	const cell = createStruct("Cell", ["row"], [int32Type()], true);
+	const objectVariant = createStruct("Clicked", ["hit"], [hit], false);
+	assert isTypeSendable(createBitSet(mod));
+	assert isTypeSendable(createStruct("Held", ["mods"], [createBitSet(mod)], true));
+	assert isTypeSendable(createSizedArray(int32Type(), 4));
+	assert isTypeSendable(createDistinct(int32Type()));
+	assert isTypeSendable(createUnionInOrder([hit, cell]));
+	assert !isTypeSendable(createUnionInOrder([hit, objectVariant]));
+	assert !isTypeSendable(createSizedArray(createRef(hit), 2));
+	assert isLockedPayloadSendable(createSizedArray(int32Type(), 4));
+	assert !isLockedPayloadSendable(createSizedArray(stringType(), 2));
 }
 
 test "a generic param passes the Locked payload rule, not the Arc pointee rule" {
