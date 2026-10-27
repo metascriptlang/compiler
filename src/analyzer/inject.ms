@@ -834,7 +834,8 @@ function destructiveMoveVar(srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext): No
 	if (source.nodeType != null) tmpDecl.nodeType = source.nodeType;
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
-	addPre(dctx, isVar ? makeWasMovedCall(srcExpr.resolvedSym!, rcInfo, loc) : makeWasMovedOnExpr(cloneNodeKeepSem(source), rcInfo, loc));
+	const sourceRc = ownRcOrDest(isVar ? srcExpr.resolvedSym!.symbolType : source.nodeType, rcInfo, dctx);
+	addPre(dctx, isVar ? makeWasMovedCall(srcExpr.resolvedSym!, sourceRc, loc) : makeWasMovedOnExpr(cloneNodeKeepSem(source), sourceRc, loc));
 	return makeIdentResolved(tmpSym, loc);
 }
 
@@ -1206,8 +1207,8 @@ function makeDestroyCall(sym: Symbol, rcInfo: RcInfo, loc: SourceLocation): Node
 
 // The source of a move is zeroed by its own type's hook (reference: genWasMoved on the moved expression), which
 // differs from the destination's when the value converts on the way, a string into a Maybe.
-function ownRcOrDest(sym: Symbol, destRc: RcInfo, dctx: DrcContext): RcInfo {
-	const own = classifyRc(sym.symbolType, dctx);
+function ownRcOrDest(sourceType: Type | null, destRc: RcInfo, dctx: DrcContext): RcInfo {
+	const own = classifyRc(sourceType, dctx);
 	return own.needsCleanup ? own : destRc;
 }
 
@@ -1491,7 +1492,7 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 				hoisted.push(callTmpDecl);
 				hoisted.push(opCall);
 			if (useSink && rcInfo.wasMovedFn != null) {
-					hoisted.push(makeWasMovedCall(callTmpSym, rcInfo, loc));
+					hoisted.push(makeWasMovedCall(callTmpSym, ownRcOrDest(callTmpSym.symbolType, rcInfo, dctx), loc));
 				}
 				return makeBlock(hoisted, loc);
 			}
@@ -1548,7 +1549,7 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 			const rhsSym = rhs.resolvedSym;
 			if (rhsSym != null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
 				// Move: sink + wasMoved (Reference: genSink + genWasMoved)
-				const sourceRc = ownRcOrDest(rhsSym, rcInfo, dctx);
+				const sourceRc = ownRcOrDest(rhsSym.symbolType, rcInfo, dctx);
 				if (sourceRc.wasMovedFn != null) {
 					addPending(dctx, makeWasMovedCall(rhsSym, sourceRc, loc));
 				}
@@ -1623,7 +1624,7 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 // Returns true if wasMoved was emitted.
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
 	if (moveArg.kind == NodeKind.Identifier && moveArg.resolvedSym != null) {
-		const sourceRc = ownRcOrDest(moveArg.resolvedSym, rcInfo, dctx);
+		const sourceRc = ownRcOrDest(moveArg.resolvedSym.symbolType, rcInfo, dctx);
 		if (sourceRc.wasMovedFn != null) {
 			addPending(dctx, makeWasMovedCall(moveArg.resolvedSym, sourceRc, loc));
 		}
