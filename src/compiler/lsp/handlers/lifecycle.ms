@@ -578,16 +578,17 @@ test "definition on JSX tag with attributes resolves" {
 // JSX names `IntrinsicElements` as an alias of htmlNamed.ms's HtmlElements.
 // cards.ms exports a component that a member tag `<Ui.Card>` names through `import * as Ui`.
 const JSX_DIR = "src/test/fixtures/lsp/jsxNamespace";
+const JSX_MAIN_URI = lspPathToUri(`${cwd().replaceAll("\\", "/")}/${JSX_DIR}/main.ms`);
 
 // Opened as a client opens it, so the imports it names are recorded before the check.
 function jsxDb(main: string): TransAmDb {
 	const db = createTransAmDb(100);
-	handleDidOpen(`{"textDocument":{"uri":${lspJsonString(`file://${cwd()}/${JSX_DIR}/main.ms`)},"text":${lspJsonString(main)}}}`, db);
+	handleDidOpen(`{"textDocument":{"uri":${lspJsonString(JSX_MAIN_URI)},"text":${lspJsonString(main)}}}`, db);
 	return db;
 }
 
 function jsxQuery(db: TransAmDb, line: int32, character: int32, definition: boolean): string {
-	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
+	const params = `{"textDocument":{"uri":${lspJsonString(JSX_MAIN_URI)}},"position":{"line":${line},"character":${character}}}`;
 	return definition ? handleDefinition("71", params, db) : handleHover("70", params, db);
 }
 
@@ -682,8 +683,13 @@ test "hover on a function component's JSX attribute typed by an alias body shows
 	assert jsxQuery(jsxDb(main), 6, 24, false).indexOf("The heading the card shows.") >= 0;
 }
 
+test "hover on a field read shows its doc when the source has CRLF line endings" {
+	const src = "interface Attrs {\r\n\t/** Unique id of the element. */\r\n\tid: string;\r\n}\r\nfunction f(x: Attrs): string { return x.id; }";
+	assert jsxQuery(jsxDb(src), 4, 40, false).indexOf("Unique id of the element.") >= 0;
+}
+
 function jsxComplete(main: string, line: int32, character: int32): string {
-	const params = `{"textDocument":{"uri":"file://${cwd()}/${JSX_DIR}/main.ms"},"position":{"line":${line},"character":${character}}}`;
+	const params = `{"textDocument":{"uri":${lspJsonString(JSX_MAIN_URI)}},"position":{"line":${line},"character":${character}}}`;
 	return handleCompletion("72", params, jsxDb(main), testCache());
 }
 
