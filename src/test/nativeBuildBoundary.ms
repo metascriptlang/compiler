@@ -228,8 +228,7 @@ function cacheRootProject(dir: string, config: string): string {
 	need(ensureDir(`${dir}/caller`).ok, "cache root caller");
 	put(`${project}/build.ms`, config);
 	put(`${project}/app/main.ms`, "console.log(73);\n");
-	age(dir, `${project}/build.ms`);
-	age(dir, `${project}/app/main.ms`);
+	waitForNextSecond();
 	return project;
 }
 
@@ -547,7 +546,7 @@ function runCacheRootNative(tests: boolean): void {
 			const project = cacheRootProject(dir, cacheRootConfig());
 			if (tests) {
 				put(`${project}/app/main.ms`, "test 'root routing' { assert 73 == 73; }\n");
-				age(dir, `${project}/app/main.ms`);
+				waitForNextSecond();
 			}
 			const args = [tests ? "test" : "build", "../project/app/main.ms", "--cc=clang"];
 			if (tests) args.push("--tests-in-dir");
