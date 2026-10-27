@@ -949,7 +949,13 @@ function scanFlows(node: Node | null): void {
 			const recv = receiverOf(n);
 			const root = recv != null ? pathRoot(recv) : null;
 			if (isLocalBinding(root)) {
-				for (const a of (n.data as CallExprData).arguments) addSource(heldSources, root!, peelConv(a));
+				const sig = calledRoutineType(n);
+				const shift = n.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+				const args = (n.data as CallExprData).arguments;
+				for (let i = 0; i < args.length; i += 1) {
+					const formal = sig != null && i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
+					if (!isReadonlyView(formal)) addSource(heldSources, root!, peelConv(args[i]));
+				}
 			}
 		}
 		forEachChild(n, visit);
