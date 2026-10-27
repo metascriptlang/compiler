@@ -534,6 +534,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocDyn(s);
+		if (d.catchName == "") emitInst(s, raiserABC(RaiserOpcode.RcDec, catchReg, 1, 0));
 		if (d.finallyBody != null) {
 			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
 			s.tries.push({ finallyBody: d.finallyBody, routeReg });
