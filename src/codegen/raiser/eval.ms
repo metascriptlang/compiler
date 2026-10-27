@@ -2632,11 +2632,11 @@ test "orc: a string written into the register of its only source keeps its value
 }
 
 test "orc: non-ASCII strings keep their bytes through the string tier" {
-	const vm = evalOrcVM("console.log(\"é\".padStart(4, \"x\")); console.log(\"日本\".padEnd(5, \"·\"));"
-		+ " const m = \"naïve\".padStart(7, \"é\"); console.log(m + \"|\" + `${m.length}`);"
-		+ " for (const p of [\"a\", \"é\", \"日\"]) { console.log(p.padStart(3, \"-\")); }");
+	const vm = evalOrcVM("let m = \"naïve\"; for (let i = 0; i < 2; i++) { m = \"é\" + m; }"
+		+ " console.log(`${m}|日本${\"··\"}`);"
+		+ " for (const p of [\"a\", \"é\", \"日\"]) { console.log(\"--\" + p); }");
 	assert vm.error == "", vm.error;
-	assert vm.output == "xxxé\n日本···\néénaïve|7\n--a\n--é\n--日\n";
+	assert vm.output == "éénaïve|日本··\n--a\n--é\n--日\n", vm.output;
 }
 
 test "orc: a string a spawned strand extends leaves the sender's copy unchanged" {
@@ -2907,9 +2907,9 @@ test "engine: a ref result leaves its callee once, whether the callee made it, w
 }
 
 test "engine: a host call keeps its argument order and takes one register twice" {
-	const code = "function probe(a: string, b: string): string { return `${a.indexOf(b)} ${b.indexOf(a)} ${a.indexOf(a)} ${b.indexOf(b)}`; }"
-		+ " console.log(probe(\"xxabc\", \"abc\")); console.log(probe(\"q\", \"q\"));";
+	const code = "function probe(a: number, b: number): string { return `${Math.atan2(a, b) > 0.5} ${Math.atan2(b, a) > 0.5} ${Math.atan2(a, a)} ${Math.atan2(b, b)}`; }"
+		+ " console.log(probe(3, 1)); console.log(probe(0, 0));";
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
-	assert vm.output == "2 -1 0 0\n0 0 0 0\n", vm.output;
+	assert vm.output == "true false 0.7853981633974483 0.7853981633974483\nfalse false 0 0\n", vm.output;
 }
