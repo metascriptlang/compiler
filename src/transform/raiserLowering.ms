@@ -52,6 +52,7 @@ import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
+import { lowerStringIndexReads } from "./lowering/stringIndexLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
 import { lowerAsync } from "./lowering/asyncDesugar";
@@ -134,6 +135,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerUnionConversions(result, ctx);
 	result = lowerBigIntOps(result, ctx);
 	result = lowerUnionTags(result, ctx);
+	result = lowerStringIndexReads(result, ctx);
 	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	if (placed) result = lowerStringOps(result, ctx);

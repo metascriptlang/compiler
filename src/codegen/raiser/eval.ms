@@ -3081,3 +3081,9 @@ test "engine: an else-if condition with a call on the right of && or || reads no
 	assert vm.error == "", vm.error;
 	assert vm.output == "1 2 1 2 1 3 2\n", vm.output;
 }
+
+test "engine: a string index read leaves no string behind, as charAt does" {
+	const vm = evalVM("function show(v: string): void { console.log('[' + v + ']'); } function main(): void { const s = 'Hello'; show(s[1]); show(s.charAt(0)); } main();");
+	assert vm.error == "", vm.error;
+	assert vm.output == "[e]\n[H]\n", vm.output;
+}
