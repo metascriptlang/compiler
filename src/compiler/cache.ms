@@ -14,7 +14,7 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/process";
-import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir } from "std/fs";
+import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir } from "std/fs";
 import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot } from "../utils/cachePaths";
@@ -38,8 +38,13 @@ const _hashByStamp = new HashMap<string, string>();
 const SETTLED_SECONDS = 2;
 
 function settled(path: string): boolean {
-	const modified = modifiedTime(path);
-	return modified >= 0 && modified <= nowSeconds() - SETTLED_SECONDS;
+	const changed = changedTime(path);
+	return changed >= 0 && changed <= nowSeconds() - SETTLED_SECONDS;
+}
+
+function changedSinceBuild(path: string, startedSeconds: number): boolean {
+	const changed = changedTime(path);
+	return changed < 0 || changed >= Math.floor(startedSeconds);
 }
 
 function hashFile(path: string): string {
@@ -494,8 +499,7 @@ export function publishNativeObject(srcPath: string, compileCmd: string, oFile: 
 	// cc read these before they are hashed here: one written since the compile started may
 	// not be what cc read (ccache's include-file-too-new rule), so it keeps the first name.
 	for (const path of dependencies) {
-		const modified = modifiedTime(path);
-		if (modified < 0 || modified >= Math.floor(startedSeconds)) settled = false;
+		if (changedSinceBuild(path, startedSeconds)) settled = false;
 	}
 	const resolvedFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
 	if (resolvedFp == fp) {
@@ -540,17 +544,17 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	const found = findOnPath(path);
 	if (found != "") path = found;
 	const root = globalCacheRoot();
-	const modified = modifiedTime(path);
-	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${modified}`)}`;
+	const changed = changedTime(path);
+	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${changed}`)}`;
 	let identity = "";
-	if (memo != "" && exists(memo) && modifiedTime(memo) > modified) identity = try readFile(memo) catch "";
+	if (memo != "" && exists(memo) && modifiedTime(memo) > changed) identity = try readFile(memo) catch "";
 	if (identity == "") {
 		const args = command.value.args;
 		args.push("--version");
 		const r = execFileCapture(path, args);
 		const version = r.ok ? r.value : r.error.errorOutput;
 		identity = hashContent(`${name}:${hashFile(path)}:${version}`);
-		if (memo != "" && modified < nowSeconds() - 1) {
+		if (memo != "" && settled(path)) {
 			ensureDir(`${root}/cc`);
 			atomicWriteFile(memo, identity);
 		}
@@ -710,8 +714,7 @@ function storeManifest(dependencyFile: string, source: string, argDirs: string[]
 		}
 	}
 	for (const path of deps) {
-		const modified = modifiedTime(path);
-		if (modified < 0 || modified >= Math.floor(_buildStartedSeconds)) return "";
+		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
 	return `${text}${presenceSignature(searched, rels)}`;
@@ -1108,14 +1111,14 @@ export function writeProjectCache(
 		const path = depPaths[i];
 		const hash = hashFile(path);
 		if (_projectInputKey == record && (i >= _projectInputHashes.length || hash != _projectInputHashes[i])) return dropStaleRecord(record);
-		if (_buildStartedSeconds > 0 && (!exists(path) || modifiedTime(path) >= Math.floor(_buildStartedSeconds))) return dropStaleRecord(record);
+		if (_buildStartedSeconds > 0 && (!exists(path) || changedTime(path) >= Math.floor(_buildStartedSeconds))) return dropStaleRecord(record);
 		if (seen.has(path)) continue;
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hash}\n`;
 	}
 	for (const path of _nativeProjectDeps) {
 		if (seen.has(path)) continue;
-		if (_buildStartedSeconds > 0 && modifiedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
+		if (_buildStartedSeconds > 0 && changedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
@@ -1282,8 +1285,7 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 
 export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string): string {
 	for (const path of moduleHeaderPaths(modPath, baseFp)) {
-		const modified = modifiedTime(path);
-		if (modified < 0 || modified >= Math.floor(_buildStartedSeconds)) return oFile;
+		if (changedSinceBuild(path, _buildStartedSeconds)) return oFile;
 	}
 	const resolvedFp = moduleObjectFp(modPath, baseFp);
 	if (resolvedFp == fp) {
@@ -1612,6 +1614,69 @@ test "a file written within the settle window is not remembered by its change st
 	assert _dependenciesByStamp.get(path) == null;
 	assert _sourceIdentityByStamp.get(path) == null;
 	remove(path);
+}
+
+function backdated(path: string, content: string): boolean {
+	return writeFile(path, content).ok && execFileCapture("touch", ["-t", "202001010000", path]).ok;
+}
+
+function ageChange(path: string): void {
+	const deadline = nowSeconds() + 10;
+	while (changedTime(path) > nowSeconds() - SETTLED_SECONDS) {
+		if (nowSeconds() > deadline) throw new Error(`${path} did not settle`);
+		execFileCapture("sleep", ["0.2"]);
+	}
+}
+
+test "a file rewritten and backdated is not remembered while its change time is fresh" {
+	if (platform == "windows") return;
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-backdated-${performance.now()}.txt`;
+	assert backdated(path, "first content");
+	const writes = _hashMemoWrites;
+	hashFile(path);
+	assert _hashMemoWrites == writes;
+	assert _hashByStamp.get(path) == null;
+	ageChange(path);
+	hashFile(path);
+	assert _hashMemoWrites == writes + 1;
+	remove(path);
+}
+
+test "a backdated file is changed since the build started" {
+	if (platform == "windows") return;
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-backdated-build-${performance.now()}.h`;
+	assert backdated(path, "int a;\n");
+	assert changedSinceBuild(path, nowSeconds() - 100);
+	assert !changedSinceBuild(path, nowSeconds() + 100);
+	assert changedSinceBuild(`${path}.absent`, nowSeconds());
+	remove(path);
+}
+
+test "a backdated dependency keeps the header manifest and the project record from being written" {
+	if (platform == "windows") return;
+	withProjectRecordFixture("backdated", (dir: string): void => {
+		const dep = `${dir}/entry.ms`;
+		const header = `${dir}/dep.h`;
+		const depFile = `${dir}/entry.d`;
+		const out = `${dir}/app`;
+		assert backdated(dep, "source");
+		assert backdated(header, "int a;\n");
+		assert writeFile(depFile, `native: ${header}\n`).ok;
+		assert writeFile(out, "output").ok;
+		_buildStartedSeconds = nowSeconds() - 100;
+		assert storeManifest(depFile, `${dir}/entry.c`, [], []) == "";
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
+		_buildStartedSeconds = 0;
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert !projectCacheChanged([dep], out, 0, "", 0, "-O0");
+		registerNativeProjectDep(header);
+		_buildStartedSeconds = nowSeconds() - 100;
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
+	});
 }
 
 test "a settled file is remembered by its change stamp" {
