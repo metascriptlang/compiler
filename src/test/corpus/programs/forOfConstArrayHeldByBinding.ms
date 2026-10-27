@@ -167,4 +167,4 @@ console.log(directPush());
 console.log(letRebound());
 console.log(captured());
 console.log(generated());
-awaited().then((s: string): void => { console.log(s); });
+console.log(await awaited());
