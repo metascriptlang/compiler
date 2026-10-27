@@ -132,8 +132,8 @@ in those buckets. Measured on installed `e5c088569` (tree `1306fdabb`, binary SH
 While any such compiler can run against a root, keep nothing but compiler output in its
 buckets and link nothing into them. `nativeBuildBoundary.ms` groups `cache-preservation`,
 `cache-symlink` and `cache-local-preservation` pin both sides: red on the old compiler, green on
-the current one. `removeAll` in std still follows a directory symlink; the collector no longer
-calls it.
+the current one. std `removeAll` removes a link itself, the root included, and never walks
+through it (`src/test/lang/fsRemoveAll.ms`).
 
 **No byte budget.** The only bound on the global store is the seven-day age above; a busy week
 of worktrees grows it without limit (this Mac, 2026-10-27: `store/` 17 GB, `prelude/` 7.0 GB,
