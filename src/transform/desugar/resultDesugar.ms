@@ -18,8 +18,8 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, BlockStmtData, ReturnStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
-import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType, createResult, numberType, stringType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, BlockStmtData, ReturnStmtData, TryExprData, CallExprData, MemberExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
+import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, voidType, peelToStructOrUnion, fieldTypeView, isMaybeType, getResultOkType, getResultErrType, createResult, numberType, stringType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { newSym } from "../../checker/context";
 import { widenVariantToUnion } from "../../checker/fit";
@@ -29,7 +29,7 @@ import { hoistStmtValue } from "../blockExpand";
 import { hoistGuarded, lowerGuardedTernary, expandConditionStmt, KindHoister } from "../lowering/guardedLower";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
-	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
+	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull, makeBinary,
 	makeExprStmt, makeOwningTryCatch, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
@@ -90,7 +90,7 @@ export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
 
 // Lower Result.ok(val) / Result.err(e) → ObjectLiteral. Runs for all backends.
 export function lowerResultConstructors(program: Node): Node {
-	walkNode(program, rewriteResultCall);
+	walkNode(program, rewriteResultNode);
 	return program;
 }
 
@@ -99,6 +99,23 @@ export function lowerResultConstructors(program: Node): Node {
 // Result.ok(val) → { ok: true, value: val }
 // Result.err(e)  → { ok: false, error: e }
 // Result.ok()    → { ok: true }              (void value case)
+
+// A read of a void field (the `.value` of a Result<void, E> arm) has no stored field behind it:
+// it is the void placeholder a `try` of the same type yields, keeping the operand's evaluation.
+function rewriteResultNode(node: Node): Node {
+	if (node.kind != NodeKind.MemberExpr) return rewriteResultCall(node);
+	const md = node.data as MemberExprData;
+	const owner = peelToStructOrUnion(md.object.nodeType);
+	if (owner == null || owner.kind != TypeKind.Struct) return node;
+	const ft = fieldTypeView(owner, md.property);
+	if (ft.kind != TypeKind.Void) return node;
+	const voidLit = makeNull(node.location);
+	voidLit.nodeType = voidType();
+	if (md.object.kind == NodeKind.Identifier) return voidLit;
+	const seq = makeBinary(md.object, ",", voidLit, node.location);
+	seq.nodeType = voidType();
+	return seq;
+}
 
 function rewriteResultCall(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
