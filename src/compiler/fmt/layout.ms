@@ -119,10 +119,6 @@ function firstLineWidth(text: string, tabWidth: int32): int32 {
 	return displayWidth(newline < 0 ? text : text.slice(0, newline), tabWidth);
 }
 
-function lastLineWidth(text: string, tabWidth: int32): int32 {
-	return displayWidth(text.slice(text.lastIndexOf("\n") + 1), tabWidth);
-}
-
 function indentString(levels: int32, options: FormatOptions): string {
 	return options.useTabs ? "\t".repeat(levels) : " ".repeat(levels * options.tabWidth);
 }
@@ -197,7 +193,8 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 	let column = baseWidth;
 	const lineSuffixes: Doc[] = [];
 	const stack: Cmd[] = [{ indent: 0, mode: Mode.Break, doc }];
-	let literalEnd = 0;
+	let line = "";
+	let literalTail = 0;
 
 	while (stack.length > 0) {
 		const cmd = stack[stack.length - 1];
@@ -208,11 +205,14 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Nil | DocKind.BreakParent => {},
 			DocKind.Text => {
 				const text = textOf(d);
-				result = result + text;
-				if (text.indexOf("\n") >= 0) {
-					column = lastLineWidth(text, options.tabWidth);
-					literalEnd = result.length;
+				const tailStart = text.lastIndexOf("\n") + 1;
+				if (tailStart > 0) {
+					result = result + line + text.slice(0, tailStart);
+					line = text.slice(tailStart);
+					literalTail = line.length;
+					column = displayWidth(line, options.tabWidth);
 				} else {
+					line = line + text;
 					column = column + displayWidth(text, options.tabWidth);
 				}
 			},
@@ -229,11 +229,13 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			DocKind.Indent => { pushChildren(stack, d, cmd.indent + 1, cmd.mode); },
 			DocKind.Line | DocKind.HardLine => {
 				if (d.kind == DocKind.HardLine || cmd.mode == Mode.Break) {
-					if (lineSuffixes.length > 0) result = result + flushSuffixes(lineSuffixes);
-					result = trimTrailingBlanks(result, literalEnd) + "\n" + baseIndent + indentString(cmd.indent, options);
+					if (lineSuffixes.length > 0) line = line + flushSuffixes(lineSuffixes);
+					result = result + trimTrailingBlanks(line, literalTail) + "\n";
+					line = baseIndent + indentString(cmd.indent, options);
+					literalTail = 0;
 					column = baseWidth + cmd.indent * options.tabWidth;
 				} else if (!isSoft(d)) {
-					result = result + " ";
+					line = line + " ";
 					column = column + 1;
 				}
 			},
@@ -249,8 +251,9 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 		}
 	}
 
-	if (lineSuffixes.length > 0) result = result + flushSuffixes(lineSuffixes);
-	if (result.length > 0 && result[result.length - 1] != "\n") result = result + "\n";
+	if (lineSuffixes.length > 0) line = line + flushSuffixes(lineSuffixes);
+	result = result + line;
+	if (result.length > 0 && result.charCodeAt(result.length - 1) != 10) result = result + "\n";
 	return result;
 }
 
