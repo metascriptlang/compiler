@@ -204,7 +204,7 @@ export function synchronize(state: ParserState): void {
 
 function isTypeOperatorKeyword(kind: TokenKind): boolean {
 	return kind == TokenKind.Extends || kind == TokenKind.Keyof || kind == TokenKind.Typeof
-		|| kind == TokenKind.Infer || kind == TokenKind.Distinct;
+		|| kind == TokenKind.Infer || kind == TokenKind.Distinct || kind == TokenKind.Readonly;
 }
 
 // Collect token text from a raw index range, skipping Comment tokens.
@@ -241,7 +241,7 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 		if (text != "") {
 			const lastCh = text.byteAt(text.byteLength - 1);
 			const noSpaceBefore = !conditionalOperator && !conditionalOperand && (v == "[" || v == "]" || v == ">" || v == ">>" || v == ">>>"
-				|| v == ")" || v == "," || v == "." || v == "?" || v == ":"
+				|| v == ")" || v == "," || v == ";" || v == "." || v == "?" || v == ":"
 				|| v == "<" || (v == "(" && previous != TokenKind.Colon));
 			const noSpaceAfter = !conditionalOperand && (lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
 				|| lastCh == ".".code || lastCh == "?".code);
