@@ -318,14 +318,16 @@ backends.
 
 ## L21b. The set algebra was missing its difference, subset and cardinality (FIXED; corpus `773-bitSetAlgebra` passes on C and JS with the installed `v0.2.54`, 2026-09-15)
 
-`docs/LANG-PRIMITIVE.md` told readers to write `a & ~b` for the difference. Measured: `~a` on a
+The earlier [BitSet design record](LANG.md#bitsete--typed-ordinal-set-design-record-2026-09-07)
+told readers to write `a & ~b` for the difference. Measured: `~a` on a
 set falls through to the integer rule and yields `int32`, so `a & ~b` reports
 `bitwise operator '&' on 'BitSet<E>' and 'int32' mixes different enum sets`, and there was no
 other spelling for the difference. Subset and cardinality had none either.
 
 Now eight methods named as ES2025 names them on `Set`, all bodiless `@builtin` declarations in
 both prelude overlays, all lowered to the reference's own expressions. `~a` is rejected with a
-message that says what to use instead. Table, lowering and measurements: `docs/LANG-PRIMITIVE.md`.
+message that says what to use instead. Design rationale, historical lowering and measurements:
+[the BitSet record](LANG.md#bitsete--typed-ordinal-set-design-record-2026-09-07).
 
 ## L21c. A value-typed receiver bound to the `unknown` extension catch-all (FIXED; two equal sets hash equally on C with the installed `v0.2.54`, 2026-09-15)
 

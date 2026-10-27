@@ -69,16 +69,11 @@ A module that is both a CLI and a test target needs a guard, because a test buil
 
 ## Writing MetaScript in this tree
 
-- **`match`** over if-else chains for enum, string and number dispatch. `_` is the wildcard, `|` joins alternatives, `when (…)` guards. A bare identifier in a pattern is a binding, never a comparison. Expression arms return implicitly; block arms need `return`. `try`, C-style `for`, and loop `break`/`continue` do not work inside a match arm; use if-else or `while`/`for..of` there.
-- **`Result<T, E>` and `try`**: `try expr` unwraps or early-returns the error, `try expr catch fallback` unwraps or substitutes.
-- **`interface` is a reference type** (heap, reference-counted, built from object literals); **`struct` is a value type** (stack, copied). No `implements`, no method dispatch.
-- **Numeric types**: no bare `number` in this codebase. `number` is `float64`; use `int32` for indexes, lengths, counts and ids, `int64` past 2^31, `float64` only when genuinely fractional. Bare integer literals infer `int32`.
-- **Null**: there is no `undefined`. `null as unknown as T` is the idiom for a nullable typed field.
-- **Loops**: `for..of` first, C-style `for` when you need the index, `while` only for condition-driven scanners.
-- **Strings** have no `indexOf` or `includes`; use `slice`, `length`, `findChar`, `charAt` from `src/utils/string.ms`. Arrays pass by pointer; strings are value types.
-- `type` is a reserved word; name fields `tokenType`, `nodeType`.
-
-Full reference: [docs/LANG.md](docs/LANG.md).
+Follow the [MetaScript Authoring Standard](docs/LANG-PREFERENCE.md) for preferred constructs,
+explicit numeric widths, storage/API choices, formatting and complete recipes. It is the
+standalone authoring handbook; this contributor guide owns repository workflow, not a duplicate
+language/style checklist. Use the [language reference](docs/LANG.md) for precise meaning and
+acceptance rules.
 
 ## Runtime C
 

@@ -128,7 +128,10 @@ test "describe classifies ages" {
 }
 ```
 
-Reference: [docs/LANG.md](docs/LANG.md). Move semantics: [docs/LANG-MOVE.md](docs/LANG-MOVE.md). Structs and the type system: [docs/LANG-STRUCT.md](docs/LANG-STRUCT.md). Runtime: [docs/LANG-RUNTIME.md](docs/LANG-RUNTIME.md).
+Authoring standard and recipes: [docs/LANG-PREFERENCE.md](docs/LANG-PREFERENCE.md).
+Language meaning and contracts: [docs/LANG.md](docs/LANG.md).
+Specialized references: [move semantics](docs/LANG-MOVE.md),
+[structs and the type system](docs/LANG-STRUCT.md), [runtime](docs/LANG-RUNTIME.md).
 
 ## Standard library
 

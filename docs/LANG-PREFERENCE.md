@@ -3,8 +3,12 @@
 This is the official, standalone authoring standard for this repository: how to choose data,
 write APIs, organize modules, express failure, manage ownership and cross runtime boundaries.
 It is both a style guide and an authoring handbook; ordinary work needs no second style guide.
-[LANG.md](LANG.md) owns the detailed grammar and language contracts. This document owns preferred
-choices, their reasons, runnable compositions and the limits attached to their checked baselines.
+The two core language documents have separate jobs: [LANG.md](LANG.md) defines syntax and meaning,
+typing, ownership/lifetime contracts and target distinctions; this handbook owns preferred choices,
+their reasons, runnable compositions and the limits attached to their checked baselines.
+Language-design decisions and dated experiments are retained in LANG's
+[historical appendix](LANG.md#appendix-historical-design-records), not in a separate primitive
+specification.
 Project-specific build/release rules remain in the project's instructions, not in this standard.
 
 Write TypeScript-shaped code with explicit widths, ownership and deliberate concurrency.

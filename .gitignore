@@ -52,7 +52,6 @@ docs/*
 !docs/LANG-MORPH.md
 !docs/LANG-MOVE.md
 !docs/LANG-PRELUDE.md
-!docs/LANG-PRIMITIVE.md
 !docs/LANG-RAW.md
 !docs/LANG-RUNTIME.md
 !docs/LANG-STRUCT.md

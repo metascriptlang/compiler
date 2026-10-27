@@ -1,6 +1,14 @@
 # MetaScript Language Reference
 
-MetaScript is a systems programming language with TypeScript syntax that compiles to C, JavaScript, and Erlang. This document covers all syntax the self-hosted compiler must handle.
+This is the language reference: syntax and meaning, typing and conversion rules,
+ownership and lifetime contracts, accepted and refused programs, and target-specific behavior.
+For preferred data/API choices, module organization, formatting and complete authoring recipes,
+read the [MetaScript Authoring Standard](LANG-PREFERENCE.md). The handbook applies these contracts;
+it is not a second language specification.
+
+Language-design rationale and dated measurements live in the
+[historical design appendix](#appendix-historical-design-records). That appendix records earlier
+stages and their evidence, not current feature status or additional language rules.
 
 ## Primitive Types
 
@@ -922,7 +930,9 @@ Sink Parameters.
 | `struct` | Value | No | Stack | Hot paths, math types, small data, C interop |
 | `class` | Reference | Yes | Heap (DRC) | OOP, inheritance, polymorphism |
 
-**Workflow**: Start with `interface` (reference, familiar). Profile. Promote hot paths to `struct` (value, fast). Need methods on a value type? Use extension methods (`this self: T` syntax).
+**Choosing a representation**: the [authoring standard, §5](LANG-PREFERENCE.md#5-values-for-data-references-for-sharing)
+explains when value semantics or shared identity fits an API. Struct behavior can be expressed
+with extension methods (`this self: T`); the method syntax does not change its value semantics.
 
 ### Enums
 ```typescript
@@ -1019,7 +1029,7 @@ Three spellings look right and are not:
 Why it is shaped this way — the cross-language survey, the one TypeScript idiom it costs
 (`(flags & F.X) != 0` becomes `.has()`), the width rules, and the deliberately deferred
 set literal `{A, B}` — is recorded in
-[`LANG-PRIMITIVE.md`](LANG-PRIMITIVE.md#bitsete--typed-ordinal-set-design-record-2026-09-07).
+[the historical BitSet design record](#bitsete--typed-ordinal-set-design-record-2026-09-07).
 
 ### Type Aliases
 
@@ -4145,12 +4155,17 @@ If you receive bytes from an untrusted source, the parser itself will reject inv
 
 MetaScript provides a robust set of collection types that map to high-performance C implementations while maintaining TypeScript's ergonomic syntax.
 
-### 1. Map<K, V> (HashMap)
-A high-performance, open-addressing hash table.
+### 1. Map<K, V>
+`Map<K, V>` preserves insertion order; `HashMap<K, V>` does not promise an iteration order.
+Both are reference containers: assigning a map shares its identity and mutations, rather than
+copying its entries. Keys are generic, not limited to strings; integer-key maps are supported.
 
-- **Implementation**: ARC-managed `msMap` with a Structure-of-Arrays (SoA) layout for optimal cache performance.
-- **Key Types**: Phase 1 supports `string` keys (systems-optimized).
 - **Methods**: `get()`, `set()`, `has()`, `delete()`, `clear()`, and `.size`.
+- **Key arrays**: `Map.keys()` returns an array, not a live key iterator. Later insertions into
+  the map do not add entries to an already returned key array.
+- **Implementation**: container definitions and extensions live in
+  [`std/core/struct.ms`](../std/core/struct.ms); the JS overlay is
+  [`std/core/struct.jms`](../std/core/struct.jms).
 
 ```typescript
 const symbols = new Map<string, Symbol>();
@@ -4161,7 +4176,9 @@ if (symbols.has("main")) {
 ```
 
 ### 2. Set<T>
-A collection of unique values, implemented as a wrapper around `Map<T, void>`.
+`Set<T>` and `HashSet<T>` are reference containers of unique values. Repeated insertion does
+not add another equal value. `Set<T>` preserves insertion order; `HashSet<T>` does not promise
+an iteration order.
 
 - **Methods**: `add()`, `has()`, `delete()`, `clear()`, and `.size`.
 
@@ -4172,9 +4189,12 @@ if (visited.has("module_a")) { /* ... */ }
 ```
 
 ### 3. Tuples
-Fixed-size, heterogeneous collections.
+Fixed-size, heterogeneous value types. Copying a tuple copies its member values, not the
+objects behind reference-typed members: changing a copied scalar member does not change the
+original tuple, while a nested `T[]` remains shared.
 
-- **Implementation**: Tuples are lowered to **unique C structs** (stack-allocated) rather than heap-allocated arrays.
+- **Native representation**: a C struct with one field per element, not a heap-array representation.
+  A tuple's value semantics do not require every instance to live on the stack.
 - **Access**: Indexed access (`t[0]`) is rewritten to direct struct field access (`t._0`) in C.
 
 ```typescript
@@ -4196,14 +4216,33 @@ const registry: Record<string, number> = new Map();
 
 ---
 
-### Collection Performance & Memory
+### Collection storage contracts
 
-| Type | Allocation | Access Time | C Mapping |
-| :--- | :--- | :--- | :--- |
-| `Map<K, V>` | Heap (RC) | O(1) Average | `msMap` |
-| `Set<T>` | Heap (RC) | O(1) Average | `msMap` (value-less) |
-| `Tuple` | **Stack** | O(1) Direct | Custom `struct` |
-| `Array` | Heap (RC) | O(1) Direct | `msArray` |
+| Type | Assignment | Shape |
+| :--- | :--- | :--- |
+| `Map<K, V>` / `HashMap<K, V>` | Shared reference | Mutable key/value associations |
+| `Set<T>` / `HashSet<T>` | Shared reference | Mutable unique values |
+| Tuple | Member-value copy | Fixed arity and member types |
+| `T[]` | Shared reference | Growable homogeneous array |
+
+Two scoped consumers were run on C and JS with `msc 0.3.4`, binary/support `1e16a042e`, on
+2026-10-27. Both targets printed the same results below: the first consumer checked an
+integer-key Map, alias mutation, saved keys, a string-key HashMap, ordered Set deduplication,
+HashSet membership/deduplication and scalar tuple copying; the second checked tuple members
+containing a shared array and an independently copied string. This is not an exhaustive
+key-type, iteration-mutation or concurrency check.
+
+```text
+map changed 7 2
+keys 2 3
+hashMap 11 true
+set seven
+set two
+hashSet 1 true false
+tuple 5 8 ok
+nested 9 9
+value first second
+```
 
 ### 1. Dynamic Arrays (`T[]`)
 The standard general-purpose array. It is a **reference type** — heap-allocated, DRC-managed, and shared on assignment exactly like a TypeScript array.
@@ -4270,7 +4309,8 @@ The value-semantics counterpart to `T[]`. Same growable storage and methods, but
 - **Allocation**: Heap buffer, value handle (copied on assignment).
 - **Size**: Growable.
 - **Behavior**: Value semantics — `const b = a` copies; `a.push(x)` does NOT affect `b`.
-- **Use it when**: you need a private, non-aliased array, or to recover the (small) reference-deref cost in a *measured* hot loop. `T[]` is the right default — reach for `Vec<T>` deliberately, not by habit.
+- **Choosing storage**: use the [authoring standard, §5](LANG-PREFERENCE.md#5-values-for-data-references-for-sharing)
+  to choose value storage or shared identity deliberately; neither representation is a universal default.
 - **Usage**:
   ```typescript
   const a: Vec<number> = [1, 2, 3];
@@ -4978,3 +5018,225 @@ Output: `PASS`/`FAIL` per test, summary line (`N passed, N failed, N skipped`), 
 ## Reserved Words
 
 `type` is reserved in MetaScript. Use `tokenType`, `nodeType`, etc. for field names.
+
+## Appendix: historical design records
+
+These records preserve reasons, rejected alternatives and scoped observations, not another
+specification or a capability roadmap. They were relocated from the earlier collection design
+notes at source tree `b4fca565de636563d4c7f0448eb391ea83128898`; that is the relocation source,
+**not** the compiler tree on which every old measurement ran. Dates and any stated conditions
+belong to the original observations. Missing compiler revisions, hosts or flags were not
+reconstructed, and no historical benchmark was rerun for this move. Do not infer current
+performance or enforcement from them. Current BitSet contracts are in [BitSet<E>](#bitsete).
+
+### Collection race diagnostics: recorded rationale
+
+The early collection notes (added 2026-09-16) chose a fatal diagnostic rather than a
+catchable exception for detected overlapping mutation: once container state may be corrupted,
+catching an exception and continuing to use it cannot make that state trustworthy. The
+write flag was described as best-effort detection, not a lock or proof that races cannot occur.
+This preserves the reason for that error policy, not a promise of detection coverage or permission to share
+mutable containers across threads. Cross-thread use remains governed by the language's ownership
+and concurrency contracts.
+
+### `BitSet<E>` — typed ordinal set (design record, 2026-09-07)
+
+**Historical, non-normative.** The record begins on 2026-09-07 and includes revisions through
+2026-09-13. Counts, examples of emitted code and timings below describe those stages, including
+representations later replaced. Numbers are from 2026-09-07 unless a later date is attached.
+This is why the construct was chosen, not a current implementation inventory or test verdict.
+
+#### The pre-migration problem: enum identity dies at the first `|`
+
+Measured via the return path; the `const`-initializer path was fail-open and reported nothing,
+validated with a known-red control first:
+
+| Expression | Inferred type at that stage |
+| :--- | :--- |
+| `K.A` | `K` |
+| `K.A \| K.B` | `int32` |
+| assign `int32` into a `K` slot | **accepted** |
+| assign `K` into an `int32` slot | **rejected** |
+
+TypeScript's bitwise operators produce `number`, and numeric enum slots also accept numbers.
+Both mechanisms therefore lost the enum identity before a combined flag value was read.
+Before the flag families became sets, `node.flags & TypeFlag.HasAsgn` compiled silently across
+unrelated enums. On 2026-09-12 the migrated checker rejected it as
+`bitwise operator '&' on 'BitSet<A>' and 'B' mixes different enum sets`.
+
+The recorded scale in this repo was **224** raw bit operations on `flags` fields, **154**
+`hasFlag`/`setFlag` calls and **391** `.kind == X ||` chains that membership could replace.
+The reference survey found **1131** in-place membership literals and **7** core set aliases.
+`Symbol.symFlags` was an `int32` whose highest hand-assigned flag was `2^29`, leaving one bit.
+This was the concrete pressure, not a speculative need for another collection.
+
+#### Rejected alternative: C# `[Flags]`
+
+C# keeps `F.A | F.B` in the enum type without introducing a second type, but requires the
+values to be powers of two. `NodeKind.Call` was 5 and `NodeKind.New` was 6: `5 | 6 == 7`
+was not a set of either. The model covered the three flag enums and none of the 391
+ordinary-enum sites, so it did not solve the measured problem.
+
+#### Decision and naming
+
+Choose a separate value type `BitSet<E>` whose bit position is the member's **ordinal**, not
+its numeric value. One representation can then cover both flag families and ordinary enums.
+Only ordinal enums participate in inference: hand-assigned flag values already encode bits,
+so applying ordinal-set inference to them would encode those bits twice. At the time, two
+`checker/flow.ms` sites still built an `int32` mask from hand-numbered `FlowFlags`; that gate
+prevented breaking them before the enum became ordinal `FlowFlag` on 2026-09-11.
+
+The name follows established bit-set terminology. `Set<T>` already named the mutable hash
+container. A value-type set deliberately had no `.add()`/`.delete()` mutators: `|`, `.incl()`
+and `.excl()` produce another value. `.has()`, rather than `.contains()`, follows JS/TS and
+the existing `Set<T>` API. Enum values changing from powers of two to ordinals also required
+reviewing serialized enum formats; the representation of a set is a separate question.
+
+The original measured acceptance checks included:
+
+```text
+BitSet<Flag> -> BitSet<Kind>   rejected: "got BitSet<Flag>, expected BitSet<Kind>"
+BitSet<Flag> -> uint32         rejected (distinct is nominal)
+Flag.Used | Kind.Call          rejected (since dbb74612, re-measured 2026-09-11):
+                               "bitwise operator '|' on 'Flag' and 'Kind' mixes
+                               different enum sets"
+Flag.Used | Flag.Cursor        == 10   (bits 1 and 3, not the ordinals 1|3 == 3)
+compiler suite                 3652 / 3652
+```
+
+Those direct-cast and distinct-alias observations describe an early stage, not today's
+conversion contract. A 2026-09-12 re-audit used 26 probes on C and JS. It recorded closures of
+integer fallthroughs: a member on either side of `|`, `&`, `^` retained the set; set/member
+equality, different-enum equality and ordering were refused; non-ordinal element types were
+refused instead of reaching an unsafe shift. These are historical check results, not a claim
+that the present suite or every conversion has just been rerun.
+
+#### TypeScript compatibility cost
+
+| Choice | Recorded effect |
+| :--- | :--- |
+| Syntax | No new grammar: `A \| B` already existed; the rest uses methods |
+| `.has()`, `BitSet<E>` | Additional API names |
+| Ordinal values | Back toward the TS default `A, B, C` → `0, 1, 2` |
+| `E.A \| E.B` → `BitSet<E>` | Stricter than TS's numeric result; a combined value is not a single enum member |
+| `(flags & Flag.X) != 0` | Must become `.has()`; `&` produces a set, not an integer |
+
+The final row was the concrete migration cost: 224 sites used that idiom. Keeping its numeric
+comparison would discard the enum-set identity that motivated the change.
+
+#### Width and the recorded JS trade-off
+
+The 2026-09-12 width measurements used `src/test/c/bitSetWidth.ms` for C field types and corpus
+`761-bitSetNarrow.ms` for the 1- and 2-byte bands on C and JS:
+
+| Members | Representation | Recorded C field | Recorded membership emission |
+| :--- | :--- | :--- | :--- |
+| ≤ 8 | `uint8` | `uint8_t a;` | `(s & (1 << m)) != 0` |
+| ≤ 16 | `uint16` | `uint16_t b;` | `(s & (1 << m)) != 0` |
+| ≤ 32 | `uint32` | `uint32_t c;` | `(s & (1U << m)) != 0` |
+| ≤ 64 | `uint64` | `uint64_t d;` | `(s & (1ULL << m)) != 0` |
+| ≤ 65536 | `SizedArray<uint8, ⌈n/8⌉>` | `uint8_t data[13];` for 100 members | `(s[m >> 3] & (1 << (m & 7))) != 0` |
+| Above | Refused | — | — |
+
+Before that narrowing the floor was a 32-bit word and the array band used 32-bit words.
+The 33–64 band stayed one 64-bit word for a measured reason: on JS a two-word array took
+**0.253 s versus 0.209 s** for the BigInt path over **2M operations**, about **20% slower**.
+The recorded explanation was the element-wise work of the array, whereas `int64` used BigInt.
+The old note did not name the host, compiler revision, repetitions or full flags; the result
+supports that dated choice, not a portable or current performance claim.
+
+Below 33 members the JS representation stayed a Number. The compiler's recorded member counts
+were `NodeKind` 30, `TypeKind` 21, `SymbolKind` 14, `NodeFlag` 18, `TypeFlag` 14 and `SymbolFlag`
+30. `Node.flags`, `Type.typeFlags` and `FlowNode.flags` became 2-byte fields on 2026-09-12;
+`Symbol.symFlags` remained 4 bytes. Corpus `760-bitSetArray.ms` exercised 100 members and
+`759-bitSetWide.ms` 40 members with C/JS parity. These counts are not a current source inventory.
+
+#### Rejected syntax (decision, 2026-09-12)
+
+The surveyed set surface had literals `{A, B}`, ranges `{A..D}`, context-typed `{}`, `in` /
+`notin`, arithmetic-looking algebra, subset operators and a cardinality function. The decision
+was to carry the operations without that additional grammar:
+
+- The dominant use was already expressible as `match` alternatives for dispatch or
+  `(K.A | K.B).has(x)` for a condition. The survey's 1131 literal uses mostly tested membership.
+- The audience's familiar TS/C# forms were comparisons or `switch`; adding a set literal would
+  introduce syntax to teach even where a qualified member list was grammatically available.
+- A range `{A..D}` binds meaning to declaration order: inserting a member in the middle changes
+  every spanning range without changing its source.
+- ES2025's method family already supplied names for union, intersection, difference, subset,
+  superset, disjointness and cardinality. Methods supplied the missing algebra without giving
+  existing operators a second meaning. `|`, `&` and `^` remained the familiar shorthand.
+
+A complement was refused because it would set bits above the last enum member and invalidate
+emptiness/equality. Difference supplies the needed operation without exposing that invalid
+universe. This is the rejection's rationale, not an invitation to restore integer-mask idioms.
+
+#### Recorded algebra and hashing checks (2026-09-13)
+
+Corpus `767-bitSetAlgebra` recorded identical C and JS results across three storage bands:
+`3,1,1,2,true,true,true,false` for both 4- and 40-member enums, and
+`6,1,5,5,true,true,true,false` for 100 members. The observations covered four set-returning
+methods and three predicates, not every language feature.
+
+A hash-map-key probe had compiled while every lookup silently missed. An argument-less
+`hash()` let the `unknown` extension receiver catch-all win and hash the variable's address;
+two equal value sets therefore hashed differently. Applying the value-type exclusion already
+used for an `unknown` parameter to the extension receiver made equal sets hash equally on all
+three bands and allowed `HashMap<BitSet<E>, string>` storage/readback. The dated record names
+`unknownRefusal` and KNOWN-ISSUES L21c. This was a receiver-resolution fault, not a reason to
+special-case map lookups. Hashing in that record was C-only; the JS backend used its native Map
+and exposed no set `hash()`.
+
+#### Cross-language survey
+
+This was a design survey, **not measured in this repo**:
+
+| Language | Declaration | Combine | Membership | Who assigns bits |
+| :--- | :--- | :--- | :--- | :--- |
+| TS/JS | `enum F { A = 1, B = 2 }` | `F.A \| F.B` | `(f & F.A) != 0` | author |
+| C# | `[Flags] enum F { A = 1 }` | `F.A \| F.B` | `f.HasFlag(F.A)` | author |
+| Python | `class F(Flag): A = auto()` | `F.A \| F.B` | `F.A in f` | `auto()` |
+| Rust | `bitflags! { ... }` | `F::A \| F::B` | `f.contains(F::A)` | author |
+| Swift | `struct F: OptionSet` | `[.a, .b]` | `f.contains(.a)` | author |
+| Java | plain `enum` | `EnumSet.of(A, B)` | `s.contains(A)` | library |
+| Zig | plain `enum` | `std.EnumSet(E)` | `s.contains(.a)` | library |
+
+The common combinator was `|`; assigning bits in the library/compiler rather than in user enum
+values was what let the ordinary-enum populations participate as well as hand-numbered flags.
+
+#### Recorded lowering, serialization and evaluation experiments
+
+On 2026-09-11, `--danger` emission for the original 4-member `Flag` had no `BitSet_*` calls:
+
+```c
+s = ((1U << Flag_Used) | (1U << Flag_Cursor));                 // Flag.Used | Flag.Cursor
+g = ((s | (1U << Flag_Mutable)) & (~(1U << Flag_Used)));       // .incl(Mutable).excl(Used)
+((g & (1U << Flag_Cursor)) != 0U)                              // .has(Cursor)
+```
+
+The separate 2026-09-10 range-check experiment explained why merely finding a helper in source
+was not enough. Before the fix, a `has()` under `--danger` emitted
+`((msCheckRangeU32((*self), 0, 4294967295LL) >> msCheckRangeU32(member, …)) & msCheckRangeU32(1U, …)) != 0U`:
+three `uint32 → double → int64` round-trips and an `if (msErr) goto` after every call.
+After removing the check into an unsigned destination it was
+`((((*self) >> ((uint32_t)member)) & 1U) != 0U)`, a leaf the C compiler could inline. The `|`
+path already emitted `(1U << a) | (1U << b)` directly and had not had that problem.
+
+The serialization investigation found one representation-word column per set. The recorded
+prelude-format bump was caused by separating a union-variant slot formerly packed into a flag,
+not by changing the set columns. That historical explanation is not a present pack-format ABI.
+
+The 2026-09-12 compile-time investigation compared candidate execution against runtime values,
+not just successful parsing. Its recorded results were:
+
+- User enum, 8-bit band: `E.A | E.C` → `5`; `has` / `incl` / `excl` / `&` / `isEmpty` →
+  `5,true,false,6,4,true,false` in a macro, a `@comptime` block and at runtime.
+- 16-bit band: `M11 | M1` → `2050`.
+- 100-member array band: `true,true,false,true,false,true` on C and JS; `==` / `!=` / `&` /
+  `|` / `^` comparisons with runtime gave `true,false,false,true,true,false,true,true,true`.
+- Standard enum: `BitSet<NodeFlag> = NodeFlag.Sem | NodeFlag.Transf`, then `has(Sem)`, `has(LL)`,
+  `has(ProtocolCall)`, `incl(ProtocolCall).has(ProtocolCall)` → `true,false,false,true`. An earlier
+  failure report had used a member name that did not exist.
+- 64-bit evaluation followed that day: `(M39 | M1).has(M7)` was `false` at compile time and runtime;
+  `shl(1 as int64, 39)` was `549755813888` in both after integer registers became 64-bit and shifts
+  narrowed to operand width (KNOWN-ISSUES L19).

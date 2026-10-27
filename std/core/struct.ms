@@ -1131,7 +1131,7 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // A set of enum members: bit position = member ordinal. The checker gives
 // `E.A | E.B` the type `BitSet<E>` and sizes it by the member count; the four
 // operations below are declared without a body and lowered by tag before
-// codegen. See docs/LANG-PRIMITIVE.md.
+// codegen. See docs/LANG.md.
 @builtin("SetHas")
 export extern function has<E>(this self: BitSet<E>, member: E): boolean;
 
