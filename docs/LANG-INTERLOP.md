@@ -110,7 +110,7 @@ Measured 2026-10-27 with `./msc-cand` and gcc 15.2 on macOS arm64: `src/test/cor
 `--cc=gcc-15` (not measured on a GNU host or Windows).
 
 A return type maps the same way without `| null` (`void*` → `Ptr<void>`, read in
-`src/module/cimport/emit.ms`, not measured). Struct field types were not re-measured.
+`src/module/cimport/emit.ms`, not measured). A struct field of type `const T*` (scalar `T`) is `Ptr<T>`, not `Borrow<T>`, so the author indexes it: measured 2026-10-28 with `./msc-cand`, corpus `importedConstPointerFieldIndexes` (`uint8` and `int32` elements into a `Vec`, a fixed array and a struct field, C only). Other field types were not re-measured.
 
 At a call, a `Ptr<T> | null` parameter takes `null` or a variable, a field or an element of exactly
 type `T`, and C receives its address for the call; `Ptr<void> | null` takes any scalar, enum or

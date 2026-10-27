@@ -19,6 +19,11 @@ test "a struct or a number without [] cannot be indexed" {
 	assert hasError(P + SET + "const w = z[3];", "type 'P' has no '[]' operator");
 }
 
+test "a field holding a Borrow cannot be indexed, and the refusal names the type" {
+	assert hasError("extern struct V { p: Borrow<uint8>; n: uint64; }\nlet v: V;\nconst x = v.p[1];", "type 'Borrow<uint8>' has no '[]' operator");
+	assert hasError("extern struct W { p: Borrow<int32>; n: uint64; }\nlet w: W;\nlet a: int32[2] = [0, 0];\na[0] = w.p[1];", "type 'Borrow<int32>' has no '[]' operator");
+}
+
 test "only x[i] = v writes through a subscript, and only with a declared []=" {
 	assert strictErrorCount(P + GET + SET + "z[3] = 4;") == 0;
 	assert hasError(P + GET + "z[3] = 4;", NO_SET);

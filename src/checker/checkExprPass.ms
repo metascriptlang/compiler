@@ -3077,8 +3077,11 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	} else {
 		accessType = getElementType(arrType);
 	}
+	if (isUnresolvedType(accessType) && !isSliceSource(arrType) && arrType.kind != TypeKind.Ptr) {
+		addError(ctx, "type '" + typeDisplayName(arrType) + "' has no '[]' operator", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
 	node.nodeType = accessType;
-	node.nodeType = accessType; return;
 }
 
 function isRangeIndex(index: Node): boolean {

@@ -51,7 +51,7 @@ function isMutableChar(c: CType): boolean {
 // emitTypedef so `type MyId = ...` resolves to the underlying type, not back
 // to itself (a struct, union or enum carries the name of the typedef that
 // first names it, so its typedefName === obj.name).
-function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
+function cTypeToMs(t: CType, skipTypedef: boolean = false, inField: boolean = false): string {
 	if (!skipTypedef && t.typedefName != "") {
 		if (isNamedScalar(t.typedefName)) return t.typedefName;
 		const mapped = mapRuntimeType(t.typedefName);
@@ -88,15 +88,16 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
 			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") return `Ptr<${t.base.tagName}>`;
-			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base);
+			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base, false, inField);
 			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) return `Ptr<${inner}>`;
-			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
-			// borrow-promotion); mutable → Ptr<T>.
-			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
+			// Other typed pointer — a const pointee is a Borrow<T> in a parameter or return
+			// (read-only, accepts arr[0] borrow-promotion); a field stores the pointer, so
+			// it is a Ptr<T> the author indexes.
+			return t.base.isConst && !inField ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
 			if (t.base == null) return "unknown";
-			const elem = cTypeToMs(t.base);
+			const elem = cTypeToMs(t.base, false, inField);
 			if (t.arrayLen >= 0) return elem.includes("=>") ? `(${elem})[${t.arrayLen}]` : `${elem}[${t.arrayLen}]`;
 			return `Span<${elem}>`;
 		},
@@ -161,7 +162,7 @@ function emitStructBody(name: string, t: CType, prefix: string): string {
 	let result = `${prefix}extern struct ${name} {\n`;
 	for (const m of t.members) {
 		if (m.name == "") continue;
-		result = result + `\t${m.name}: ${cTypeToMs(m.type)};\n`;
+		result = result + `\t${m.name}: ${cTypeToMs(m.type, false, true)};\n`;
 	}
 	result = result + "}\n";
 	return result;
@@ -265,7 +266,7 @@ function translatedStructKey(name: string, t: CType, target: TargetInfo): string
 	const types: string[] = [];
 	for (const m of t.members) {
 		names.push(m.name);
-		types.push(cTypeToMs(m.type));
+		types.push(cTypeToMs(m.type, false, true));
 	}
 	const key = completeStructKey(`${target.os}-${target.cpu}`, name, names, types);
 	return t.kind == CTypeKind.Union ? key + UNION_KEY_MARK : key;
@@ -621,6 +622,14 @@ function explicitCharPointersAreBytes(os: string, cpu: string): boolean {
 		&& ms.indexOf("function cs(): Borrow<int8>") >= 0
 		&& ms.indexOf("function u(): Ptr<uint8>") >= 0
 		&& ms.indexOf("function cu(): Borrow<uint8>") >= 0;
+}
+
+test "a const pointer field is a Ptr the author indexes, a const pointer parameter a Borrow" {
+	const ms = emitFor("macos", "arm64", "typedef struct { const unsigned char *p; const int *q[2]; const int **r; } S;\nvoid f(const int *x);");
+	assert ms.indexOf("p: Ptr<uint8>;") >= 0, ms;
+	assert ms.indexOf("q: Ptr<int32>[2];") >= 0, ms;
+	assert ms.indexOf("r: Ptr<Ptr<int32>>;") >= 0, ms;
+	assert ms.indexOf("f(x: Borrow<int32>)") >= 0, ms;
 }
 
 test "plain char pointers are cstring whether the target's char is signed or unsigned" {
