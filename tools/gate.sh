@@ -11,7 +11,7 @@ RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
-  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
@@ -469,7 +469,7 @@ select_leaves_nothing() {
   [ "$1" != tests ] && [ "$select" -eq 1 ] && [ -z "$only_csv" ]
 }
 
-TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
+TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms std/crypto/test.ms"
 SHARDED_TIERS="src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
 
@@ -1875,9 +1875,9 @@ CASES
   rm -f "$log"
   [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=3; test_jobs | awk '{ n++; if ($2 != "-") s++ } NR == 1 { first = $0 } END { printf "%d %d %s", n, s, first }')
-  [ "$got" = "9 3 src/test/c/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "10 3 src/test/c/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
-  [ "$got" = "7 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
   log=$(mktemp -d) || return 1
   mkdir -p "$log/done"
   guard_probe_names | sed 1d | while read -r got; do : >"$log/done/$got"; done
