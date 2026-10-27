@@ -128,7 +128,7 @@ function bindDeclaredOperator(ctx: CheckerContext, node: Node, op: string, opera
 // Overload scoring lets an operand of a generic parameter, of `unknown` or still inferred match any
 // routine; such an operator binds in each instance, and an `unknown` operand is compared as itself,
 // since a call refuses it for a typed parameter.
-function operandTypeSettled(t: Type): boolean {
+function operandTypeSettled(t: Readonly<Type>): boolean {
 	return !hasGenericParams(t) && t.kind != TypeKind.Unknown && t.kind != TypeKind.Inferred && t.kind != TypeKind.None;
 }
 
