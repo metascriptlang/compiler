@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, peelSink, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -1903,8 +1903,12 @@ function isActorRef(t: Type | null): boolean {
 	return bare.kind == TypeKind.Ref && bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor;
 }
 
+function isRefFree(t: Type | null): boolean {
+	return isDeepSendable(t == null ? null : peelSink(t), (SendLeaf.String | SendLeaf.Array) as int32, declaresNoHook);
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
-	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
+	if (!typeCarriesRef(sym.symbolType) || isRefFree(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
