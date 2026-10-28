@@ -30,7 +30,7 @@ import {
 import { isScopeBoundary } from "../../ast/shape";
 import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor";
 import { mapChildren } from "../walker";
-import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { setFlag, hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
 import { wrapMaybeValue } from "../maybeCarrier";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
@@ -46,6 +46,7 @@ import { int32Type, booleanType, createPtr, createPrimitive, numberType, hasAsgn
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
+import { closeIterator } from "./forOfLower";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
@@ -528,9 +529,27 @@ function isCloseCheck(stmt: Node, opSym: Symbol): boolean {
 }
 
 function makeCloseCheck(opSym: Symbol, loc: SourceLocation): Node {
+	return makeCloseCheckThen(opSym, [], loc);
+}
+
+function makeCloseCheckThen(opSym: Symbol, before: Node[], loc: SourceLocation): Node {
 	const closing = makeBinary(makeTypedIdentResolved(opSym, int32Type(), loc), "===", makeNumber(CLOSE_OP, loc), loc);
 	const consume = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(0, loc), loc), loc);
-	return makeIf(closing, makeBlock([consume, makeReturn(null, loc)], loc), null, loc);
+	return makeIf(closing, makeBlock([consume, ...before, makeReturn(null, loc)], loc), null, loc);
+}
+
+function helperSource(node: Node, fnType: Type | null): Symbol | null {
+	const sym = node.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.IteratorHelper)) return null;
+	const params = node.paramSyms;
+	const source = params != null && params.length > 0 ? params[0] : null;
+	if (source == null || source.symbolType == null || !isIterator(peelTransparentInstance(source.symbolType))) {
+		throw new Error(`internal: iterator helper '${sym.name}' has no iterator as its first parameter`);
+	}
+	if (fnType == null || fnType.typeReturn == null || !isIterator(fnType.typeReturn)) {
+		throw new Error(`internal: iterator helper '${sym.name}' does not return an iterator`);
+	}
+	return source;
 }
 
 const RUNNING_MESSAGE = "Generator is already running";
@@ -1268,7 +1287,7 @@ function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Nod
 	return fn;
 }
 
-function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
+function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation, source: Symbol | null = null): Node {
 	// 1. Collect all locals and their types
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
@@ -1296,7 +1315,8 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const entryState = allocState(sc);
 	const initState = closable ? allocState(sc) : entryState;
 	if (closable) {
-		sc.items[entryState].stmts.push(rewriteJumps(makeCloseCheck(opSym, loc), sc, false, false, loc));
+		const atStart = source != null ? [makeStateAssign(-1, loc, stateSym), closeIterator(source, loc)] : [];
+		sc.items[entryState].stmts.push(rewriteJumps(makeCloseCheckThen(opSym, atStart, loc), sc, false, false, loc));
 		sc.items[entryState].stmts.push(makeStateAssign(initState, loc, stateSym));
 	}
 	const doneState = -1;  // terminal
@@ -1409,7 +1429,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 					const retType = fnType != null ? fnType.typeReturn : null;
 					d.fnBody = transformGeneratorFn(
 						d.params, d.fnParamTypes, d.fnBody,
-						d.fnFlags, d.fnReturnType, retType, ctx, node.location,
+						d.fnFlags, d.fnReturnType, retType, ctx, node.location, helperSource(node, fnType),
 					);
 					d.fnFlags = "";
 				}

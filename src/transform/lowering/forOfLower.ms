@@ -126,17 +126,21 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 	return makeBlock(stmts, loc);
 }
 
-function closeOnAbruptExit(loop: Node, iterSym: Symbol, liveSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
+export function closeIterator(iterSym: Symbol, loc: SourceLocation): Node {
 	const retType = getIteratorReturnFnType(peelTransparentInstance(iterSym.symbolType));
+	const field = (): Node => makeMember(makeIdentResolved(iterSym, loc), "return", loc);
+	const present = field();
+	present.nodeType = retType;
+	const callee = field();
+	callee.nodeType = retType != null && isMaybeType(retType) ? retType.typeReturn : retType;
+	const call = makeCall(callee, [], loc);
+	call.nodeType = callee.nodeType != null ? callee.nodeType.typeReturn : null;
+	return makeIf(makeBinary(present, "!==", makeNull(loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
+}
+
+function closeOnAbruptExit(loop: Node, iterSym: Symbol, liveSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
 	const closeIfLive = (swallow: boolean): Node => {
-		const field = (): Node => makeMember(makeIdentResolved(iterSym, loc), "return", loc);
-		const present = field();
-		present.nodeType = retType;
-		const callee = field();
-		callee.nodeType = retType != null && isMaybeType(retType) ? retType.typeReturn : retType;
-		const call = makeCall(callee, [], loc);
-		call.nodeType = callee.nodeType != null ? callee.nodeType.typeReturn : null;
-		let close: Node = makeIf(makeBinary(present, "!==", makeNull(loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
+		let close: Node = closeIterator(iterSym, loc);
 		if (swallow) close = makeBareCatch(makeBlock([close], loc), loc);
 		const off = makeExprStmt(makeAssign(makeIdentResolved(liveSym, loc), makeBool(false, loc), loc), loc);
 		return makeIf(makeIdentResolved(liveSym, loc), makeBlock([off, close], loc), null as unknown as Node, loc);

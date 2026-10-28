@@ -73,6 +73,7 @@ import { lowerAwaitSpill } from "./lowering/awaitSpill";
 import { lowerAsyncModuleBody } from "./lowering/asyncModuleBody";
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
+import { lowerIteratorHelpersJs } from "./lowering/iteratorHelperJs";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerSpawn } from "./lowering/spawnLower";
@@ -183,6 +184,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowLap("pass.lowerIterInline");
 	result = lowerForOf(result, ctx);
 	flowLap("pass.lowerForOf");
+	if (jsBackend) { result = lowerIteratorHelpersJs(result, ctx); flowLap("pass.lowerIteratorHelpersJs"); }
 	result = lowerTryExpr(result, ctx);
 	flowLap("pass.lowerTryExpr");
 	result = lowerResultConstructors(result);
