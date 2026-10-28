@@ -1449,7 +1449,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				generateUnionArms(hook, cName, objType, s1, s2, lctx, buf, loc);
 			}
 		} else if (objType.kind == TypeKind.Distinct) {
-			fillBody(hook, x1, x2, "", objType.typeReturn!, lctx, buf, createNameSet(), loc);
+			const body = objType.typeReturn!;
+			if (lctx.raiserBackend && !walksCells(hook) && body.kind == TypeKind.Struct && !isMaybeType(body)) {
+				valueCellOp(hook, x1, x2, false, lctx, buf, loc);
+			} else {
+				fillBody(hook, x1, x2, "", body, lctx, buf, createNameSet(), loc);
+			}
 		} else if (hook == "destroy") {
 			const releaseBase = (): void => {
 				if (owner != null) {
