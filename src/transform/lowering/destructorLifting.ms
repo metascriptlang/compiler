@@ -35,7 +35,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion, unwrapGenericInstance } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion, unwrapGenericInstance, structCellInfo } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -720,6 +720,25 @@ function positionalMember(obj: Node, position: number, loc: SourceLocation): Nod
 	return makeArrayAccess(obj, makeNumber(position, loc), loc);
 }
 
+function valueCellOp(hook: string, xf: Node, yf: Node, empties: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const cell = structCellInfo();
+	match (hook) {
+		"destroy" => {
+			if (!empties) {
+				genOpCall(cell.destroyFn!, hook, xf, yf, buf, loc);
+				return;
+			}
+			const old = keepOld(xf, lctx, buf, loc);
+			genOpCall(cell.wasMovedFn!, "wasMoved", clonePath(xf, loc), xf, buf, loc);
+			genOpCall(cell.destroyFn!, hook, old, clonePath(old, loc), buf, loc);
+		},
+		"copy" => { genOpCall(cell.copyFn!, hook, xf, yf, buf, loc); },
+		"sink" => { genOpCall(cell.sinkFn!, hook, xf, yf, buf, loc); },
+		"wasMoved" => { genOpCall(cell.wasMovedFn!, hook, xf, yf, buf, loc); },
+		_ => { throw new Error("internal: valueCellOp has no row for hook " + hook); },
+	};
+}
+
 function releaseArrayCell(hook: string, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	if (!lctx.raiserBackend) return;
 	if (hook == "destroy") genCall("msArrayDestroy", "destroy", clonePath(xf, loc), clonePath(xf, loc), buf, loc);
@@ -879,6 +898,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			if (lctx.raiserBackend && raiserBareUnion(fieldType)) {
 				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
+				return;
+			}
+			if (lctx.raiserBackend && storesUnionTag(fieldType) && !walksCells(hook)) {
+				valueCellOp(hook, xf, yf, empties, lctx, buf, loc);
 				return;
 			}
 			// Pure strlit union is msString-backed (see isTaggedUnion below) —

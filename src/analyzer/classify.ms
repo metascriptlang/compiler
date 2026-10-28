@@ -269,7 +269,7 @@ export function raiserBareUnion(t: Type): boolean {
 
 // A Raiser struct is a heap cell until typed memory lays structs inline, so a struct with no hook of its own
 // still has a cell to release, copy and move.
-function structCellInfo(): RcInfo {
+export function structCellInfo(): RcInfo {
 	return {
 		rcKind: RcKind.Named, typeName: "", needsCleanup: true, seqLike: false,
 		destroyFn: cellOpSym("msStructCellDestroy", AttachedOp.AttachedDestructor),
@@ -434,6 +434,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
 			if (ctx.raiserBackend && raiserFlatCellUnion(t)) return structCellInfo();
+			if (ctx.raiserBackend && storesUnionTag(t)) return structCellInfo();
 			if (t.typeName != "" && hasAsgnFlag(t)) {
 				return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
 			}
