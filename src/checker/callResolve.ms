@@ -744,6 +744,7 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 		callCheckExpr(defCtx, cloned, expectedType);
 		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
+		if (defNode.kind == NodeKind.NullLiteral) fitted.flags = fitted.flags.incl(NodeFlag.OmittedArg);
 		args.push(fitted);
 		argIdx = argIdx + 1;
 	}
