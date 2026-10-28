@@ -1447,7 +1447,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			} else if (lctx.raiserBackend && !walksCells(hook) && (raiserFlatCellUnion(objType) || storesUnionTag(objType))) {
 				if (hook != "destroy") valueCellOp(hook, x1, x2, false, lctx, buf, loc);
 				else if (releasesAfterHook && !storesUnionTag(objType)) {
-					throw new Error("internal: a user destroy hook on a union of struct members with no stored tag has no cell class to carry it on the Raiser (" + objType.typeName + ")");
+					throw new Error("internal: a user destroy hook on a union of structs and closures with no stored tag has no cell class to carry it on the Raiser (" + objType.typeName + ")");
 				} else if (releasesAfterHook) {
 					const payload = makeMember(x1, VALUE_FIELD, loc);
 					payload.nodeType = objType;

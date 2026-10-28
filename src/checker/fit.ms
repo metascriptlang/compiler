@@ -3131,7 +3131,21 @@ function hasSharedDiscriminant(t: Readonly<Type>): boolean {
 	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
 }
 
+function structMemberUnionWithHook(t: Readonly<Type>): boolean {
+	const owner = t.sym != null ? t.sym.symbolType : t;
+	let hooked = false;
+	for (const op of owner.attachedOps) {
+		if (op != null) hooked = true;
+	}
+	if (!hooked) return false;
+	for (const m of t.typeChildren) {
+		if (m.kind != TypeKind.Struct) return false;
+	}
+	return true;
+}
+
 export function storesUnionTag(t: Readonly<Type>): boolean {
+	if (isSlotUnion(t) && structMemberUnionWithHook(t)) return true;
 	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
 	for (const m of t.typeChildren) {
