@@ -6408,6 +6408,11 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 	if (joined.kind == TypeKind.Null && expectedType != null && !isUnresolvedType(expectedType) && isAssignable(joined, expectedType)) joined = expectedType;
 	if (expectedType != null && !isUnresolvedType(joined) && !hasGenericParams(expectedType)
 			&& !isAssignable(joined, expectedType) && armValues.every((v) => branchFitsSlot(ctx, v.nodeType, expectedType))) joined = expectedType;
+	if (expectedType != null && joined.kind == TypeKind.Union && joined.typeName == "" && !hasGenericParams(expectedType)) {
+		const slot = peelThrough(expectedType, PEEL_ALIAS);
+		if (slot != null && slot != joined && slot.kind == TypeKind.Union && slot.typeName != ""
+				&& armValues.every((v) => branchFitsSlot(ctx, v.nodeType, expectedType))) joined = expectedType;
+	}
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
