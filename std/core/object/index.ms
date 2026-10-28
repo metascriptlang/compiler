@@ -7,9 +7,9 @@
 // the macro walks the peeled shape and emits a plain array literal. Zero
 // runtime reflection, both backends emit the same literal.
 //
-// values() requires every field to share one atomic type — MS arrays are
-// homogeneous and generics cannot express `T[keyof T]`. Mixed-shape objects
-// must read fields directly. entries() needs tuple element types — follow-up.
+// values() and entries() require every field to share one atomic type — MS arrays
+// are homogeneous and generics cannot express `T[keyof T]`. Mixed-shape objects
+// must read fields directly.
 
 import { Node, NodeKind, getTypeImpl, sameType } from "std/meta";
 
@@ -23,6 +23,11 @@ export class Object {
 	// knowable after the macro expands against the concrete T.
 	static values<T>(o: T) {
 		return objectValuesOf(o);
+	}
+
+	// Same shared-type rule as values(): the result is `[string, V][]`.
+	static entries<T>(o: T) {
+		return objectEntriesOf(o);
 	}
 }
 
@@ -191,5 +196,36 @@ export macro objectValuesOf(t: Node): Node {
 	return {
 		kind: NodeKind.ArrayLiteral, line: t.line, column: t.column,
 		elements: vals,
+	};
+}
+
+export macro objectEntriesOf(t: Node): Node {
+	const tt = getTypeImpl(t);
+	if (tt == null) error("Object.entries: type implementation is unavailable", t);
+	if (tt.kind != NodeKind.TypeObject) {
+		error("Object.entries: expected an object type (interface/struct/class) — primitives and arrays have no field shape", t);
+	}
+	const fields = tt.typExprFieldNames;
+	const types = tt.typExprFieldTypes;
+	if (fields.length == 0) error("Object.entries: an object with no fields has no element type", t);
+	const pairs: Node[] = [];
+	let i = 0;
+	while (i < fields.length) {
+		if (types[i].kind != NodeKind.Identifier || !sameType(types[0], types[i])) {
+			error("Object.entries: every field must share one atomic type — heterogeneous shapes must read fields directly", t);
+		}
+		pairs.push({
+			kind: NodeKind.ArrayLiteral, line: t.line, column: t.column,
+			elements: [
+				{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fields[i] },
+				{ kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: fields[i], isOptional: false },
+			],
+		});
+		i = i + 1;
+	}
+	return {
+		kind: NodeKind.TypeAssertion, line: t.line, column: t.column,
+		asType: "Array<[string, " + types[0].name + "]>",
+		asExpr: { kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: pairs },
 	};
 }
