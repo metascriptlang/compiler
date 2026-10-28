@@ -148,29 +148,25 @@ export function isParamPatternDecl(s: Node): boolean {
 		&& init.location.line == s.location.line && init.location.column == s.location.column;
 }
 
+let collapsibleBlock: Node | null = null;
+
+export function printCollapsibleBody(body: Node, options: FormatOptions): Doc {
+	collapsibleBlock = body;
+	return callPrintNode(body, options);
+}
+
 export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
+	const collapsible = node == collapsibleBlock;
+	collapsibleBlock = null;
 	const items = listItems(node, d.statements);
 	const orphans = danglingOf(node);
 	if (items.length == 0) {
-		if (orphans.length == 0) return docText("{}");
-		return boxed("{", [danglingBlock(orphans)], "}");
+		if (orphans.length > 0) return boxed("{", [danglingBlock(orphans)], "}");
+		if (collapsible) return docText("{}");
+		return docGroup([docText("{"), docHardLine(), docText("}")]);
 	}
 	const stmts = printItems(items, d.statements, options);
-
-	// Single-statement block can stay inline (`{ stmt }`) when it fits
-	// printWidth. Multi-stmt blocks always break — flattening multiple
-	// statements onto one line is unreadable. Statements with comments
-	// also break, so the comments don't get smushed inline.
-	if (items.length == 1 && !items[0].broken) {
-		return docGroup([
-			docText("{"),
-			docIndent([docLine(), stmts[0]]),
-			docLine(),
-			docText("}"),
-		]);
-	}
-
 	return docGroup([
 		docText("{"),
 		docIndent([docHardLine(), ...stmts]),
@@ -255,9 +251,10 @@ function bracelessStatement(body: Node, options: FormatOptions): Node | null {
 	return stmt;
 }
 
-function printBody(body: Node, options: FormatOptions): Doc {
+function printBody(body: Node, options: FormatOptions, collapsible: boolean): Doc {
 	const single = bracelessStatement(body, options);
-	return callPrintNode(single != null ? single : body, options);
+	const printed = single != null ? single : body;
+	return collapsible ? printCollapsibleBody(printed, options) : callPrintNode(printed, options);
 }
 
 function commentsBeforeElse(d: IfStmtData, options: FormatOptions): SourceComment[] {
@@ -289,7 +286,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		docText("if ("),
 		callPrintNode(d.condition, options),
 		docText(") "),
-		printBody(d.consequent, options),
+		printBody(d.consequent, options, false),
 	];
 	if (hasElse) {
 		const alt = d.alternate!;
@@ -301,7 +298,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		const elseOnOwnLine = beforeElse.length > 0
 			|| (braceless != null && alt.location.line > lastLineOf(braceless));
 		parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
-		parts.push(alt.kind == NodeKind.IfStmt ? callPrintNode(alt, options) : printBody(alt, options));
+		parts.push(alt.kind == NodeKind.IfStmt ? callPrintNode(alt, options) : printBody(alt, options, false));
 	}
 	return docGroup(parts);
 }
@@ -312,7 +309,7 @@ export function printWhileStmt(node: Node, options: FormatOptions): Doc {
 		docText("while ("),
 		callPrintNode(d.whileCondition, options),
 		docText(") "),
-		printBody(d.whileBody, options),
+		printBody(d.whileBody, options, true),
 	]);
 }
 
@@ -326,14 +323,14 @@ export function printForStmt(node: Node, options: FormatOptions): Doc {
 		docText("; "),
 		callPrintNode(d.forUpdate, options),
 		docText(") "),
-		printBody(d.forBody, options),
+		printBody(d.forBody, options, true),
 	]);
 }
 
 export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ForOfStmtData;
 	const asWritten = headerAsWritten(node, d.forOfBody, options, null);
-	if (asWritten != null) return docGroup([asWritten, printBody(d.forOfBody, options)]);
+	if (asWritten != null) return docGroup([asWritten, printBody(d.forOfBody, options, true)]);
 	let binding = "let";
 	if (d.forOfIsConst) { binding = "const"; }
 	const target = d.forOfPattern != null ? callPrintNode(d.forOfPattern, options) : docText(d.forOfBinding);
@@ -343,7 +340,7 @@ export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 		docText(" of "),
 		callPrintNode(d.forOfIterable, options),
 		docText(") "),
-		printBody(d.forOfBody, options),
+		printBody(d.forOfBody, options, true),
 	]);
 }
 
@@ -354,7 +351,7 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 		docText("for (" + binding + " " + d.forInBinding + " in "),
 		callPrintNode(d.forInObject, options),
 		docText(") "),
-		printBody(d.forInBody, options),
+		printBody(d.forInBody, options, true),
 	]);
 }
 
@@ -376,7 +373,7 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DoWhileStmtData;
 	const parts: Doc[] = [
 		docText("do "),
-		callPrintNode(d.doBody, options),
+		printCollapsibleBody(d.doBody, options),
 		docText(" while ("),
 		callPrintNode(d.doCondition, options),
 		docText(")"),
@@ -466,6 +463,7 @@ export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 
 export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TryCatchStmtData;
+	const hasFinally = d.finallyBody != null && !isSynthesized(node, d.finallyBody);
 	const parts: Doc[] = [docText("try "), callPrintNode(d.tryBody, options)];
 	if (d.hasCatchClause) {
 		parts.push(docText(" catch"));
@@ -473,9 +471,9 @@ export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 			parts.push(docText(" (" + d.catchName + ")"));
 		}
 		parts.push(docText(" "));
-		parts.push(callPrintNode(d.catchBody, options));
+		parts.push(hasFinally ? callPrintNode(d.catchBody, options) : printCollapsibleBody(d.catchBody, options));
 	}
-	if (d.finallyBody != null && !isSynthesized(node, d.finallyBody)) {
+	if (hasFinally) {
 		parts.push(docText(" finally "));
 		parts.push(callPrintNode(d.finallyBody, options));
 	}
@@ -749,7 +747,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const params: Doc[] = [];
 	const staticType = flagGet(d.fnFlags, "sext");
 	const asWritten = headerAsWritten(node, d.fnBody, options, staticType == "" ? node.paramLocations : null);
-	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.fnBody, options)]);
+	if (asWritten != null) return docGroup([asWritten, printCollapsibleBody(d.fnBody, options)]);
 	if (staticType != "") params.push(docText("this typeof " + staticType));
 	for (const p of buildParamList(names, types, defaults, options, node.paramLocations)) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);
@@ -772,6 +770,6 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	}
 
 	parts.push(docText(" "));
-	parts.push(callPrintNode(d.fnBody, options));
+	parts.push(printCollapsibleBody(d.fnBody, options));
 	return docGroup(parts);
 }

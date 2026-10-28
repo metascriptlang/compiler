@@ -38,16 +38,16 @@ function options(printWidth: int32, tabWidth: int32, useTabs: boolean, singleQuo
 	return o;
 }
 
-test "fmt options: the defaults indent one tab per level and keep a short block inline" {
-	assert layoutHolds(defaultFormatOptions(), HEAD + "\tif (a > 0) { return m.call(alpha, beta, gamma); }\n\treturn 0;\n}\n");
+test "fmt options: the defaults indent one tab per level and a one-statement block still breaks" {
+	assert layoutHolds(defaultFormatOptions(), HEAD + "\tif (a > 0) {\n\t\treturn m.call(alpha, beta, gamma);\n\t}\n\treturn 0;\n}\n");
 }
 
 test "fmt options: useTabs indents with one tab per level" {
-	assert layoutHolds(options(80, 2, true, false), HEAD + "\tif (a > 0) { return m.call(alpha, beta, gamma); }\n\treturn 0;\n}\n");
+	assert layoutHolds(options(80, 2, true, false), HEAD + "\tif (a > 0) {\n\t\treturn m.call(alpha, beta, gamma);\n\t}\n\treturn 0;\n}\n");
 }
 
 test "fmt options: tabWidth sets the space indent" {
-	assert layoutHolds(options(80, 4, false, false), HEAD + "    if (a > 0) { return m.call(alpha, beta, gamma); }\n    return 0;\n}\n");
+	assert layoutHolds(options(80, 4, false, false), HEAD + "    if (a > 0) {\n        return m.call(alpha, beta, gamma);\n    }\n    return 0;\n}\n");
 }
 
 test "fmt options: printWidth breaks a block and a call that overflow it" {
@@ -60,5 +60,5 @@ test "fmt options: a tab counts tabWidth columns toward printWidth" {
 }
 
 test "fmt options: singleQuote quotes a printed module path and keeps literals as written" {
-	assert layoutHolds(options(80, 2, false, true), "import * as m from './m';\nconst s = \"x\";\nfunction f(a: int32): int32 {\n  if (a > 0) { return m.call(alpha, beta, gamma); }\n  return 0;\n}\n");
+	assert layoutHolds(options(80, 2, false, true), "import * as m from './m';\nconst s = \"x\";\nfunction f(a: int32): int32 {\n  if (a > 0) {\n    return m.call(alpha, beta, gamma);\n  }\n  return 0;\n}\n");
 }

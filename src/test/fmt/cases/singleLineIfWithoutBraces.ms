@@ -19,7 +19,7 @@ test "fmt: a braceless body on the next line stays braceless" {
 	assert assertFmtContains(source, "if (x == 0) return 1;");
 }
 
-test "fmt: a braced single-line if keeps its braces" {
+test "fmt: a braced single-line if keeps its braces and breaks them onto lines" {
 	const source = "function f(x: int32): int32 {\n\tif (x == 0) { return 1; }\n\treturn x;\n}\n";
-	assert assertFmtContains(source, "if (x == 0) { return 1; }");
+	assert assertFmtContains(source, "if (x == 0) {\n\t\treturn 1;\n\t}");
 }

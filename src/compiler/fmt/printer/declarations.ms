@@ -16,7 +16,7 @@ import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, isSynthesized, takeStructAccessors } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors } from "./statements";
 
 function bodyComments(node: Node): SourceComment[] {
 	const loc = node.location;
@@ -300,7 +300,7 @@ function printStructGetter(getter: Node, options: FormatOptions): Doc {
 	const fd = fn.data as FunctionDeclData;
 	const ret = fd.fnReturnType != "" ? ": " + fd.fnReturnType : "";
 	parts.push(docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "));
-	parts.push(callPrintNode(fd.fnBody, options));
+	parts.push(printCollapsibleBody(fd.fnBody, options));
 	return withComments(getter, docGroup(parts));
 }
 
@@ -508,12 +508,12 @@ export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
 	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
-	if (asWritten != null) return docGroup([docText(visibility), asWritten, callPrintNode(d.ctorBody, options)]);
+	if (asWritten != null) return docGroup([docText(visibility), asWritten, printCollapsibleBody(d.ctorBody, options)]);
 	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
 	const parts: Doc[] = [docText(visibility + "constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	parts.push(docText(" "));
-	parts.push(callPrintNode(d.ctorBody, options));
+	parts.push(printCollapsibleBody(d.ctorBody, options));
 	return docGroup(parts);
 }
 
@@ -535,7 +535,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ (node.flags.has(NodeFlag.Accessor) ? d.methodName.slice(0, 3) + " " + d.methodName.slice(4, d.methodName.length) : writtenName(options, d.nameLocation, d.methodName)) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
 	const asWritten = headerAsWritten(node, d.methodBody, options, node.paramLocations);
-	if (asWritten != null) return docGroup([docText(modifiers), asWritten, callPrintNode(d.methodBody, options)]);
+	if (asWritten != null) return docGroup([docText(modifiers), asWritten, printCollapsibleBody(d.methodBody, options)]);
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
 	const paramComments = paramListComments(node, d.methodBody);
@@ -553,6 +553,6 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		return docGroup(parts);
 	}
 	parts.push(docText(" "));
-	parts.push(callPrintNode(d.methodBody, options));
+	parts.push(printCollapsibleBody(d.methodBody, options));
 	return docGroup(parts);
 }

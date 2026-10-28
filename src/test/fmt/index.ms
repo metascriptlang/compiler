@@ -34,7 +34,7 @@ import "./cases/starExportImport";
 import "./cases/unreachableStmt";
 import "./cases/testDeclEscape";
 import "./cases/propertyInit";
-import "./cases/inlineShortBlock";
+import "./cases/blockAlwaysBreaks";
 import "./cases/singleLineIfWithoutBraces";
 import "./cases/inlineImport";
 import "./cases/enumComment";

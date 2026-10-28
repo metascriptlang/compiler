@@ -20,7 +20,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten } from "./statements";
+import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -382,13 +382,13 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
 	const blockBody = sourceByteAt(options.source, d.arrowBody.location.line, d.arrowBody.location.column) == "{".code;
 	const asWritten = blockBody ? headerAsWritten(node, d.arrowBody, options, null) : null;
-	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, callPrintNode(writtenArrowBody(d.arrowBody, options), options)]);
+	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, printCollapsibleBody(writtenArrowBody(d.arrowBody, options), options)]);
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
 	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
+	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
 	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
-	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
 	if (typed != "") {
 		parts.push(docText(typed));
 	} else if (bare) {
@@ -400,7 +400,7 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.arrowReturnType));
 	}
 	parts.push(docText(" => "));
-	parts.push(callPrintNode(writtenArrowBody(d.arrowBody, options), options));
+	parts.push(printCollapsibleBody(writtenArrowBody(d.arrowBody, options), options));
 	return docGroup(parts);
 }
 
@@ -594,7 +594,7 @@ export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
 export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as FunctionExprData;
 	const asWritten = headerAsWritten(node, d.funcExprBody, options, null);
-	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.funcExprBody, options)]);
+	if (asWritten != null) return docGroup([asWritten, printCollapsibleBody(d.funcExprBody, options)]);
 	// `async`, `generator`, and `async_generator` are encoded in funcExprFlags.
 	const isAsync = flagHas(d.funcExprFlags, "async") || flagHas(d.funcExprFlags, "async_generator");
 	const isGen = flagHas(d.funcExprFlags, "generator") || flagHas(d.funcExprFlags, "async_generator");
@@ -608,6 +608,6 @@ export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.funcExprReturnType));
 	}
 	parts.push(docText(" "));
-	parts.push(callPrintNode(d.funcExprBody, options));
+	parts.push(printCollapsibleBody(d.funcExprBody, options));
 	return docGroup(parts);
 }
