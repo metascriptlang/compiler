@@ -17,11 +17,11 @@ import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stri
 import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
+	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef, takeValueShareFns, makeBinary, makeReturn, makeIf, makeBlock, makeFnDecl,
 } from "../util";
-import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns } from "./debugLower";
+import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns, nullableText } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin } from "../lowering/promiseLower";
@@ -196,16 +196,11 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// and `.value` are real fields on C; the js backend rewrites them back to
 	// `x !== null` and `x` (native/maybeUnwrap.ms), so one shape serves both.
 	if (isMaybeType(objType)) {
+		if ((callNode.data as CallExprData).arguments.length > 0) {
+			throw new Error("internal: toString with arguments reached a nullable receiver, which the checker refuses");
+		}
 		const payload = unwrapMaybeType(objType);
-		const val = makeMember(obj, "value", loc);
-		val.nodeType = payload;
-		const present = makeMember(obj, "present", loc);
-		present.nodeType = booleanType();
-		const absent = makeString("null", loc);
-		absent.nodeType = stringType();
-		const cond = makeConditional(present, lowerToString(callNode, val, payload, loc, ctx), absent, loc);
-		cond.nodeType = stringType();
-		return cond;
+		return nullableText(obj, objType, (value: Node): Node => lowerToString(callNode, value, payload, loc, ctx), loc, ctx);
 	}
 
 	if (tk == TypeKind.Null) return evaluatedPlaceholder(obj, objType, "null", loc, ctx);
