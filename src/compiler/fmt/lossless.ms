@@ -1,4 +1,4 @@
-import { Token, TokenKind, tokenKindToString, isIdentLikeKind } from "../../lexer/token";
+import { Token, TokenKind, tokenKindToString, isIdentLikeKind, isIdentOrKeyword } from "../../lexer/token";
 import { lex } from "../../lexer/lexer";
 
 function isCloser(kind: TokenKind): boolean {
@@ -80,6 +80,13 @@ function addsArrowParens(a: Token[], i: int32, b: Token[], j: int32): boolean {
 		&& b[j + 2].kind == TokenKind.RParen && b[j + 3].kind == TokenKind.Arrow;
 }
 
+function unquotesKey(a: Token[], i: int32, b: Token[], j: int32): boolean {
+	if (a[i].kind != TokenKind.String || i == 0 || i + 1 >= a.length) return false;
+	if (a[i - 1].kind != TokenKind.LBrace && a[i - 1].kind != TokenKind.Comma) return false;
+	return a[i + 1].kind == TokenKind.Colon && isIdentOrKeyword(b[j].kind) && b[j].value == a[i].value
+		&& j + 1 < b.length && b[j + 1].kind == TokenKind.Colon;
+}
+
 export function checkLossless(source: string, formatted: string): Result<void, string> {
 	const before = lex(source);
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
@@ -93,6 +100,11 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 		if (addsArrowParens(a, i, b, j)) {
 			i += 1;
 			j += 3;
+			continue;
+		}
+		if (unquotesKey(a, i, b, j)) {
+			i += 1;
+			j += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j])) {
@@ -164,4 +176,16 @@ test "lossless: other added or removed parentheses stay refused" {
 	assert !checkLossless("set((c) => c);", "set(c => c);\n").ok;
 	assert !checkLossless("const f = c => c;", "const f = (c, d) => c;\n").ok;
 	assert !checkLossless("const f = c => c;", "const f = (c) => (c);\n").ok;
+}
+
+test "lossless: a string token whose decoded value is unchanged may change quotes" {
+	assert checkLossless("f('a', \"it\\'s\");", "f(\"a\", \"it's\");\n").ok;
+	assert !checkLossless("f('a');", "f(\"b\");\n").ok;
+}
+
+test "lossless: an object key may lose the quotes it did not need" {
+	assert checkLossless("const o = { 'a': 1, \"class\": 2 };", "const o = { a: 1, class: 2 };\n").ok;
+	assert !checkLossless("const o = { 'a': 1 };", "const o = { b: 1 };\n").ok;
+	assert !checkLossless("const v = c ? 'a' : b;", "const v = c ? a : b;\n").ok;
+	assert !checkLossless("f('a');", "f(a);\n").ok;
 }

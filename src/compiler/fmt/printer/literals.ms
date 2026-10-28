@@ -68,6 +68,80 @@ function escapeString(s: string, quote: number): string {
 	return out;
 }
 
+const DOUBLE_QUOTE = "\"".code;
+const SINGLE_QUOTE = "'".code;
+
+function normalizeStringContent(content: string, preferred: int32, quotesWillChange: boolean): string {
+	const alternate = preferred == DOUBLE_QUOTE ? SINGLE_QUOTE : DOUBLE_QUOTE;
+	const end = content.byteLength;
+	let out = "";
+	let copyStart = 0;
+	let i = 0;
+	while (i < end) {
+		const b = content.byteAt(i);
+		if (b == "\\".code) {
+			if (i + 1 >= end) break;
+			const escaped = content.byteAt(i + 1);
+			if (quotesWillChange && escaped == alternate) {
+				out = out + content.byteSlice(copyStart, i);
+				copyStart = i + 1;
+			}
+			i += 2;
+			continue;
+		}
+		if (b == preferred) {
+			out = out + content.byteSlice(copyStart, i) + "\\";
+			copyStart = i;
+		}
+		i += 1;
+	}
+	if (copyStart == 0 && out == "") return content;
+	return out + content.byteSlice(copyStart, end);
+}
+
+function stringContent(raw: string): string {
+	if (raw.byteLength < 2) throw new Error("internal: a string token is shorter than its quotes: " + raw);
+	const first = raw.byteAt(0);
+	if ((first != DOUBLE_QUOTE && first != SINGLE_QUOTE) || raw.byteAt(raw.byteLength - 1) != first) {
+		throw new Error("internal: a string token without matching quotes: " + raw);
+	}
+	return raw.byteSlice(1, raw.byteLength - 1);
+}
+
+export function normalizeStringToken(raw: string, singleQuote: boolean): string {
+	const content = stringContent(raw);
+	const chosen = singleQuote ? SINGLE_QUOTE : DOUBLE_QUOTE;
+	const alternate = singleQuote ? DOUBLE_QUOTE : SINGLE_QUOTE;
+	let chosenCount = 0;
+	let alternateCount = 0;
+	for (let i = 0; i < content.byteLength; i += 1) {
+		const b = content.byteAt(i);
+		if (b == chosen) chosenCount += 1;
+		else if (b == alternate) alternateCount += 1;
+	}
+	const quote = chosenCount > alternateCount ? alternate : chosen;
+	const normalized = normalizeStringContent(content, quote, raw.byteAt(0) != quote);
+	if (normalized == content && raw.byteAt(0) == quote) return raw;
+	const mark = quote == DOUBLE_QUOTE ? "\"" : "'";
+	return mark + normalized + mark;
+}
+
+function isAsciiIdentifier(s: string): boolean {
+	if (s.byteLength == 0 || isDigit(s.byteAt(0))) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const b = s.byteAt(i);
+		const word = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || isDigit(b) || b == "_".code || b == "$".code;
+		if (!word) return false;
+	}
+	return true;
+}
+
+function normalizeKeyToken(raw: string, singleQuote: boolean): string {
+	const content = stringContent(raw);
+	if (content != "new" && isAsciiIdentifier(content)) return content;
+	return normalizeStringToken(raw, singleQuote);
+}
+
 // Extract the raw string token from source text using node position.
 // Prettier pattern: work from raw source, never re-escape parsed values.
 // Returns the full token including quotes (e.g., `"hello \"world\""`), or "" if unavailable.
@@ -297,11 +371,11 @@ function writtenSpacingAside(source: string, from: int32, text: string): boolean
 	return true;
 }
 
-export function rawObjectKeyAt(source: string, line: int32, column: int32): string {
+export function rawObjectKeyAt(source: string, line: int32, column: int32, singleQuote: boolean = false): string {
 	const pos = sourceOffset(source, line, column - 1);
 	if (pos < 0) return "";
 	const ch = source.byteAt(pos);
-	if (ch == "\"".code || ch == "'".code) return source.byteSlice(pos, skipQuoted(source, pos));
+	if (ch == "\"".code || ch == "'".code) return normalizeKeyToken(source.byteSlice(pos, skipQuoted(source, pos)), singleQuote);
 	if (ch != "[".code) return "";
 	let depth = 0;
 	let end = pos;
@@ -339,7 +413,7 @@ export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	// Only works for real parsed nodes with valid source positions, not synthetic nodes.
 	if (options.source != "" && node.location.line > 0) {
 		const raw = extractRawStringToken(options.source, node.location.line, node.location.column - 1);
-		if (raw != "") return docText(raw);
+		if (raw != "") return docText(normalizeStringToken(raw, options.singleQuote));
 	}
 	// Fall back to re-escaping (synthetic nodes from transforms, template desugaring)
 	return docText(q + escapeString(d.value, q.byteAt(0)) + q);

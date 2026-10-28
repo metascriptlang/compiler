@@ -59,6 +59,6 @@ test "fmt options: a tab counts tabWidth columns toward printWidth" {
 	assert layoutHolds(options(40, 8, true, false), HEAD + "\tif (a > 0) {\n\t\treturn m.call(\n\t\t\talpha,\n\t\t\tbeta,\n\t\t\tgamma,\n\t\t);\n\t}\n\treturn 0;\n}\n");
 }
 
-test "fmt options: singleQuote quotes a printed module path and keeps literals as written" {
-	assert layoutHolds(options(80, 2, false, true), "import * as m from './m';\nconst s = \"x\";\nfunction f(a: int32): int32 {\n  if (a > 0) {\n    return m.call(alpha, beta, gamma);\n  }\n  return 0;\n}\n");
+test "fmt options: singleQuote quotes a printed module path and string literals" {
+	assert layoutHolds(options(80, 2, false, true), "import * as m from './m';\nconst s = 'x';\nfunction f(a: int32): int32 {\n  if (a > 0) {\n    return m.call(alpha, beta, gamma);\n  }\n  return 0;\n}\n");
 }
