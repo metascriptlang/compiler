@@ -105,3 +105,8 @@ function refusedOp(source: string, refusal: string): boolean {
 	const out = js(source);
 	return out.startsWith("ERROR:") && out.includes(refusal + " on JS: a location there has no address arithmetic");
 }
+
+test "byteViews: a scalar element passed as Ptr<void> is refused on JS and names the ref, Borrow and Span alternatives" {
+	const out = js("extern function show(v: Ptr<void> | null): void from \"console.log(#)\";\nlet v: uint8[] = [1, 2];\nshow(v[1]);\n");
+	assert out.startsWith("ERROR:") && out.includes("cannot convert uint8 to Ptr<void> on JS: " + NO_BYTES + "; an element has no raw address on JS: pass it to a `ref` or `Borrow<T>` parameter"), out.slice(0, 400);
+}
