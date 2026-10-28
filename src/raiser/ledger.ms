@@ -4,9 +4,9 @@
 // the references the roots and the live items make and compares them with each count.
 
 import {
-	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
+	RaiserObjectData, RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
-	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
+	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldNameAt, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
 	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
@@ -17,6 +17,7 @@ interface LedgerTally {
 	seqs: HashMap<int64, int32>;
 	objects: int32[];
 	boxes: HashMap<int64, int32>;
+	holders: HashMap<int64, string>;
 }
 
 function zeros(count: int32): int32[] {
@@ -25,8 +26,10 @@ function zeros(count: int32): int32[] {
 	return out;
 }
 
-function tallyRef(tally: LedgerTally, v: RaiserValue): void {
+function tallyRef(tally: LedgerTally, v: RaiserValue, holder: string): void {
 	if (v.kind < RaiserValueKind.String) return;
+	const named = tally.holders.get(v.intVal);
+	tally.holders.set(v.intVal, (named != null ? named + ", " : "") + holder);
 	const index = handleIndex(v.intVal);
 	match (handleHeapKind(v.intVal)) {
 		RaiserHeapKind.String => { const held = tally.strings.get(v.intVal); tally.strings.set(v.intVal, (held != null ? held : 0) + 1); },
@@ -38,6 +41,12 @@ function tallyRef(tally: LedgerTally, v: RaiserValue): void {
 	}
 }
 
+function objectFieldNames(data: RaiserObjectData): string {
+	const names: string[] = [];
+	for (let f = 0; f < objectFieldCount(data); f += 1) names.push(fieldNameAt(data, f));
+	return names.join(",");
+}
+
 function freeFlags(count: int32, freeList: int64[]): boolean[] {
 	const free: boolean[] = [];
 	for (let i = 0; i < count; i += 1) free.push(false);
@@ -47,25 +56,25 @@ function freeFlags(count: int32, freeList: int64[]): boolean[] {
 
 // "" when every live item's count is the number of references the roots and the live items
 // make to it; otherwise the message that names the first disagreement.
-export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string): string {
+export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string, rootNames: string[] = []): string {
 	const tally: LedgerTally = {
 		strings: new HashMap<int64, int32>(), seqs: new HashMap<int64, int32>(),
-		objects: zeros(obj.objects.length), boxes: new HashMap<int64, int32>(),
+		objects: zeros(obj.objects.length), boxes: new HashMap<int64, int32>(), holders: new HashMap<int64, string>(),
 	};
 	const freeObjects = freeFlags(obj.objects.length, obj.freeList);
 	const boxHandles = heapBoxHandles(arr);
 	const stringBytes = stringBytesHandles(arr);
-	for (const root of roots) {
-		if (root.kind == RaiserValueKind.Array && stringBytes.includes(root.intVal)) continue;
-		tallyRef(tally, root);
+	for (let r = 0; r < roots.length; r += 1) {
+		if (roots[r].kind == RaiserValueKind.Array && stringBytes.includes(roots[r].intVal)) continue;
+		tallyRef(tally, roots[r], (r < rootNames.length ? rootNames[r] : `root ${r}`));
 	}
-	for (const bytes of stringBytes) tallyRef(tally, raiserArray(bytes));
+	for (const bytes of stringBytes) tallyRef(tally, raiserArray(bytes), "string bytes");
 	const seqHandles = heapSeqHandles(arr);
 	for (const handle of seqHandles) {
 		if (heapArrayIsView(arr, handle)) continue;
 		if (arrayHoldsHandles(arr, handle)) {
 			const held = arrayHeldCount(arr, handle);
-			for (let k = 0; k < held; k += 1) tallyRef(tally, arrayHeldAt(arr, handle, k));
+			for (let k = 0; k < held; k += 1) tallyRef(tally, arrayHeldAt(arr, handle, k), `array ${handle}`);
 		}
 	}
 	const cellHandles = heapObjectCellHandles(arr);
@@ -74,20 +83,22 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		for (let f = 0; f < kinds.length; f += 1) {
 			if (kinds[f] == RaiserRegClass.Dyn) {
 				const box = objectCellRawSlot(handle, f);
-				if (box != 0) tallyRef(tally, { kind: RaiserValueKind.Box, intVal: box, floatVal: 0.0 });
-			} else tallyRef(tally, objectCellFieldValue(arr, handle, f));
+				if (box != 0) tallyRef(tally, { kind: RaiserValueKind.Box, intVal: box, floatVal: 0.0 }, `cell ${objectCellClass(handle).name}#${handle} field ${f}`);
+			} else tallyRef(tally, objectCellFieldValue(arr, handle, f), `cell ${objectCellClass(handle).name}#${handle} field ${f}`);
 		}
 	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
 		if (freeObjects[i]) continue;
 		const count = objectFieldCount(obj.objects[i]);
-		for (let f = 0; f < count; f += 1) tallyRef(tally, fieldValueAt(obj.objects[i], f));
+		for (let f = 0; f < count; f += 1) tallyRef(tally, fieldValueAt(obj.objects[i], f), `object ${i} field ${f}`);
 	}
-	for (const handle of boxHandles) tallyRef(tally, heapBoxValue(arr, handle));
+	for (const handle of boxHandles) tallyRef(tally, heapBoxValue(arr, handle), `box ${handle}`);
 	let leakedStrings = 0;
 	let leakedArrays = 0;
 	let leakedObjects = 0;
 	let leakedBoxes = 0;
+	let firstBox = "";
+	let firstLeak = "";
 	for (const handle of heapStringHandles(arr)) {
 		const held = tally.strings.get(handle);
 		const holders = held != null ? held : 0;
@@ -107,25 +118,34 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		const held = tally.seqs.get(handle);
 		const holders = held != null ? held : 0;
 		const counted = heapArrayRc(arr, handle);
-		if (counted < holders) return `internal: object ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
-		if (counted > holders) leakedObjects += 1;
+		if (counted < holders) return `internal: object ${handle} (${objectCellClass(handle).name}) counts ${counted} holders but ${holders} hold it at ${where} end: ${tally.holders.get(handle)}`;
+		if (counted > holders) {
+			leakedObjects += 1;
+			if (leakedObjects <= 4) firstLeak += `${firstLeak == "" ? "" : "; "}${objectCellClass(handle).name}[${objectCellClass(handle).fields.join(",")}]#${handle} counts ${counted} holders ${holders}`;
+		}
 	}
 	for (let i = 0; i < tally.objects.length; i += 1) {
 		if (freeObjects[i]) continue;
 		if (obj.objects[i].rc < tally.objects[i]) return `internal: object ${i} counts ${obj.objects[i].rc} holders but ${tally.objects[i]} hold it at ${where} end`;
-		if (obj.objects[i].rc > tally.objects[i]) leakedObjects += 1;
+		if (obj.objects[i].rc > tally.objects[i]) {
+			leakedObjects += 1;
+			if (leakedObjects <= 4) firstLeak += `${firstLeak == "" ? "" : "; "}${obj.objects[i].classType.name}[${objectFieldNames(obj.objects[i])}]#${i} counts ${obj.objects[i].rc} holders ${tally.objects[i]} slots ${obj.objects[i].slots.length} values ${obj.objects[i].values.length} layout ${obj.objects[i].classType.kinds.length}`;
+		}
 	}
 	for (const handle of boxHandles) {
 		const held = tally.boxes.get(handle);
 		const holders = held != null ? held : 0;
 		const counted = heapBoxRc(handle);
 		if (counted < holders) return `internal: box ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
-		if (counted > holders) leakedBoxes += 1;
+		if (counted > holders) {
+			leakedBoxes += 1;
+			if (firstBox == "") firstBox = `Box#${handle} counts ${counted} holders ${holders} holding kind ${heapBoxValue(arr, handle).kind}`;
+		}
 	}
 	if (leakedStrings > 0) return `internal: ${leakedStrings} string items live after ${where} end`;
 	if (leakedArrays > 0) return `internal: ${leakedArrays} array items live after ${where} end`;
-	if (leakedObjects > 0) return `internal: ${leakedObjects} object items live after ${where} end`;
-	if (leakedBoxes > 0) return `internal: ${leakedBoxes} box items live after ${where} end`;
+	if (leakedObjects > 0) return `internal: ${leakedObjects} object items live after ${where} end${firstLeak == "" ? "" : " (leaked: " + firstLeak + ")"}`;
+	if (leakedBoxes > 0) return `internal: ${leakedBoxes} box items live after ${where} end (first: ${firstBox})`;
 	return "";
 }
 
@@ -170,6 +190,6 @@ test "the audit counts the references an object cell holds and names a cell that
 	objectCellSetSlot(cell, 0, s.intVal);
 	const root = raiserObject(objectCellHandle(cell));
 	assert ledgerAudit(arr, obj, [root], "program") == "", ledgerAudit(arr, obj, [root], "program");
-	assert ledgerAudit(arr, obj, [], "program") == "internal: 1 object items live after program end";
-	assert ledgerAudit(arr, obj, [root, root], "program").endsWith("counts 1 holders but 2 hold it at program end");
+	assert ledgerAudit(arr, obj, [], "program").startsWith("internal: 1 object items live after program end (leaked: Holder[");
+	assert ledgerAudit(arr, obj, [root, root], "program").includes("counts 1 holders but 2 hold it at program end");
 }
