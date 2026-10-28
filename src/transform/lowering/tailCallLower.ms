@@ -32,7 +32,7 @@ import {
 	VariableDeclData, ArrowFunctionData, FunctionExprData, OutExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
-import { noneType, peelToStruct } from "../../checker/types";
+import { peelToStruct } from "../../checker/types";
 import { walkNode, mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild, anyChild } from "../../ast/visitor";
 import { isAssignOp } from "../../ast/operators";
@@ -422,8 +422,9 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 			tempSyms.push(null);
 			continue;
 		}
-		const argType = cd.arguments[i].nodeType != null ? cd.arguments[i].nodeType : noneType();
-		const sym = freshTempSym(ctx, "tc", argType);
+		const ls = localSyms[i];
+		if (ls == null) throw new Error(`internal: tail-call parameter '${params[i]}' has no loop-carried local`);
+		const sym = freshTempSym(ctx, "tc", ls.symbolType);
 		tempSyms.push(sym);
 		const tcDecl = makeVarDecl(sym.name, cd.arguments[i], DeclKind.Const, loc);
 		tcDecl.resolvedSym = sym;

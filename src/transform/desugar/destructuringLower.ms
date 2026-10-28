@@ -8,6 +8,8 @@ import {
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { cloneIfPure } from "../place";
 import { nullishLowered } from "../coercion/nullishCoalesce";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef, counterType, makeCounterStep } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -29,8 +31,8 @@ function destrElemType(base: Node, i: int32): Type {
 
 function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: SourceLocation, ctx: TransformContext, items: Node[]): Node | null {
 	if (ctx.jsBackend) {
-		const sliceCallee = makeMember(base, "slice", loc);
-		const sliceCall = makeCall(sliceCallee, [makeNumber(from, loc), makeMember(base, "length", loc)], loc);
+		const sliceCallee = makeMember(cloneNodeKeepSem(base), "slice", loc);
+		const sliceCall = makeCall(sliceCallee, [makeNumber(from, loc), makeMember(cloneNodeKeepSem(base), "length", loc)], loc);
 		if (restType != null) sliceCall.nodeType = restType;
 		return sliceCall;
 	}
@@ -51,7 +53,7 @@ function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: Sou
 	iDecl.resolvedSym = iSym;
 	iDecl.nodeType = indexType;
 	items.push(iDecl);
-	const lenMember = makeMember(base, "length", loc);
+	const lenMember = makeMember(cloneNodeKeepSem(base), "length", loc);
 	lenMember.nodeType = int32Type();
 	const iv0 = makeIdentResolved(iSym, loc);
 	iv0.nodeType = indexType;
@@ -59,7 +61,7 @@ function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: Sou
 	const iv1 = makeIdentResolved(iSym, loc);
 	iv1.nodeType = indexType;
 	const refAcc = restType.kind == TypeKind.Ref && restType.typeReturn != null;
-	const elemAccess = makeArrayAccess(base, iv1, loc);
+	const elemAccess = makeArrayAccess(cloneNodeKeepSem(base), iv1, loc);
 	elemAccess.nodeType = refAcc ? restType.typeReturn.typeReturn : restType.typeReturn;
 	const accRef = makeIdentResolved(accSym, loc);
 	accRef.nodeType = restType;
@@ -104,7 +106,7 @@ export function expandArrayRet(
 		if (elem.kind == NodeKind.Identifier) {
 			const id = elem.data as IdentifierData;
 			if (id.name != "_") {
-				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
+				const access = makeArrayAccess(cloneNodeKeepSem(base), makeNumber(i, loc), loc);
 				const elemType = destrElemType(base, i);
 				if (elemType != null) access.nodeType = elemType;
 				let init = access;
@@ -112,7 +114,7 @@ export function expandArrayRet(
 					const def = apd.patternDefaults[i];
 					init = nullishLowered(access, def, loc, elemType, ctx);
 					if (destrHasRuntimeLength(base.nodeType)) {
-						const lenMember = makeMember(base, "length", loc);
+						const lenMember = makeMember(cloneNodeKeepSem(base), "length", loc);
 						lenMember.nodeType = int32Type();
 						const idx = makeNumber(i, loc);
 						idx.nodeType = int32Type();
@@ -152,7 +154,7 @@ export function expandObjectRet(
 			const restNames = destrObjectRestNames(base.nodeType, takenKeys);
 			const restValues: Node[] = [];
 			for (const fieldName of restNames) {
-				const fieldAccess = makeMember(base, fieldName, loc);
+				const fieldAccess = makeMember(cloneNodeKeepSem(base), fieldName, loc);
 				const ft = destrNamedFieldType(base.nodeType, fieldName);
 				if (ft != null) fieldAccess.nodeType = ft;
 				restValues.push(fieldAccess);
@@ -167,7 +169,7 @@ export function expandObjectRet(
 		const p = prop.data as ObjectPatternPropData;
 		if (p.propAlias.kind == NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
-			const memberAccess = makeMember(base, p.propKey, loc);
+			const memberAccess = makeMember(cloneNodeKeepSem(base), p.propKey, loc);
 			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
 			if (fieldType != null) memberAccess.nodeType = fieldType;
 			let init = memberAccess;
@@ -226,7 +228,7 @@ function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: Tran
 				assignTarget((target.data as SpreadExprData).spreadArg, rest, loc, ctx, items);
 				continue;
 			}
-			const access = makeArrayAccess(base, makeNumber(i, loc), loc);
+			const access = makeArrayAccess(cloneNodeKeepSem(base), makeNumber(i, loc), loc);
 			const elemType = destrElemType(base, i);
 			if (elemType != null) access.nodeType = elemType;
 			assignTarget(target, access, loc, ctx, items);
@@ -240,7 +242,7 @@ function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: Tran
 			ctx.errors.push(`${target.location.line}:${target.location.column}: a rest property in a destructuring assignment is not supported; destructure into a declaration`);
 			continue;
 		}
-		const access = makeMember(base, od.keys[i], loc);
+		const access = makeMember(cloneNodeKeepSem(base), od.keys[i], loc);
 		const fieldType = destrNamedFieldType(base.nodeType, od.keys[i]);
 		if (fieldType != null) access.nodeType = fieldType;
 		assignTarget(target, access, loc, ctx, items);
@@ -267,7 +269,7 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	// Simple RHS (identifier/member/access) → skip temp
 	let baseExpr: Node | null = null;
 	const initKind = d.destrInit.kind;
-	if (initKind == NodeKind.Identifier || initKind == NodeKind.MemberExpr || initKind == NodeKind.ArrayAccess) {
+	if ((initKind == NodeKind.Identifier || initKind == NodeKind.MemberExpr || initKind == NodeKind.ArrayAccess) && cloneIfPure(d.destrInit) != null) {
 		baseExpr = d.destrInit;
 	} else {
 		const sym = freshTempSym(ctx, "destr", d.destrInit.nodeType != null ? d.destrInit.nodeType : noneType());

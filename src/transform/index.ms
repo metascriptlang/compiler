@@ -111,6 +111,7 @@ import { lowerAssert } from "./native/assertLower";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor, lowerActorHandles } from "./lowering/actorLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
+import { reportShareIfRequested } from "./shareCount";
 
 // An instance field initializer is evaluated by the constructor, so its `?.`, `??` and
 // truthiness tests bind their temps there, after lowerCtorInit has moved it; on C the moved
@@ -323,6 +324,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowLap("pass.liftDestructors");
 	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); flowLap("pass.dropLocalTypeLift"); }
 	if (jsBackend) { result = ownModuleScopeTemps(result, checkerCtx); flowLap("pass.ownModuleScopeTemps"); }
+	reportShareIfRequested(result, "xform");
 	return result;
 }
 

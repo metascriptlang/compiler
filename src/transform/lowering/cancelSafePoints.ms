@@ -8,7 +8,7 @@
 // the AwaitGroup pointer is known at transform time.
 
 import { Node, NodeKind, SourceLocation, BlockStmtData, WhileStmtData, DoWhileStmtData, ForOfStmtData, ForStmtData, IfStmtData } from "../../ast/node";
-import { makeCall, makeIf, makeBlock, makeReturn, runtimeRef } from "../util";
+import { cloneIdent, makeCall, makeIf, makeBlock, makeReturn, runtimeRef } from "../util";
 import { booleanType } from "../../checker/types";
 
 // Inject cancellation checks at loop backedges in the given function body.
@@ -18,7 +18,7 @@ export function injectCancelSafePoints(body: Node, groupIdent: Node, loc: Source
 }
 
 function makeCancelCheck(groupIdent: Node, loc: SourceLocation): Node {
-	const checkCall = makeCall(runtimeRef("msSpawnCheckCancel", loc), [groupIdent], loc);
+	const checkCall = makeCall(runtimeRef("msSpawnCheckCancel", loc), [cloneIdent(groupIdent, loc)], loc);
 	checkCall.nodeType = booleanType();
 	const retNode = makeReturn(null, loc);
 	const ifBody = makeBlock([retNode], loc);

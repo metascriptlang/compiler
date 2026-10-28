@@ -739,13 +739,13 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 	// field would produce invalid C (`(*dest).v0.value` on a void slot).
 	if (fieldType.kind == TypeKind.Void) return;
 	let xf = fieldName != ""
-		? makeMember(x, fieldName, loc)
+		? makeMember(clonePath(x, loc), fieldName, loc)
 		: x;
 	if (fieldName != "") { xf.nodeType = fieldType; }
 	// reference parity: trace keeps y as raw callback, not y.field
 	let yf = (fieldName != "" && !walksCells(hook))
-		? makeMember(y, fieldName, loc)
-		: y;
+		? makeMember(clonePath(y, loc), fieldName, loc)
+		: walksCells(hook) ? clonePath(y, loc) : y;
 	if (fieldName != "" && !walksCells(hook)) { yf.nodeType = fieldType; }
 	const empties = emptiesSlot(hook, x, fieldName);
 

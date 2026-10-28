@@ -217,7 +217,13 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type | n
 	}
 
 	// The $matched flag gates only a non-empty default body that arms cannot early-return past.
-	const needsFlag = mode != ArmMode.Return && !isEmptyBlock(defaultBody);
+	let armHasGuard = false;
+	for (let i = 0; i < cases.length; i += 1) {
+		const cd = cases[i].data as MatchCaseData;
+		if (!isWildcard(cd.casePatterns) && cd.caseGuard != null) armHasGuard = true;
+	}
+	const defaultInSwitch = !armHasGuard && !isEmptyBlock(defaultBody);
+	const needsFlag = mode != ArmMode.Return && armHasGuard && !isEmptyBlock(defaultBody);
 	const matchedSym = freshTempSym(ctx, "matched", booleanType());
 	const matchedName = matchedSym.name;
 
@@ -295,6 +301,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type | n
 		switchCases.push(makeSwitchCase(patternTests[gi], caseStmts, false, loc));
 	}
 
+	if (defaultInSwitch) switchCases.push(makeSwitchCase([], [defaultBody], true, loc));
 	const discIdent = makeTypedIdentResolved(matchSym, discType, loc);
 	const switchNode = makeSwitch(discIdent, switchCases, loc);
 
@@ -308,7 +315,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type | n
 		stmts.push(makeIf(notMatched, defaultBody, makeBlock([], loc), loc));
 	} else {
 		stmts.push(switchNode);
-		if (!isEmptyBlock(defaultBody)) {
+		if (!defaultInSwitch && !isEmptyBlock(defaultBody)) {
 			stmts.push(defaultBody);
 		}
 	}

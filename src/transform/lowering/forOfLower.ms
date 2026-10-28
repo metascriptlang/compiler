@@ -16,7 +16,7 @@ import {
 import { TransformContext, freshTempSym } from "../context";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { appendLoopTail, bodySuspends } from "./forLoopLower";
-import { int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
+import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import { clonePlace, isVariantRead } from "../place";
@@ -247,8 +247,8 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 			itemDecl.nodeType = charType();
 			itemAccess.nodeType = charType();
 		} else if (elemArrType != null && elemArrType.typeReturn != null) {
-			itemDecl.nodeType = elemArrType.typeReturn;
-			itemAccess.nodeType = elemArrType.typeReturn;
+			itemDecl.nodeType = withoutOwned(elemArrType.typeReturn);
+			itemAccess.nodeType = withoutOwned(elemArrType.typeReturn);
 		}
 		whileStmts.push(itemDecl);
 	}

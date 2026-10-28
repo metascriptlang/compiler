@@ -28,6 +28,7 @@ import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerInductionPointers } from "./inductionPointer";
+import { reportShareIfRequested } from "../shareCount";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowMark();
@@ -55,5 +56,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.insertVarParamDerefs");
 	result = lowerInductionPointers(result, ctx);
 	flowLap("pass.lowerInductionPointers");
+	reportShareIfRequested(result, "native");
 	return result;
 }

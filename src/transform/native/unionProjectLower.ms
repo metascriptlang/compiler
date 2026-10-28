@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
-import { narrowUnionToVariant, isSlotUnion, isLiteralSet, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
+import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType, isLiteralSet } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";

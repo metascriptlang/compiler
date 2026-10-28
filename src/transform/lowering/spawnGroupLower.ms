@@ -32,7 +32,7 @@ import {
 import { TransformContext, ModuleFact, noteFact } from "../context";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
-import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
+import { cloneIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
@@ -102,7 +102,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 			createPromise(voidType()), loc);
 		stmts.push(doneFut.decl);
 		stmts.push(makeExprStmt(
-			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
+			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [cloneIdent(ag.ident, loc), doneFut.ident], loc), loc));
 	}
 
 	// 2. Inject cancel safe-points + submit tasks
@@ -125,7 +125,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				closureBody = (thunk.data as ArrowFunctionData).arrowBody;
 			}
 			if (closureBody != null) {
-				injectCancelSafePoints(closureBody, ag.ident, loc);
+				injectCancelSafePoints(closureBody, cloneIdent(ag.ident, loc), loc);
 			}
 		}
 		disownResult(thunk, slot.innerType, ctx);
@@ -164,7 +164,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		}
 		// msSpawnTaskSubmit($ag, i, closure);
 		stmts.push(makeExprStmt(
-			makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(si, loc), closure], loc), loc));
+			makeCall(runtimeRef("msSpawnTaskSubmit", loc), [cloneIdent(ag.ident, loc), makeNumber(si, loc), closure], loc), loc));
 		si = si + 1;
 	}
 
@@ -179,7 +179,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	if (!allVoid) {
 		const values: Node[] = [];
 		for (let ri = 0; ri < n; ri += 1) {
-			const read = readGroupSlot(ctx, ag.ident, ri, slots[ri].innerType, loc);
+			const read = readGroupSlot(ctx, cloneIdent(ag.ident, loc), ri, slots[ri].innerType, loc);
 			for (const r of read.stmts) reads.push(r);
 			values.push(read.value);
 		}
@@ -196,15 +196,15 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		for (const r of reads) stmts.push(r);
 	} else {
 		// Sync: blocking wait (with optional timeout)
-		const waitStmts = emitAwaitGroupWait(ag.ident, groupTimeout, loc, ctx, reads);
+		const waitStmts = emitAwaitGroupWait(cloneIdent(ag.ident, loc), groupTimeout, loc, ctx, reads);
 		for (const ws of waitStmts) stmts.push(ws);
 	}
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [cloneIdent(ag.ident, loc)], loc), loc));
 
 	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [cloneIdent(ag.ident, loc)], loc), loc));
 
 	return { stmts, resultExpr };
 }
