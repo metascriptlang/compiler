@@ -80,6 +80,29 @@ function addsArrowParens(a: Token[], i: int32, b: Token[], j: int32): boolean {
 		&& b[j + 2].kind == TokenKind.RParen && b[j + 3].kind == TokenKind.Arrow;
 }
 
+function endsArrowBody(after: Token | null, close: Token): boolean {
+	if (after == null || after.line > close.line) return true;
+	return match (after.kind) {
+		TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace | TokenKind.Comma | TokenKind.Semicolon | TokenKind.Colon => true,
+		_ => false,
+	};
+}
+
+function addedBodyCloserAt(a: Token[], i: int32, b: Token[], j: int32): int32 {
+	if (i == 0 || j == 0 || a[i - 1].kind != TokenKind.Arrow || b[j - 1].kind != TokenKind.Arrow) return -1;
+	if (b[j].kind != TokenKind.LParen || a[i].kind == TokenKind.LParen || a[i].kind == TokenKind.LBrace) return -1;
+	let depth = 0;
+	for (let k = j; k < b.length; k += 1) {
+		const kind = b[k].kind;
+		if (kind == TokenKind.LParen || kind == TokenKind.LBracket || kind == TokenKind.LBrace) depth += 1;
+		else if (isCloser(kind)) {
+			depth -= 1;
+			if (depth == 0) return endsArrowBody(k + 1 < b.length ? b[k + 1] : null, b[k]) ? k : -1;
+		} else if (kind == TokenKind.Comma && depth == 1) return -1;
+	}
+	return -1;
+}
+
 function unquotesKey(a: Token[], i: int32, b: Token[], j: int32): boolean {
 	if (a[i].kind != TokenKind.String || i == 0 || i + 1 >= a.length) return false;
 	if (a[i - 1].kind != TokenKind.LBrace && a[i - 1].kind != TokenKind.Comma) return false;
@@ -96,7 +119,19 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	const b = greaterUnits(significantTokens(after.value));
 	let i = 0;
 	let j = 0;
+	const addedClosers: int32[] = [];
 	while (i < a.length && j < b.length) {
+		if (addedClosers.length > 0 && addedClosers[addedClosers.length - 1] == j) {
+			addedClosers.pop();
+			j += 1;
+			continue;
+		}
+		const close = addedBodyCloserAt(a, i, b, j);
+		if (close >= 0) {
+			addedClosers.push(close);
+			j += 1;
+			continue;
+		}
 		if (addsArrowParens(a, i, b, j)) {
 			i += 1;
 			j += 3;
@@ -175,7 +210,19 @@ test "lossless: other added or removed parentheses stay refused" {
 	assert !checkLossless("f(c);", "f((c));\n").ok;
 	assert !checkLossless("set((c) => c);", "set(c => c);\n").ok;
 	assert !checkLossless("const f = c => c;", "const f = (c, d) => c;\n").ok;
-	assert !checkLossless("const f = c => c;", "const f = (c) => (c);\n").ok;
+	assert !checkLossless("const f = c => c;", "const f = c => c();\n").ok;
+}
+
+test "lossless: parentheses added around a whole expression body of an arrow are free" {
+	assert checkLossless("sort((a, b) => a < b ? -1 : 1);", "sort((a, b) => (a < b ? -1 : 1));\n").ok;
+	assert checkLossless("const m = (t: string): string => on ? t : \"\";\nconst n = 1;", "const m = (t: string): string => (on ? t : \"\");\nconst n = 1;\n").ok;
+	assert checkLossless("f(x => y => x ? y : 0, 2);", "f((x) => (y) => (x ? y : 0), 2);\n").ok;
+}
+
+test "lossless: parentheses that would change an arrow body stay refused" {
+	assert !checkLossless("g(x => a, b);", "g((x) => (a, b));\n").ok;
+	assert !checkLossless("const f = x => {};", "const f = (x) => ({});\n").ok;
+	assert !checkLossless("const f = x => a + b;", "const f = (x) => (a) + b;\n").ok;
 }
 
 test "lossless: a string token whose decoded value is unchanged may change quotes" {
