@@ -37,6 +37,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
+import { raiserStructRefUnion } from "../../analyzer/classify";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
 import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 
@@ -841,7 +842,7 @@ function reserveCells(s: RaiserCompState, args: Node[]): int32[] {
 	for (const a of args) {
 		if (a.kind != NodeKind.HiddenAddr) continue;
 		const inner = (a.data as HiddenDerefData).expr;
-		if (!heldByLocation(s, inner.nodeType) || isPlace(s, inner) || inRefFile(regClassOf(s, inner.nodeType))) continue;
+		if (!heldByLocation(s, inner.nodeType) || isPlace(s, inner) || (inRefFile(regClassOf(s, inner.nodeType)) && !(inner.nodeType != null && raiserStructRefUnion(unwrapRef(inner.nodeType))))) continue;
 		const reg = allocRef(s);
 		s.cellNodes.push(a);
 		s.cellRegs.push(reg);

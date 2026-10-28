@@ -901,6 +901,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
 				return;
 			}
+			if (lctx.raiserBackend && raiserStructRefUnion(fieldType) && hook != "copy") {
+				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
+				return;
+			}
 			if (lctx.raiserBackend && storesUnionTag(fieldType) && !walksCells(hook)) {
 				valueCellOp(hook, xf, yf, empties, lctx, buf, loc);
 				return;
@@ -1525,7 +1529,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
 			} else if (lctx.raiserBackend && raiserStructRefUnion(objType)) {
 				if (hook == "copy") structRefUnionCopy(objType, x1, x2, lctx, buf, loc);
-				else refOp(hook, x1, x2, false, objType, false, false, lctx, buf, loc);
+				else {
+					refOp(hook, x1, x2, false, objType, false, false, lctx, buf, loc);
+					if (hook == "sink") refOp("wasMoved", clonePath(x2, loc), clonePath(x2, loc), false, objType, false, false, lctx, buf, loc);
+				}
 			} else if (lctx.raiserBackend && !walksCells(hook) && (raiserFlatCellUnion(objType) || storesUnionTag(objType))) {
 				if (hook != "destroy") valueCellOp(hook, x1, x2, false, lctx, buf, loc);
 				else if (releasesAfterHook && !storesUnionTag(objType)) {
