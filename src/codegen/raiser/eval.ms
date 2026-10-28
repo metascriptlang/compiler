@@ -5,9 +5,10 @@
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, MethodDeclData, makeLoc } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
+import { Type, TypeKind } from "../../ast/node";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
-import { unwrapRef } from "../../checker/types";
+import { unwrapRef, classBodyOf } from "../../checker/types";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
@@ -309,12 +310,58 @@ function vmStdSeeds(sym: Symbol): NamedSymbol[] {
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null, original: Node | null = null): int32 {
+// A std class has one symbol in the build's std and another in the engine's: a module-level routine or
+// variable whose type names one carries the build's, which no value the engine makes belongs to.
+function namesEngineTwin(t: Type | null, seen: Type[]): boolean {
+	if (t == null || seen.indexOf(t) >= 0) return false;
+	seen.push(t);
+	const cls = classBodyOf(t);
+	if (cls != null) {
+		const origin = cls.sym!.instantiatedFrom != null ? cls.sym!.instantiatedFrom! : cls.sym!;
+		const twin = origin.builtinKind.startsWith("Meta") ? null : stdSymbol(raiserPreludeCtx(), origin.name);
+		if (twin != null && twin != origin && twin.symbolKind == SymbolKind.Class) return true;
+	}
+	const body = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	if (body == null || body.kind == TypeKind.Struct) return false;
+	if (body.kind == TypeKind.GenericInstance && namesEngineTwin(body.typeExtra, seen)) return true;
+	if (body.kind != TypeKind.GenericInstance && namesEngineTwin(body.typeReturn, seen)) return true;
+	if (body.typeChildren != null) {
+		for (const child of body.typeChildren) if (namesEngineTwin(child, seen)) return true;
+	}
+	return false;
+}
+
+function declaredInEngine(sym: Symbol): Node[] | null {
+	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Variable) return null;
+	const all: Symbol[] = [sym];
+	for (const o of sym.overloads) all.push(o);
+	let names = false;
+	for (const s of all) {
+		if (s.declNode == null || (s.declNode.kind != NodeKind.FunctionDecl && s.declNode.kind != NodeKind.VariableDecl)) return null;
+		if (namesEngineTwin(s.symbolType, [])) names = true;
+	}
+	if (!names) return null;
+	const decls: Node[] = [];
+	for (const s of all) decls.push(cloneNodeForCheck(s.declNode));
+	return decls;
+}
+
+function compileProgramIntoEngine(program: Node, seedsIn: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null, original: Node | null = null): int32 {
+	const seeds: NamedSymbol[] = [];
+	const redeclared: Node[] = [];
+	for (const s of seedsIn) {
+		const decls = declaredInEngine(s.sym);
+		if (decls == null) {
+			seeds.push(s);
+			continue;
+		}
+		for (const d of decls) redeclared.push(d);
+	}
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
-	registerSeedSymbols(withMetaSeeds(seeds), exts);
+	registerSeedSymbols(withMetaSeeds(seeds), exts, redeclared);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
