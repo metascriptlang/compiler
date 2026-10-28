@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs; the Raiser runs a spawn group before its caller continues
 // @stdout: plain: caller continues
 // @stdout: plain: group done
 // @stdout: plain 7
