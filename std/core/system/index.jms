@@ -20,6 +20,7 @@ export extern class process {
 // wrapper here would shadow the global and recurse forever.
 export extern function setTimeout(fn: () => void, ms: number): number;
 export extern function clearTimeout(id: number): void;
+export extern function queueMicrotask(fn: () => void): void;
 export extern function setInterval(fn: () => void, ms: number): number;
 export extern function clearInterval(id: number): void;
 
