@@ -1,5 +1,4 @@
 // @stdout: chain 8 text 3x7 pair 9 len 4 void 5 pair2 3 9 leaf x capture 4
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a value-returning `.then` resolves the promise it makes with the callback's result:
 // number, string, struct, array and class payloads in, number, string, int32 and struct out,
 // a `Promise<void>` input, a chain of two, and a void callback capturing a local beside them.

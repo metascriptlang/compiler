@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: steps 800
 // @serial
 // note: four actors each run an interval that replaces their ring, while every round spawns a

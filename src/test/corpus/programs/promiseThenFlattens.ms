@@ -1,5 +1,4 @@
 // @stdout: num 6 | text a!! | pair 3 p3 | chain 14 | void 7 | named 6 | nested 8 | rejected boom 2 | thrown bad 1
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a then callback that returns a Promise<U> gives a Promise<U>, one level flattened as in
 // TypeScript, for number, string and struct payloads, a chain of them, a void input, a named
 // callback and a rejection or a throw inside the callback.

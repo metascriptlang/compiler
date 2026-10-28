@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors
 // @stdout: before zero=1 one=10 two=300 read=311
 // @stdout: between zero=1 one=10 two=300 read=311
 // @stdout: after zero=1 one=10 two=300 read=311

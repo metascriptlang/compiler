@@ -1,6 +1,5 @@
 // @stdout: moved 64
 // @stdout: churn 1024
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @serial
 // note: an actor method returns an array of rings through the CALL reply; the caller cuts them. No thread may keep a root that points at a cell another thread freed.
 

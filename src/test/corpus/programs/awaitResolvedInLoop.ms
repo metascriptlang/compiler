@@ -3,7 +3,6 @@
 // @stdout: loop 1
 // @stdout: loop 2
 // @stdout: total 3
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs; the Raiser resumes an await of a finished future at once
 // note: every await of Promise.resolve(i) in a loop resumes in a later job, so the caller's next statement runs before the first iteration's tail, as in TypeScript.
 
 async function sum(): Promise<void> {
