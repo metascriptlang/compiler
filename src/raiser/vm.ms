@@ -2363,8 +2363,6 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 	return false;
 }
 
-// The error object lives in the main strand's heap, where the body threw it: a reader
-// there gets that same object, a spawned strand a copy in its own heap.
 export function execLoop(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
