@@ -1450,6 +1450,8 @@ export class CheckerContext {
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
+	capturedSyms: HashSet<Symbol>;
+	identifierMoves: Node[];
 	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	awaitedCall: Node | null;  // the call an await expression is checking as its operand
@@ -1551,6 +1553,8 @@ export function createContext(): CheckerContext {
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
+		capturedSyms: new HashSet<Symbol>(),
+		identifierMoves: [],
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		awaitedCall: null,

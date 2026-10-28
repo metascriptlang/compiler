@@ -627,8 +627,7 @@ function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): bool
 	return false;
 }
 
-function capturesView(ctx: CheckerContext, name: string, sym: Symbol): boolean {
-	if (!isFrameValue(sym)) return false;
+function crossesFunction(ctx: CheckerContext, name: string, sym: Symbol): boolean | null {
 	const nameId = getIdentId(ctx.table.identCache, name);
 	let crossed = false;
 	let scope = ctx.table.current;
@@ -636,7 +635,10 @@ function capturesView(ctx: CheckerContext, name: string, sym: Symbol): boolean {
 		if (scope.scopeKind == ScopeKind.Function) crossed = true;
 		scope = scope.parent;
 	}
-	if (scope == null) return false;
+	return scope == null ? null : crossed;
+}
+
+function capturesView(ctx: CheckerContext, sym: Symbol, crossed: boolean): boolean {
 	const suspended = !crossed && sym.symbolKind == SymbolKind.Parameter &&
 		routineSuspends(ctx.currentFunction);
 	return (crossed || suspended) && isViewType(sym.symbolType);
@@ -1274,6 +1276,16 @@ function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	node.nodeType = inferredType(); return;
 }
 
+export function refuseCapturedMoves(ctx: CheckerContext): void {
+	for (const node of ctx.identifierMoves) {
+		const arg = (node.data as MoveExprData).moveArg;
+		if (ctx.capturedSyms.has(arg.resolvedSym!)) {
+			addError(ctx, `cannot move '${(arg.data as IdentifierData).name}': a closure captures it, and a captured variable lives in the closure's environment, so moving it would leave the closure reading an empty slot; copy it instead, or stop capturing it`, node.location.line, node.location.column);
+		}
+	}
+	ctx.identifierMoves = [];
+}
+
 function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as MoveExprData;
 	// Validate operand: only identifiers, member access, array access, and calls allowed
@@ -1292,6 +1304,7 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		if (refusal != null) addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
 	}
+	if (d.moveArg.kind == NodeKind.Identifier && d.moveArg.resolvedSym != null && isFrameValue(d.moveArg.resolvedSym)) ctx.identifierMoves.push(node);
 	// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
 	// Ownership transfers out of the current scope, so the binding must
 	// not be awaited again — same consumption semantics as `await h`.
@@ -3337,7 +3350,9 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
-	if (capturesView(ctx, d.name, sym)) {
+	const crossed = isFrameValue(sym) ? crossesFunction(ctx, d.name, sym) : null;
+	if (crossed != null && crossed) ctx.capturedSyms.add(sym);
+	if (crossed != null && capturesView(ctx, sym, crossed)) {
 		const useAt = node.location;
 		addError(ctx, viewCaptureRefusal(ctx, d.name, sym), useAt.line, useAt.column);
 	}
