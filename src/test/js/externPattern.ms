@@ -173,3 +173,14 @@ test "JS: a std static pattern extern read through its class is refused" {
 	assert !js.ok;
 	assert js.error.contains("extern function 'alloc' is the pattern \"new Uint8Array(#)\"");
 }
+
+test "JS: a trailing optional argument left out of an extern call is not passed, one written null is" {
+	const decl = "extern class Text { extern split(separator: string, limit?: int32): string[]; }\n"
+		+ "extern function asText(s: string): Text from \"(#)\";\n"
+	const js = compileToJS(decl + "const a = asText(\"a,b\").split(\",\");\nconst b = asText(\"a,b\").split(\",\", null);\n"
+		+ "const c = asText(\"a,b\").split(\",\", 1);\n");
+	assert js.ok;
+	assert js.value.contains("(\"a,b\").split(\",\");");
+	assert js.value.contains("(\"a,b\").split(\",\", null);");
+	assert js.value.contains("(\"a,b\").split(\",\", 1);");
+}
