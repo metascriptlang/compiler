@@ -407,6 +407,16 @@ export function replaceWithCall(node: Node, call: Node, negated: boolean): void 
 	node.resolvedSym = call.resolvedSym;
 }
 
+// A local narrowed to `null` that a closure may since have set is compared through the type it stores, the
+// way storedTypeOfNullRead reads it into a call, so `==` against a value reads what the slot holds.
+function storedTypeOfNullOperand(expr: Node, exprType: Type, other: Type): Type {
+	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || other.kind == TypeKind.Null) return exprType;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || stored.kind == TypeKind.Null) return exprType;
+	expr.nodeType = stored;
+	return stored;
+}
+
 // `==` / `!=` over two values of one value type calls the operator the program declares for the
 // pair, else the std routine for that type; both are bound by symbol like any synthesized call.
 export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExprData, leftType: Type, rightType: Type): boolean {
@@ -414,6 +424,9 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	const negated = op == "!=" || op == "!==";
 	if (!negated && op != "==" && op != "===") return false;
 	if (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const heldLeft = storedTypeOfNullOperand(d.left, leftType, rightType);
+	rightType = storedTypeOfNullOperand(d.right, rightType, leftType);
+	leftType = heldLeft;
 	const held = comparedByHeldMember(leftType, rightType);
 	if (held != null && !declaresEquality(ctx, [leftType, rightType])) {
 		const call = unionEqualityCall(ctx, d.left, d.right, held, node.location);
@@ -3721,6 +3734,38 @@ function refusingNumericMember(exprType: Type, formal: Type): Type | null {
 export function slotRefuses(exprType: Type, formal: Type): boolean {
 	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
 	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal) && !arityAdapts(exprType, formal);
+}
+
+// The arms of a conditional or a match, each taken into the slot the expression sits in when every arm
+// fits it: the slot is each arm's contextual type, so an arm literal keeps the literal union it is
+// written for. Returns the fitted arms, or null when the arms join among themselves instead.
+export function fitArmsToSlot(ctx: CheckerContext, arms: Node[], expectedType: Type | null, converting: boolean): Node[] | null {
+	if (expectedType == null || hasGenericParams(expectedType)) return null;
+	let allString = true;
+	let allNumeric = true;
+	for (const arm of arms) {
+		if (arm.nodeType == null) return null;
+		if (!(arm.nodeType.kind == TypeKind.String || arm.nodeType.kind == TypeKind.StringLiteral)) allString = false;
+		if (!isNumeric(arm.nodeType)) allNumeric = false;
+	}
+	if (allString && expectedType.kind == TypeKind.CString) return null;
+	if (!(converting && allNumeric)) {
+		for (const arm of arms) {
+			if (!branchFitsSlot(ctx, arm.nodeType, expectedType)) return null;
+		}
+	}
+	const fitted: Node[] = [];
+	for (const arm of arms) fitted.push(fitArmToSlot(ctx, arm, expectedType, converting));
+	return fitted;
+}
+
+function fitArmToSlot(ctx: CheckerContext, arm: Node, expectedType: Type, converting: boolean): Node {
+	const armType = arm.nodeType;
+	if (converting && armType != null && isNumeric(armType) && numericConvRefuses(armType, expectedType)
+		&& !isFittingNumericConstant(arm, expectedType)) {
+		return wrapInConv(arm, expectedType);
+	}
+	return fitNode(ctx, arm, expectedType, armType);
 }
 
 export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, formal: Type | null): boolean {
