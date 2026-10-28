@@ -30,3 +30,7 @@ export function byteIsAscii(s: string): boolean {
 	}
 	return true;
 }
+
+export function wellFormedString(data: Readonly<Span<uint8>>): string {
+	return data.asString();
+}
