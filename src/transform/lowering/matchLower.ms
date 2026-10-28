@@ -412,7 +412,7 @@ function moveInto(node: Node, mode: ArmMode, assignSym: Symbol | null, loc: Sour
 		}
 		return node;
 	}
-	if (endsInNoReturn(node, ctx)) return node;
+	if (endsInNoReturn(node, ctx)) return node.kind == NodeKind.CallExpr ? makeExprStmt(node, loc) : node;
 	if (node.kind == NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
 		return moveInto(expr, mode, assignSym, loc, ctx);
