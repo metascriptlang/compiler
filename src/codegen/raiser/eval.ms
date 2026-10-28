@@ -2,11 +2,12 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, MethodDeclData, makeLoc } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
+import { unwrapRef } from "../../checker/types";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
@@ -31,7 +32,7 @@ import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/met
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { generateRaiser, appendProgramToImage } from "./rgen";
+import { generateRaiser, appendProgramToImage, unwrapToClassDecl } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
@@ -308,7 +309,7 @@ function vmStdSeeds(sym: Symbol): NamedSymbol[] {
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
+function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null, original: Node | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
@@ -322,8 +323,52 @@ function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: Ext
 	const ownErrors = _lastEngineCheckErrors;
 	for (const e of ownErrors) if (e.severity == Severity.Error) return -1;
 	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
+	if (original != null) aliasMethodsOf(original, transformed);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
+}
+
+// A call site holds the symbols of the class the program declared, while the engine compiled a re-checked
+// clone of it: each method of the clone answers for the original method of the same name and position.
+function aliasMethodsOf(original: Node, transformed: Node): void {
+	const from = unwrapToClassDecl(original);
+	if (from == null) return;
+	const fromData = from.data as ClassDeclData;
+	const to = classNamed(transformed, fromData.className);
+	if (to == null) return;
+	const toMethods = methodDecls(to);
+	const seen = new Map<string, int32>();
+	for (const m of methodDecls(from)) {
+		const name = (m.data as MethodDeclData).methodName;
+		const nth = seen.get(name) ?? 0;
+		seen.set(name, nth + 1);
+		let k = 0;
+		for (const c of toMethods) {
+			if ((c.data as MethodDeclData).methodName != name) continue;
+			if (k == nth) {
+				const idx = c.resolvedSym != null ? _engine.funcMap.symbolIndices.get(c.resolvedSym) : null;
+				if (idx != null && m.resolvedSym != null) _engine.funcMap.symbolIndices.set(m.resolvedSym, idx);
+				break;
+			}
+			k += 1;
+		}
+	}
+}
+
+function classNamed(program: Node, className: string): Node | null {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const c = unwrapToClassDecl(stmt);
+		if (c != null && (c.data as ClassDeclData).className == className) return c;
+	}
+	return null;
+}
+
+function methodDecls(cls: Node): Node[] {
+	const out: Node[] = [];
+	for (const member of (cls.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.MethodDecl) out.push(member);
+	}
+	return out;
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult {
@@ -410,6 +455,15 @@ export function engineRecheckCount(): int32 {
 	return _engineRecheckCount;
 }
 
+// A method has no body of its own in the engine: its class compiles whole, in the class scope its `this` and fields live in.
+function compileMethodOwner(method: Symbol): int32 {
+	const fnType = method.symbolType;
+	const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
+	if (self == null || self.sym == null || ensureCompiledIntoEngine(self.sym) < 0) return -1;
+	const idx = _engine.funcMap.symbolIndices.get(method);
+	return idx != null ? idx : -1;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	const isClass = sym.symbolKind == SymbolKind.Class;
@@ -418,6 +472,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
+	if (sym.declNode.kind == NodeKind.MethodDecl) return compileMethodOwner(sym);
 	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
 	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));
 	const checkedByVmPrelude = isVmPreludeSym(sym) || isVmStdHelper(sym);
@@ -445,7 +500,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	_engineRecheckCount += 1;
-	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym);
+	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym, isClass ? sym.declNode : null);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({
