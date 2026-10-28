@@ -810,7 +810,12 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.AwaitExpr => { checkAwaitExpr(ctx, node, expectedType); return; },
 		NodeKind.YieldExpr => {
 			checkYield(ctx, node);
-			node.nodeType = inferredType(); return;
+			if (node != ctx.stmtPosExpr) {
+				const what = (node.data as YieldExprData).isDelegate ? "yield*" : "yield";
+				addError(ctx, "the value of '" + what + "' cannot be read: a generator's next() passes no value in and its 'return' carries none; write '" + what + "' as a statement on its own", node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
+			node.nodeType = voidType(); return;
 		},
 		NodeKind.MoveExpr => { checkMoveExpr(ctx, node, expectedType); return; },
 		NodeKind.OutExpr => {
