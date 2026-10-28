@@ -942,7 +942,8 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const bound = reusableBound(db, filePath);
 	if (bound != null) return bound.ctx;
 	if (db.checkInProgress.has(filePath)) return null;
-	const checked = dbContext(db, checkCtxKey(fileId));
+	const checkEntry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, fileId));
+	const checked = checkEntry != null && checkEntry.state == TaQueryState.Green ? dbContext(db, checkCtxKey(fileId)) : null;
 	if (checked != null) return checked;
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
@@ -1574,6 +1575,18 @@ test "an unchanged text keeps the module's check green" {
 	dbSetFileText(db, "test.ms", "const x = 1;");
 	dbParse(db, "test.ms");
 	assert dbTypeCheck(db, "test.ms") == first;
+}
+
+test "a bound-context read answers with the checked context only until the module is edited" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "export const x = 1;");
+	const first = dbTypeCheck(db, "test.ms");
+	_checkingDb = db;
+	assert dbBoundModule("test.ms") == first;
+	dbSetFileText(db, "test.ms", "export const x = 2;");
+	const edited = dbBoundModule("test.ms");
+	_checkingDb = null;
+	assert edited != null && edited != first;
 }
 
 test "real code edit invalidates typecheck" {
