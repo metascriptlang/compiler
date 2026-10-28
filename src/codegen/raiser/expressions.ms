@@ -2390,6 +2390,11 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 
 function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ObjectLiteralData;
+	if (d.properties.length == 0 && isMaybeType(skipModifier(node.nodeType))) {
+		const none = allocRef(s);
+		emitLoadConst(s, none, raiserNil());
+		return none;
+	}
 	const dest = allocRef(s);
 
 	emitObjectShell(s, dest, node.nodeType);
