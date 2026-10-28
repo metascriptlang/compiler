@@ -128,3 +128,14 @@ test "JS: an extern let bound by a from name is written through that name" {
 	assert js.value.contains("globalThis.msCounter = 3");
 	assert js.value.contains("globalThis.msCounter += 1");
 }
+
+test "JS: a trailing optional argument left out of an extern call is not passed, one written null is" {
+	const decl = "extern class Text { extern split(separator: string, limit?: int32): string[]; }\n"
+		+ "extern function asText(s: string): Text from \"(#)\";\n"
+	const js = compileToJS(decl + "const a = asText(\"a,b\").split(\",\");\nconst b = asText(\"a,b\").split(\",\", null);\n"
+		+ "const c = asText(\"a,b\").split(\",\", 1);\n");
+	assert js.ok;
+	assert js.value.contains("(\"a,b\").split(\",\");");
+	assert js.value.contains("(\"a,b\").split(\",\", null);");
+	assert js.value.contains("(\"a,b\").split(\",\", 1);");
+}
