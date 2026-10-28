@@ -1295,7 +1295,10 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		iterateSpreadSource(ctx, d.newArguments[ai]);
 		const argType = d.newArguments[ai].nodeType;
 		if (argExpected != null && argType != null) {
-			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
+			const fitted = fitNode(ctx, d.newArguments[ai], argExpected, argType);
+			d.newArguments[ai] = fitted.nodeType != null && needsStdConv(unwrapRef(fitted.nodeType), argExpected)
+				? wrapInConv(fitted, argExpected.kind == TypeKind.Sink && argExpected.typeReturn != null ? argExpected.typeReturn : argExpected)
+				: fitted;
 		}
 		ai = ai + 1;
 	}
