@@ -13,9 +13,10 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeAssertionData, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
+import { sameType } from "../../checker/compat";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
 import { makeCtx } from "../testUtil";
@@ -84,6 +85,7 @@ function propagateSizedArrayType(node: Node): Node {
 
 function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node, ctx.boundChecks);
+	if (node.kind == NodeKind.TypeAssertion) return withoutIdentityCastOfRefRead(node);
 	if (!ctx.boundChecks && isRuntimeProcCall(node, "msSliceLen")) return uncheckedSliceLen(node);
 	if (!ctx.rangeChecks && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) node.flags = node.flags.incl(NodeFlag.NoFieldCheck);
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
@@ -92,6 +94,13 @@ function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
 	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node, ctx));
 	return node;
+}
+
+function withoutIdentityCastOfRefRead(node: Node): Node {
+	const operand = (node.data as TypeAssertionData).asExpr;
+	const isRead = isRuntimeProcCall(operand, "msRefArrayAccess") || isRuntimeProcCall(operand, "msRefArrayAccessUnchecked");
+	const plain = !node.flags.has(NodeFlag.ObjCheck) && !node.flags.has(NodeFlag.ConvCheck);
+	return isRead && plain && sameType(operand.nodeType, node.nodeType) ? operand : node;
 }
 
 function rewriteAtomicLiteral(node: Node): Node {
