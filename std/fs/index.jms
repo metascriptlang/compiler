@@ -10,10 +10,11 @@
 
 @import("node:fs", {
 	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, accessSync,
-	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
+	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync, openSync, readSync, closeSync,
 });
 
-import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { IoError, ioErrorFromErrno, readFailed, writeFailed } from "../io/errors";
+import { Buffer } from "std/core/buffer";
 
 extern function readFileSync(path: string, encoding: string): string;
 extern function writeFileSync(path: string, data: string): void;
@@ -75,6 +76,26 @@ function errnoOf(e: Error): number {
 export function readFile(path: string): Result<string, IoError> {
 	try {
 		return Result.ok(readFileSync(path, "utf-8"));
+	} catch (e) {
+		return Result.err(ioErrorFromErrno(errnoOf(e), path));
+	}
+}
+
+extern function copyOfFileBytes(path: string): Buffer from "new Uint8Array(readFileSync(#))";
+extern function rangeOfFileBytes(path: string, offset: number, length: number): Buffer from "(function (p, o, n) { var fd = openSync(p, 'r'); try { var b = new Uint8Array(n); var got = 0; while (got < n) { var r = readSync(fd, b, got, n - got, o + got); if (r === 0) break; got += r; } return b.slice(0, got); } finally { closeSync(fd); } })(#, #, #)";
+
+export function readFileBytes(path: string): Result<Buffer, IoError> {
+	try {
+		return Result.ok(copyOfFileBytes(path));
+	} catch (e) {
+		return Result.err(ioErrorFromErrno(errnoOf(e), path));
+	}
+}
+
+export function readFileRange(path: string, offset: number, length: number): Result<Buffer, IoError> {
+	if (offset < 0 || length < 0) return Result.err(readFailed(path, "negative offset or length"));
+	try {
+		return Result.ok(rangeOfFileBytes(path, offset, length));
 	} catch (e) {
 		return Result.err(ioErrorFromErrno(errnoOf(e), path));
 	}

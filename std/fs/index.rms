@@ -3,7 +3,8 @@
 // follow the C contract — 1/0 ints for predicates and mutations, errno
 // polled via msFsLastErrno, readFile returns "" on failure.
 
-import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { IoError, ioErrorFromErrno, readFailed, writeFailed } from "../io/errors";
+type Buffer = string;
 
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
@@ -29,6 +30,14 @@ export function readFile(path: string): Result<string, IoError> {
 	const err = msFsLastErrno();
 	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
+}
+
+export function readFileBytes(path: string): Result<Buffer, IoError> {
+	return Result.err(readFailed(path, "binary reads are not available on the raiser target"));
+}
+
+export function readFileRange(path: string, offset: number, length: number): Result<Buffer, IoError> {
+	return Result.err(readFailed(path, "binary reads are not available on the raiser target"));
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {

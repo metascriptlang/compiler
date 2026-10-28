@@ -33,6 +33,11 @@ int32_t msFsLastErrno(void);
  * Returns MS_EMPTY_STRING on failure. */
 msString msFsReadFile(msString path);
 
+/* Read up to length bytes starting at offset. A short read at end of file returns the
+ * bytes that exist; an offset past the end returns MS_EMPTY_STRING with errno 0.
+ * A negative offset or length sets EINVAL. */
+msString msFsReadRange(msString path, int64_t offset, int64_t length);
+
 /* List directory entries as "\n"-joined string.
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
