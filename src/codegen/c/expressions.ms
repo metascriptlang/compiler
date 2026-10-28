@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
+import { isPlainFunctionPointer, skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2300,6 +2300,10 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(convUnion)) {
 			const pvi = projSlot - 1;
 			ctx.results.push(`(${inner}).v${pvi}`);
+			return;
+		}
+		if (isPlainFunctionPointer(d.convType)) {
+			ctx.results.push(`((void*)(${inner}))`);
 			return;
 		}
 		if (d.convType.kind == TypeKind.Function) {
