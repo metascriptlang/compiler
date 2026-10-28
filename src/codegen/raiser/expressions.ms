@@ -2057,7 +2057,9 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.
-		return compileExpr(s, d.arguments[0]);
+		const value = compileExpr(s, d.arguments[0]);
+		if (inRefFile(classOfReg(s, value))) emitInst(s, raiserABC(RaiserOpcode.RcInc, value, 0, 0));
+		return value;
 	}
 
 	// str.charAt(i)
