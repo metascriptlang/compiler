@@ -942,6 +942,8 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const bound = reusableBound(db, filePath);
 	if (bound != null) return bound.ctx;
 	if (db.checkInProgress.has(filePath)) return null;
+	const checked = dbContext(db, checkCtxKey(fileId));
+	if (checked != null) return checked;
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
 	const program = treeForCheck(db, filePath, "dbBoundModule");
