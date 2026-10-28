@@ -2323,7 +2323,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				paramExpected = _formal;
 			}
 			if (_contextBindings.names.length > 0 && hasGenericParams(paramExpected)
-				&& takesContext(ctx, d.arguments[ai])) {
+				&& (takesContext(ctx, d.arguments[ai]) || d.arguments[ai].kind == NodeKind.StringLiteral)) {
 				paramExpected = substituteBound(paramExpected, _contextBindings);
 			}
 			if (_isGenericCall && hasGenericParams(paramExpected)
