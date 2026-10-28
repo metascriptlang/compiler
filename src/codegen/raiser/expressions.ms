@@ -1673,6 +1673,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const value = compileExpr(s, d.arguments[0]);
 		return emitConvTo(s, value, RaiserConvClass.F64Bits as int32, RaiserConvClass.F64 as int32);
 	}
+	if (builtinKind == "Float64FromBits" && d.arguments.length == 1) {
+		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.F64 as int32, RaiserConvClass.F64Bits as int32);
+	}
 	if (builtinKind == "PtrBits" && d.arguments.length == 1) {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}

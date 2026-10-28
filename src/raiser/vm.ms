@@ -3805,6 +3805,10 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		setRegInt(vm, ia, msFloat64Bits(asNum(src)));
 		return;
 	}
+	if (cls == RaiserConvClass.F64 && convSource(ic) == (RaiserConvClass.F64Bits as int32)) {
+		setRegFloat(vm, ia, msBitsFloat64(src.intVal));
+		return;
+	}
 	if (cls == RaiserConvClass.I32Wrap) {
 		setRegInt(vm, ia, msToInt32(asNum(src)) as int64);
 		return;
@@ -4191,6 +4195,13 @@ test "a float wrapped to int32 takes the bitwise operand conversion of C and JS"
 test "a float converted to its bits keeps the IEEE pattern" {
 	assert execConv(raiserFloat(1.5), RaiserConvClass.F64Bits).exitValue.intVal == 4609434218613702656;
 	assert execConv(raiserFloat(-1.0), RaiserConvClass.F64Bits).exitValue.intVal == -4616189618054758400;
+}
+
+test "bits converted to a float are the IEEE pattern, not the integer's value" {
+	const fromBits = RaiserConvClass.F64Bits as int32;
+	assert execConv(raiserInt(4609434218613702656), RaiserConvClass.F64, fromBits).exitValue.floatVal == 1.5;
+	assert execConv(raiserInt(-4616189618054758400), RaiserConvClass.F64, fromBits).exitValue.floatVal == -1.0;
+	assert execConv(raiserInt(1), RaiserConvClass.F64, fromBits).exitValue.floatVal == 5e-324;
 }
 
 test "a reference converted to its identity bits is its handle, and nil is zero" {
