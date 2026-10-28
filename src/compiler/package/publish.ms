@@ -14,6 +14,7 @@ import { loadBuildConfig, PackageSection } from "../buildConfig";
 import { loadToken } from "./credentials";
 import { collectPublishFiles } from "./walker";
 import { validateBin, binEntryFor } from "./bin";
+import { rawString } from "std/core/buffer/bytes";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
@@ -238,7 +239,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 		console.log(`${errStyle("error")}: zip finalize failed: ${zipR.error.message}`);
 		return false;
 	}
-	const zipBytes = zipR.value;
+	const zipBytes = rawString(zipR.value);
 
 	// --- Client-side size gate #2: compressed ---
 	if (zipBytes.byteLength > MAX_COMPRESSED) {

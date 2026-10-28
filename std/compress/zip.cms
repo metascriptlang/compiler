@@ -17,6 +17,8 @@
 
 @include("runtime/compress/zip.h");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, compressError } from "./errors";
 // Re-export for callers — keep in sync with inflate.cms / deflate.cms
 export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
@@ -57,8 +59,8 @@ export interface ZipWriter {
 
 // Parse an archive from an in-memory buffer. The reader keeps an internal
 // copy of `data`, so callers may free their reference after this call.
-export function openZip(data: string): Result<ZipReader, CompressError> {
-	const h = msZipReaderOpen(data);
+export function openZip(data: Bytes): Result<ZipReader, CompressError> {
+	const h = msZipReaderOpen(rawString(data));
 	if (h == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "failed to open zip archive"));
 	}
@@ -87,22 +89,22 @@ export function zipEntries(r: ZipReader): ZipEntry[] {
 }
 
 // Extract one entry's uncompressed bytes. For directory entries this returns
-// an empty string successfully. For regular files, an empty result is only a
+// an empty Buffer successfully. For regular files, an empty result is only a
 // success if the file was legitimately zero-length — we disambiguate via the
 // stat'd uncompressed size.
-export function zipExtract(r: ZipReader, index: int32): Result<string, CompressError> {
+export function zipExtract(r: ZipReader, index: int32): Result<Buffer, CompressError> {
 	const isDir = msZipReaderEntryIsDir(r.handle, index);
 	if (isDir < 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "invalid entry index"));
 	}
-	if (isDir == 1) return Result.ok("");
+	if (isDir == 1) return Result.ok(Buffer.alloc(0));
 	const expectedSize = msZipReaderEntrySize(r.handle, index);
-	if (expectedSize == 0) return Result.ok("");
+	if (expectedSize == 0) return Result.ok(Buffer.alloc(0));
 	const data = msZipReaderExtract(r.handle, index);
 	if (data.length == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "failed to extract zip entry"));
 	}
-	return Result.ok(data);
+	return Result.ok(rawBuffer(data));
 }
 
 // Find an entry by name. Returns -1 if not present.
@@ -117,7 +119,7 @@ export function zipFindByName(r: ZipReader, name: string): int32 {
 }
 
 // Extract by name — convenience wrapper over zipFindByName + zipExtract.
-export function zipExtractByName(r: ZipReader, name: string): Result<string, CompressError> {
+export function zipExtractByName(r: ZipReader, name: string): Result<Buffer, CompressError> {
 	const idx = zipFindByName(r, name);
 	if (idx < 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "entry not found: " + name));
@@ -147,11 +149,11 @@ export function newZipWriter(): Result<ZipWriter, CompressError> {
 // Add one entry to the writer with the given name, bytes, and compression
 // level (0-9, 6 is the default). For a "stored" entry pass level=0.
 // Returns Result<boolean, CompressError> — true on success.
-export function zipAdd(w: ZipWriter, name: string, data: string, level: int32 = 6): Result<boolean, CompressError> {
+export function zipAdd(w: ZipWriter, name: string, data: Bytes, level: int32 = 6): Result<boolean, CompressError> {
 	if (w.handle == 0 || w.finalized) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed or finalized"));
 	}
-	const st = msZipWriterAdd(w.handle, name, data, level);
+	const st = msZipWriterAdd(w.handle, name, rawString(data), level);
 	if (st < 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "zipAdd failed for " + name));
 	}
@@ -160,7 +162,7 @@ export function zipAdd(w: ZipWriter, name: string, data: string, level: int32 = 
 
 // Finalise the archive and return its bytes. The writer is still valid and
 // must be closed via closeZipWriter, but no further entries can be added.
-export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
+export function zipFinalize(w: ZipWriter): Result<Buffer, CompressError> {
 	if (w.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed"));
 	}
@@ -172,7 +174,7 @@ export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "finalize failed"));
 	}
-	return Result.ok(out);
+	return Result.ok(rawBuffer(out));
 }
 
 // Release all writer resources.

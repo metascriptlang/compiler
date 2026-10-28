@@ -12,6 +12,7 @@ import { exists, writeFile, ensureDir, chmod, rename, removeAll } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { createHeaders } from "std/http/headers";
 import { sha256 } from "std/crypto";
+import { rawString } from "std/core/buffer/bytes";
 import { openZip, zipEntries, zipExtract, zipFindByName, closeZip, ZipReader, newZipWriter, zipAdd, zipFinalize, closeZipWriter } from "std/compress/zip";
 import { tmpDir } from "../../utils/path";
 import { registryDownloadPath, registrySrcPath } from "./cache";
@@ -70,7 +71,7 @@ function writeEntries(reader: ZipReader, destDir: string): Result<int32, Package
 
 		const outPath = join(destDir, entryPath);
 		if (!ensureDir(dirname(outPath)).ok) return Result.err(PackageError.Write);
-		if (!writeFile(outPath, content.value).ok) return Result.err(PackageError.Write);
+		if (!writeFile(outPath, rawString(content.value)).ok) return Result.err(PackageError.Write);
 		if (!chmod(outPath, 292 as int32).ok) return Result.err(PackageError.Write);
 		written = written + 1;
 	}
@@ -143,7 +144,7 @@ function testArchive(names: string[]): string {
 	const bytes = zipFinalize(made.value);
 	closeZipWriter(made.value);
 	if (!bytes.ok) return "";
-	return bytes.value;
+	return rawString(bytes.value);
 }
 
 function freshDir(label: string): string {

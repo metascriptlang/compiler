@@ -12,6 +12,8 @@
 @compile("vendor/miniz/miniz.c");
 @compile("vendor/miniz/miniz_tinfl.c");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
@@ -41,28 +43,28 @@ export function createInflate(format: CompressFormat = CompressFormat.Gzip): Inf
 }
 
 // Feed a chunk of compressed input. Returns any bytes decoded so far
-// (may be "" if more input is needed before any output is produced).
-export function inflateFeed(s: InflateStream, chunk: string): Result<string, CompressError> {
+// (may be empty if more input is needed before any output is produced).
+export function inflateFeed(s: InflateStream, chunk: Bytes): Result<Buffer, CompressError> {
 	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
 	if (s.finished) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "feed after finish"));
 	}
-	const st = msInflateFeed(s.handle, chunk, 0);
+	const st = msInflateFeed(s.handle, rawString(chunk), 0);
 	if (st < 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "decompression failed"));
 	}
-	return Result.ok(msInflateDrain(s.handle, 0));
+	return Result.ok(rawBuffer(msInflateDrain(s.handle, 0)));
 }
 
 // Signal end of input, drain remaining output, and release the context.
 // The InflateStream must not be used after this call.
-export function inflateFinish(s: InflateStream): Result<string, CompressError> {
+export function inflateFinish(s: InflateStream): Result<Buffer, CompressError> {
 	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
-	if (s.finished) return Result.ok("");
+	if (s.finished) return Result.ok(Buffer.alloc(0));
 	s.finished = true;
 	const st = msInflateFeed(s.handle, "", 1);
 	if (st < 0) {
@@ -73,34 +75,37 @@ export function inflateFinish(s: InflateStream): Result<string, CompressError> {
 	const tail = msInflateDrain(s.handle, 0);
 	msInflateFree(s.handle);
 	s.handle = 0;
-	return Result.ok(tail);
+	return Result.ok(rawBuffer(tail));
 }
 
 // ===== One-shot helpers =====
 
 // Decompress a complete gzip blob (RFC 1952).
-export function gunzip(data: string): Result<string, CompressError> {
-	const out = msInflateOneShot(data, CompressFormat.Gzip as int32);
-	if (out.length == 0 && data.length > 0) {
+export function gunzip(data: Bytes): Result<Buffer, CompressError> {
+	const input = rawString(data);
+	const out = msInflateOneShot(input, CompressFormat.Gzip as int32);
+	if (out.length == 0 && input.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "gzip decompression failed"));
 	}
-	return Result.ok(out);
+	return Result.ok(rawBuffer(out));
 }
 
 // Decompress a zlib-wrapped DEFLATE blob (RFC 1950).
-export function inflate(data: string): Result<string, CompressError> {
-	const out = msInflateOneShot(data, CompressFormat.Zlib as int32);
-	if (out.length == 0 && data.length > 0) {
+export function inflate(data: Bytes): Result<Buffer, CompressError> {
+	const input = rawString(data);
+	const out = msInflateOneShot(input, CompressFormat.Zlib as int32);
+	if (out.length == 0 && input.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "zlib decompression failed"));
 	}
-	return Result.ok(out);
+	return Result.ok(rawBuffer(out));
 }
 
 // Decompress a raw DEFLATE stream (RFC 1951).
-export function inflateRaw(data: string): Result<string, CompressError> {
-	const out = msInflateOneShot(data, CompressFormat.Deflate as int32);
-	if (out.length == 0 && data.length > 0) {
+export function inflateRaw(data: Bytes): Result<Buffer, CompressError> {
+	const input = rawString(data);
+	const out = msInflateOneShot(input, CompressFormat.Deflate as int32);
+	if (out.length == 0 && input.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "deflate decompression failed"));
 	}
-	return Result.ok(out);
+	return Result.ok(rawBuffer(out));
 }
