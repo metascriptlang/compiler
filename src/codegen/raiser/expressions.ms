@@ -3041,7 +3041,8 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	}
 	const display: int64[] = [];
 	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
-	const shown = typeDisplayName(unwrapRef(classSym.symbolType));
+	const decl = classDeclNodeOf(classSym);
+	const shown = decl != null && decl.kind == NodeKind.ClassDecl && (decl.data as ClassDeclData).classDisplayName != "" ? (decl.data as ClassDeclData).classDisplayName : typeDisplayName(unwrapRef(classSym.symbolType));
 	const classType = createClassType(shown, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType));
 	const cyclic = slotCyclicOf(classSym.symbolType);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
