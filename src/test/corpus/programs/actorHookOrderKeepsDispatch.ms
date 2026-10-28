@@ -3,10 +3,6 @@
 // @stdout: between zero=1 one=10 two=300 read=311
 // @stdout: after zero=1 one=10 two=300 read=311
 // @stdout: done
-// @ledger-slack(Before) 1
-// @ledger-slack(Between) 1
-// @ledger-slack(After) 1
-// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: a lifecycle hook declared before, between or after the message methods leaves every
 // message on its own method (old compiler: a hook above a method took that method's message,
 // so onTerminate ran with bump's argument as its reason and every later method was shifted by one).

@@ -3,8 +3,6 @@
 // @stdout: moved 512
 // @stdout: churn 1024
 // @serial
-// @ledger-slack(Sink) 1
-// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: an acyclic holder whose field is a ring is sent to an actor and its ring freed there; the main thread then keeps building and dropping rings. No thread may keep a root that points at a cell another thread freed.
 
 class Node {

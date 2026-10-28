@@ -1,8 +1,6 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: void 1 value 2 reply 2
 // @serial
-// @ledger-slack(Relay) 2
-// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 actor Relay {
 	hits: int32 = 0;
 	peer: Relay | null = null;
