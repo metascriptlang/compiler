@@ -85,9 +85,9 @@ test "distinctComparison: a distinct of a match struct borrows only an equality 
 	assert refused(shape + declared + delegated + compared("D", "==") + compared("D", "!=")) == 0;
 }
 
-test "distinctComparison: a generic routine names the delegate it cannot see" {
+test "distinctComparison: a generic routine sees the instantiating module's delegate, exported or not" {
 	const row = "struct Row { tag: Tag; }\nfunction f(a: Row, b: Row): boolean { return a == b; }\n";
-	assert count("@delegate function `==`(this a: Tag, b: Tag): boolean;\n" + row, "its `==` is not exported, and a generic routine sees only exported operators") == 1;
+	assert refused("@delegate function `==`(this a: Tag, b: Tag): boolean;\n" + row) == 0;
 	assert refused("@delegate export function `==`(this a: Tag, b: Tag): boolean;\n" + row) == 0;
 	assert count(row, inherit) == 1;
 }
