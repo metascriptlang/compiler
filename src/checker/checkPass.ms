@@ -2750,7 +2750,8 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// compares Null against expected, which is the real safety question.
 	if (d.argument.kind == NodeKind.NullLiteral) {
 		const fnType = ctx.currentFunction != null ? ctx.currentFunction.symbolType : null;
-		const declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		let declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		if (declared != null && !isUnresolvedType(declared) && hasFlag(ctx.currentFunction!, SymbolFlag.Async)) declared = asyncBodyType(declared);
 		if (declared != null) {
 			d.argument.nodeType = nullType();
 			if (isUnresolvedType(declared)) {
