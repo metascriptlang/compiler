@@ -82,6 +82,13 @@ export function readsBeforeHoist(e: Node): boolean {
 	return (isStorageRead(e) || e.kind == NodeKind.ConditionalExpr) && snapshotsLikeJs(e.nodeType);
 }
 
+// An array is a counted handle: a temp keeps the object this read named, as JS does. The handle
+// sits under the deref the array operand reads through.
+export function arrayHandleRead(e: Node): Node | null {
+	const place = e.kind == NodeKind.HiddenDeref ? (e.data as HiddenDerefData).expr : e;
+	return e.nodeType != null && e.nodeType.kind == TypeKind.Array && isStorageRead(place) ? place : null;
+}
+
 function bindIfEarly(sp: Spiller, e: Node, pre: Node[]): Node {
 	if (!readsBeforeHoist(e) && !(isCallKind(e) && !isVoidType(e.nodeType))) return e;
 	return tempRef(bindTemp(sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);

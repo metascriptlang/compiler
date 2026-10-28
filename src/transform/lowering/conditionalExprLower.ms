@@ -51,7 +51,7 @@ import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } f
 import { cloneTargetIfPure } from "../place";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
-import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
+import { readsBeforeHoist, arrayHandleRead, snapshotsLikeJs, isNeverType } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { tdzBindingOf, moduleBindingRead } from "./moduleTdz";
@@ -344,6 +344,14 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 
 function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
+	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOperand(child, pre, ctx);
+	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess ? arrayHandleRead(child) : null;
+	if (handle != null && (calls || readsAnyOf(child, writes))) {
+		const bound = bindOperand(handle, pre, ctx);
+		if (handle === child) return bound;
+		(child.data as HiddenDerefData).expr = bound;
+		return child;
+	}
 	if (isCallee) return child;
 	const isLocation = index == 0 && (parent.kind == NodeKind.MemberExpr || parent.kind == NodeKind.ArrayAccess
 		|| parent.kind == NodeKind.HiddenDeref || parent.kind == NodeKind.HiddenAddr
@@ -359,6 +367,10 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
 	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
 	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
+	return bindOperand(child, pre, ctx);
+}
+
+function bindOperand(child: Node, pre: Node[], ctx: TransformContext): Node {
 	const loc = child.location;
 	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
 	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
