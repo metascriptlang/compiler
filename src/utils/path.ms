@@ -1,6 +1,6 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
-import { argv, cwd, env, platform } from "std/process";
+import { argv, cwd, env, execPath, platform } from "std/process";
 import { exists, realpath, ensureDir, writeFile, remove, removeAll, symlink } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
@@ -129,10 +129,20 @@ export function setHostRuntimeDir(root: string): void {
 }
 
 // Find the compiler root directory (the one containing std/).
-// Walks up from argv[0] (resolved via $PATH if bare), then falls back to cwd().
+// Walks up from the running executable, then from argv[0] (resolved via $PATH if bare),
+// then falls back to cwd(). A bare argv[0] looked up on PATH can name another install
+// than the one running, which then compiles against that install's std.
 export function resolveRuntimeDir(): string {
 	if (_hostRuntimeDir != "") return _hostRuntimeDir;
-	return runtimeDirFrom(resolveArgv0(argv[0]));
+	if (execPath != "") {
+		const fromExe = runtimeDirFrom(execPath);
+		if (fromExe != "") return fromExe;
+	}
+	const fromArgv0 = runtimeDirFrom(resolveArgv0(argv[0]));
+	if (fromArgv0 != "") return fromArgv0;
+	const base = cwd();
+	if (exists(join(base, "std/core/system/index.ms"))) return base;
+	return "";
 }
 
 // The directory of stand-in system headers cparse reads in place of the C compiler's own.
@@ -157,9 +167,6 @@ function runtimeDirFrom(exe: string): string {
 		base = dirname(base);
 		i = i + 1;
 	}
-	// Fallback: cwd (needed when argv[0] doesn't resolve)
-	base = cwd();
-	if (exists(join(base, "std/core/system/index.ms"))) return base;
 	return "";
 }
 
@@ -184,6 +191,16 @@ test "runtimeDirFrom finds the install behind a symlinked binary or a symlinked 
 	remove(join(probe, "path/msc"));
 	remove(join(probe, "linkedBin"));
 	removeAll(probe);
+}
+
+test "execPath names the running binary as an absolute path, whatever argv[0] says" {
+	assert execPath != "";
+	assert isAbsolute(execPath);
+	assert exists(execPath);
+}
+
+test "runtimeDirFrom answers only from the binary's own directories" {
+	assert runtimeDirFrom(join(cwd(), "out/noSuchDir/a/b/c/d/e/msc")) == "";
 }
 
 test "canonicalRootDir — a trailing dot segment is dropped" {
