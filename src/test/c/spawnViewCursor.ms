@@ -395,3 +395,42 @@ test "E2E C: an element passed to a callee whose local closure stores into the a
 		assert body.split("msIncref(dollarborrow").length == 3, store + body;
 	}
 }
+
+const SENDABLE_CAPTURE = (decls: string, call: string) => `
+${decls}
+async function main(): Promise<int32> {
+	const slot: W = mk(3);
+	const t = spawn(() => ${call});
+	return await t;
+}
+console.log(\`\${await main()}\`);
+`;
+
+test "E2E C: a task passes a captured Sendable closure to a callee with no rc op on its env" {
+	const body = compiledThunks(SENDABLE_CAPTURE(`
+type W = Sendable<(a: string) => string>;
+function mk(k: int32): W { return (a: string): string => \`\${a}\${k}\`; }
+function loop(slot: W, n: int32): int32 { return slot("x").length as int32 + n; }`, "loop(slot, 1)"));
+	assert body.length > 0;
+	assert !body.contains("msClosureCopy(dollarborrow");
+	assert !body.contains("msClosureDestroy(dollarborrow");
+}
+
+test "E2E C: a task passes a captured Sendable closure of two parameters to a callee with no rc op on its env" {
+	const body = compiledThunks(SENDABLE_CAPTURE(`
+type W = Sendable<(a: string, b: int32) => string>;
+function mk(k: int32): W { return (a: string, b: int32): string => \`\${a}\${b + k}\`; }
+function loop(slot: W, n: int32): int32 { return slot("x", n).length as int32; }`, "loop(slot, 1)"));
+	assert body.length > 0;
+	assert !body.contains("msClosureCopy(dollarborrow");
+	assert !body.contains("msClosureDestroy(dollarborrow");
+}
+
+test "E2E C: a task keeps the count on a captured Sendable closure that takes a pointer-holding parameter" {
+	const body = compiledThunks(SENDABLE_CAPTURE(`
+type W = Sendable<(a: int32[]) => int32>;
+function mk(k: int32): W { return (a: int32[]): int32 => a.length as int32 + k; }
+function loop(slot: W, n: int32): int32 { const a: int32[] = [1]; return slot(a) + n; }`, "loop(slot, 1)"));
+	assert body.length > 0;
+	assert body.contains("msClosureCopy(dollarborrow");
+}
