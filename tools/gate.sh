@@ -598,7 +598,7 @@ esac
 EXE_SUFFIX=""
 case "$CAND" in *.exe) EXE_SUFFIX=.exe ;; esac
 CTL_CACHE="${HOME:-$USERPROFILE}/.metascript/cache/gate-ctl/v1"
-CTL_WORK="$CTL_CACHE/work"
+CTL_WORK="$OUT/ctl-work"
 CONTROL_SUPPORT=""
 EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
