@@ -25,7 +25,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
 import { storesUnionTag } from "../../checker/fit";
 import { VALUE_FIELD } from "./unionTagLower";
-import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, swapHeldBeyond, HeldBeyondState, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, literalTagDiscriminant, peelToStruct, enumMemberValue, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, runtimeClassSym, typeDisplayName, booleanType } from "../../checker/types";
+import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, swapHeldBeyond, HeldBeyondState, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, literalTagDiscriminant, peelToStruct, enumMemberValue, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, swapHookSyms, HookSymsState, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -36,7 +36,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion, raiserStructRefUnion, unwrapGenericInstance, structCellInfo } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion, raiserStructSlotUnion, unwrapGenericInstance, structCellInfo } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -901,7 +901,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
 				return;
 			}
-			if (lctx.raiserBackend && raiserStructRefUnion(fieldType) && hook != "copy") {
+			if (lctx.raiserBackend && raiserStructSlotUnion(fieldType) && hook != "copy") {
 				refOp(hook, xf, yf, empties, fieldType, isCyclicType(fieldType, lctx, visited), false, lctx, buf, loc);
 				return;
 			}
@@ -1046,6 +1046,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	const probe = newBuf();
 	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	if (objType.kind == TypeKind.Union) {
+		if (lctx.raiserBackend && raiserStructSlotUnion(objType)) return true;
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
@@ -1342,7 +1343,7 @@ function structRefUnionCopy(objType: Type, x1: Node, x2: Node, lctx: LiftCtx, bu
 		if (disc == "") {
 			structArms += 1;
 			if (structArms > 1) throw new Error(`internal: the struct and ref union '${objType.typeName}' has several struct arms and no literal discriminant, so its copy cannot tell them apart`);
-			chain = makeIf(refArmTest(objType, x2, loc), chain, makeBlock(arm.items, loc), loc);
+			chain = makeIf(nonStructArmTest(objType, x2, loc), chain, makeBlock(arm.items, loc), loc);
 			continue;
 		}
 		const read = makeMember(clonePath(x2, loc), disc, loc);
@@ -1353,19 +1354,28 @@ function structRefUnionCopy(objType: Type, x1: Node, x2: Node, lctx: LiftCtx, bu
 	buf.items.push(makeIf(makeBinary(clonePath(x1, loc), "!==", clonePath(x2, loc), loc), makeBlock(inner.items, loc), null, loc));
 }
 
-function refArmTest(objType: Type, x2: Node, loc: SourceLocation): Node {
+function nonStructArmTest(objType: Type, x2: Node, loc: SourceLocation): Node {
 	let test: Node | null = null;
 	for (const member of objType.typeChildren) {
 		if (member.kind == TypeKind.Struct) continue;
-		const cls = runtimeClassSym(member.typeReturn);
-		if (cls == null || member.typeReturn == null || member.typeReturn.kind == TypeKind.GenericInstance) throw new Error(`internal: the ref arm '${typeDisplayName(member)}' of '${objType.typeName}' is not a plain class, so its copy cannot test it`);
-		const ref = makeIdentResolved(cls, loc);
-		ref.nodeType = cls.symbolType;
-		const one = makeBinary(clonePath(x2, loc), "instanceof", ref, loc);
+		let one: Node;
+		if (member.kind == TypeKind.Ref) {
+			const cls = runtimeClassSym(member.typeReturn);
+			if (cls == null || member.typeReturn == null || member.typeReturn.kind == TypeKind.GenericInstance) throw new Error(`internal: the ref arm '${typeDisplayName(member)}' of '${objType.typeName}' is not a plain class, so its copy cannot test it`);
+			const ref = makeIdentResolved(cls, loc);
+			ref.nodeType = cls.symbolType;
+			one = makeBinary(clonePath(x2, loc), "instanceof", ref, loc);
+		} else {
+			const operand = clonePath(x2, loc);
+			operand.nodeType = objType;
+			const kind = makeUnary("typeof", operand, loc);
+			kind.nodeType = stringType();
+			one = makeBinary(kind, "===", makeString(jsMemberKind(member), loc), loc);
+		}
 		one.nodeType = booleanType();
 		test = test == null ? one : makeBinary(test, "||", one, loc);
 	}
-	if (test == null) throw new Error(`internal: the union '${objType.typeName}' has no ref arm`);
+	if (test == null) throw new Error(`internal: the union '${objType.typeName}' has no arm besides its struct`);
 	test.nodeType = booleanType();
 	return test;
 }
@@ -1527,7 +1537,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		if (objType.kind == TypeKind.Union) {
 			if (lctx.raiserBackend && raiserBareUnion(objType)) {
 				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
-			} else if (lctx.raiserBackend && raiserStructRefUnion(objType)) {
+			} else if (lctx.raiserBackend && raiserStructSlotUnion(objType)) {
 				if (hook == "copy") structRefUnionCopy(objType, x1, x2, lctx, buf, loc);
 				else {
 					refOp(hook, x1, x2, false, objType, false, false, lctx, buf, loc);
