@@ -22,6 +22,7 @@ export interface BuildSection {
 	cacheDir: string;
 	globalCacheDir: string;
 	globalCache: boolean;
+	trimpath: boolean;
 	cacheError: string;
 }
 
@@ -34,6 +35,7 @@ export function defaultBuildSection(): BuildSection {
 		cacheDir: "",
 		globalCacheDir: "",
 		globalCache: true,
+		trimpath: false,
 		cacheError: "",
 	};
 }
@@ -403,13 +405,14 @@ function extractBuild(buildNode: Node | null): BuildSection {
 			bs.cacheError = "build: spread and computed fields require direct literal declarations";
 			return bs;
 		}
-		if (key != "cacheDir" && key != "globalCacheDir" && key != "globalCache") continue;
-		if (key == "globalCache") {
+		if (key != "cacheDir" && key != "globalCacheDir" && key != "globalCache" && key != "trimpath") continue;
+		if (key == "globalCache" || key == "trimpath") {
 			if (value == null || value.kind != NodeKind.BooleanLiteral) {
-				bs.cacheError = "build.globalCache: must be a boolean literal";
+				bs.cacheError = `build.${key}: must be a boolean literal`;
 				return bs;
 			}
-			bs.globalCache = nodeBool(value) == 1;
+			if (key == "trimpath") bs.trimpath = nodeBool(value) == 1;
+			else bs.globalCache = nodeBool(value) == 1;
 			continue;
 		}
 		if (value == null || value.kind != NodeKind.StringLiteral) {
@@ -978,6 +981,16 @@ test "build cache fields preserve literals and independent sharing policy" {
 	);
 	assert enabled.build.globalCache;
 	assert enabled.build.cacheError == "";
+}
+
+test "build trimpath is a boolean literal and defaults off" {
+	assert !testExtractFromSource("const config = { build: {} };").build.trimpath;
+	const on = testExtractFromSource("const config = { build: { trimpath: true } };");
+	assert on.build.cacheError == "" && on.build.trimpath;
+	for (const value of ['"true"', "null", "1", "enabled", "!true"]) {
+		const cfg = testExtractFromSource(`const config = { build: { trimpath: ${value} } };`);
+		assert cfg.build.cacheError.startsWith("build.trimpath:");
+	}
 }
 
 test "omitted build cache fields remain unset and sharing defaults true" {

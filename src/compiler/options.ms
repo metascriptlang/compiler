@@ -60,6 +60,8 @@ export interface CliOptions {
 	globalCacheDir: string;
 	globalCache: boolean;
 	globalCacheExplicit: boolean;
+	trimpath: boolean;
+	trimpathExplicit: boolean;
 	strip: boolean;
 	sanitize: string;
 	passC: string;
@@ -164,6 +166,8 @@ export function newCliOptions(): CliOptions {
 		globalCacheDir: "",
 		globalCache: true,
 		globalCacheExplicit: false,
+		trimpath: false,
+		trimpathExplicit: false,
 		strip: false,
 		sanitize: "",
 		passC: "",
@@ -292,6 +296,7 @@ function applyCacheConfig(
 	);
 	if (!opts.globalCacheExplicit) opts.globalCache = build.globalCache;
 	if (env.get("MSC_NO_GLOBAL_CACHE") != "") opts.globalCache = false;
+	if (!opts.trimpathExplicit) opts.trimpath = env.get("MSC_TRIMPATH") != "" || build.trimpath;
 	return Result.ok(null);
 }
 
@@ -431,6 +436,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg == "--global-cache" || arg == "--no-global-cache") {
 			opts.globalCache = arg == "--global-cache";
 			opts.globalCacheExplicit = true;
+		} else if (arg == "--trimpath" || arg == "--no-trimpath") {
+			opts.trimpath = arg == "--trimpath";
+			opts.trimpathExplicit = true;
 		} else if (arg == "--strip") {
 			opts.strip = true;
 		} else if (arg.startsWith("--sanitize=")) {
@@ -771,6 +779,36 @@ test "the last explicit global cache toggle wins" {
 	assert opts.globalCache && opts.globalCacheExplicit;
 	assert applyArgs(opts, ["--global-cache", "--no-global-cache"], 0).ok;
 	assert !opts.globalCache && opts.globalCacheExplicit;
+}
+
+test "the last explicit trimpath toggle wins and is off by default" {
+	const opts = newCliOptions();
+	assert !opts.trimpath && !opts.trimpathExplicit;
+	assert applyArgs(opts, ["--trimpath", "--no-trimpath"], 0).ok;
+	assert !opts.trimpath && opts.trimpathExplicit;
+	assert applyArgs(opts, ["--trimpath"], 0).ok;
+	assert opts.trimpath;
+}
+
+test "trimpath takes the command line, then the environment, then build.ms" {
+	withCacheEnvironment(() => {
+		const saved = env.get("MSC_TRIMPATH");
+		const build = defaultBuildSection();
+		env.delete("MSC_TRIMPATH");
+		const off = newCliOptions();
+		assert applyCacheConfig(off, build, "").ok && !off.trimpath;
+		build.trimpath = true;
+		const manifest = newCliOptions();
+		assert applyCacheConfig(manifest, build, "").ok && manifest.trimpath;
+		build.trimpath = false;
+		env.set("MSC_TRIMPATH", "1");
+		const fromEnv = newCliOptions();
+		assert applyCacheConfig(fromEnv, build, "").ok && fromEnv.trimpath;
+		const cli = newCliOptions();
+		assert applyArgs(cli, ["--no-trimpath"], 0).ok;
+		assert applyCacheConfig(cli, build, "").ok && !cli.trimpath;
+		if (saved == "") env.delete("MSC_TRIMPATH"); else env.set("MSC_TRIMPATH", saved);
+	});
 }
 
 test "run cache options obey the existing file argument boundary" {
