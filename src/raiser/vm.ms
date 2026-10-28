@@ -1599,9 +1599,27 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	if (vm.current != 0) releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
-		vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand");
+		const sharing: RaiserStrand[] = [s];
+		for (const o of vm.sched.strands.items) {
+			if (o != s && o.status != RaiserStrandStatus.Done && o.arrayHeap == s.arrayHeap) sharing.push(o);
+		}
+		vmLedger(vm, sharing, pendingThenValues(vm, s.arrayHeap), "strand", "a pending .then");
 	}
 	return vm.current != 0;
+}
+
+function pendingThenValues(vm: RaiserVM, heap: RaiserArrayHeap): RaiserValue[] {
+	const held: RaiserValue[] = [];
+	for (const t of vm.sched.thenRuns) addThenValues(held, t, heap);
+	for (const f of vm.sched.futures.items) for (const t of f.thens) addThenValues(held, t, heap);
+	return held;
+}
+
+function addThenValues(held: RaiserValue[], t: RaiserThen, heap: RaiserArrayHeap): void {
+	if (t.arrayHeap != heap) return;
+	held.push(t.fulfilled);
+	held.push(t.rejected);
+	held.push(t.arg);
 }
 
 // The handles the frames of a strand hold: each frame's registers below its callee's first slot, because the
@@ -1630,7 +1648,7 @@ function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: R
 	}
 }
 
-function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string): void {
+function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string, extraName: string = "module state error"): void {
 	if (vm.comptime || !vm.auditLedger || vm.error != "") return;
 	vmLedgerCollect(vm);
 	const roots: RaiserValue[] = [];
@@ -1644,7 +1662,7 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 		if (s != running) { roots.push(s.currentException); names.push(`strand ${s.id} current exception`); }
 	}
 	for (const g of held[0].globals) { roots.push(g); names.push("global"); }
-	for (const e of extra) { roots.push(e); names.push("module state error"); }
+	for (const e of extra) { roots.push(e); names.push(extraName); }
 	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where, names);
 	if (verdict != "") vmError(vm, verdict);
 }
