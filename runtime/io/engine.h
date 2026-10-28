@@ -114,6 +114,9 @@ static inline int32_t msFsWriteSettled(msString path) { (void)path; return 1; }
  * Returns number of completions processed. */
 int msIoEnginePoll(msIoEngine* e, int timeoutMs);
 
+/* Operations and watches this engine still holds. */
+int msIoEngineLive(msIoEngine* e);
+
 /* Drop pending I/O on fd and complete its future (peer-close shape).
  * Readiness does real cleanup — kqueue/epoll silently drop closed fds
  * so userspace must clear fdMap and complete the future. uring + IOCP
