@@ -32,7 +32,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, fitArmsToSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall } from "./fit";
 import { resolveRuntimeDir } from "../utils/path";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
@@ -3437,17 +3437,11 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 // Phase 5: resolve `super` identifier to the parent class symbol.
 // `super` is only valid inside an instance method (where "this" is in scope).
 // Walks: this → enclosing class type → typeExtra → parent class.
-function isStringArm(arm: Node): boolean {
-	return arm.nodeType != null && (arm.nodeType.kind == TypeKind.String || arm.nodeType.kind == TypeKind.StringLiteral);
-}
-
 function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null, converting: boolean): Type | null {
-	const stringIntoCString = expectedType != null && expectedType.kind == TypeKind.CString && isStringArm(d.ternaryConsequent) && isStringArm(d.ternaryAlternate);
-	if (expectedType != null && !stringIntoCString && !hasGenericParams(expectedType) && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
-		|| (branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
-		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
-		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);
-		d.ternaryAlternate = fitArm(ctx, d.ternaryAlternate, expectedType, converting);
+	const slotFitted = fitArmsToSlot(ctx, [d.ternaryConsequent, d.ternaryAlternate], expectedType, converting);
+	if (slotFitted != null) {
+		d.ternaryConsequent = slotFitted[0];
+		d.ternaryAlternate = slotFitted[1];
 		const fitted = d.ternaryConsequent.nodeType;
 		return fitted != null && sameType(fitted, d.ternaryAlternate.nodeType) ? fitted : expectedType;
 	}
@@ -3473,15 +3467,6 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
 	d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
 	return joined;
-}
-
-function fitArm(ctx: CheckerContext, arm: Node, expectedType: Type, converting: boolean): Node {
-	const armType = arm.nodeType;
-	if (converting && armType != null && isNumeric(armType) && numericConvRefuses(armType, expectedType)
-		&& !isFittingNumericConstant(arm, expectedType)) {
-		return wrapInConv(arm, expectedType);
-	}
-	return fitNode(ctx, arm, expectedType, armType);
 }
 
 function nullishArmExpected(expectedType: Type | null): Type | null {
