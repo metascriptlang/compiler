@@ -237,6 +237,8 @@ static msTimerHeap gTimers = { NULL, 0, 0 };
 static inline void msTimerLock(void) { msTicketLockAcquire(&gTimerLock); }
 static inline void msTimerUnlock(void) { msTicketLockRelease(&gTimerLock); }
 
+#define MS_WORKER_ENGINE_POLL_MS 10
+
 static void msReleaseEnvOnLoop(void* env) {
 	if (env == NULL) return;
 	const msTypeInfo* __t = msHeader(env)->type;
@@ -522,9 +524,9 @@ bool msCompletionQueueDrainAll(void) {
 	return didWork;
 }
 void* msLoopCompletionQueue(void) { return NULL; }
-bool msWorkerLoopPump(void) { return tlEnvInbox != NULL && msEnvInboxDrain(tlEnvInbox); }
+bool msWorkerLoopPump(void) { bool didWork = msWorkerEnginePoll(); if (tlEnvInbox != NULL && msEnvInboxDrain(tlEnvInbox)) didWork = true; return didWork; }
 bool msWorkerLoopPending(void) { return tlEnvInbox != NULL && atomic_load_explicit(&tlEnvInbox->head, memory_order_acquire) != NULL; }
-int msWorkerTimerDelayMs(void) { return -1; }
+int msWorkerTimerDelayMs(void) { return msWorkerEngineLive() ? MS_WORKER_ENGINE_POLL_MS : -1; }
 static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
 #else
@@ -769,13 +771,14 @@ bool msWorkerLoopPending(void) {
 }
 
 bool msWorkerLoopPump(void) {
-    if (tlWorkerChannel == NULL) return false;
+    bool engineWork = msWorkerEnginePoll();
+    if (tlWorkerChannel == NULL) return engineWork;
     const msTaskFrame* frame = msPoolFrameSwap(NULL);
     msActor* actor = msActorCurrentForJobs();
     if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
-    bool didWork = msChannelDrain(tlWorkerChannel);
+    bool didWork = engineWork || msChannelDrain(tlWorkerChannel);
     if (tlWorkerChannel->timers.len > 0) (void)msProcessTimers(msGetDispatcher(), &didWork);
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
@@ -786,8 +789,10 @@ bool msWorkerLoopPump(void) {
 }
 
 int msWorkerTimerDelayMs(void) {
-    if (tlWorkerChannel == NULL || tlWorkerChannel->timers.len == 0) return -1;
-    return msNextTimerDelayMs();
+    int timerMs = -1;
+    if (tlWorkerChannel != NULL && tlWorkerChannel->timers.len > 0) timerMs = msNextTimerDelayMs();
+    if (msWorkerEngineLive() && (timerMs < 0 || timerMs > MS_WORKER_ENGINE_POLL_MS)) return MS_WORKER_ENGINE_POLL_MS;
+    return timerMs;
 }
 
 /* Pool shutdown, after every worker has joined: the main thread is the only
