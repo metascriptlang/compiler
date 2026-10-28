@@ -1644,18 +1644,18 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	// arr.push(val)
-	if (isArrayPush(d.callee)) {
+	if (isArrayPush(node)) {
 		return compileArrayPushCall(s, node);
 	}
 
 	// arr.setLength(n) — arrays only; strings fall through (their setLength
 	// is a C-backend in-place mutation with no comptime meaning).
-	if (isArraySetLengthCall(s, d.callee) && d.arguments.length == 1) {
+	if (isArraySetLengthCall(node) && d.arguments.length == 1) {
 		return compileArraySetLenCall(s, node);
 	}
 
 	// x.toString()
-	if (isToStringCall(d.callee) && d.arguments.length == 0) {
+	if (isToStringCall(node) && d.arguments.length == 0) {
 		return compileToStringCall(s, node);
 	}
 
@@ -2353,27 +2353,29 @@ function isRecordOperand(node: Node): boolean {
 	return t != null && t.kind == TypeKind.Struct;
 }
 
-function isDeclaredMethodCall(callee: Node): boolean {
-	return callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Method;
+function memberCallSym(call: Node): Symbol | null {
+	const callee = (call.data as CallExprData).callee;
+	if (callee.kind != NodeKind.MemberExpr) return null;
+	return call.resolvedSym != null ? call.resolvedSym : callee.resolvedSym;
 }
 
-function isArrayPush(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
-	const d = node.data as MemberExprData;
-	return d.property == "push";
+function isArrayPush(call: Node): boolean {
+	const sym = memberCallSym(call);
+	return sym != null && sym.nativeName == "&msGenericArrayPush";
 }
 
-function isArraySetLengthCall(s: RaiserCompState, node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
-	const d = node.data as MemberExprData;
-	if (d.property != "setLength") return false;
-	return !exprIsString(s, d.object);
+function isArraySetLengthCall(call: Node): boolean {
+	const sym = memberCallSym(call);
+	return sym != null && sym.nativeName == "&msGenericArraySetLen";
 }
 
-function isToStringCall(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
-	const d = node.data as MemberExprData;
-	return d.property == "toString";
+// A lowering that turns a value into text writes `.toString()` with no symbol; a checked call
+// carries the one it resolved to, and only the universal builtin is the text of the receiver.
+function isToStringCall(call: Node): boolean {
+	const sym = memberCallSym(call);
+	if (sym != null) return sym.builtinKind == "ToStringMethod";
+	const callee = (call.data as CallExprData).callee;
+	return callee.kind == NodeKind.MemberExpr && (callee.data as MemberExprData).property == "toString";
 }
 
 function compileToStringCall(s: RaiserCompState, node: Node): int32 {
