@@ -31,7 +31,7 @@ import { CheckerContext, createContextWithCache, createExtensionRegistry, create
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
-import { makeSymbolState, setFlag } from "./symbol";
+import { makeSymbolState, setFlag, hasFlag } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { globalCacheRoot } from "../utils/cachePaths";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -770,7 +770,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const dp = idxs(s.defaultParams);
 		const tps: int32[] = [];
 		for (const tp of s.typeParams) tps.push(idxType(tp));
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1386,7 +1386,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			rd.skip();
 			const kind = rd.int() as int32 as SymbolKind;
 			const state = rd.int() as int32 as SymbolState;
-			const symFlags = rd.int() as uint32 as BitSet<SymbolFlag>;
+			const symFlags = rd.int() as uint64 as BitSet<SymbolFlag>;
 			const overloadIdx = rd.int() as int32;
 			const mutatedParams = rd.int() as int32;
 			const duVariantSlot = rd.int() as int32;
@@ -1896,6 +1896,30 @@ test "preludePack: a generic instance keeps the generic it was instantiated from
 		const gotLinked = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkShift_int32"));
 		assert gotLinked != null && gotLinked.instantiatedFrom != null;
 		assert gotLinked.instantiatedFrom!.name == "pkShift";
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
+test "preludePack: a symbol keeps the flags above bit 31" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const sym = makeSymbolState("pkHelper", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		setFlag(sym, SymbolFlag.Exported);
+		setFlag(sym, SymbolFlag.Inline);
+		setFlag(sym, SymbolFlag.IteratorHelper);
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const key = preludePackKey("high-flags", ".test");
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkHelper"));
+		assert got != null;
+		assert hasFlag(got, SymbolFlag.Exported) && hasFlag(got, SymbolFlag.Inline) && hasFlag(got, SymbolFlag.IteratorHelper);
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);
