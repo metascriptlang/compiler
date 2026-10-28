@@ -1730,7 +1730,11 @@ function releaseSpawnEnv(vm: RaiserVM, s: RaiserStrand): void {
 }
 
 function releaseMovedOut(vm: RaiserVM, handle: int64): void {
-	if (handle == 0 || !rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) return;
+	if (handle == 0) return;
+	if (!rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) {
+		vmRegisterCyclic(vm, handle);
+		return;
+	}
 	const pending = vm.dropped.length;
 	vmDestroyWalk(vm, handle);
 	while (vm.dropped.length > pending) vmDestroyWalk(vm, vm.dropped.pop());
