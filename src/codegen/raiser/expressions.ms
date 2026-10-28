@@ -2030,7 +2030,8 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
-		if (isFreshValue(d.arguments[0]) || d.arguments[0].kind == NodeKind.NewExpr) emitInst(s, raiserABC(RaiserOpcode.RcDec, errorReg, 0, 0));
+		const reason = d.arguments[0].kind == NodeKind.HiddenSubConv ? (d.arguments[0].data as HiddenStdConvData).convExpr : d.arguments[0];
+		if (isFreshValue(reason) || reason.kind == NodeKind.NewExpr) emitInst(s, raiserABC(RaiserOpcode.RcDec, errorReg, 0, 0));
 		return dest;
 	}
 	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
