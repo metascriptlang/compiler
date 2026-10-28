@@ -13,15 +13,16 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/process";
-import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir } from "std/fs";
-import { join, dirname, normalize, isAbsolute } from "std/fs/path";
+import { env, platform, argv, cwd, execFileCapture, execFileResult, findOnPath } from "std/process";
+import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir, realpath } from "std/fs";
+import { join, dirname, basename, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
+import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
@@ -204,6 +205,8 @@ let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
 let _buildStartedSeconds: number = 0;
 let _projectInputKey = "";
 let _projectInputHashes: string[] = [];
+let _queryRecordDeps: string[] = [];
+let _queryRecordDepSet: HashSet<string> = new HashSet<string>();
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -216,7 +219,15 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_forceRebuild = forceRebuild;
 	_nativeProjectDeps = [];
 	_nativeProjectDepSet = new HashSet<string>();
+	_queryRecordDeps = [];
+	_queryRecordDepSet = new HashSet<string>();
 	_dirNames = new HashMap<string, HashSet<string>>();
+	_presenceByRecord = new HashMap<string, string>();
+	_subdirs = new HashMap<string, boolean>();
+	_dirEntries = new HashMap<string, string[]>();
+	_dirFolds = new HashMap<string, HashMap<string, string[]>>();
+	_dirUnfoldable = new HashMap<string, string[]>();
+	_dirStamps = new HashMap<string, string>();
 	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
 }
@@ -445,7 +456,7 @@ function ensureLocalSchema(): void {
 }
 
 export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string, isCpp: boolean = false): string {
-	return `${getCompilerHash(ccOption, ccBinary)} ${objectCompileKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`;
+	return `${getCompilerHash(ccOption, ccBinary)} ${objectCompileKey(ccOption, ccBinary, isCpp, mode, extraFlags)} ${implicitSearchKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`;
 }
 
 // Fingerprint folds in VERSION and objectStamp(): the stamp content-hashes
@@ -485,18 +496,20 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 		registerNativeProjectDep(path);
 		result = result + `:${path}=${hashFile(path)}`;
 	}
-	return result;
+	return `${result}:${trackedQueryPresence(nativeDepFile(srcPath, compileCmd))}`;
 }
 
-export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number): Result<string, string> {
+export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number, search: HeaderSearch): Result<string, string> {
 	const dependencies = nativeDependencyPaths(srcPath, compileCmd);
-	let settled = dependencies.length > 0;
+	const queries = recordQueries(nativeDepFile(srcPath, compileCmd), [srcPath], dependencies, search, [dirname(srcPath)], startedSeconds);
+	let settled = dependencies.length > 0 && queries;
 	// cc read these before they are hashed here: one written since the compile started may
 	// not be what cc read (ccache's include-file-too-new rule), so it keeps the first name.
 	for (const path of dependencies) {
 		if (changedSinceBuild(path, startedSeconds)) settled = false;
 	}
-	const resolvedFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
+	const settledFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
+	const resolvedFp = presenceTrusted(settledFp) ? settledFp : `${settledFp}:${hashFile(oFile)}`;
 	if (resolvedFp == fp) {
 		writeCompileCache(oFile, fp);
 		return Result.ok(oFile);
@@ -513,16 +526,23 @@ export function publishNativeObject(srcPath: string, compileCmd: string, oFile: 
 
 // ===== Global Object Store =====
 
-const STORE_FORMAT = "store4";
+const STORE_FORMAT = "store5";
 
 struct StoreHit {
 	object: string;
 	deps: string[];
+	queries: QueryRecord;
 }
 
 let _ccIdentity = "";
 let _ccIdentityName = "";
 let _dirNames: HashMap<string, HashSet<string>> = new HashMap<string, HashSet<string>>();
+let _presenceByRecord: HashMap<string, string> = new HashMap<string, string>();
+let _subdirs: HashMap<string, boolean> = new HashMap<string, boolean>();
+let _dirEntries: HashMap<string, string[]> = new HashMap<string, string[]>();
+let _dirFolds: HashMap<string, HashMap<string, string[]>> = new HashMap<string, HashMap<string, string[]>>();
+let _dirUnfoldable: HashMap<string, string[]> = new HashMap<string, string[]>();
+let _dirStamps: HashMap<string, string> = new HashMap<string, string>();
 
 function storeRoot(): string {
 	const root = globalCacheRoot();
@@ -540,7 +560,7 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	if (found != "") path = found;
 	const root = globalCacheRoot();
 	const changed = changedTime(path);
-	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${changed}`)}`;
+	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${changed}${developerToolchain()}`)}`;
 	let identity = "";
 	if (memo != "" && exists(memo) && modifiedTime(memo) > changed) identity = try readFile(memo) catch "";
 	if (identity == "") {
@@ -559,10 +579,21 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	return identity;
 }
 
+function developerToolchain(): string {
+	if (platform != "darwin") return "";
+	const selected = env.get("DEVELOPER_DIR") != "" ? env.get("DEVELOPER_DIR") : realpath("/var/db/xcode_select_link");
+	let text = `\n${selected}\n${env.get("TOOLCHAINS")}\n${env.get("SDKROOT")}`;
+	for (const tool of ["usr/bin/clang", "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"]) {
+		const path = `${selected}/${tool}`;
+		text = `${text}\n${exists(path) ? changeStamp(path) : "absent"}`;
+	}
+	return text;
+}
+
 export function objectStoreKey(source: string, ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
 	if (storeRoot() == "") return "";
 	const args = objectCompileArgsKey(ccOption, ccBinary, isCpp, mode, extraFlags);
-	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}`);
+	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}\n${implicitSearchKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`);
 }
 
 export function nativeStoreSource(srcPath: string): string {
@@ -580,20 +611,57 @@ function absoluteSlashed(path: string): string {
 }
 
 function foldName(name: string): string {
-	return platform == "windows" ? name.toLowerCase() : name;
+	for (let i = 0; i < name.length; i++) {
+		const code = name.charCodeAt(i);
+		if ((code >= 65 && code <= 90) || code > 127) return name.toLowerCase();
+	}
+	return name;
 }
 
 function dirNames(dir: string): HashSet<string> {
 	const known = _dirNames.get(dir);
 	if (known != null) return known;
+	dirStamp(dir);
 	const names = new HashSet<string>();
+	const entries: string[] = [];
+	const folds = new HashMap<string, string[]>();
+	const unfoldable: string[] = [];
 	if (exists(dir)) {
 		for (const entry of readDir(dir)) {
-			names.add(foldName(entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry));
+			const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+			if (!asciiName(name)) unfoldable.push(name);
+			const fold = foldName(name);
+			names.add(fold);
+			entries.push(name);
+			let spelled = folds.get(fold);
+			if (spelled == null) {
+				spelled = [];
+				folds.set(fold, spelled);
+			}
+			spelled.push(name);
 		}
 	}
 	_dirNames.set(dir, names);
+	_dirEntries.set(dir, entries);
+	_dirFolds.set(dir, folds);
+	_dirUnfoldable.set(dir, unfoldable);
 	return names;
+}
+
+function dirStamp(dir: string): string {
+	const known = _dirStamps.get(dir);
+	if (known != null) return known;
+	const stamp = !exists(dir) ? "absent" : settled(dir) ? changeStamp(dir) : "";
+	_dirStamps.set(dir, stamp);
+	return stamp;
+}
+
+function knownDir(path: string): boolean {
+	const known = _subdirs.get(path);
+	if (known != null) return known;
+	const found = isDir(path);
+	_subdirs.set(path, found);
+	return found;
 }
 
 function underAnyDir(path: string, dirs: string[]): boolean {
@@ -609,6 +677,11 @@ function headerRels(path: string, dirs: string[]): string[] {
 		if (path.startsWith(`${dir}/`)) rels.push(path.slice(dir.length + 1, path.length));
 	}
 	if (rels.length > 0) return rels;
+	const framework = frameworkRel(path);
+	if (framework != "") {
+		rels.push(framework);
+		return rels;
+	}
 	const at = path.lastIndexOf("/include/");
 	if (at < 0) return rels;
 	let tail = path.slice(at + 9, path.length);
@@ -620,51 +693,111 @@ function headerRels(path: string, dirs: string[]): string[] {
 	return rels;
 }
 
-function relTree(rels: string[]): HashMap<string, HashSet<string>> {
-	const tree = new HashMap<string, HashSet<string>>();
+function frameworkRel(path: string): string {
+	for (const part of ["/Headers/", "/PrivateHeaders/"]) {
+		const at = path.lastIndexOf(part);
+		if (at < 0) continue;
+		const bundle = path.slice(0, at);
+		if (!bundle.endsWith(".framework")) continue;
+		const name = bundle.slice(bundle.lastIndexOf("/") + 1, bundle.length - ".framework".length);
+		return `${name}/${path.slice(at + part.length, path.length)}`;
+	}
+	return "";
+}
+
+function relTree(rels: string[]): HashMap<string, string[]> {
+	const tree = new HashMap<string, string[]>();
+	const placed = new HashSet<string>();
 	for (const rel of rels) {
 		let prefix = "";
 		let rest = rel;
 		while (rest != "") {
 			const slash = rest.indexOf("/");
 			const head = foldName(slash < 0 ? rest : rest.slice(0, slash));
-			let children = tree.get(prefix);
-			if (children == null) {
-				children = new HashSet<string>();
-				tree.set(prefix, children);
+			const full = prefix == "" ? head : `${prefix}/${head}`;
+			if (!placed.has(full)) {
+				placed.add(full);
+				let children = tree.get(prefix);
+				if (children == null) {
+					children = [];
+					tree.set(prefix, children);
+				}
+				children.push(head);
 			}
-			children.add(head);
-			prefix = prefix == "" ? head : `${prefix}/${head}`;
+			prefix = full;
 			rest = slash < 0 ? "" : rest.slice(slash + 1, rest.length);
 		}
 	}
 	return tree;
 }
 
-function existingCandidates(dir: string, prefix: string, tree: HashMap<string, HashSet<string>>, rels: HashSet<string>, found: string[]): void {
+function existingCandidates(dir: string, prefix: string, spelledPrefix: string, tree: HashMap<string, string[]>, rels: HashSet<string>, found: string[], walked: string[]): void {
 	const wanted = tree.get(prefix);
 	if (wanted == null) return;
+	walked.push(dir);
 	const names = dirNames(dir);
-	for (const name of wanted) {
-		if (names.has(name)) {
-			const full = prefix == "" ? name : `${prefix}/${name}`;
-			if (rels.has(full)) found.push(full);
-			if (tree.get(full) != null && isDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, tree, rels, found);
+	for (const name of _dirUnfoldable.get(dir) ?? []) found.push(spelledPrefix == "" ? name : `${spelledPrefix}/${name}`);
+	const entries = _dirEntries.get(dir) ?? [];
+	if (entries.length < wanted.length) {
+		for (const name of entries) {
+			const fold = foldName(name);
+			const full = prefix == "" ? fold : `${prefix}/${fold}`;
+			if (rels.has(full) || tree.get(full) != null) existingCandidate(dir, name, full, spelledPrefix, tree, rels, found, walked);
+		}
+	} else {
+		const folds = _dirFolds.get(dir) ?? new HashMap<string, string[]>();
+		for (const fold of wanted) {
+			if (!names.has(fold)) continue;
+			const full = prefix == "" ? fold : `${prefix}/${fold}`;
+			for (const name of folds.get(fold) ?? []) existingCandidate(dir, name, full, spelledPrefix, tree, rels, found, walked);
 		}
 	}
 }
 
-function presenceSignature(searched: string[], rels: string[]): string {
-	const tree = relTree(rels);
+function existingCandidate(dir: string, name: string, full: string, spelledPrefix: string, tree: HashMap<string, string[]>, rels: HashSet<string>, found: string[], walked: string[]): void {
+	const spelled = spelledPrefix == "" ? name : `${spelledPrefix}/${name}`;
+	if (rels.has(full)) found.push(spelled);
+	if (tree.get(full) != null && knownDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, spelled, tree, rels, found, walked);
+}
+
+struct DirPresence {
+	found: string;
+	walked: string[];
+}
+
+struct RememberedPresence {
+	presence: string;
+	dirs: HashMap<string, DirPresence>;
+}
+
+const UNSETTLED_STAMP = "unsettled";
+
+function dirPresence(dir: string, tree: HashMap<string, string[]>, folded: HashSet<string>): DirPresence {
+	const found: string[] = [];
+	const walked: string[] = [];
+	existingCandidates(dir, "", "", tree, folded, found, walked);
+	found.sort();
+	return { found: found.join("|"), walked };
+}
+
+function signatureLine(dir: string, found: string): string {
+	return found == "" ? "" : `s\t${dir}\t${found}\n`;
+}
+
+function foldedRels(rels: string[]): HashSet<string> {
 	const folded = new HashSet<string>();
 	for (const rel of rels) folded.add(foldName(rel));
+	return folded;
+}
+
+function presenceSignature(searched: string[], rels: string[], walked: string[]): string {
+	const tree = relTree(rels);
+	const folded = foldedRels(rels);
 	let signature = "";
 	for (const dir of searched) {
-		const found: string[] = [];
-		existingCandidates(dir, "", tree, folded, found);
-		if (found.length == 0) continue;
-		found.sort();
-		signature = `${signature}s\t${dir}\t${found.join("|")}\n`;
+		const part = dirPresence(dir, tree, folded);
+		for (const path of part.walked) walked.push(path);
+		signature = `${signature}${signatureLine(dir, part.found)}`;
 	}
 	return signature;
 }
@@ -686,7 +819,399 @@ function searchedDirs(argDirs: string[], includers: string[], deps: string[]): s
 	return searched;
 }
 
-function storeManifest(dependencyFile: string, source: string, argDirs: string[], includers: string[]): string {
+export struct HeaderSearch {
+	dirs: string[];
+	frameworks: string[];
+	complete: boolean;
+}
+
+struct ImplicitSearch {
+	dirs: string[];
+	frameworks: string[];
+	complete: boolean;
+	key: string;
+}
+
+const SEARCH_FORMAT = "search1";
+const SEARCH_ENV = [
+	"CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "OBJCPLUS_INCLUDE_PATH",
+	"SDKROOT", "DEVELOPER_DIR", "TOOLCHAINS", "COMPILER_PATH", "GCC_EXEC_PREFIX", "CCC_OVERRIDE_OPTIONS",
+];
+const _implicitByKey = new HashMap<string, ImplicitSearch>();
+
+export function headerSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): HeaderSearch {
+	const implicit = implicitSearch(ccOption, ccBinary, isCpp, mode, extraFlags);
+	const dirs = objectSearchDirs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	for (const dir of implicit.dirs) {
+		if (!dirs.includes(dir)) dirs.push(dir);
+	}
+	return { dirs, frameworks: implicit.frameworks, complete: implicit.complete };
+}
+
+struct SearchProbe {
+	path: string;
+	args: string[];
+	key: string;
+}
+
+function searchProbe(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): SearchProbe | null {
+	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (!parts.ok) return null;
+	const args = withoutSearchDirs(parts.value.lead);
+	for (const arg of withoutSearchDirs(parts.value.trail)) args.push(arg);
+	let inputs = `${SEARCH_FORMAT}\n${ccContentIdentity(ccOption, ccBinary)}\n${parts.value.command.path}\n${isCpp}\n${args.join("\n")}`;
+	for (const name of SEARCH_ENV) inputs = `${inputs}\n${name}=${env.get(name)}`;
+	inputs = `${inputs}${developerToolchain()}`;
+	return { path: parts.value.command.path, args, key: hashContent(inputs) };
+}
+
+function implicitSearchKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	return searchProbe(ccOption, ccBinary, isCpp, mode, extraFlags)?.key ?? "search-unresolved";
+}
+
+function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): ImplicitSearch {
+	const probe = searchProbe(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (probe == null) return { dirs: [], frameworks: [], complete: false, key: "search-unresolved" };
+	const args = probe.args;
+	const key = probe.key;
+	const known = _implicitByKey.get(key);
+	if (known != null) return known;
+	const memo = `${getCacheDir()}/search.${key}`;
+	let found = parseImplicitSearch(readSealed(memo).join("\n"), key);
+	if (!found.complete) {
+		const devNull = platform == "windows" ? "NUL" : "/dev/null";
+		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", devNull, "-o", devNull]) args.push(arg);
+		const run = execFileResult(probe.path, args);
+		found = parseImplicitSearch(run.started && run.pipeOk && run.exitCode == 0 ? run.errorOutput : "", key);
+		if (found.complete) writeSealed(memo, searchLines(found));
+	}
+	_implicitByKey.set(key, found);
+	return found;
+}
+
+function withoutSearchDirs(args: string[]): string[] {
+	const kept: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		const kind = ["-iquote", "-isystem", "-idirafter", "-I"].find((flag) => args[i].startsWith(flag)) ?? "";
+		if (kind == "") {
+			kept.push(args[i]);
+		} else if (args[i] == kind) {
+			i = i + 1;
+		}
+	}
+	return kept;
+}
+
+function searchLines(found: ImplicitSearch): string[] {
+	const lines: string[] = ["#include <...> search starts here:"];
+	for (const dir of found.dirs) lines.push(` ${dir}`);
+	for (const dir of found.frameworks) lines.push(` ${dir} (framework directory)`);
+	lines.push("End of search list.");
+	return lines;
+}
+
+function parseImplicitSearch(text: string, key: string): ImplicitSearch {
+	const dirs: string[] = [];
+	const frameworks: string[] = [];
+	const absent = "ignoring nonexistent directory \"";
+	const marked = " (framework directory)";
+	let complete = false;
+	let listing = false;
+	for (const raw of text.split("\n")) {
+		const line = raw.endsWith("\r") ? raw.slice(0, raw.length - 1) : raw;
+		if (line.startsWith(absent) && line.endsWith("\"")) {
+			const dir = absoluteSlashed(line.slice(absent.length, line.length - 1));
+			if (!dirs.includes(dir)) dirs.push(dir);
+			if (!frameworks.includes(dir)) frameworks.push(dir);
+		} else if (line.endsWith(" search starts here:")) {
+			listing = true;
+		} else if (line == "End of search list.") {
+			complete = listing;
+			listing = false;
+		} else if (listing && line.startsWith(" ")) {
+			const entry = line.trim();
+			if (entry.endsWith(marked)) {
+				const dir = absoluteSlashed(entry.slice(0, entry.length - marked.length));
+				if (!frameworks.includes(dir)) frameworks.push(dir);
+			} else if (entry.endsWith(")")) {
+				return { dirs: [], frameworks: [], complete: false, key: `search-unreadable:${key}` };
+			} else {
+				const dir = absoluteSlashed(entry);
+				if (!dirs.includes(dir)) dirs.push(dir);
+			}
+		}
+	}
+	if (!complete) return { dirs: [], frameworks: [], complete: false, key: `search-unread:${key}` };
+	return { dirs, frameworks, complete, key: hashContent(`${dirs.join("\n")}\n|\n${frameworks.join("\n")}`) };
+}
+
+const QUERY_RECORD_FORMAT = "queries1";
+const QUERY_ENTRY = "?";
+const HEADER_QUERY_UNBOUNDED = "header-query-unbounded";
+const HEADER_QUERY_UNRECORDED = "header-query-unrecorded";
+
+interface QueryRecord {
+	dirs: string[];
+	rels: string[];
+	paths: string[];
+	bounded: boolean;
+}
+
+const _queriesByHash = new HashMap<string, HeaderQueries>();
+
+function queriesIn(path: string): HeaderQueries | null {
+	const hash = hashFile(path);
+	const known = _queriesByHash.get(hash);
+	if (known != null) return known;
+	const text = readFile(path);
+	if (!text.ok) return null;
+	const found = headerQueries(text.value);
+	_queriesByHash.set(hash, found);
+	return found;
+}
+
+function asciiName(name: string): boolean {
+	for (let i = 0; i < name.length; i++) {
+		const code = name.charCodeAt(i);
+		if (code < 32 || code > 126) return false;
+	}
+	return true;
+}
+
+function namedFromDir(name: string): boolean {
+	return name.startsWith("/") || name == "." || name == ".."
+		|| name.startsWith("./") || name.startsWith("../")
+		|| name.indexOf("/./") >= 0 || name.indexOf("/../") >= 0
+		|| name.endsWith("/.") || name.endsWith("/..");
+}
+
+function queryRecord(sources: string[], spelledDeps: string[], search: HeaderSearch, includers: string[]): QueryRecord {
+	const deps = spelledDeps.map((path) => absoluteSlashed(path));
+	const dirs = searchedDirs(search.dirs, includers, deps);
+	const names: string[] = [];
+	let bounded = search.complete;
+	const scanned: string[] = [];
+	for (const path of sources) scanned.push(path);
+	for (const path of deps) scanned.push(path);
+	for (const path of scanned) {
+		const queries = queriesIn(path);
+		if (queries == null || queries.macroForm) {
+			bounded = false;
+			continue;
+		}
+		if (queries.quoteForm) {
+			const own = dirname(absoluteSlashed(path));
+			if (!dirs.includes(own)) dirs.push(own);
+		}
+		for (const name of queries.names) names.push(name);
+	}
+	const rels: string[] = [];
+	const paths: string[] = [];
+	const seen = new HashSet<string>();
+	for (const path of deps) {
+		for (const rel of headerRels(path, dirs)) {
+			if (seen.has(rel)) continue;
+			seen.add(rel);
+			rels.push(rel);
+		}
+	}
+	for (const name of names) {
+		if (seen.has(name)) continue;
+		seen.add(name);
+		if (!namedFromDir(name)) {
+			rels.push(name);
+		} else if (name.startsWith("/")) {
+			paths.push(normalize(name).replaceAll("\\", "/"));
+		} else {
+			for (const dir of dirs) paths.push(normalize(`${dir}/${name}`).replaceAll("\\", "/"));
+		}
+	}
+	for (const rel of rels) {
+		if (!asciiName(rel)) bounded = false;
+		const slash = rel.indexOf("/");
+		if (slash <= 0 || namedFromDir(rel)) continue;
+		for (const dir of search.frameworks) {
+			for (const part of ["Headers", "PrivateHeaders"]) {
+				paths.push(`${dir}/${rel.slice(0, slash)}.framework/${part}/${rel.slice(slash + 1, rel.length)}`);
+			}
+		}
+	}
+	for (const path of paths) {
+		if (!asciiName(path)) bounded = false;
+	}
+	return { dirs, rels, paths, bounded };
+}
+
+function presenceText(record: QueryRecord, walked: string[]): string {
+	let text = presenceSignature(record.dirs, record.rels, walked);
+	for (const path of record.paths) {
+		walked.push(dirname(path));
+		text = `${text}e\t${path}\t${exists(path) ? 1 : 0}\n`;
+	}
+	return text;
+}
+
+function newestCandidate(record: QueryRecord): number {
+	const tree = relTree(record.rels);
+	const folded = new HashSet<string>();
+	for (const rel of record.rels) folded.add(foldName(rel));
+	let newest: number = -1;
+	for (const dir of record.dirs) {
+		const found: string[] = [];
+		existingCandidates(dir, "", "", tree, folded, found, []);
+		for (const rel of found) newest = Math.max(newest, changedTime(`${dir}/${rel}`));
+	}
+	for (const path of record.paths) newest = Math.max(newest, changedTime(path));
+	return newest;
+}
+
+function writeQueryRecord(depFile: string, record: QueryRecord, settled: boolean): void {
+	let text = `${QUERY_RECORD_FORMAT}\n`;
+	if (!record.bounded) text = `${text}unbounded\n`;
+	if (!settled) text = `${text}unsettled\n`;
+	for (const dir of record.dirs) text = `${text}dir\t${dir}\n`;
+	for (const rel of record.rels) text = `${text}rel\t${rel}\n`;
+	for (const path of record.paths) text = `${text}path\t${path}\n`;
+	atomicWriteFile(`${depFile}.q`, text);
+}
+
+function recordQueries(depFile: string, sources: string[], deps: string[], search: HeaderSearch, includers: string[], startedSeconds: number): boolean {
+	const record = queryRecord(sources, deps, search, includers);
+	const settled = record.bounded && newestCandidate(record) < Math.floor(startedSeconds);
+	writeQueryRecord(depFile, record, settled);
+	trackQueryRecord(depFile);
+	return settled;
+}
+
+function queryPresence(depFile: string): string {
+	const text = try readFile(`${depFile}.q`) catch "";
+	const known = _presenceByRecord.get(text);
+	if (known != null) return known;
+	const key = hashContent(text);
+	const remembered = rememberedPresence(depFile, key);
+	let presence = remembered.presence;
+	if (presence == "") presence = presenceOfRecord(depFile, text, key, remembered.dirs);
+	_presenceByRecord.set(text, presence);
+	return presence;
+}
+
+function presenceMemo(depFile: string): string {
+	return `${dirname(depFile)}/presence/${basename(depFile)}.qs`;
+}
+
+function rememberedPresence(depFile: string, key: string): RememberedPresence {
+	const dirs = new HashMap<string, DirPresence>();
+	const lines = (try readFile(presenceMemo(depFile)) catch "").split("\n");
+	if (lines.length < 2 || lines[0] != key) return { presence: "", dirs };
+	let allCurrent = true;
+	let open = false;
+	let fresh = true;
+	let dir = "";
+	let found = "";
+	let walked: string[] = [];
+	for (let i = 2; i <= lines.length; i++) {
+		const line = i < lines.length ? lines[i] : "p";
+		if (line == "") continue;
+		const tab = line.indexOf("\t", 0);
+		const last = line.lastIndexOf("\t");
+		const kind = tab < 0 ? line : line.slice(0, tab);
+		if (kind == "w" && last > tab) {
+			const path = line.slice(tab + 1, last);
+			if (dirStamp(path) != line.slice(last + 1, line.length)) {
+				fresh = false;
+				allCurrent = false;
+			}
+			walked.push(path);
+			continue;
+		}
+		if (open && fresh) dirs.set(dir, { found, walked });
+		open = false;
+		fresh = true;
+		walked = [];
+		if (kind == "s" && last > tab) {
+			open = true;
+			dir = line.slice(tab + 1, last);
+			found = line.slice(last + 1, line.length);
+		} else if (kind != "p") {
+			return { presence: "", dirs: new HashMap<string, DirPresence>() };
+		}
+	}
+	return { presence: allCurrent ? lines[1] : "", dirs };
+}
+
+function stampLines(walked: string[]): string {
+	let text = "";
+	const seen = new HashSet<string>();
+	for (const path of walked) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		const stamp = dirStamp(path);
+		text = `${text}w\t${path}\t${stamp == "" ? UNSETTLED_STAMP : stamp}\n`;
+	}
+	return text;
+}
+
+function presenceOfRecord(depFile: string, text: string, key: string, remembered: HashMap<string, DirPresence>): string {
+	const lines = text.split("\n");
+	if (lines[0] != QUERY_RECORD_FORMAT) return HEADER_QUERY_UNRECORDED;
+	const record: QueryRecord = { dirs: [], rels: [], paths: [], bounded: true };
+	for (let i = 1; i < lines.length; i++) {
+		const line = lines[i];
+		const tab = line.indexOf("\t", 0);
+		const kind = tab < 0 ? line : line.slice(0, tab);
+		const value = tab < 0 ? "" : line.slice(tab + 1, line.length);
+		match (kind) {
+			"" => {},
+			"unbounded" => { return HEADER_QUERY_UNBOUNDED; },
+			"dir" => { record.dirs.push(value); },
+			"rel" => { record.rels.push(value); },
+			"path" => { record.paths.push(value); },
+			_ => { return HEADER_QUERY_UNRECORDED; },
+		}
+	}
+	const walks = record.dirs.some((dir) => !remembered.has(dir));
+	const tree = walks ? relTree(record.rels) : new HashMap<string, string[]>();
+	const folded = walks ? foldedRels(record.rels) : new HashSet<string>();
+	let signature = "";
+	let memo = "";
+	for (const dir of record.dirs) {
+		const part = remembered.get(dir) ?? dirPresence(dir, tree, folded);
+		signature = `${signature}${signatureLine(dir, part.found)}`;
+		memo = `${memo}s\t${dir}\t${part.found}\n${stampLines(part.walked)}`;
+	}
+	const parents: string[] = [];
+	for (const path of record.paths) {
+		parents.push(dirname(path));
+		signature = `${signature}e\t${path}\t${exists(path) ? 1 : 0}\n`;
+	}
+	const presence = hashContent(signature);
+	const memoFile = presenceMemo(depFile);
+	ensureDir(dirname(memoFile));
+	atomicWriteFile(memoFile, `${key}\n${presence}\n${memo}p\n${stampLines(parents)}`);
+	return presence;
+}
+
+function trackQueryRecord(depFile: string): void {
+	if (_queryRecordDepSet.has(depFile)) return;
+	_queryRecordDepSet.add(depFile);
+	_queryRecordDeps.push(depFile);
+}
+
+function trackedQueryPresence(depFile: string): string {
+	trackQueryRecord(depFile);
+	return queryPresence(depFile);
+}
+
+function presenceTrusted(fp: string): boolean {
+	return fp.indexOf(HEADER_QUERY_UNBOUNDED, 0) < 0 && fp.indexOf(HEADER_QUERY_UNRECORDED, 0) < 0;
+}
+
+struct StoreManifest {
+	deps: string[];
+	queries: QueryRecord;
+}
+
+function storeManifest(dependencyFile: string, source: string, search: HeaderSearch, includers: string[]): string {
 	const own = absoluteSlashed(source);
 	const deps: string[] = [];
 	const seen = new HashSet<string>();
@@ -696,44 +1221,48 @@ function storeManifest(dependencyFile: string, source: string, argDirs: string[]
 		seen.add(path);
 		deps.push(path);
 	}
-	const searched = searchedDirs(argDirs, includers, deps);
+	const record = queryRecord([own], deps, search, includers);
+	if (!record.bounded || newestCandidate(record) >= Math.floor(_buildStartedSeconds)) return "";
+	const searched = searchedDirs(search.dirs, includers, deps);
 	let text = `${STORE_FORMAT}\n`;
-	const rels: string[] = [];
-	const relSeen = new HashSet<string>();
-	for (const path of deps) {
-		for (const rel of headerRels(path, searched)) {
-			if (relSeen.has(rel)) continue;
-			relSeen.add(rel);
-			rels.push(rel);
-			text = `${text}r\t${rel}\n`;
-		}
+	for (const rel of record.rels) text = `${text}r\t${rel}\n`;
+	for (const dir of record.dirs) {
+		if (!searched.includes(dir)) text = `${text}q\t${dir}\n`;
 	}
+	for (const path of record.paths) text = `${text}a\t${path}\n`;
 	for (const path of deps) {
 		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
-	return `${text}${presenceSignature(searched, rels)}`;
+	return `${text}${presenceText(record, [])}`;
 }
 
-function manifestDeps(text: string, argDirs: string[], includers: string[]): string[] | null {
+function readStoreManifest(text: string, argDirs: string[], includers: string[]): StoreManifest | null {
 	const lines = text.split("\n");
 	if (lines[0] != STORE_FORMAT) return null;
 	const rels: string[] = [];
+	const queried: string[] = [];
+	const paths: string[] = [];
 	const deps: string[] = [];
 	let recorded = "";
 	for (let i = 1; i < lines.length; i++) {
 		if (lines[i] == "") continue;
 		const fields = lines[i].split("\t");
 		const width = match (fields[0]) {
-			"r" => 2,
-			"d" => 3,
-			"s" => 3,
+			"r" | "q" | "a" => 2,
+			"d" | "s" | "e" => 3,
 			_ => 0,
 		};
 		if (fields.length != width) return null;
 		match (fields[0]) {
 			"r" => {
 				rels.push(fields[1]);
+			},
+			"q" => {
+				queried.push(fields[1]);
+			},
+			"a" => {
+				paths.push(fields[1]);
 			},
 			"d" => {
 				if (hashFile(fields[1]) != fields[2]) return null;
@@ -744,13 +1273,18 @@ function manifestDeps(text: string, argDirs: string[], includers: string[]): str
 			},
 		}
 	}
-	if (presenceSignature(searchedDirs(argDirs, includers, deps), rels) != recorded) return null;
-	return deps;
+	const dirs = searchedDirs(argDirs, includers, deps);
+	for (const dir of queried) {
+		if (!dirs.includes(dir)) dirs.push(dir);
+	}
+	const queries: QueryRecord = { dirs, rels, paths, bounded: true };
+	if (presenceText(queries, []) != recorded) return null;
+	return { deps, queries };
 }
 
-function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit | null {
+function storeHit(key: string, search: HeaderSearch, includers: string[]): StoreHit | null {
 	const root = storeRoot();
-	if (root == "" || key == "") return null;
+	if (root == "" || key == "" || !search.complete) return null;
 	const dir = `${root}/${key}`;
 	if (!exists(dir)) return null;
 	for (const entry of readDir(dir)) {
@@ -758,10 +1292,10 @@ function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit
 		const object = `${dir}/${entry.slice(0, entry.length - 2)}.o`;
 		if (!exists(object)) continue;
 		const text = try readFile(`${dir}/${entry}`) catch "";
-		const deps = manifestDeps(text, argDirs, includers);
-		if (deps != null) {
+		const manifest = readStoreManifest(text, search.dirs, includers);
+		if (manifest != null) {
 			markUsed(`${dir}/${entry}`, nowSeconds());
-			return { object, deps };
+			return { object, deps: manifest.deps, queries: manifest.queries };
 		}
 	}
 	return null;
@@ -787,12 +1321,13 @@ function writeDependencyFile(path: string, deps: string[]): void {
 	atomicWriteFile(path, `${text}\n`);
 }
 
-export function restoreNativeObject(srcPath: string, compileCmd: string, key: string, argDirs: string[]): string {
-	const hit = storeHit(key, argDirs, [dirname(srcPath)]);
+export function restoreNativeObject(srcPath: string, compileCmd: string, key: string, search: HeaderSearch): string {
+	const hit = storeHit(key, search, [dirname(srcPath)]);
 	if (hit == null) return "";
 	const deps: string[] = [srcPath];
 	for (const dep of hit.deps) deps.push(dep);
 	writeDependencyFile(nativeDepFile(srcPath, compileCmd), deps);
+	writeQueryRecord(nativeDepFile(srcPath, compileCmd), hit.queries, true);
 	const fp = computeFingerprint(srcPath, compileCmd);
 	const oFile = stableOFileFp(srcPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
@@ -800,10 +1335,11 @@ export function restoreNativeObject(srcPath: string, compileCmd: string, key: st
 	return oFile;
 }
 
-export function restoreModuleObject(modPath: string, baseFp: string, key: string, argDirs: string[]): string {
-	const hit = storeHit(key, argDirs, []);
+export function restoreModuleObject(modPath: string, baseFp: string, key: string, search: HeaderSearch): string {
+	const hit = storeHit(key, search, []);
 	if (hit == null) return "";
 	writeDependencyFile(moduleDepFile(modPath, baseFp), hit.deps);
+	writeQueryRecord(moduleDepFile(modPath, baseFp), hit.queries, true);
 	const fp = moduleObjectFp(modPath, baseFp);
 	const oFile = stableOFileFp(modPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
@@ -811,10 +1347,10 @@ export function restoreModuleObject(modPath: string, baseFp: string, key: string
 	return oFile;
 }
 
-export function publishToStore(key: string, oFile: string, dependencyFile: string, source: string, dirs: string[], includers: string[]): void {
+export function publishToStore(key: string, oFile: string, dependencyFile: string, source: string, search: HeaderSearch, includers: string[]): void {
 	const root = storeRoot();
 	if (root == "" || key == "") return;
-	const manifest = storeManifest(dependencyFile, source, dirs, includers);
+	const manifest = storeManifest(dependencyFile, source, search, includers);
 	if (manifest == "") return;
 	const dir = `${root}/${key}`;
 	const stem = hashContent(manifest);
@@ -856,7 +1392,7 @@ function tryRemoveFile(path: string): void {
 // object is published atomically over the stale one by the compile path.
 export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
-	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
+	if (!_forceRebuild && presenceTrusted(fp) && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
 		if (stored == fp) return true;
 	}
@@ -877,7 +1413,7 @@ export function writeCompileCache(oFile: string, fp: string): void {
 // compiler binary hash.
 //
 
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 
 function projectCacheFile(outputFile: string, command: string): string {
 	const key = objectListKey([cwd(), join(cwd(), outputFile), command]);
@@ -905,7 +1441,9 @@ export function compilerIdentity(name: string, path: string, size: number, modif
 }
 
 function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
-	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}`;
+	const c = implicitSearchKey(ccOption, ccBinary, false, mode, compileFlags);
+	const cpp = implicitSearchKey(ccOption, ccBinary, true, mode, compileFlags);
+	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}:${c}:${cpp}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.
@@ -1024,6 +1562,10 @@ function readProjectRecord(cacheFile: string, outputFile: string, command: strin
 
 function storedDepCurrent(entry: string): boolean {
 	const path = storedDepPath(entry);
+	if (path.startsWith(QUERY_ENTRY)) {
+		const presence = queryPresence(path.slice(QUERY_ENTRY.length, path.length));
+		return presenceTrusted(presence) && entry == `${path}=${presence}`;
+	}
 	return path != "" && entry == `${path}=${hashFile(path)}`;
 }
 
@@ -1116,6 +1658,11 @@ export function writeProjectCache(
 		if (_buildStartedSeconds > 0 && changedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
+	}
+	for (const depFile of _queryRecordDeps) {
+		const presence = queryPresence(depFile);
+		if (!presenceTrusted(presence)) return dropStaleRecord(record);
+		dependencies = dependencies + `${PRE_DEP}${QUERY_ENTRY}${depFile}=${presence}\n`;
 	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${join(cwd(), outputFile)}\n`;
@@ -1275,11 +1822,13 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 		registerNativeProjectDep(path);
 		result = `${result}:${path}=${hashFile(path)}`;
 	}
-	return result;
+	return `${result}:${trackedQueryPresence(moduleDepFile(modPath, baseFp))}`;
 }
 
-export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string): string {
-	for (const path of moduleHeaderPaths(modPath, baseFp)) {
+export function publishModuleObject(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
+	const headers = moduleHeaderPaths(modPath, baseFp);
+	if (!recordQueries(moduleDepFile(modPath, baseFp), [cFile], headers, search, [], _buildStartedSeconds)) return oFile;
+	for (const path of headers) {
 		if (changedSinceBuild(path, _buildStartedSeconds)) return oFile;
 	}
 	const resolvedFp = moduleObjectFp(modPath, baseFp);
@@ -1305,7 +1854,7 @@ export function publishModuleObject(modPath: string, baseFp: string, oFile: stri
 export function isCCodeCached(modPath: string, fp: string): boolean {
 	const oFile = stableOFileFp(modPath, fp);
 	const fpFile = oFile + ".cfp";
-	if (_forceRebuild) return false;
+	if (_forceRebuild || !presenceTrusted(fp)) return false;
 	if (!exists(oFile) || !exists(fpFile)) return false;
 	const storedFp = try readFile(fpFile) catch "";
 	if (storedFp == fp) return true;
@@ -1661,7 +2210,7 @@ test "a backdated dependency keeps the header manifest and the project record fr
 		assert writeFile(depFile, `native: ${header}\n`).ok;
 		assert writeFile(out, "output").ok;
 		_buildStartedSeconds = nowSeconds() - 100;
-		assert storeManifest(depFile, `${dir}/entry.c`, [], []) == "";
+		assert storeManifest(depFile, `${dir}/entry.c`, { dirs: [], frameworks: [], complete: true }, []) == "";
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
 		_buildStartedSeconds = 0;
@@ -2162,4 +2711,60 @@ test "a precompiled header goes stale when a header it includes changes in place
 	writeFile(`${dir}/inner.h`, inner("42"));
 	assert !pchManifestCurrent(`${dir}/prefix.pch.deps`);
 	assert !pchManifestCurrent(`${dir}/absent.pch.deps`);
+}
+
+const SAMPLE_SEARCH = [
+	"clang version 19.1.0",
+	" \"/usr/bin/clang\" -cc1 -triple arm64 -E -v -x c /dev/null",
+	"ignoring nonexistent directory \"/opt/none/include\"",
+	"#include \"...\" search starts here:",
+	"#include <...> search starts here:",
+	" /usr/local/include",
+	" /usr/include",
+	" /Library/Frameworks (framework directory)",
+	"End of search list.",
+];
+
+test "a search list keeps its directories, frameworks and absent directories and skips the command line" {
+	const found = parseImplicitSearch(SAMPLE_SEARCH.join("\n"), "k");
+	assert found.complete;
+	assert found.dirs.join("|") == "/opt/none/include|/usr/local/include|/usr/include";
+	assert found.frameworks.join("|") == "/opt/none/include|/Library/Frameworks";
+	assert parseImplicitSearch(searchLines(found).join("\n"), "k").key == found.key;
+}
+
+test "a search list without its end or with a header map is incomplete" {
+	assert !parseImplicitSearch(SAMPLE_SEARCH.slice(0, SAMPLE_SEARCH.length - 1).join("\n"), "k").complete;
+	const mapped = SAMPLE_SEARCH.slice(0);
+	mapped.splice(5, 0, " /work/app.hmap (headermap)");
+	assert !parseImplicitSearch(mapped.join("\n"), "k").complete;
+	assert !parseImplicitSearch("", "k").complete;
+}
+
+test "the selected developer directory keys the compiler identity on macOS only" {
+	const saved = env.get("DEVELOPER_DIR");
+	env.set("DEVELOPER_DIR", "/msc/first");
+	const first = developerToolchain();
+	env.set("DEVELOPER_DIR", "/msc/second");
+	const second = developerToolchain();
+	if (saved == "") {
+		env.delete("DEVELOPER_DIR");
+	} else {
+		env.set("DEVELOPER_DIR", saved);
+	}
+	if (platform == "darwin") {
+		assert first != second;
+	} else {
+		assert first == "" && second == "";
+	}
+}
+
+test "a source or dependency that cannot be read leaves the header query record untrusted" {
+	const dir = `out/test/unreadableQueries${performance.now()}`;
+	ensureDir(`${dir}/dep.h`);
+	writeFile(`${dir}/entry.c`, "int a;\n");
+	const search: HeaderSearch = { dirs: [], frameworks: [], complete: true };
+	assert queryRecord([`${dir}/entry.c`], [], search, []).bounded;
+	assert !queryRecord([`${dir}/gone.c`], [], search, []).bounded;
+	assert !queryRecord([`${dir}/entry.c`], [`${dir}/dep.h`], search, []).bounded;
 }

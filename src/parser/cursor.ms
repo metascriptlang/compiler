@@ -11,7 +11,6 @@ export class ParserState {
 	position: int32;
 	errors: string[];
 	panicMode: boolean;
-	pendingComments: Token[];
 	pendingTypeArg: string; // Captured <T> type arg waiting to be consumed by next CallExpr
 	// Restricted production (like JS's NoIn): >0 while parsing a match-case
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
@@ -32,14 +31,13 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
 }
 
 export interface ParserMark {
 	position: int32;
 	errorCount: int32;
 	panicMode: boolean;
-	pendingComments: Token[];
 	pendingTypeArg: string;
 	noBareArrow: int32;
 	noArrowReturnType: int32;
@@ -52,7 +50,6 @@ export function markState(state: ParserState): ParserMark {
 		position: state.position,
 		errorCount: state.errors.length,
 		panicMode: state.panicMode,
-		pendingComments: state.pendingComments.slice(0),
 		pendingTypeArg: state.pendingTypeArg,
 		noBareArrow: state.noBareArrow,
 		noArrowReturnType: state.noArrowReturnType,
@@ -65,7 +62,6 @@ export function rewindState(state: ParserState, mark: ParserMark): void {
 	state.position = mark.position;
 	while (state.errors.length > mark.errorCount) state.errors.pop();
 	state.panicMode = mark.panicMode;
-	state.pendingComments = mark.pendingComments;
 	state.pendingTypeArg = mark.pendingTypeArg;
 	state.noBareArrow = mark.noBareArrow;
 	state.noArrowReturnType = mark.noArrowReturnType;
@@ -83,20 +79,37 @@ export function takeTrailingDecls(state: ParserState, mark: int32): Node[] {
 	return taken;
 }
 
-// Stamp a node's end position from the last consumed token (position - 1).
-// Call AFTER the node is fully parsed. Safe to call multiple times.
-export function stampEnd(state: ParserState, node: Node): void {
-	if (node == null || node.location == null) return;
-	const prevIdx = state.position - 1;
-	if (prevIdx < 0 || prevIdx >= state.tokens.length) return;
-	const prev = state.tokens[prevIdx];
-	node.location.endLine = prev.line as int32;
-	const width = prev.kind == TokenKind.String ? prev.rawValue.byteLength + 2 : prev.value.byteLength;
-	node.location.endColumn = (prev.column + width) as int32;
+// Ends a node where the lexer recorded that `token` ends; a node that starts past it is empty and ends where it starts.
+export function finishToken(node: Node, token: Token): Node {
+	const empty = token.endLine < node.location.line || (token.endLine == node.location.line && token.endColumn < node.location.column);
+	node.location.endLine = empty ? node.location.line : token.endLine;
+	node.location.endColumn = empty ? node.location.column : token.endColumn;
+	return node;
+}
+
+// Ends a node at the last token consumed, not counting comments the cursor stepped over; call once the node is fully parsed, and again if it grows.
+// A node that consumed nothing past its own start is empty: it ends where it starts.
+export function finishNode(state: ParserState, node: Node): Node {
+	let last = state.position - 1;
+	while (last >= 0 && state.tokens[last].kind == TokenKind.Comment) last -= 1;
+	if (last < 0) return finishToken(node, { kind: TokenKind.Eof, value: "", line: node.location.line, column: node.location.column, endLine: node.location.line, endColumn: node.location.column, rawValue: "" });
+	return finishToken(node, state.tokens[last]);
+}
+
+// Ends a node its callee left open; a node the callee already ended keeps that end.
+export function finishOnce(state: ParserState, node: Node): Node {
+	return node.location.endLine == 0 ? finishNode(state, node) : node;
+}
+
+// Ends a node where its last child ends, for a node built after the cursor moved past it.
+export function finishAfter(node: Node, last: Node): Node {
+	node.location.endLine = last.location.endLine;
+	node.location.endColumn = last.location.endColumn;
+	return node;
 }
 
 function eofToken(): Token {
-	return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+	return { kind: TokenKind.Eof, value: "", line: 0, column: 0, endLine: 0, endColumn: 0, rawValue: "" };
 }
 
 // Public helper to get the next non-comment token.
@@ -105,40 +118,20 @@ export function current(state: ParserState): Token {
 	return tokenAt(state, skipComments(state, state.position));
 }
 
-// Comments are attached to the NEXT non-comment token (leading comments).
-function collectLeadingComments(state: ParserState): void {
+function skipLeadingComments(state: ParserState): void {
 	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
-		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
 }
 
 export function advance(state: ParserState): Token {
-	collectLeadingComments(state);
+	skipLeadingComments(state);
 	if (state.position >= state.tokens.length) return eofToken();
 	const token = state.tokens[state.position];
 	if (token.kind != TokenKind.Eof) {
 		state.position += 1;
 	}
 	return token;
-}
-
-// Helper to take and clear pending comments (the "Harvest")
-// Also collects any comment tokens at the current position that haven't been
-// advanced over yet. This ensures comments immediately before a construct
-// are attached to it (e.g., leading comments before a function parameter).
-export function takePendingComments(state: ParserState): Token[] {
-	collectLeadingComments(state);
-	const comments: Token[] = [];
-	for (const c of state.pendingComments) {
-		let seen = false;
-		for (const k of comments) {
-			if (k.line == c.line && k.column == c.column) seen = true;
-		}
-		if (!seen) comments.push(c);
-	}
-	state.pendingComments = [];
-	return comments;
 }
 
 export function isAtEnd(state: ParserState): boolean {
@@ -211,7 +204,7 @@ export function synchronize(state: ParserState): void {
 
 function isTypeOperatorKeyword(kind: TokenKind): boolean {
 	return kind == TokenKind.Extends || kind == TokenKind.Keyof || kind == TokenKind.Typeof
-		|| kind == TokenKind.Infer || kind == TokenKind.Distinct;
+		|| kind == TokenKind.Infer || kind == TokenKind.Distinct || kind == TokenKind.Readonly;
 }
 
 // Collect token text from a raw index range, skipping Comment tokens.
@@ -248,7 +241,7 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 		if (text != "") {
 			const lastCh = text.byteAt(text.byteLength - 1);
 			const noSpaceBefore = !conditionalOperator && !conditionalOperand && (v == "[" || v == "]" || v == ">" || v == ">>" || v == ">>>"
-				|| v == ")" || v == "," || v == "." || v == "?" || v == ":"
+				|| v == ")" || v == "," || v == ";" || v == "." || v == "?" || v == ":"
 				|| v == "<" || (v == "(" && previous != TokenKind.Colon));
 			const noSpaceAfter = !conditionalOperand && (lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
 				|| lastCh == ".".code || lastCh == "?".code);

@@ -1487,6 +1487,35 @@ function positionsBuiltByAMacroAnswerNothing(): LspScenario {
 	};
 }
 
+const RETURNED_FROM_MODULE_LIB = "export function useParams(): Map<string, string> {\n\treturn new Map<string, string>();\n}\nexport function pairs<K, V>(k: K, v: V): Map<K, V> {\n\tconst m = new Map<K, V>();\n\tm.set(k, v);\n\treturn m;\n}\nexport class Box {\n\tn: int32 = 1;\n}\nexport function makeBox(): Box {\n\treturn new Box();\n}\n";
+const RETURNED_FROM_MODULE_USER = "import { useParams, pairs, makeBox } from \"./lib\";\n\nconst slug = useParams();\nconst pm = pairs<string, int32>(\"a\", 1);\nconst bx = makeBox();\nconsole.log(slug.size, pm.size, bx.n);\n";
+
+function hoverShowsTheTypeAnotherModuleReturns(): LspScenario {
+	const uri = PROJECT_URI + "main.ms";
+	return {
+		name: "hover on a const set from another module's call shows the returned Map or class",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, RETURNED_FROM_MODULE_USER))]),
+			frames([
+				request("10", "textDocument/hover", positionParams(uri, 2, 6)),
+				request("11", "textDocument/hover", positionParams(uri, 3, 6)),
+				request("12", "textDocument/hover", positionParams(uri, 4, 6)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
+			sameText("hover on a Map an imported function returns", "```metascript\nconst slug: Map<string, string>\n``` @ 2:6-2:10", hoverSummary(r, "n:10")),
+			sameText("hover on a Map an imported generic returns", "```metascript\nconst pm: Map<string, int32>\n``` @ 3:6-3:8", hoverSummary(r, "n:11")),
+			sameText("hover on a class instance an imported function returns", "```metascript\nconst bx: Box\n``` @ 4:6-4:8", hoverSummary(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: [{ path: "lib.ms", text: RETURNED_FROM_MODULE_LIB }],
+	};
+}
+
 const SHADOWED_DOC_SOURCE = "function f(): int32 {\n\tconst JSON: int32 = 3;\n\treturn JSON;\n}\nconst s = JSON.stringify(1);\n";
 
 function hoverDocFollowsTheSymbol(): LspScenario {
@@ -1777,6 +1806,7 @@ export function lspScenarios(): LspScenario[] {
 		hoverInsideToken(),
 		hoverShowsTheFieldDocAtItsUses(),
 		positionsBuiltByAMacroAnswerNothing(),
+		hoverShowsTheTypeAnotherModuleReturns(),
 		hoverDocFollowsTheSymbol(),
 		signatureHelpFollowsTheCalleeSymbol(),
 		referencesFollowTheImportedSymbol(),

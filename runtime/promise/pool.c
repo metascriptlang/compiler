@@ -23,6 +23,7 @@ bool msPoolBusyDec(void) { return false; }
 void msPoolBusyInc(void) {}
 int32_t msPoolPendingPeek(void) { return 0; }
 int32_t msPoolThreadPeek(void) { return 0; }
+bool msPoolSetWorkerCount(int32_t count) { (void)count; return false; }
 void msPoolPendingAdd(int32_t delta) { (void)delta; }
 
 #elif !defined(MSOS_BARE)
@@ -55,6 +56,25 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 #else
 #define msCtz64(x) __builtin_ctzll(x)
 #endif
+
+static inline void msPoolIdleSet(msThreadPool* pool, int i) {
+	atomic_fetch_or_explicit(&pool->idleMask[i / 64], (uint64_t)1 << (i % 64), memory_order_release);
+}
+static inline void msPoolIdleClear(msThreadPool* pool, int i) {
+	atomic_fetch_and_explicit(&pool->idleMask[i / 64], ~((uint64_t)1 << (i % 64)), memory_order_acquire);
+}
+static inline bool msPoolIdleIs(msThreadPool* pool, int i) {
+	return ((atomic_load_explicit(&pool->idleMask[i / 64], memory_order_acquire) >> (i % 64)) & 1) != 0;
+}
+/* First sleeping pool thread at index from or above, or -1. */
+static inline int msPoolIdleFirst(msThreadPool* pool, int from) {
+	for (int w = from / 64; w < MS_POOL_IDLE_WORDS; w++) {
+		uint64_t bits = atomic_load_explicit(&pool->idleMask[w], memory_order_acquire);
+		if (w == from / 64) bits &= ~(uint64_t)0 << (from % 64);
+		if (bits != 0) return w * 64 + msCtz64(bits);
+	}
+	return -1;
+}
 
 #ifdef _WIN32
 
@@ -150,11 +170,12 @@ static void msPoolDropClaimed(msThreadPool* pool) {
 	pool->tail = w;
 }
 
-static inline bool msPoolHasUnclaimed(msThreadPool* pool) {
+static inline int msPoolUnclaimed(msThreadPool* pool) {
+	int n = 0;
 	for (int i = pool->head; i != pool->tail; i = (i + 1) % pool->cap) {
-		if (!pool->queue[i].claimed) return true;
+		if (!pool->queue[i].claimed) n++;
 	}
-	return false;
+	return n;
 }
 
 /* Threads past workerCount are spares: started by a waiter that would park while
@@ -169,6 +190,9 @@ int32_t msPoolThreadPeek(void) {
 }
 static int msPoolSparesActive = 0;  /* under the pool lock */
 static int msPoolSparesWanted = 0;  /* under the pool lock */
+/* Spares started or woken that have not reached the queue yet: each will take one task. */
+static bool msPoolSpareEnRoute[MS_POOL_MAX_WORKERS];  /* under the pool lock */
+static int msPoolSparesEnRoute = 0;  /* under the pool lock */
 static msThreadPool* gPool = NULL;
 
 /* ===== Actor polling from worker threads (Phase 5: Parallel Actors) =====
@@ -325,19 +349,23 @@ static void* msPoolWorkerLoop(void* arg) {
 			!atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_acquire) &&
 			!msWorkerLoopPending() &&
 			!pool->shutdown) {
-			if (!retired) atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
+			if (!retired) msPoolIdleSet(pool, myWorkerIdx);
 			if (engineParks) {
 				MS_UNLOCK(pool);
 				(void)msWorkerEnginePark(timerMs);
 				MS_LOCK(pool);
 			} else if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
-			if (!retired) atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
+			if (!retired) msPoolIdleClear(pool, myWorkerIdx);
 		}
 		/* Clear actor wake flag after waking (inside lock, before poll) */
 		atomic_store_explicit(&msPoolActorWake[myWorkerIdx], false, memory_order_relaxed);
 		retired = spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_RETIRED;
 		msPoolSkipClaimed(pool);
+		if (msPoolSpareEnRoute[myWorkerIdx]) {
+			msPoolSpareEnRoute[myWorkerIdx] = false;
+			msPoolSparesEnRoute--;
+		}
 		/* Check shutdown with empty queue — exit cleanly */
 		if (pool->shutdown && (retired || pool->head == pool->tail)) {
 			MS_UNLOCK(pool);
@@ -364,11 +392,8 @@ static void* msPoolWorkerLoop(void* arg) {
 			 * Rapid submits may signal the same worker (idle bit not cleared
 			 * fast enough). Chain-wake ensures each queued task gets a worker. */
 			if (pool->head != pool->tail) {
-				uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
-				if (idle != 0) {
-					int wake = msCtz64(idle);
-					msPoolSignalWorker(pool, wake);
-				}
+				int wake = msPoolIdleFirst(pool, 0);
+				if (wake >= 0) msPoolSignalWorker(pool, wake);
 			}
 		}
 		MS_UNLOCK(pool);
@@ -522,11 +547,11 @@ static void msPoolSignalWorker(msThreadPool* pool, int idx) {
 void msPoolWakeThief(int ownerSchedulerID) {
 	msThreadPool* pool = msPoolGet();
 	if (pool == NULL) return;
-	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
-	if (pool->workerCount < 64) idle &= ((uint64_t)1 << pool->workerCount) - 1;
-	if (ownerSchedulerID >= 1) idle &= ~((uint64_t)1 << (ownerSchedulerID - 1));
-	if (idle == 0) return;
-	msPoolWakeWorker(msCtz64(idle) + 1);
+	for (int i = msPoolIdleFirst(pool, 0); i >= 0 && i < pool->workerCount; i = i + 1 < MS_POOL_MAX_WORKERS ? msPoolIdleFirst(pool, i + 1) : -1) {
+		if (i == ownerSchedulerID - 1) continue;
+		msPoolWakeWorker(i + 1);
+		return;
+	}
 }
 
 /* Every worker is parked with no wake, task or loop message addressed to it, and
@@ -537,11 +562,10 @@ bool msPoolQuiescentWith(bool (*mainIdle)(void)) {
 	if (pool == NULL) return msPoolPendingPeek() == 0 && mainIdle();
 	MS_LOCK(pool);
 	bool idle = pool->head == pool->tail && msPoolPendingPeek() == 0;
-	uint64_t parked = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
 	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_acquire);
 	for (int i = 0; idle && i < count; i++) {
 		if (msPoolThreadState[i] == MS_THREAD_RETIRED) continue;
-		idle = ((parked >> i) & 1) != 0 && !atomic_load_explicit(&msPoolActorWake[i], memory_order_acquire);
+		idle = msPoolIdleIs(pool, i) && !atomic_load_explicit(&msPoolActorWake[i], memory_order_acquire);
 	}
 	if (idle) idle = mainIdle();
 	MS_UNLOCK(pool);
@@ -588,9 +612,22 @@ static bool msPoolStartThread(msThreadPool* pool, int idx, bool spare) {
 #endif
 }
 
+static int msPoolWorkersWanted = 0;
+
+/* Sizes the pool as a host with count CPUs would, before the first spawn starts it; false once it runs. */
+bool msPoolSetWorkerCount(int32_t count) {
+	if (gPool != NULL || count < 1) return false;
+	msPoolWorkersWanted = count;
+	return true;
+}
+
 static void msPoolInit(void) {
 	gPool = (msThreadPool*)msMemAlloc0(sizeof(msThreadPool));
-	int cpus = msDetectCPUs();
+#ifdef MS_POOL_WORKERS
+	int cpus = msPoolWorkersWanted > 0 ? msPoolWorkersWanted : MS_POOL_WORKERS;
+#else
+	int cpus = msPoolWorkersWanted > 0 ? msPoolWorkersWanted : msDetectCPUs();
+#endif
 	gPool->workerCount = cpus < MS_POOL_MAX_WORKERS ? cpus : MS_POOL_MAX_WORKERS;
 	gPool->cap = MS_POOL_MAX_QUEUE;
 	gPool->queue = (msSpawnCtx*)msMemAllocN0(gPool->cap, sizeof(msSpawnCtx));
@@ -667,11 +704,8 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	pool->tail = (pool->tail + 1) % pool->cap;
 	atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 	/* Signal one IDLE worker (find via bitmask — guaranteed to be sleeping) */
-	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
-	if (idle != 0) {
-		int wake = msCtz64(idle);  /* first set bit = first idle worker */
-		msPoolSignalWorker(pool, wake);
-	}
+	int wake = msPoolIdleFirst(pool, 0);
+	if (wake >= 0) msPoolSignalWorker(pool, wake);
 	/* If no idle workers, task waits in queue — next worker finishing a task will dequeue it */
 	MS_UNLOCK(pool);
 }
@@ -834,13 +868,13 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	if (!msEdgeLessLeaf(awaited)) return false;
 	msThreadPool* pool = msPoolGet();
 	MS_LOCK(pool);
-	if (!msPoolHasUnclaimed(pool)) {
+	if (msPoolUnclaimed(pool) <= msPoolSparesEnRoute) {
 		MS_UNLOCK(pool);
 		return false;
 	}
-	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
-	if (idle != 0) {
-		msPoolSignalWorker(pool, msCtz64(idle));
+	int idle = msPoolIdleFirst(pool, 0);
+	if (idle >= 0) {
+		msPoolSignalWorker(pool, idle);
 		MS_UNLOCK(pool);
 		return false;
 	}
@@ -848,6 +882,8 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	for (int i = pool->workerCount; i < count; i++) {
 		if (msPoolThreadState[i] != MS_THREAD_RETIRED) continue;
 		msPoolThreadState[i] = MS_THREAD_SPARE;
+		msPoolSpareEnRoute[i] = true;
+		msPoolSparesEnRoute++;
 		msPoolSparesActive++;
 		msPoolSparesWanted++;
 		msPoolSpares++;
@@ -860,6 +896,8 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 		msPoolThreadState[count] = MS_THREAD_SPARE;
 		if (msPoolStartThread(pool, count, true)) {
 			atomic_store_explicit(&msPoolThreadCount, count + 1, memory_order_release);
+			msPoolSpareEnRoute[count] = true;
+			msPoolSparesEnRoute++;
 			msPoolSparesActive++;
 			msPoolSparesWanted++;
 			msPoolSpares++;
@@ -867,6 +905,12 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 			return true;
 		}
 		msPoolThreadState[count] = MS_THREAD_WORKER;
+	}
+	/* At the limit a thread still running a task, or a spare on its way, reaches the queue
+	 * again: wait for it. Only a pool where every thread waits can never run the queue. */
+	if (count >= MS_POOL_MAX_WORKERS && (atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed) > 0 || msPoolSparesEnRoute > 0)) {
+		MS_UNLOCK(pool);
+		return false;
 	}
 	MS_UNLOCK(pool);
 	/* One report: a second waiter reaching the limit waits for the first to exit. */
@@ -887,10 +931,8 @@ void msPoolCompensateEnd(void) {
 	/* Every idle spare retires at its next turn while more are active than wanted. One
 	 * signal per end is not enough: ends that come before the signalled spare runs
 	 * would all signal that same spare. */
-	if (pool->workerCount < MS_POOL_MAX_WORKERS) {
-		for (uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire) >> pool->workerCount; idle != 0; idle &= idle - 1) {
-			msPoolSignalWorker(pool, pool->workerCount + msCtz64(idle));
-		}
+	for (int idle = msPoolIdleFirst(pool, pool->workerCount); idle >= 0; idle = idle + 1 < MS_POOL_MAX_WORKERS ? msPoolIdleFirst(pool, idle + 1) : -1) {
+		msPoolSignalWorker(pool, idle);
 	}
 	MS_UNLOCK(pool);
 }

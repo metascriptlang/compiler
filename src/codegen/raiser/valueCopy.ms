@@ -4,7 +4,7 @@ import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCop
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef } from "../../checker/types";
+import { peelToRepr, unwrapRef, isPlainFunctionPointer } from "../../checker/types";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
@@ -147,6 +147,7 @@ function zeroShape(t: Type | null): Type | null {
 
 export function zeroScalar(t: Type | null): RaiserValue {
 	if (t == null) return raiserNil();
+	if (isPlainFunctionPointer(t)) return raiserInt(0);
 	return match (literalBase(t).kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Enum | TypeKind.Char => raiserInt(0),
 		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => raiserFloat(0),
@@ -275,7 +276,7 @@ export function slotClassesOf(s: RaiserCompState, shape: Type): RaiserRegClass[]
 export function layoutOf(t: Type | null): string[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
 	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR;
+	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }
@@ -284,7 +285,7 @@ export function layoutOf(t: Type | null): string[] {
 export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
 	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR_KINDS;
+	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR_KINDS;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
 }
@@ -317,6 +318,7 @@ function classOfUnion(s: RaiserCompState, t: Type, depth: int32): RaiserRegClass
 function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRegClass {
 	if (t == null) return RaiserRegClass.Dyn;
 	if (depth > MAX_TYPE_DEPTH) throw new Error(`internal: a type nested deeper than ${MAX_TYPE_DEPTH} levels has no register class`);
+	if (isPlainFunctionPointer(t)) return RaiserRegClass.Word;
 	return match (t.kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64

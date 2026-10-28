@@ -47,6 +47,16 @@ function anonWithFields(c: string, fields: string): string {
 	return "no anonymous struct with " + fields;
 }
 
+function anonWithPointerField(c: string, field: string): string {
+	const lines = c.split("\n");
+	for (let i = 0; i + 2 < lines.length; i += 1) {
+		const line = lines[i];
+		if (!line.startsWith("struct msAnon_") || !line.endsWith(" {") || lines[i + 2] != "};") continue;
+		if (lines[i + 1].trim().endsWith(`* ${field};`)) return line.substring(7, line.length - 2);
+	}
+	return "no anonymous struct holding a pointer named " + field;
+}
+
 function compiled(src: string): string {
 	const r = compileToC(src);
 	return r.ok ? r.value : "compile error: " + r.error;
@@ -282,4 +292,114 @@ export class K { u: U; next: K | null; }
 export function f(k: K): int32 { k.next = k; return 1; }
 `);
 	assert traceRefs(c) == 2;
+}
+
+const TILE = `type Area = { area: number };
+class Tile { area: number = 1; owner: Holder | null = null; }
+`;
+
+test "E2E C: a class converted into an unnamed record argument registers the cycle" {
+	const c = compiled(TILE + `class Holder { slot: Area | null = null; }
+function keep(h: Holder, a: Area): void { h.slot = a; }
+const h = new Holder();
+const t = new Tile();
+keep(h, t);
+t.owner = h;
+console.log(t.area);
+`);
+	assert cyclicFlag(c, "Holder") == "cyclic";
+	assert cyclicFlag(c, "Tile") == "cyclic";
+}
+
+test "E2E C: a class returned as an unnamed record registers the cycle" {
+	const c = compiled(TILE + `class Holder { slot: Area | null = null; }
+function asArea(t: Tile): Area { return t; }
+const h = new Holder();
+const t = new Tile();
+h.slot = asArea(t);
+t.owner = h;
+console.log(t.area);
+`);
+	assert cyclicFlag(c, "Holder") == "cyclic";
+}
+
+test "E2E C: a class placed in an array literal of an unnamed record registers the cycle" {
+	const c = compiled(TILE + `class Holder { slots: Area[] = []; }
+const h = new Holder();
+const t = new Tile();
+h.slots = [t];
+t.owner = h;
+console.log(t.area);
+`);
+	assert cyclicFlag(c, "Holder") == "cyclic";
+}
+
+test "E2E C: a class placed in an object literal field of an unnamed record registers the cycle" {
+	const c = compiled(TILE + `class Holder { box: { a: Area } | null = null; }
+const h = new Holder();
+const t = new Tile();
+h.box = { a: t };
+t.owner = h;
+console.log(t.area);
+`);
+	assert cyclicFlag(c, "Holder") == "cyclic";
+}
+
+function selfNamedBeside(field: string): string {
+	return compiled(`class C { name: C | null = null; }
+type D = { tag: number } | { ${field}: string };
+class HolderD { d: D = { ${field}: "a" }; }
+function takeY(y: { name: C | null }): boolean { return y.name != null; }
+const c = new C();
+c.name = c;
+const h = new HolderD();
+console.log(takeY(c), h.d);
+`);
+}
+
+test "E2E C: a union record arm spelled with the field names of a slot a cyclic class fits copies without cyclic operations" {
+	assert cyclicOps(selfNamedBeside("name")) == cyclicOps(selfNamedBeside("nome"));
+}
+
+function holderRBeside(field: string): string {
+	return compiled(`class C { name: C | null = null; }
+function takeY(y: { name: C | null }): boolean { return y.name != null; }
+const c = new C();
+c.name = c;
+class HolderR { r: { ${field}: string } | null = null; }
+const h = new HolderR();
+h.r = { ${field}: "a" };
+console.log(takeY(c), h.r != null);
+`);
+}
+
+test "E2E C: a record field type spelled with the field names of a slot a cyclic class fits copies without cyclic operations" {
+	assert cyclicOps(holderRBeside("name")) == cyclicOps(holderRBeside("nome"));
+}
+
+const REJECTED = `class C { name: C | null = null; }
+type R = { name: C | null };
+`;
+
+test "E2E C: an overload rejected for a call notes nothing behind its record parameter" {
+	const c = compiled(REJECTED + `class Holder { r: R | null = null; }
+function f(a: R, b: number): number { return 1; }
+function f(a: C, b: string): number { return 2; }
+const h = new Holder();
+h.r = { name: null };
+console.log(f(new C(), "s"), h.r != null);
+`);
+	assert cyclicFlag(c, anonWithPointerField(c, "name")) == "acyclic";
+}
+
+test "E2E C: an overload rejected for a call notes nothing behind the element of its record array parameter" {
+	const c = compiled(REJECTED + `class Holder { r: R[] = []; }
+function f(a: R[], b: number): number { return 1; }
+function f(a: C[], b: string): number { return 2; }
+const cs: C[] = [new C()];
+const h = new Holder();
+h.r.push({ name: null });
+console.log(f(cs, "s"), h.r.length);
+`);
+	assert cyclicFlag(c, anonWithPointerField(c, "name")) == "acyclic";
 }

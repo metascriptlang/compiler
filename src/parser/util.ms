@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentLikeKind, isIdentOrKeyword } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, addError } from "./cursor";
+import { ParserState, createState, current, advance, peek, isAtEnd, addError } from "./cursor";
 import { optionalizeTypeString } from "../utils/string";
 import { skipTypeAnnotation, captureType } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
@@ -11,18 +11,6 @@ import { isBinaryOperator } from "./expressions/precedence";
 import { parseExpressionFromState } from "./expressions/core";
 import { parseObjectPattern, parseArrayPattern } from "./statements/declaration";
 
-
-// ===== Comment Preservation =====
-
-export function attachComments(state: ParserState, node: Node): Node {
-	if (node != null) {
-		const comments = takePendingComments(state);
-		for (const comment of comments) {
-			node.comments.push(comment);
-		}
-	}
-	return node;
-}
 
 // ===== Skip Optional Type Annotation =====
 // Checks for ':' and skips the following type. Used after identifiers/params.

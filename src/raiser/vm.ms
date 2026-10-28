@@ -3805,6 +3805,10 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		setRegInt(vm, ia, msFloat64Bits(asNum(src)));
 		return;
 	}
+	if (cls == RaiserConvClass.F64 && convSource(ic) == (RaiserConvClass.F64Bits as int32)) {
+		setRegFloat(vm, ia, msBitsFloat64(src.intVal));
+		return;
+	}
 	if (cls == RaiserConvClass.I32Wrap) {
 		setRegInt(vm, ia, msToInt32(asNum(src)) as int64);
 		return;
@@ -3944,9 +3948,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	vm.wordFloor = outerWordFloor;
 	vm.refFloor = outerRefFloor;
-	if (prevObjHeap != null && prevArrHeap != null) {
-		setActiveHostHeaps(prevObjHeap, prevArrHeap);
-	}
+	setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	setActiveProgramArgv(prevArgv);
 
 	const fatal = hostRaiseIsFatal();
@@ -4191,6 +4193,13 @@ test "a float wrapped to int32 takes the bitwise operand conversion of C and JS"
 test "a float converted to its bits keeps the IEEE pattern" {
 	assert execConv(raiserFloat(1.5), RaiserConvClass.F64Bits).exitValue.intVal == 4609434218613702656;
 	assert execConv(raiserFloat(-1.0), RaiserConvClass.F64Bits).exitValue.intVal == -4616189618054758400;
+}
+
+test "bits converted to a float are the IEEE pattern, not the integer's value" {
+	const fromBits = RaiserConvClass.F64Bits as int32;
+	assert execConv(raiserInt(4609434218613702656), RaiserConvClass.F64, fromBits).exitValue.floatVal == 1.5;
+	assert execConv(raiserInt(-4616189618054758400), RaiserConvClass.F64, fromBits).exitValue.floatVal == -1.0;
+	assert execConv(raiserInt(1), RaiserConvClass.F64, fromBits).exitValue.floatVal == 5e-324;
 }
 
 test "a reference converted to its identity bits is its handle, and nil is zero" {
@@ -5146,6 +5155,33 @@ test "CallHost two-arg native" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 42;
+}
+
+test "a host call leaves the active host heaps as it found them, none included" {
+	_resetHostRegistryForTests();
+	let during: RaiserArrayHeap | null = null;
+	registerHostFn("peek", (args: RaiserValue[]): RaiserValue => {
+		during = activeHostArrayHeap();
+		return raiserInt(1);
+	});
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserConstString("peek")];
+	setActiveHostHeaps(null, null);
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error == "", vm.error;
+	assert during == vm.arrayHeap;
+	assert activeHostArrayHeap() == null;
+	assert activeHostObjectHeap() == null;
+	const outerArrays = createArrayHeap();
+	const outerObjects = createStructHeap();
+	setActiveHostHeaps(outerObjects, outerArrays);
+	const again = execModule(makeTestModule(code, consts));
+	assert during == again.arrayHeap;
+	assert activeHostArrayHeap() == outerArrays;
+	assert activeHostObjectHeap() == outerObjects;
 }
 
 test "CallHost zero-arg native" {

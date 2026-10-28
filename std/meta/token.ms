@@ -60,5 +60,7 @@ export interface Token {
 	value: string;
 	line: int32;
 	column: int32;
+	endLine: int32;
+	endColumn: int32;
 	rawValue: string;
 }

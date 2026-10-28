@@ -353,6 +353,24 @@ function cellKind(p: CProgram, type: string): string {
 	return releasesShared(p, type) ? `${name} (its destroy hook releases a program cell)` : "";
 }
 
+function lentNames(fn: CFunction): HashSet<string> {
+	const names = new HashSet<string>();
+	for (const part of fn.params.split(",")) {
+		const d = part.includes("*") ? declOf(part) : null;
+		if (d != null) names.add(d.name);
+	}
+	for (const line of fn.body) {
+		let s = line.trim();
+		if (!s.endsWith(";")) continue;
+		s = stripCasts(s.slice(0, s.length - 1));
+		const eq = s.indexOf(" = ");
+		if (eq <= 0) continue;
+		const lhs = s.slice(0, eq).trim();
+		if (identAt(lhs, 0).length == lhs.length && names.has(stripCasts(s.slice(eq + 3)))) names.add(lhs);
+	}
+	return names;
+}
+
 export function rcOpsOnCells(dir: string): RcOp[] {
 	const p = new CProgram();
 	collect(dir, p);
@@ -362,9 +380,14 @@ export function rcOpsOnCells(dir: string): RcOp[] {
 	for (const name of reachedFromWorkers(p.fns)) {
 		const fn = p.fns.get(name)!;
 		const types = localTypes(fn);
+		const lent = lentNames(fn);
 		for (let k = 0; k < fn.body.length; k += 1) {
 			const line = fn.body[k];
 			const arg = rcOpArgument(line);
+			if (arg != null && line.includes("msIncref") && lent.has(stripCasts(arg))) {
+				found.push({ fn: name, cell: "parameter its caller lends", at: sourceLine(fn, k), text: line.trim() });
+				continue;
+			}
 			if (arg != null) {
 				const kind = cellKind(p, typeOf(p, types, arg));
 				if (kind != "") found.push({ fn: name, cell: kind, at: sourceLine(fn, k), text: line.trim() });

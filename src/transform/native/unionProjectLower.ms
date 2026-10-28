@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
-import { narrowUnionToVariant, isSlotUnion, isLiteralSet, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
+import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType, isLiteralSet } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
@@ -68,10 +68,19 @@ function isLocation(n: Node): boolean {
 
 function lowerUnionInstanceof(node: Node): Node {
 	const d = node.data as BinaryExprData;
-	const u = d.left;
-	const ut = u.nodeType;
-	if (ut == null || !isSlotUnion(ut) || !isLocation(u)) return node;
+	const held = d.left.nodeType;
+	if (held == null || !isLocation(d.left)) return node;
 	const loc = node.location;
+	if (isSlotUnion(held)) return slotInstanceof(d.left, held, d.right, loc);
+	if (!isMaybeType(held) || held.typeReturn == null || !isSlotUnion(held.typeReturn)) return node;
+	const payload = makeMember(cloneNodeKeepSem(d.left), "value", loc);
+	payload.nodeType = held.typeReturn;
+	const present = makeMember(d.left, "present", loc);
+	present.nodeType = booleanType();
+	return makeBinary(present, "&&", slotInstanceof(payload, held.typeReturn, d.right, loc), loc);
+}
+
+function slotInstanceof(u: Node, ut: Type, cls: Node, loc: SourceLocation): Node {
 	let anyMember: Node | null = null;
 	for (let vi = 0; vi < ut.typeChildren.length; vi += 1) {
 		const m = ut.typeChildren[vi];
@@ -79,7 +88,7 @@ function lowerUnionInstanceof(node: Node): Node {
 		const tag = makeMember(cloneNodeKeepSem(u), "_tag", loc);
 		tag.nodeType = int32Type();
 		const isSlot = makeBinary(tag, "==", makeNumber(vi, loc), loc);
-		const inst = makeBinary(projectTagUnionMember(cloneNodeKeepSem(u), ut, m), "instanceof", cloneNodeKeepSem(d.right), loc);
+		const inst = makeBinary(projectTagUnionMember(cloneNodeKeepSem(u), ut, m), "instanceof", cloneNodeKeepSem(cls), loc);
 		inst.nodeType = booleanType();
 		const term = makeBinary(isSlot, "&&", inst, loc);
 		anyMember = anyMember == null ? term : makeBinary(anyMember, "||", term, loc);

@@ -4,6 +4,7 @@
 //
 // analyzeProgram is the main entry point called from src/index.ms.
 
+import { reportShareIfRequested } from "../transform/shareCount";
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, CallingConvention, ExportDeclData, FunctionDeclData, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
@@ -37,6 +38,7 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext, tables
 	flowLap("analyze.inject");
 	const optimized = optimizeDrc(injected);
 	flowLap("analyze.optimize");
+	reportShareIfRequested(optimized, "analyzer");
 	return optimized;
 }
 

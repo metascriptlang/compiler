@@ -2,7 +2,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../cursor";
+import { ParserState, current, advance, isAtEnd, finishNode, finishToken } from "../cursor";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 // ===== Member Access Chain Parser =====
@@ -17,7 +17,7 @@ export function parseMemberChain(state: ParserState, base: Node): Node {
 		const prop = current(state);
 		if (isIdentOrKeyword(prop.kind)) {
 			advance(state);
-			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, dotToken);
+			node = finishNode(state, createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, dotToken));
 		} else {
 			break;
 		}
@@ -31,11 +31,11 @@ export function tryParseLiteralKeyword(state: ParserState): Node | null {
 	const token = current(state);
 	if (token.kind == TokenKind.True || token.kind == TokenKind.False) {
 		advance(state);
-		return createNode(NodeKind.BooleanLiteral, { boolValue: token.kind == TokenKind.True }, token);
+		return finishToken(createNode(NodeKind.BooleanLiteral, { boolValue: token.kind == TokenKind.True }, token), token);
 	}
 	if (token.kind == TokenKind.Null) {
 		advance(state);
-		return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token);
+		return finishToken(createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token), token);
 	}
 	return null;
 }
@@ -45,5 +45,5 @@ export function numberLiteralNode(token: Token): Node {
 	const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
 	const outOfRangeText = isFloat || integerLiteralFits(token.value) ? "" : token.value;
 	const isBitPattern = !isFloat && integerLiteralIsBitPattern(token.value);
-	return createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token);
+	return finishToken(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token), token);
 }

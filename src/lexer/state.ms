@@ -60,7 +60,7 @@ export function skip(s: LexerState, n: int32): void {
 }
 
 export function addToken(s: LexerState, kind: TokenKind, value: string, line: int32, column: int32): Token {
-	const tok: Token = { kind, value, line, column, rawValue: "" };
+	const tok: Token = { kind, value, line, column, endLine: s.line, endColumn: s.column, rawValue: "" };
 	s.tokens.push(tok);
 	s.lastToken = kind;
 	return tok;
@@ -68,7 +68,7 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: in
 
 // Comment preservation: push to tokens array (parser skips via TokenKind.Comment check).
 export function addComment(s: LexerState, value: string, line: int32, column: int32): void {
-	const tok: Token = { kind: TokenKind.Comment, value, line, column };
+	const tok: Token = { kind: TokenKind.Comment, value, line, column, endLine: s.line, endColumn: s.column, rawValue: "" };
 	s.tokens.push(tok);
 }
 

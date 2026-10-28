@@ -7,7 +7,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, SourceLocation, createNode, makeLoc,
 	JSXElementData, JSXFragmentData, JSXTextData,
 	JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, addError, hasPrecedingLineBreak } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, addError, hasPrecedingLineBreak, finishNode, finishToken } from "../cursor";
 import { exprNode, exprKind, parseOk } from "./testUtil";
 
 type ExprResult = Result<Expression, string>;
@@ -57,7 +57,7 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 			const arg = try parseExpr(state, 0);
 			if (current(state).kind != TokenKind.RBrace) return Result.err("Expected '}' after JSX spread attribute");
 			advance(state);
-			attrs.push(createNode(NodeKind.JSXSpreadAttribute, { jsxSpreadArg: arg }, tok));
+			attrs.push(finishNode(state, createNode(NodeKind.JSXSpreadAttribute, { jsxSpreadArg: arg }, tok)));
 			continue;
 		}
 
@@ -77,7 +77,7 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 				if (vk == TokenKind.String) {
 					const sTok = current(state);
 					advance(state);
-					valNode = createNode(NodeKind.StringLiteral, { value: sTok.value }, sTok);
+					valNode = finishToken(createNode(NodeKind.StringLiteral, { value: sTok.value }, sTok), sTok);
 				} else if (vk == TokenKind.LBrace) {
 					advance(state);
 					valNode = try parseExpr(state, 0);
@@ -90,7 +90,7 @@ function parseJsxAttributes(state: ParserState, parseExpr: ExprParser): Result<N
 			} else {
 				valNode = createNode(NodeKind.BooleanLiteral, { boolValue: true }, tok);
 			}
-			attrs.push(createNode(NodeKind.JSXAttribute, { jsxAttrName: attrName, jsxAttrValue: valNode }, tok));
+			attrs.push(finishNode(state, createNode(NodeKind.JSXAttribute, { jsxAttrName: attrName, jsxAttrValue: valNode }, tok)));
 			continue;
 		}
 
@@ -109,7 +109,7 @@ function parseJsxChildren(state: ParserState, parseExpr: ExprParser): Result<Nod
 
 		if (k == TokenKind.JsxText) {
 			advance(state);
-			children.push(createNode(NodeKind.JSXText, { jsxText: tok.value }, tok));
+			children.push(finishToken(createNode(NodeKind.JSXText, { jsxText: tok.value }, tok), tok));
 			continue;
 		}
 		if (k == TokenKind.JsxTagStart) {
@@ -124,7 +124,7 @@ function parseJsxChildren(state: ParserState, parseExpr: ExprParser): Result<Nod
 			const expr = try parseExpr(state, 0);
 			if (current(state).kind != TokenKind.RBrace) return Result.err("Expected '}' in JSX expression container");
 			advance(state);
-			children.push(createNode(NodeKind.JSXExpressionContainer, { jsxExpr: expr }, tok));
+			children.push(finishNode(state, createNode(NodeKind.JSXExpressionContainer, { jsxExpr: expr }, tok)));
 			continue;
 		}
 		return Result.err(`Unexpected token in JSX children at line ${tok.line}`);
@@ -146,11 +146,11 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	const tagTok = current(state);
 	const segments: SourceLocation[] = [];
 	const tag = try parseJsxName(state, segments);
-	const attrs = try parseJsxAttributes(state, parseExpr);
 	// Positioned tag-name node on `typeExpr` (the LSP side-channel) so the checker can bind an
 	// uppercase component tag to its function symbol — see recordJsxTagSym for go-to-def / rename.
-	const tagNode = createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok);
+	const tagNode = finishNode(state, createNode(NodeKind.Identifier, { name: tagTok.value }, tagTok));
 	tagNode.paramLocations = segments;
+	const attrs = try parseJsxAttributes(state, parseExpr);
 
 	if (current(state).kind != TokenKind.Gt) {
 		if (current(state).kind == TokenKind.Slash) advance(state);
@@ -161,7 +161,7 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 		}
 		const selfNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: [], jsxSelfClosing: true }, start);
 		selfNode.typeExpr = tagNode;
-		return Result.ok(selfNode);
+		return Result.ok(finishNode(state, selfNode));
 	}
 
 	advance(state);
@@ -170,7 +170,7 @@ function parseJsxElement(state: ParserState, parseExpr: ExprParser, start: Token
 	if (closeTag != tag) return Result.err(`JSX closing tag </${closeTag}> does not match <${tag}>`);
 	const openNode = createNode(NodeKind.JSXElement, { jsxTag: tag, jsxAttrs: attrs, jsxChildren: children, jsxSelfClosing: false }, start);
 	openNode.typeExpr = tagNode;
-	return Result.ok(openNode);
+	return Result.ok(finishNode(state, openNode));
 }
 
 function parseJsxFragment(state: ParserState, parseExpr: ExprParser, start: Token): ExprResult {
@@ -180,7 +180,7 @@ function parseJsxFragment(state: ParserState, parseExpr: ExprParser, start: Toke
 	advance(state);
 	if (current(state).kind != TokenKind.Gt) return Result.err("Expected '>' after '</' in fragment close");
 	advance(state);
-	return Result.ok(createNode(NodeKind.JSXFragment, { jsxFragChildren: children }, start));
+	return Result.ok(finishNode(state, createNode(NodeKind.JSXFragment, { jsxFragChildren: children }, start)));
 }
 
 export function parseJsxRoot(state: ParserState, parseExpr: ExprParser): ExprResult {

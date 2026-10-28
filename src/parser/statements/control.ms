@@ -1,8 +1,8 @@
 // Control Flow Statements - if, while, for, break, continue, return
 
-import { Token, TokenKind } from "../../lexer/token";
+import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, finishNode, finishAfter, takeTrailingDecls } from "../cursor";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { parseBlockStmt, parseStatement } from "./core";
 import { parseExpressionFromState } from "../expressions/core";
@@ -23,18 +23,11 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 	const mark = state.trailingDecls.length;
 	const stmts = [try parseStatement(state)];
 	for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
-	return Result.ok(createNode(NodeKind.BlockStmt, { statements: stmts }, tok));
+	return Result.ok(finishNode(state, createNode(NodeKind.BlockStmt, { statements: stmts }, tok)));
 }
 
 // ===== If Statement =====
 // syntax: 'if' '(' expr ')' (block | stmt) ('else' (ifStmt | block | stmt))?
-
-function withLeading(node: Node, leading: Token[]): Node {
-	if (leading.length == 0) return node;
-	for (const c of node.comments) leading.push(c);
-	node.comments = leading;
-	return node;
-}
 
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
@@ -53,14 +46,13 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
-		const beforeElse = takePendingComments(state);
 		advance(state);
 		if (current(state).kind == TokenKind.If) {
-			const elseIf = try parseIfStmt(state);
+			const elseIf = finishNode(state, try parseIfStmt(state));
 			return Result.ok(createNode(NodeKind.IfStmt, {
 				condition,
 				consequent,
-				alternate: withLeading(elseIf, beforeElse),
+				alternate: elseIf,
 			}, ifToken));
 		}
 
@@ -68,7 +60,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.IfStmt, {
 			condition,
 			consequent,
-			alternate: withLeading(elseBody, beforeElse),
+			alternate: elseBody,
 		}, ifToken));
 	}
 
@@ -233,7 +225,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
 		initNode.typeExpr = declTypeExpr;
-		stampEnd(state, initNode);
+		finishNode(state, initNode);
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 		}
@@ -264,7 +256,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 	const exprInitToken = current(state);
 	const exprInit = try parseExpressionFromState(state);
 	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, exprInitToken);
-	stampEnd(state, exprInitNode);
+	finishNode(state, exprInitNode);
 	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 	}
@@ -389,6 +381,7 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 		const prev = cases.length > 0 ? cases[cases.length - 1].data as SwitchCaseData : null;
 		if (prev != null && prev.caseStmts.length == 0) {
 			stackLabels(prev, caseNode.data as SwitchCaseData);
+			finishAfter(cases[cases.length - 1], caseNode);
 		} else {
 			cases.push(caseNode);
 		}
@@ -420,11 +413,11 @@ function parseSwitchCase(state: ParserState): NodeResult {
 			advance(state);
 		}
 		const stmts = try parseCaseBody(state);
-		return Result.ok(createNode(NodeKind.SwitchCase, {
+		return Result.ok(finishNode(state, createNode(NodeKind.SwitchCase, {
 			caseTests: [],
 			caseStmts: stmts,
 			isDefault: true,
-		}, caseToken));
+		}, caseToken)));
 	}
 
 	if (caseToken.kind != TokenKind.Case) {
@@ -440,11 +433,11 @@ function parseSwitchCase(state: ParserState): NodeResult {
 	}
 
 	const stmts = try parseCaseBody(state);
-	return Result.ok(createNode(NodeKind.SwitchCase, {
+	return Result.ok(finishNode(state, createNode(NodeKind.SwitchCase, {
 		caseTests: tests,
 		caseStmts: stmts,
 		isDefault: false,
-	}, caseToken));
+	}, caseToken)));
 }
 
 type NodesResult = Result<Node[], string>;

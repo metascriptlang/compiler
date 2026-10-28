@@ -22,7 +22,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { classBodyOf, isReadonlyView, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
+import { isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, classBodyOf, isReadonlyView } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -1685,6 +1685,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const value = compileExpr(s, d.arguments[0]);
 		return emitConvTo(s, value, RaiserConvClass.F64Bits as int32, RaiserConvClass.F64 as int32);
 	}
+	if (builtinKind == "Float64FromBits" && d.arguments.length == 1) {
+		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.F64 as int32, RaiserConvClass.F64Bits as int32);
+	}
 	if (builtinKind == "PtrBits" && d.arguments.length == 1) {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
@@ -1943,7 +1946,8 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 		const declared = declaredParams != null && i < declaredParams.length ? declaredParams[i] : null;
 		closureClasses.push(regClassOf(s, declared != null ? declared : d.arguments[i].nodeType));
 	}
-	closureClasses.push(RaiserRegClass.Ref);
+	const plain = calleeType != null && isPlainFunctionPointer(calleeType);
+	if (!plain) closureClasses.push(RaiserRegClass.Ref);
 	const dest = allocBlock(s, closureClasses);
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
@@ -1953,6 +1957,10 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 		}
 		compileExprInto(s, d.arguments[i], dest + 1 + slot);
 		slot = slot + 1;
+	}
+	if (plain) {
+		emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, closureReg, argCount));
+		return dest;
 	}
 	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	return dest;

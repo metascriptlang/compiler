@@ -30,6 +30,7 @@
 3	msPoolCompensate
 3	msWaitForReady
 4	msActorLendWakeCb
+4	msActorShutdownAtExit
 4	msPoolRunQueued
 4	msProcessTimers
 5	msActorProcess

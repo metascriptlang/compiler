@@ -87,6 +87,10 @@ export function literalUnionBase(t: Readonly<Type | null>): Readonly<Type | null
 	return literalMemberBase(t.typeChildren[t.typeChildren.length - 1]);
 }
 
+export function isLiteralSet(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral || literalUnionBase(t) != null);
+}
+
 function literalMemberBase(child: Readonly<Type | null>): Readonly<Type | null> {
 	if (child == null) return null;
 	if (child.kind == TypeKind.StringLiteral) return STRING_TYPE_VIEW;
@@ -282,6 +286,10 @@ export function closureStorageType(t: Type): Type {
 
 export function callConvKey(t: Readonly<Type>): string {
 	return t.callConv == CallingConvention.CcClosure ? "" : "@" + (t.callConv as number).toString();
+}
+
+export function isPlainFunctionPointer(t: Readonly<Type>): boolean {
+	return t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure;
 }
 
 export function plainFunctionPointerType(t: Type): Type {
@@ -1673,6 +1681,62 @@ export function createArc(inner: Type | null): Type {
 	return t;
 }
 
+export function createOwned(ref: Type): Type {
+	if (isOwnedRef(ref)) return ref;
+	if (ref.ownedType != null) return ref.ownedType;
+	const c = copyTypeShallow(ref);
+	c.typeFlags = c.typeFlags.incl(TypeFlag.IsOwned);
+	c.plainType = ref;
+	ref.ownedType = c;
+	return c;
+}
+
+export function isOwnedRef(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsOwned);
+}
+
+export function isSinkTypeForParam(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	return t.kind == TypeKind.Sink || isOwnedRef(t) || (t.kind == TypeKind.Union && isOwnedRef(unwrapRefNullUnion(t)));
+}
+
+export function withoutOwned(t: Type): Type {
+	if (t.plainType != null) return t.plainType;
+	if (t.kind == TypeKind.Ref && isOwnedRef(t)) {
+		const c = copyTypeShallow(t);
+		c.typeFlags = c.typeFlags.excl(TypeFlag.IsOwned);
+		c.ownedType = t;
+		t.plainType = c;
+		return c;
+	}
+	if (t.kind == TypeKind.Union && unwrapRefNullUnion(t) != null && t.typeChildren.some((m) => isOwnedRef(m))) {
+		const c = copyTypeShallow(t);
+		c.typeChildren = t.typeChildren.map((m) => withoutOwned(m));
+		t.plainType = c;
+		return c;
+	}
+	return t;
+}
+
+export function ownedEdgeOf(t: Type | null, depth: int32 = 0): Type | null {
+	if (t == null || depth > 8) return null;
+	if (isOwnedRef(t)) return t;
+	return match (t.kind) {
+		TypeKind.Union => ownedEdgeOf(unwrapRefNullUnion(t), depth + 1),
+		TypeKind.Array | TypeKind.SizedArray => ownedEdgeOf(t.typeReturn, depth + 1),
+		TypeKind.Struct | TypeKind.Tuple => firstOwnedEdge(t.typeChildren, depth),
+		_ => null,
+	};
+}
+
+function firstOwnedEdge(parts: Type[], depth: int32): Type | null {
+	for (const part of parts) {
+		const edge = ownedEdgeOf(part, depth + 1);
+		if (edge != null) return edge;
+	}
+	return null;
+}
+
 export function isAtomicRef(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsAtomic);
 }
@@ -1894,7 +1958,8 @@ export function refSubstInner(t: Readonly<Type>): Readonly<Type | null> {
 export function rebuildRefLike(t: Type, inner: Type | null): Type {
 	if (isLockedRef(t)) return createLocked(inner);
 	if (isAtomicRef(t)) return createArc(inner);
-	return createRef(inner);
+	const plain = createRef(inner);
+	return isOwnedRef(t) ? createOwned(plain) : plain;
 }
 
 // The annotation spelling that re-resolves to this Ref class, or "" for a plain
@@ -1904,6 +1969,7 @@ export function rebuildRefLike(t: Type, inner: Type | null): Type {
 export function refWrapperName(t: Readonly<Type>): string {
 	if (isLockedRef(t)) return "Locked";
 	if (isAtomicRef(t)) return "Arc";
+	if (isOwnedRef(t)) return "Owned";
 	return "";
 }
 
@@ -3475,45 +3541,88 @@ class HeldBeyond {
 }
 
 let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
-let _heldByName: HashMap<string, HeldBeyond> = new HashMap<string, HeldBeyond>();
+let _heldByFieldNames: HashMap<string, HashMap<Type, HeldBeyond>> = new HashMap<string, HashMap<Type, HeldBeyond>>();
+let _speculationDepth: int32 = 0;
 
 export function resetHeldBeyond(): void {
 	_heldBySym = new HashMap<Symbol, HeldBeyond>();
-	_heldByName = new HashMap<string, HeldBeyond>();
+	_heldByFieldNames = new HashMap<string, HashMap<Type, HeldBeyond>>();
+	_speculationDepth = 0;
 }
 
-function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
+export function enterSpeculation(): void {
+	_speculationDepth += 1;
+}
+
+export function leaveSpeculation(): void {
+	if (_speculationDepth == 0) throw new Error("internal: leaveSpeculation without a matching enterSpeculation");
+	_speculationDepth -= 1;
+}
+
+function newHeldBeyond(): HeldBeyond {
+	return { held: [], seen: new HashSet<Type>() };
+}
+
+function heldEntry(slot: Type): HeldBeyond {
 	if (slot.sym != null) {
 		const known = _heldBySym.get(slot.sym);
-		if (known != null || !create) return known;
-		const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
+		if (known != null) return known;
+		const made = newHeldBeyond();
 		_heldBySym.set(slot.sym, made);
 		return made;
 	}
-	const key = "{" + slot.typeNames.join(",") + "}";
-	const known = _heldByName.get(key);
-	if (known != null || !create) return known;
-	const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
-	_heldByName.set(key, made);
+	const fieldNames = slot.typeNames.join(",");
+	let bucket = _heldByFieldNames.get(fieldNames);
+	if (bucket == null) {
+		bucket = new HashMap<Type, HeldBeyond>();
+		_heldByFieldNames.set(fieldNames, bucket);
+	}
+	const known = bucket.get(slot);
+	if (known != null) return known;
+	const made = newHeldBeyond();
+	bucket.set(slot, made);
 	return made;
+}
+
+function opensToHeld(slot: Type): boolean {
+	return slot.kind == TypeKind.Struct && (slot.sym == null || slot.sym.symbolKind == SymbolKind.Interface);
 }
 
 // A slot typed by an interface or an unnamed record takes any object whose leading fields fit
 // (objectLayoutFits), so a cycle can close through it by way of that object. The checker notes
-// each such type here and the cycle classification walks them, as the reference walks the
-// subtypes of a non-final object; a slot nothing else was accepted into stays closed.
+// each such type here, except while it only tries a relation (an overload candidate it ranks),
+// and the cycle classification walks them, as the reference walks the subtypes of a non-final
+// object; a slot nothing else was accepted into stays closed.
 export function noteHeldBeyond(slot: Type, held: Type): void {
-	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return;
-	const entry = heldEntry(slot, true)!;
+	if (_speculationDepth > 0 || !opensToHeld(slot)) return;
+	const entry = heldEntry(slot);
 	if (entry.seen.has(held)) return;
 	entry.seen.add(held);
 	entry.held.push(held);
 }
 
+// An unnamed record is one type wherever it is spelled, so the types held beyond it are those
+// noted under every slot with its identity (field names and field types).
 export function heldBeyond(slot: Type): Type[] {
-	if (slot.kind != TypeKind.Struct || slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return [];
-	const entry = heldEntry(slot, false);
-	return entry != null ? entry.held : [];
+	if (!opensToHeld(slot)) return [];
+	if (slot.sym != null) {
+		const entry = _heldBySym.get(slot.sym);
+		return entry != null ? entry.held : [];
+	}
+	const bucket = _heldByFieldNames.get(slot.typeNames.join(","));
+	if (bucket == null) return [];
+	const identity = anonStructName(slot.typeNames, slot.typeChildren);
+	const held: Type[] = [];
+	const seen = new HashSet<Type>();
+	for (const noted of bucket.keys()) {
+		if (anonStructName(noted.typeNames, noted.typeChildren) != identity) continue;
+		for (const t of bucket.get(noted)!.held) {
+			if (seen.has(t)) continue;
+			seen.add(t);
+			held.push(t);
+		}
+	}
+	return held;
 }
 
 export function nominalTypeKey(t: Readonly<Type>): string {
@@ -4076,7 +4185,7 @@ export function hasAsgnFlag(t: Readonly<Type>): boolean {
 export function arrayElementNeedsCleanup(elem: Type): boolean {
 	if (elem == null) return false;
 	if (elem.kind == TypeKind.String || elem.kind == TypeKind.Ref
-		|| elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Function
+		|| elem.kind == TypeKind.Ptr || (elem.kind == TypeKind.Function && !isPlainFunctionPointer(elem))
 		|| elem.kind == TypeKind.BigInt || elem.kind == TypeKind.Unknown) return true;
 	if (elem.kind == TypeKind.Distinct && elem.typeReturn != null) {
 		return arrayElementNeedsCleanup(elem.typeReturn);
@@ -5417,6 +5526,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// Locked<T> is a Ref onto the generated cell struct, so typeNameOf would
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayNameInner(lockedPayloadType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
+	if (!shown.has(TypeFlag.IsOwned) && isOwnedRef(t)) return "Owned<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsOwned), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsReadonly) && isReadonlyView(t)) return "Readonly<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsReadonly), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsSendable) && isSendableFunction(t)) return "Sendable<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsSendable), open, shapes) + ">";
 	if (isIterator(t)) return "Iterator<" + typeDisplayNameInner(getIteratorYieldType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";

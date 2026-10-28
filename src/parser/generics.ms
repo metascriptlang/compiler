@@ -39,8 +39,8 @@ export function splitAngleAssign(state: ParserState): void {
 	};
 	if (closer == TokenKind.Eof) return;
 	const width = tok.value.byteLength - 1;
-	state.tokens[pos] = { kind: closer, value: ">".repeat(width), line: tok.line, column: tok.column, rawValue: "" };
-	const assign: Token = { kind: TokenKind.Assign, value: "=", line: tok.line, column: tok.column + width, rawValue: "" };
+	state.tokens[pos] = { kind: closer, value: ">".repeat(width), line: tok.line, column: tok.column, endLine: tok.line, endColumn: tok.column + width, rawValue: "" };
+	const assign: Token = { kind: TokenKind.Assign, value: "=", line: tok.line, column: tok.column + width, endLine: tok.endLine, endColumn: tok.endColumn, rawValue: "" };
 	state.tokens.splice(pos + 1, 0, assign);
 	state.splits.push({ position: pos, original: tok });
 }

@@ -19,6 +19,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { scanJsCells } from "../transform/lowering/jsVarParamLower";
 import { analyzeProgram } from "../analyzer/index";
+import { inferSinkParams } from "../analyzer/sinkInference";
 import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
@@ -81,11 +82,11 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -1283,7 +1284,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 						memoHits.push({ source: fullPath, dependencyFile, oFile });
 					} else {
 						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
-						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
+						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, headerSearch(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
 						if (stored != "") {
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
 							oFiles.push(stored);
@@ -1357,8 +1358,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		}
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
-		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
-		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
+		const dirs = headerSearch(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
+		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds, dirs);
 		if (published.ok) {
 			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles[j.slot] = published.value;
@@ -3411,6 +3412,9 @@ resetLiftedOps();
 			noteUnitDecls(liftTables, modPath, tree);
 		}
 	}
+	if (!session.keep && !opts.isHcr && gcModeOf(opts.gcMode) == GcMode.Drc) {
+		inferSinkParams(staged.map((st: { at: int32, job: A2Job, tree: Node }): Node => st.tree), staged.map((st: { at: int32, job: A2Job, tree: Node }): TransformContext => st.job.nativeCtx!));
+	}
 	for (const st of staged) {
 		const cm = checkedMods[st.at];
 		const modPath = cm.modPath;
@@ -3767,7 +3771,7 @@ resetLiftedOps();
 
 			const cached = isCCodeCached(p.modPath, modFp);
 			const storeKey = cached ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
-			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
+			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
 			if (cached) {
 				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
@@ -3904,10 +3908,10 @@ resetLiftedOps();
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile;
+			const dirs = headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
+			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.cFile, cj.oFile, cj.fp, dirs) : cj.oFile;
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
 			if (cj.storeKey != "" && !driverPlansOn()) {
-				const dirs = objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
 				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
 			}
 			oSlots[cj.slot] = [published];
@@ -4291,7 +4295,7 @@ resetLiftedOps();
 		const code = cCodes[cji];
 		if (code == 0) {
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
-			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.cFile, cj.oFile, cj.fp, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags)) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printError(`compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;

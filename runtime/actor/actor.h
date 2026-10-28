@@ -43,8 +43,9 @@ typedef void (*msActorDropFn)(void* msg);
 /* ===== ExitReason (Erlang OTP parity) ===== */
 
 #define MS_EXIT_NORMAL   0  /* clean shutdown */
-#define MS_EXIT_KILLED   1  /* forced kill (supervisor restart, system shutdown) */
-#define MS_EXIT_ABNORMAL 2  /* crash (unhandled panic/error) */
+#define MS_EXIT_SHUTDOWN 1  /* program exit (ULTRALOCK A8) */
+#define MS_EXIT_KILLED   2  /* forced kill (supervisor restart) */
+#define MS_EXIT_ABNORMAL 3  /* crash (unhandled panic/error) */
 
 /* onTerminate callback: called before actor is destroyed. Can send messages, flush. */
 typedef void (*msActorOnTerminateFn)(void* state, int32_t reason);
@@ -1075,7 +1076,8 @@ static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
     }
     bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
     if (!frozen) {
-        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL) {
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL
+                || atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
             work = true;
         } else if (!msMpscMarkEmpty(&a->mailbox)) {
             work = true;
@@ -1177,9 +1179,9 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
-        /* STOP signal: swallow — its scheduling job is done; the reap gate (or
-         * the owner's reap scan) collects with the flag it rode in with. */
-        if (msg->kind == MS_ACTOR_MSG_STOP) { processed++; continue; }
+        /* STOP signal: end the visit; its end re-queues a stopped actor, so the next
+         * visit's reap gate collects it and messages behind the STOP fail noproc. */
+        if (msg->kind == MS_ACTOR_MSG_STOP) { processed++; break; }
         /* System messages (kind < 0): route to onSystemMsg handler if set */
         if (msg->kind < 0 && a->onSystemMsg != NULL) {
             a->onSystemMsg(a->state, (void*)msg);
@@ -1825,6 +1827,7 @@ static inline int64_t msActorStolenVisits(void) { return atomic_load_explicit(&m
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
 static inline bool msActorSystemIdle(void);           /* defined below */
+static inline void msActorShutdownAtExit(void);       /* defined below */
 extern void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));  /* pool.c */
 static inline bool msActorPollLocal(void);            /* defined below */
 
@@ -1873,6 +1876,7 @@ static inline void msActorSystemInit(void) {
     msCDInit();
     msSetActorPollHook(msActorPollEventLoop);
     msSetActorIdleHook(msActorSystemIdle);
+    msSetActorExitHook(msActorShutdownAtExit);
     atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
 }
 
@@ -2044,22 +2048,30 @@ static inline bool msActorPollAll(void) {
     return didWork;
 }
 
-/* No actor can run: none is queued or in a visit, and no idle timeout or pending stop
- * is armed. A suspended actor with no queued run is not a source of work; whatever
- * settles its awaited future is. Called by msPoolQuiescentWith with every worker
- * parked, so no registry changes under the scan. */
+static inline bool msActorParked(msActor* a) {
+    return msActorHasFlag(a, MS_ACTOR_SUSPENDED)
+        && atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL;
+}
+
+/* A suspended actor with no queued run is not a source of work; whatever settles its
+ * awaited future is. Called by msPoolQuiescentWith with every worker parked, so no
+ * registry changes under the scan. */
 static inline bool msActorSystemIdle(void) {
-    if (atomic_load_explicit(&msActorsWithTimeout, memory_order_acquire) != 0) return false;
-    if (atomic_load_explicit(&msActorsStopPending, memory_order_acquire) != 0) return false;
+    int timeouts = atomic_load_explicit(&msActorsWithTimeout, memory_order_acquire);
+    int stops = atomic_load_explicit(&msActorsStopPending, memory_order_acquire);
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
         if (atomic_load_explicit(&sched->runHead, memory_order_acquire) != NULL) return false;
         int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
         for (int i = 0; i < cnt; i++) {
-            if (atomic_load_explicit(&sched->actors[i]->processing, memory_order_acquire)) return false;
+            msActor* a = sched->actors[i];
+            if (atomic_load_explicit(&a->processing, memory_order_acquire)) return false;
+            if (!msActorParked(a)) continue;
+            if (a->idleTimeoutMs > 0) timeouts--;
+            if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) stops--;
         }
     }
-    return true;
+    return timeouts == 0 && stops == 0;
 }
 
 /* ===== Async Cycle Detector Actor (Pony ORCA parity) =====
@@ -2177,6 +2189,56 @@ static inline void msCDTick(void) {
     if (msCycleDetectorActor == NULL) return;
     msMessage* msg = msMsgAlloc(MS_CD_MSG_TICK, NULL);
     msActorSend(msCycleDetectorActor, msg);
+}
+
+extern void msRunUntilNothingCanSettle(void);  /* dispatchFull.c */
+
+static inline int msActorStopLive(int32_t reason) {
+    int stopped = 0;
+    int32_t slots = atomic_load_explicit(&msPidNextSlot, memory_order_acquire);
+    for (int32_t i = 0; i < slots; i++) {
+        msActor* a = msPidPinSlot(i);
+        if (a == NULL) continue;
+        int64_t pid = a->pid;
+        bool live = a != msCycleDetectorActor
+            && atomic_load_explicit(&a->alive, memory_order_acquire)
+            && !atomic_load_explicit(&a->stopRequested, memory_order_acquire);
+        msHazardClear(a);
+        if (!live) continue;
+        msActorStop(pid, reason);
+        stopped++;
+    }
+    return stopped;
+}
+
+static inline int msActorReportUnreachedHooks(void) {
+    int unreached = 0;
+    int32_t slots = atomic_load_explicit(&msPidNextSlot, memory_order_acquire);
+    for (int32_t i = 0; i < slots; i++) {
+        msActor* a = msPidPinSlot(i);
+        if (a == NULL) continue;
+        if (atomic_load_explicit(&a->stopRequested, memory_order_acquire) && msActorParked(a)
+                && a->onTerminateFn != NULL
+                && atomic_load_explicit(&a->stopReason, memory_order_relaxed) != MS_EXIT_KILLED) {
+            if (unreached++ == 0) fflush(stdout);
+            fprintf(stderr, "Warning: Detected unsettled await in actor %s at exit: its onTerminate cannot run\n",
+                msPidTypeName(a->state != NULL ? msHeader(a->state)->type : NULL));
+        }
+        msHazardClear(a);
+    }
+    return unreached;
+}
+
+static inline void msActorShutdownAtExit(void) {
+    for (;;) {
+        int stopped = msActorStopLive(MS_EXIT_SHUTDOWN);
+        msRunUntilNothingCanSettle();
+        if (stopped == 0) break;
+    }
+    if (atomic_load_explicit(&msActorsStopPending, memory_order_acquire) != 0
+            && msActorReportUnreachedHooks() > 0) {
+        exit(13);
+    }
 }
 
 #endif /* MS_ACTOR_H */

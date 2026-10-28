@@ -3,6 +3,7 @@
 export enum DocKind {
 	Nil,
 	Text,
+	SourceText,
 	Group,
 	Indent,
 	Line,
@@ -38,6 +39,11 @@ export function docNil(): Doc {
 
 export function docText(text: string): Doc {
 	return createDoc(DocKind.Text, { text } as DocData);
+}
+
+// Text taken from the source as written, such as a comment: a line break never trims its blanks.
+export function docSourceText(text: string): Doc {
+	return createDoc(DocKind.SourceText, { text } as DocData);
 }
 
 export function docGroup(children: Doc[]): Doc {

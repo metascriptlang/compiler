@@ -18,11 +18,11 @@ import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stri
 import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
+	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef, takeValueShareFns, makeBinary, makeReturn, makeIf, makeBlock, makeFnDecl,
 } from "../util";
-import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns } from "./debugLower";
+import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns, nullableText } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin } from "../lowering/promiseLower";
@@ -197,32 +197,11 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// and `.value` are real fields on C; the js backend rewrites them back to
 	// `x !== null` and `x` (native/maybeUnwrap.ms), so one shape serves both.
 	if (isMaybeType(objType)) {
-		const payload = unwrapMaybeType(objType);
-		if (cloneIfPure(obj) == null) {
-			const m = mintSym(ctx, SymbolKind.Parameter, "m", objType);
-			const held = makeMember(makeTypedIdentResolved(m, objType, loc), "present", loc);
-			held.nodeType = booleanType();
-			const text = makeMember(makeTypedIdentResolved(m, objType, loc), "value", loc);
-			text.nodeType = payload;
-			const none = makeString("null", loc);
-			none.nodeType = stringType();
-			const body = makeBlock([
-				makeIf(held, makeBlock([makeReturn(lowerToString(callNode, text, payload, loc, ctx), loc)], loc), null, loc),
-				makeReturn(none, loc),
-			], loc);
-			const once = makeCall(textFn(m, objType, body, loc, ctx), [obj], loc);
-			once.nodeType = stringType();
-			return once;
+		if ((callNode.data as CallExprData).arguments.length > 0) {
+			throw new Error("internal: toString with arguments reached a nullable receiver, which the checker refuses");
 		}
-		const val = makeMember(obj, "value", loc);
-		val.nodeType = payload;
-		const present = makeMember(obj, "present", loc);
-		present.nodeType = booleanType();
-		const absent = makeString("null", loc);
-		absent.nodeType = stringType();
-		const cond = makeConditional(present, lowerToString(callNode, val, payload, loc, ctx), absent, loc);
-		cond.nodeType = stringType();
-		return cond;
+		const payload = unwrapMaybeType(objType);
+		return nullableText(obj, objType, (value: Node): Node => lowerToString(callNode, value, payload, loc, ctx), loc, ctx);
 	}
 
 	if (tk == TypeKind.Null) return evaluatedPlaceholder(obj, objType, "null", loc, ctx);

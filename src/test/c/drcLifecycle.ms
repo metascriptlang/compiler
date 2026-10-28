@@ -291,7 +291,7 @@ test "E2E C: a field reached through a non-owning local is never moved out" {
 	assert !c.value.contains("WasMoved((*rhs_1_).own)");
 }
 
-test "E2E C: a narrowed local returned through an identity assertion is copied" {
+test "E2E C: a narrowed local returned through an identity assertion on its last read is moved out" {
 	const c = compileToC(`
 		struct Box { names: string[]; count: int32; }
 		function get(): Box {
@@ -302,7 +302,7 @@ test "E2E C: a narrowed local returned through an identity assertion is copied" 
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("Copy((&(dollarborrow");
+	assert c.value.contains("WasMoved((&(got_1_.value)))");
 	assert !c.value.contains("*__result = got_1_.value;");
 }
 

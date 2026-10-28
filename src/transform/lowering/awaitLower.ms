@@ -40,7 +40,7 @@ import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, crea
 import { skipsModule } from "../moduleFacts";
 import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
+import { cloneIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
 import { lowerDefer } from "./deferLower";
 import { createPtr, createPrimitive, awaitedType, booleanType, closureStorageType } from "../../checker/types";
 import { TypeKind, AttachedOp, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -203,7 +203,7 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 // skipped slot holds null, which reads as the type's default.
 export function readGroupSlot(ctx: TransformContext, agIdent: Node, slot: int32, innerType: Type | null, loc: SourceLocation): { stmts: Node[], value: Node } {
 	const raw = (): Node => {
-		const c = makeCall(runtimeRef("msAwaitGroupResult", loc), [agIdent, makeNumber(slot, loc)], loc);
+		const c = makeCall(runtimeRef("msAwaitGroupResult", loc), [cloneIdent(agIdent, loc), makeNumber(slot, loc)], loc);
 		c.nodeType = VOID_PTR_TYPE;
 		return c;
 	};
@@ -228,7 +228,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	const stmts: Node[] = [];
 	if (timeoutExpr == null) {
 		stmts.push(makeExprStmt(
-			makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
+			makeCall(runtimeRef("msAwaitGroupBlocking", loc), [cloneIdent(agIdent, loc)], loc), loc));
 		for (const r of reads) stmts.push(r);
 		return stmts;
 	}
@@ -242,7 +242,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// msAwaitGroupBlockingWithDeadline($ag, $deadline);
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupBlockingWithDeadline", loc), [
-			agIdent, dl.ident,
+			cloneIdent(agIdent, loc), dl.ident,
 		], loc), loc));
 
 	// if (msAwaitGroupTimedOut($ag)) msAwaitGroupBlocking($ag);  reads;
@@ -256,16 +256,16 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// while waiting, which is exactly what unblocks a timer-parked child.
 	// msAwaitGroupFree reports a child failure only that join observed.
 	const timedOut = (): Node => {
-		const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
+		const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [cloneIdent(agIdent, loc)], loc);
 		c.nodeType = booleanType();
 		return c;
 	};
 	const joinCall = makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
+		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [cloneIdent(agIdent, loc)], loc), loc);
 	stmts.push(makeIf(timedOut(), makeBlock([joinCall], loc), null, loc));
 	for (const r of reads) stmts.push(r);
 	const freeCall = makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupFree", loc), [agIdent], loc), loc);
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [cloneIdent(agIdent, loc)], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
 	stmts.push(makeIf(timedOut(), makeBlock([freeCall, throwNode], loc), null, loc));
@@ -291,20 +291,20 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 	const task = bindTask(ctx, closureArg, loc);
 	if (task != null) stmts.push(task!.decl);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), task != null ? task!.ident : closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [cloneIdent(as.ident, loc), makeNumber(0, loc), task != null ? task!.ident : closureArg], loc), loc));
 
 	// 3. msAwaitSlotWait($as); the joined task's closure and its moved captures drop here.
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitSlotWait", loc), [as.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitSlotWait", loc), [cloneIdent(as.ident, loc)], loc), loc));
 	for (const d of dropTask(task != null ? task!.sym : null, loc)) stmts.push(d);
 
 	// 4. const $agr = msAwaitSlotResult($as);
-	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
+	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [cloneIdent(as.ident, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(agr.decl);
 
 	// 5. msAwaitSlotRelease($as);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitSlotRelease", loc), [as.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitSlotRelease", loc), [cloneIdent(as.ident, loc)], loc), loc));
 
 	return { stmts, resultIdent: agr.ident };
 }
@@ -326,23 +326,23 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 		closureBody = (closureArg.data as ArrowFunctionData).arrowBody;
 	}
 	if (closureBody != null) {
-		injectCancelSafePoints(closureBody, ag.ident, loc);
+		injectCancelSafePoints(closureBody, cloneIdent(ag.ident, loc), loc);
 	}
 
 	// 3. msSpawnTaskSubmit($ag, 0, closure);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnTaskSubmit", loc), [cloneIdent(ag.ident, loc), makeNumber(0, loc), closureArg], loc), loc));
 
 	// 4. Blocking wait with deadline, the result read before any raise
-	const read = readGroupSlot(ctx, ag.ident, 0, innerType, loc);
-	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx, read.stmts);
+	const read = readGroupSlot(ctx, cloneIdent(ag.ident, loc), 0, innerType, loc);
+	const waitStmts = emitAwaitGroupWait(cloneIdent(ag.ident, loc), timeoutExpr, loc, ctx, read.stmts);
 	for (const ws of waitStmts) stmts.push(ws);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [cloneIdent(ag.ident, loc)], loc), loc));
 
 	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [cloneIdent(ag.ident, loc)], loc), loc));
 
 	return { stmts, resultIdent: read.value };
 }
@@ -386,14 +386,14 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	const readFn = typedFutureReadFn(innerType);
 	if (readFn != "") {
 		stmts.push(makeExprStmt(
-			makeCall(runtimeRef("msWaitForReady", loc), [futIdent], loc), loc));
-		const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef(readFn, loc), [futIdent], loc), innerType, loc);
+			makeCall(runtimeRef("msWaitForReady", loc), [cloneIdent(futIdent, loc)], loc), loc));
+		const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef(readFn, loc), [cloneIdent(futIdent, loc)], loc), innerType, loc);
 		stmts.push(res.decl);
 		return { stmts, resultIdent: res.ident, typed: true };
 	}
 
 	// Fallback: void* path (structs, refs, strings) — caller must apply unboxing
-	const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef("msWaitFor", loc), [futIdent], loc), VOID_PTR_TYPE, loc);
+	const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef("msWaitFor", loc), [cloneIdent(futIdent, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(res.decl);
 	return { stmts, resultIdent: res.ident, typed: false };
 }
@@ -402,7 +402,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 // value and this reader copies it; a future completed across threads has one
 // reader, which takes the value as before.
 function expandSharedAwait(futIdent: Node, stmts: Node[], loc: SourceLocation, ctx: TransformContext, innerType: Type): { stmts: Node[], resultIdent: Node, typed: boolean } {
-	const fut = (): Node => futIdent.resolvedSym != null ? makeIdentResolved(futIdent.resolvedSym!, loc) : futIdent;
+	const fut = (): Node => futIdent.resolvedSym != null ? makeIdentResolved(futIdent.resolvedSym!, loc) : cloneIdent(futIdent, loc);
 	stmts.push(makeExprStmt(makeCall(runtimeRef("msWaitForReady", loc), [fut()], loc), loc));
 	const res = makeTempDecl(ctx, "aw", makeDefaultValue(innerType, loc), innerType, loc);
 	(res.decl.data as VariableDeclData).declKind = DeclKind.Let;
@@ -452,17 +452,17 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			const stmts: Node[] = [];
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
-				makeCall(runtimeRef("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+				makeCall(runtimeRef("msAwaitSlotWait", loc), [cloneIdent(slotEntry.slotIdent, loc)], loc), loc));
 			for (const d of dropTask(slotEntry.task, loc)) stmts.push(d);
 			if (slotEntry.joined != null) {
 				stmts.push(makeExprStmt(makeAssign(makeIdentResolved(slotEntry.joined!, loc), makeBool(true, loc), loc), loc));
 			}
 			// const $agr = msAwaitSlotResult($slot);
-			const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
+			const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [cloneIdent(slotEntry.slotIdent, loc)], loc), VOID_PTR_TYPE, loc);
 			stmts.push(agr.decl);
 			// msAwaitSlotRelease($slot);
 			stmts.push(makeExprStmt(
-				makeCall(runtimeRef("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
+				makeCall(runtimeRef("msAwaitSlotRelease", loc), [cloneIdent(slotEntry.slotIdent, loc)], loc), loc));
 			let resultIdent = agr.ident;
 			if (slotEntry.innerType != null) {
 				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);
@@ -532,7 +532,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					const taskSym = task != null ? task!.sym : null;
 					if (task != null) stmts.push(task!.decl);
 					stmts.push(makeExprStmt(
-						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), task != null ? task!.ident : si.closure!], loc), loc));
+						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [cloneIdent(slot.ident, loc), makeNumber(0, loc), task != null ? task!.ident : si.closure!], loc), loc));
 					stmts.push(settleOnExit(slot.sym, flag.sym, taskSym, loc));
 					// Register for later `await h` lookup
 					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, task: taskSym, innerType, joined: flag.sym });

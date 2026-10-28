@@ -7,6 +7,7 @@ import { TransformContext, mintSym } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull, makeIf } from "../util";
 import { cloneIfPure } from "../place";
 import { charToString } from "./stringOpLower";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	if (arg.nodeType == null) return arg;
@@ -40,40 +41,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
-	if (isMaybeType(t)) {
-		const payload = unwrapMaybeType(t);
-		if (cloneIfPure(arg) == null) {
-			const m = mintSym(ctx, SymbolKind.Parameter, "m", t);
-			const held = makeMember(makeTypedIdentResolved(m, t, loc), "present", loc);
-			held.nodeType = booleanType();
-			const text = makeMember(makeTypedIdentResolved(m, t, loc), "value", loc);
-			text.nodeType = payload;
-			const none = makeString("null", loc);
-			none.nodeType = stringType();
-			const body = makeBlock([
-				makeIf(held, makeBlock([makeReturn(echoCoerceArg(text, loc, ctx), loc)], loc), null, loc),
-				makeReturn(none, loc),
-			], loc);
-			const sym = mintSym(ctx, SymbolKind.Function, "$placeholder" + _placeholderFnDecls.length.toString(), null);
-			const fnNode = makeFnDecl(sym.name, [m], ["unknown"], body, "", "string", loc);
-			fnNode.nodeType = createFunction([t], ["m"], stringType());
-			sym.symbolType = fnNode.nodeType;
-			fnNode.resolvedSym = sym;
-			_placeholderFnDecls.push(fnNode);
-			const once = makeCall(makeTypedIdentResolved(sym, fnNode.nodeType, loc), [arg], loc);
-			once.nodeType = stringType();
-			return once;
-		}
-		const val = makeMember(arg, "value", loc);
-		val.nodeType = payload;
-		const present = makeMember(arg, "present", loc);
-		present.nodeType = booleanType();
-		const absent = makeString("null", loc);
-		absent.nodeType = stringType();
-		const cond = makeConditional(present, echoCoerceArg(val, loc, ctx), absent, loc);
-		cond.nodeType = stringType();
-		return cond;
-	}
+	if (isMaybeType(t)) return nullableText(arg, t, (value: Node): Node => echoCoerceArg(value, loc, ctx), loc, ctx);
 	const inner = unwrapRef(t);
 	if (inner.kind == TypeKind.Union && inner.typeName != "" && isJsonValueData(inner)) {
 		return buildJsonValueDebug(arg, loc);
@@ -122,8 +90,32 @@ export function evaluatedPlaceholder(arg: Node, t: Type, text: string, loc: Sour
 		placeholder = makeConditional(makeBinary(makeTypedIdentResolved(valueSym, slotType, loc), "==", makeNull(loc), loc), absent, placeholder, loc);
 		placeholder.nodeType = stringType();
 	}
-	const fnNode = makeFnDecl(sym.name, [valueSym], ["unknown"], makeBlock([makeReturn(placeholder, loc)], loc), "", "string", loc);
-	fnNode.nodeType = createFunction([slotType], ["x"], stringType());
+	return callTextRoutine(sym, valueSym, slotType, placeholder, arg, loc);
+}
+
+export function nullableText(arg: Node, t: Type, payloadText: (value: Node) => Node, loc: SourceLocation, ctx: TransformContext): Node {
+	if (cloneIfPure(arg) != null) return presentOrNull(arg, cloneNodeKeepSem(arg), t, payloadText, loc);
+	const sym = mintSym(ctx, SymbolKind.Function, "$nullableText" + _placeholderFnDecls.length.toString(), null);
+	const carrierSym = mintSym(ctx, SymbolKind.Parameter, "x", t);
+	const text = presentOrNull(makeTypedIdentResolved(carrierSym, t, loc), makeTypedIdentResolved(carrierSym, t, loc), t, payloadText, loc);
+	return callTextRoutine(sym, carrierSym, t, text, arg, loc);
+}
+
+function presentOrNull(presenceRead: Node, payloadRead: Node, t: Type, payloadText: (value: Node) => Node, loc: SourceLocation): Node {
+	const present = makeMember(presenceRead, "present", loc);
+	present.nodeType = booleanType();
+	const val = makeMember(payloadRead, "value", loc);
+	val.nodeType = unwrapMaybeType(t);
+	const absent = makeString("null", loc);
+	absent.nodeType = stringType();
+	const cond = makeConditional(present, payloadText(val), absent, loc);
+	cond.nodeType = stringType();
+	return cond;
+}
+
+function callTextRoutine(sym: Symbol, param: Symbol, paramType: Type, text: Node, arg: Node, loc: SourceLocation): Node {
+	const fnNode = makeFnDecl(sym.name, [param], ["unknown"], makeBlock([makeReturn(text, loc)], loc), "", "string", loc);
+	fnNode.nodeType = createFunction([paramType], ["x"], stringType());
 	sym.symbolType = fnNode.nodeType;
 	fnNode.resolvedSym = sym;
 	_placeholderFnDecls.push(fnNode);

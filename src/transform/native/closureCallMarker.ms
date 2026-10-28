@@ -14,11 +14,11 @@
 // instances are resolved before this pass (and substitution copies callConv),
 // and Sink/Lent are never built for a callee — probed, not assumed.
 
-import { Node, NodeKind, SymbolKind, Symbol, CallExprData, TypeAssertionData, ObjectLiteralData, BinaryExprData, createNodeAt, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
-import { createFunction, createPtr, voidType, peelTransparentInstance, closureStorageType, peelToStructOrUnion } from "../../checker/types";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, ObjectLiteralData, BinaryExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { createFunction, voidType, peelTransparentInstance, closureStorageType, peelToStructOrUnion, isPlainFunctionPointer } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeObjectLiteral, makeNull } from "../util";
+import { makeObjectLiteral, makeNull, makeHiddenStdConv } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -88,10 +88,6 @@ function wrapFuncArgsAsThunks(node: Node): void {
 	}
 }
 
-function isPlainFunctionPointer(t: Type): boolean {
-	return t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure;
-}
-
 function eraseFieldRoutines(node: Node): void {
 	const od = node.data as ObjectLiteralData;
 	const shape = peelToStructOrUnion(node.nodeType);
@@ -105,13 +101,7 @@ function eraseFieldRoutines(node: Node): void {
 function asPointerSlot(value: Node, slot: Type | null): Node {
 	if (slot == null || !isPlainFunctionPointer(slot)) return value;
 	if (value.resolvedSym == null || value.resolvedSym.symbolKind != SymbolKind.Function) return value;
-	return asRawAddress(value);
-}
-
-function asRawAddress(arg: Node): Node {
-	const cast = createNodeAt(NodeKind.TypeAssertion, { asExpr: arg, asType: "Ptr<void>" } as TypeAssertionData, arg.location);
-	cast.nodeType = createPtr(voidType());
-	return cast;
+	return makeHiddenStdConv(value, slot, value.location);
 }
 
 function isClosureTypedCallee(callee: Node): boolean {

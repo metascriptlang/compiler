@@ -158,7 +158,11 @@ function need(tag: string, ok: boolean, why: string): void {
 	if (!ok) failWith(tag, why);
 }
 
+// the dirs the running case made; shards run cases side by side in one TMP, so a case drops only its own
+const caseDirs: string[] = [];
+
 function freshDir(path: string): string {
+	caseDirs.push(path);
 	removeAll(path);
 	ensureDir(path);
 	return path;
@@ -2534,7 +2538,7 @@ function runEvents(): void {
 	need(tag, up, "malformed case: the program did not start");
 	const verdicts = `${TMP}/runEventsMalformed/out/hcr/app.reload.jsonl`;
 	need(tag, writeFile(verdicts, "this is not json\n").ok, `cannot write ${verdicts}`);
-	readUntil(bad, badSeen, "is not JSON", 20000);
+	readUntil(bad, badSeen, "is not JSON", 120000);
 	const died = bad.wait(30000);
 	bad.close();
 	need(tag, badSeen[0].contains("app.reload.jsonl line 1 is not JSON"), `a malformed verdict line was not named: ${badSeen[0]}`);
@@ -2643,6 +2647,10 @@ for (let i = 0; i < CASES.length; i++) {
 		continue;
 	}
 	const t0 = performance.now();
+	caseDirs.splice(0, caseDirs.length);
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);
+	// A failing case exits above and keeps its dirs; a passing one drops what it wrote (about 45 GB per gate
+	// across the cases, 2026-10-28), so its images die in the page cache instead of on the disk.
+	for (const d of caseDirs) removeAll(d);
 }

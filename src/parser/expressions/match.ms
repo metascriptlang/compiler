@@ -1,9 +1,9 @@
 // Match Expression Parser
 // Uses callback injection to avoid circular imports with expression.ms
 
-import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
+import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, takePendingComments } from "../cursor";
+import { ParserState, current, advance, isAtEnd, finishNode, finishToken } from "../cursor";
 import { parseMemberChain, tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";
@@ -43,13 +43,9 @@ export function parseMatchExpr(
 	advance(state);
 
 	const cases: Node[] = [];
-	let prevEndLine: int32 = 0;
 
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-		const leading = claimCaseComments(state, cases, prevEndLine);
 		const caseNode = try parseMatchCase(state, exprParser, blockParser);
-		for (const c of caseNode.comments) leading.push(c);
-		caseNode.comments = leading;
 		cases.push(caseNode);
 
 		// Optional comma between cases
@@ -57,11 +53,6 @@ export function parseMatchExpr(
 			caseNode.flags = caseNode.flags.incl(NodeFlag.CommaWritten);
 			advance(state);
 		}
-		prevEndLine = state.tokens[state.position - 1].line as int32;
-	}
-	const rest = claimCaseComments(state, cases, prevEndLine);
-	if (cases.length > 0) {
-		for (const c of rest) cases[cases.length - 1].comments.push(c);
 	}
 
 	if (current(state).kind != TokenKind.RBrace) {
@@ -73,18 +64,6 @@ export function parseMatchExpr(
 		matchDisc: disc,
 		matchCases: cases,
 	}, matchToken));
-}
-
-function claimCaseComments(state: ParserState, cases: Node[], prevEndLine: int32): Token[] {
-	const leading: Token[] = [];
-	for (const c of takePendingComments(state)) {
-		if (cases.length > 0 && c.line <= prevEndLine) {
-			cases[cases.length - 1].comments.push(c);
-		} else {
-			leading.push(c);
-		}
-	}
-	return leading;
 }
 
 // ===== Single Match Case =====
@@ -120,11 +99,11 @@ function parseMatchCase(
 	// Parse body: block ({ ... }) or expression
 	let body = try parseMatchBody(state, exprParser, blockParser);
 
-	return Result.ok(createNode(NodeKind.MatchCase, {
+	return Result.ok(finishNode(state, createNode(NodeKind.MatchCase, {
 		casePatterns: patterns,
 		caseGuard: guard,
 		caseBody: body,
-	}, arrowToken));
+	}, arrowToken)));
 }
 
 // ===== Match Body =====
@@ -175,7 +154,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// String literal — with optional .code suffix ("a".code → MemberExpr)
 	if (token.kind == TokenKind.String) {
 		advance(state);
-		let node = createNode(NodeKind.StringLiteral, { value: token.value }, token);
+		let node = finishToken(createNode(NodeKind.StringLiteral, { value: token.value }, token), token);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 			advance(state);
 			if (isAtEnd(state) || !isIdentOrKeyword(current(state).kind)) {
@@ -183,7 +162,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 			}
 			const prop = current(state);
 			advance(state);
-			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
+			node = finishNode(state, createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token));
 		}
 		return Result.ok(node);
 	}
@@ -197,7 +176,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// Identifier (including _ wildcard, enum members, binding patterns)
 	if (isIdentLike(token)) {
 		advance(state);
-		const base = createNode(NodeKind.Identifier, { name: token.value }, token);
+		const base = finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
 		return Result.ok(parseMemberChain(state, base));
 	}
 
@@ -205,7 +184,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Minus) {
 		advance(state);
 		const operand = try parseSinglePattern(state);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token));
+		return Result.ok(finishNode(state, createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token)));
 	}
 
 	return Result.err(`Unexpected token in match pattern: ${token.value} at line ${token.line}`);

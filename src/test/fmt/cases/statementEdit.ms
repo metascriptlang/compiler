@@ -2,24 +2,33 @@ import { parseSource } from "../../../parser/statements/validation";
 import "../../../parser/statements/core";
 import { NodeKind } from "../../../ast/node";
 import { defaultFormatOptions } from "../../../compiler/fmt/options";
-import { formatStatementEdit, innermostStatement, applyEdit } from "../../../compiler/fmt/edit";
+import { formatRunEdits, rangeStatements, StatementRun } from "../../../compiler/fmt/edit";
+
+function runAt(source: string, line: int32, column: int32): StatementRun | null {
+	const parsed = parseSource(source);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const run = rangeStatements(parsed.value, { line, column }, { line, column });
+	if (!run.ok) throw new Error(run.error);
+	return run.value;
+}
 
 function reformatAt(source: string, line: int32, column: int32): string {
-	const parsed = parseSource(source);
-	if (!parsed.ok) return "PARSE ERROR: " + parsed.error;
-	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });
-	if (stmt == null) return "NO STATEMENT";
-	const edit = formatStatementEdit(stmt, source, defaultFormatOptions());
-	if (!edit.ok) return "FMT ERROR: " + edit.error;
-	return applyEdit(source, edit.value);
+	const run = runAt(source, line, column);
+	if (run == null) return "NO STATEMENT";
+	const edits = formatRunEdits(run, source, defaultFormatOptions());
+	if (!edits.ok) return "FMT ERROR: " + edits.error;
+	let result = source;
+	for (let i = edits.value.length - 1; i >= 0; i -= 1) {
+		const e = edits.value[i];
+		result = result.byteSlice(0, e.start) + e.newText + result.byteSlice(e.end, result.byteLength);
+	}
+	return result;
 }
 
 function stmtKindAt(source: string, line: int32, column: int32): string {
-	const parsed = parseSource(source);
-	if (!parsed.ok) return "PARSE ERROR";
-	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });
-	if (stmt == null) return "none";
-	return NodeKind[stmt.kind];
+	const run = runAt(source, line, column);
+	if (run == null) return "none";
+	return NodeKind[run.first.kind];
 }
 
 const MIXED = "const xs = [\n\t1,\n\t2,\n];\nfunction f(): void {\n\tlet   x=1;\n\tconst y = [3,\n\t\t4];\n}\n";
@@ -56,4 +65,14 @@ test "fmt edit: the statement's own comments are rewritten once, not duplicated"
 
 test "fmt edit: a position outside every statement finds none" {
 	assert stmtKindAt("const a = 1;\n\n", 2, 1) == "none";
+}
+
+test "fmt edit: a range over a statement keeps its leading and trailing comments once" {
+	const source = "const a = 1;\n// lead\nlet   b=2; // tail\nconst c = 3;\n";
+	assert reformatAt(source, 3, 3) == "const a = 1;\n// lead\nlet b = 2; // tail\nconst c = 3;\n";
+}
+
+test "fmt edit: the same holds one block deeper" {
+	const source = "function f(): void {\n\tconst a = 1;\n\t// lead\n\tlet   b=2; // tail\n\tconst c = 3;\n}\n";
+	assert reformatAt(source, 4, 3) == "function f(): void {\n\tconst a = 1;\n\t// lead\n\tlet b = 2; // tail\n\tconst c = 3;\n}\n";
 }

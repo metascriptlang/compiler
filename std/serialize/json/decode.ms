@@ -13,7 +13,7 @@
 // Day 5 scope: all atomic field types (string/boolean/number/float*/int*/uint*).
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
-import { Node, NodeKind, TypeKind, typeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, typeKind, getTypeImpl } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -266,7 +266,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			continue;
 		}
 
-		// Nullable field — `X | null`, atomic X only (mirrors the strict
+		// Nullable field — `X | null`, atomic or struct X (mirrors the strict
 		// macro; lenient contract: null/missing → null, present → as* read).
 		if (ftype.kind == NodeKind.TypeUnion) {
 			let optCount: int32 = 0;
@@ -276,6 +276,34 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				if (m.kind == NodeKind.Identifier && m.name == "null") { optSawNull = true; continue; }
 				if (optMember == null) optMember = m;
 				optCount = optCount + 1;
+			}
+			const optImpl: Node | null = optSawNull && optCount == 1 && optMember != null ? getTypeImpl(optMember) : null;
+			if (optImpl != null && optImpl.kind == NodeKind.TypeObject) {
+				const optField: Node = {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+					arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }],
+				};
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [optField],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStruct" },
+						arguments: [
+							optField,
+							{ kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: fname, nodeType: ftype, isOptional: false },
+						],
+					},
+				});
+				i = i + 1;
+				continue;
 			}
 			if (optSawNull && optCount == 1 && optMember != null && optMember.kind == NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
@@ -315,7 +343,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				i = i + 1;
 				continue;
 			}
-			error("jsonValueToStruct: nullable field '" + fname + "' — only atomic `X | null` is supported (nullable struct/array deferred)", witness);
+			error("jsonValueToStruct: nullable field '" + fname + "' — only atomic or struct `X | null` is supported (nullable array deferred)", witness);
 		}
 
 		// Array field — V2: builtin atomic + enum/alias + struct/interface elements.
@@ -836,7 +864,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		// Nullable field — `X | null` (the bridge maps the Maybe carrier back
 		// to the surface union). Missing/null decodes to null; a present
 		// value takes the strict X read, so a wrong kind is still an error.
-		// Only atomic X for now: ref-typed X (interface/array) errors loud.
+		// X is atomic or a struct; an array X errors loud.
 		if (fcore.kind == NodeKind.TypeUnion) {
 			let optCount: int32 = 0;
 			let optMember: Node | null = null;
@@ -845,6 +873,48 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				if (m.kind == NodeKind.Identifier && m.name == "null") { optSawNull = true; continue; }
 				if (optMember == null) optMember = m;
 				optCount = optCount + 1;
+			}
+			const optImpl: Node | null = optSawNull && optCount == 1 && optMember != null ? getTypeImpl(optMember) : null;
+			if (optImpl != null && optImpl.kind == NodeKind.TypeObject) {
+				const optObj: Node = {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: {
+						kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
+						object: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+							arguments: [jv, fnameLit],
+						},
+						property: "reqObject",
+					},
+					arguments: [pfx, fnameLit, errs],
+				};
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [{
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+							arguments: [jv, fnameLit],
+						}],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
+						arguments: [
+							optObj,
+							{ kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: fname, nodeType: ftype, isOptional: false },
+							errs,
+							{ kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname + "." } },
+						],
+					},
+				});
+				i = i + 1;
+				continue;
 			}
 			if (optSawNull && optCount == 1 && optMember != null && optMember.kind == NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
@@ -944,7 +1014,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				i = i + 1;
 				continue;
 			}
-			error("jsonValueToStructE: nullable field '" + fname + "' — only atomic `X | null` is supported (nullable struct/array deferred)", witness);
+			error("jsonValueToStructE: nullable field '" + fname + "' — only atomic or struct `X | null` is supported (nullable array deferred)", witness);
 		}
 
 		// Array detection FIRST — the struct branch would otherwise swallow

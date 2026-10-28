@@ -8,7 +8,7 @@
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, plainFunctionPointerType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow, int32Type, float64Type } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, int32Type, float64Type } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -891,6 +891,7 @@ enum AnnotationWrap {
 	Ref,
 	Arc,
 	Locked,
+	Owned,
 	Readonly,
 	Var,
 }
@@ -918,6 +919,15 @@ function readonlyAnnotationOf(viewed: Type): Type {
 	return substituteParams(homomorphic, [source], [viewed]);
 }
 
+function ownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isUnresolvedType(inner) || inner.kind == TypeKind.Error) return inner;
+	if (inner.kind != TypeKind.Ref || isAtomicRef(inner) || (inner.typeReturn != null && isValuePointee(inner.typeReturn))) {
+		addError(ctx, "Owned<T> takes a class type, got '" + typeDisplayName(inner) + "': a Vec or string is already unique, and a struct is a value", line, col);
+		return inner;
+	}
+	return createOwned(inner);
+}
+
 function bitSetAnnotationOf(ctx: CheckerContext, elem: Type, line: int32, col: int32): Type {
 	if (!bitSetElementAllowed(elem)) {
 		addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
@@ -940,6 +950,7 @@ function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext
 		AnnotationWrap.Ref => createRef(inner),
 		AnnotationWrap.Arc => createArc(inner),
 		AnnotationWrap.Locked => createLocked(inner),
+		AnnotationWrap.Owned => ownedAnnotationOf(ctx, inner, line, col),
 		AnnotationWrap.Readonly => readonlyAnnotationOf(inner),
 		AnnotationWrap.Var => createVar(inner),
 	};
@@ -1207,9 +1218,11 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 					if (afterBracket.length > 0 && afterBracket.charAt(0) == ":") {
 						const valueType = afterBracket.slice(1, afterBracket.length).trim();
 						if (keyType != "" && valueType != "") {
-							// Rewrite to Map<K, V> (ordered) and recurse — reuses all generic resolution.
-							const mapAnnotation = "Map<" + keyType + ", " + valueType + ">";
-							return resolveAnnotation(mapAnnotation, ctx, line, col);
+							const mapSym = stdSymbol(ctx, "Map");
+							if (mapSym == null) throw new Error("internal: the prelude declares no Map for an index signature");
+							ensureShaped(mapSym, ctx);
+							const args = [resolveAnnotation(keyType, ctx, line, col), resolveAnnotation(valueType, ctx, line, col)];
+							return genericInstanceOf(ctx, mapSym, symGenericParams(mapSym), args, line, col);
 						}
 					}
 				}
@@ -1360,6 +1373,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		}
 		if (builtinHead == "Locked" && args.length == 1) {
 			return peelAnnotation(layers, AnnotationWrap.Locked, args[0], 0);
+		}
+		if (builtinHead == "Owned" && args.length == 1) {
+			return peelAnnotation(layers, AnnotationWrap.Owned, args[0], 0);
 		}
 		if (builtinHead == "Readonly" && args.length == 1) {
 			return peelAnnotation(layers, AnnotationWrap.Readonly, args[0], 0);

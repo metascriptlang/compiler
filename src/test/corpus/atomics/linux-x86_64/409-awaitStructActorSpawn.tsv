@@ -32,6 +32,7 @@
 3	msSpawnWorkerSettle
 3	msWaitFor
 4	msActorLendWakeCb
+4	msActorShutdownAtExit
 4	msProcessTimers
 4	run__SsrcZtestZcorpusZprogramsZ409U2DawaitU53tructU41ctorU53pawnOms_u0
 5	msActorProcess

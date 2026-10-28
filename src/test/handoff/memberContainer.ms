@@ -72,7 +72,12 @@ test "memberContainer: a field a builtin promise lacks is refused, not read from
 	assert messages.length == 1 && messages[0].contains("'extra'"), messages.join("\n");
 }
 
-test "memberContainer: a field the builtin promise declares is read beside a module class spelled Promise" {
-	const messages = entryErrors("import { wait } from \"./b\";\nclass Promise { extra: int32 = 5; }\nconst local = new Promise();\nconst done = wait().finished;\nconst n = local.extra;\n", promiseModule);
+test "memberContainer: the builtin promise has no finished field to poll, as on the JS backend" {
+	const messages = entryErrors("import { wait } from \"./b\";\nconst done = wait().finished;\n", promiseModule);
+	assert messages.length == 1 && messages[0].contains("'finished'"), messages.join("\n");
+}
+
+test "memberContainer: a member the builtin promise declares is read beside a module class spelled Promise" {
+	const messages = entryErrors("import { wait } from \"./b\";\nclass Promise { extra: int32 = 5; }\nconst local = new Promise();\nconst done = wait().then((v: int32): void => {});\nconst n = local.extra;\n", promiseModule);
 	assert messages.length == 0, messages.join("\n");
 }

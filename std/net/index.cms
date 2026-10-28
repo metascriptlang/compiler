@@ -17,6 +17,7 @@ extern function msNetAccept(fd: int32): int32;
 extern function msNetConnect(fd: int32, host: string, port: int32): int32;
 extern function msNetSend(fd: int32, data: string): int32;
 extern function msNetRecv(fd: int32, maxBytes: int32): string;
+extern function msNetLastRecvTimedOut(): int32;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
@@ -53,6 +54,11 @@ export function send(fd: int32, data: string): int32 {
 
 export function recv(fd: int32, maxBytes: int32): string {
 	return msNetRecv(fd, maxBytes);
+}
+
+// True also when a non-blocking socket had no data, so an empty recv is end of stream only when this is false.
+export function recvTimedOut(): boolean {
+	return msNetLastRecvTimedOut() != 0;
 }
 
 export function close(fd: int32): void {

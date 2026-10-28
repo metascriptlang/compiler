@@ -34,7 +34,7 @@ export type RaiserPrintSink = (text: string) => void;
 // are where text crosses to and from a host string.
 function hostStringHeap(): RaiserArrayHeap {
 	const heap = activeHostArrayHeap();
-	if (heap == null) throw new Error("internal: a host string needs an active host heap");
+	if (heap == null) throw new Error("boxString and unboxString work inside a host routine; outside one, build a string argument with hostString");
 	return heap;
 }
 
@@ -124,11 +124,13 @@ export function hostValue(v: RaiserValue): RaiserHostValue {
 		throw new Error(`hostValue takes a boxed scalar, not a handle of kind ${kind}: `
 			+ "build an aggregate with hostObject or hostArray");
 	}
-	if (isHeapString(v)) {
-		const arrayHeap = createArrayHeap();
-		return { root: heapAllocString(arrayHeap, unboxString(v)), arrayHeap, objectHeap: SCALAR_OBJECTS };
-	}
+	if (isHeapString(v)) throw new Error("hostValue takes a boxed number, boolean or nil: build a string with hostString");
 	return { root: v, arrayHeap: SCALAR_ARRAYS, objectHeap: SCALAR_OBJECTS };
+}
+
+export function hostString(s: string): RaiserHostValue {
+	const arrayHeap = createArrayHeap();
+	return { root: heapAllocString(arrayHeap, s), arrayHeap, objectHeap: SCALAR_OBJECTS };
 }
 
 export function hostObject(names: string[], values: RaiserHostValue[]): RaiserHostValue {
@@ -270,8 +272,8 @@ test "boxVoid is nil" {
 }
 
 test "a host value built from scalars crosses into a VM heap and back with its children counted" {
-	const keys = hostValue(boxString("ctrl+a"));
-	const bind = hostObject(["keys", "text"], [keys, hostValue(boxString("home"))]);
+	const keys = hostString("ctrl+a");
+	const bind = hostObject(["keys", "text"], [keys, hostString("home")]);
 	const binds = hostArray([bind, bind]);
 	const config = hostObject(["binds", "fontSize"], [binds, hostValue(boxVoid())]);
 	const vmArrays = createArrayHeap();
@@ -297,4 +299,20 @@ test "a host value refuses a walk its kind does not have" {
 	assert refused == "element 0 of an array of 0";
 	try { hostValue(raiserObject(0)); } catch (e) { refused = e.message; }
 	assert refused.startsWith("hostValue takes a boxed scalar, not a handle of kind Object");
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
+	try { hostValue(boxString("haro")); } catch (e) { refused = e.message; }
+	assert refused == "hostValue takes a boxed number, boolean or nil: build a string with hostString";
+}
+
+test "a host string is built on its own heap and never on the heap of a running host routine" {
+	const running = createArrayHeap();
+	setActiveHostHeaps(createStructHeap(), running);
+	const key = hostObject(["code"], [hostString("KeyA")]);
+	assert running.strings.texts.length == 0;
+	const vmArrays = createArrayHeap();
+	const vmObjects = createStructHeap();
+	const placed = copyToVm(vmArrays, vmObjects, hostArray([key, hostString("日本")]));
+	const back = copyToHost(vmArrays, vmObjects, placed);
+	assert back.at(0).field("code").text() == "KeyA";
+	assert back.at(1).text() == "日本";
 }

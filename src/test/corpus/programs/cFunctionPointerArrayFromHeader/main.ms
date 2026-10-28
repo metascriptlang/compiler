@@ -1,7 +1,6 @@
 // A header struct's array of function pointers holds module-level functions as C symbols:
 // filled by element assignment, read and called as `t.fs[i](n)`, in an array of three, and
-// nested one struct deep. The structs come from the header because a literal cannot yet fill
-// a C array field of any element type.
+// nested one struct deep.
 //
 // @xfail(raiser): raiser has no host bridge for the header's C function 'corpusMakeTable', so the extern cannot run in the VM
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage

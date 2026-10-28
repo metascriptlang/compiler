@@ -20,13 +20,14 @@ RULES=(
   'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
+  'cache|^src/compiler/(cache|cc|compile|toolchain)\.ms$|^src/test/cache/'
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana"
-LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
-KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san tsan guard solana"
+ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
+LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
+PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
+KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
@@ -61,7 +62,8 @@ every gate ahead of it has finished or died. It names the gate it waits behind
 about once a minute; the wait is not capped by GATE_WAIT_MAX and shows in the
 ledger wait column. Only the running gate counts when worker slots are split.
 --dry-run, a tools-only run and the --emit-one children of a running gate never
-queue. An empty registry file is a running gate whose gate.sh predates the queue;
+queue, nor does a run with GATE_QUEUE=0, whose caller admitted it on measured free CPU and RAM (a
+gate host running several gates in their own checkouts). An empty registry file is a running gate whose gate.sh predates the queue;
 it is waited for like any other. A registry file that does not parse stops the
 run and names the file.
 
@@ -596,7 +598,7 @@ esac
 EXE_SUFFIX=""
 case "$CAND" in *.exe) EXE_SUFFIX=.exe ;; esac
 CTL_CACHE="${HOME:-$USERPROFILE}/.metascript/cache/gate-ctl/v1"
-CTL_WORK="$CTL_CACHE/work"
+CTL_WORK="$OUT/ctl-work"
 CONTROL_SUPPORT=""
 EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
@@ -613,6 +615,7 @@ reds_of() {
       sed -n 's/^FAIL \(self-host: .*[^)]\)\( ([^)]*)\)\{0,1\}$/\1/p' "$log"
       [ "$rc" -eq 0 ] || grep -q '^FAIL self-host: ' "$log" || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
+    cache) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^cache: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -nE 's/^FAIL (.*): (bash -n|self-test|check)$/\1/p' "$log" ;;
     suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
@@ -1724,8 +1727,8 @@ runtime/actor/actor.h|boundary build corpus guard hcr san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
-src/compiler/cc.ms|boundary build corpus solana suite tests
-src/compiler/compile.ms|boundary build corpus hcr solana suite tests
+src/compiler/cc.ms|boundary build cache corpus solana suite tests
+src/compiler/compile.ms|boundary build cache corpus hcr solana suite tests
 src/compiler/meta/comptime.ms|build corpus guard solana suite tests
 src/compiler/lsp/server.ms|build lsp suite
 src/compiler/transam/query.ms|build lsp suite
@@ -1735,6 +1738,8 @@ runtime/process.h|boundary build corpus hcr lsp suite tests
 src/compiler/package/install.ms|boundary build suite
 src/compiler/meta/hostTable.ms|boundary build corpus guard solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
+src/test/cache/run.ms|build cache suite
+src/compiler/cache.ms|boundary build cache corpus hcr suite tests
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
@@ -2127,6 +2132,7 @@ lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
+    cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
@@ -2369,7 +2375,7 @@ need_cand() {
 if [ "$select_only" -eq 1 ]; then
   need_cand select
   trap queue_release EXIT
-  queue_acquire
+  [ "${GATE_QUEUE:-1}" = 0 ] || queue_acquire
   select=1 selected=0 select_label=corpus
   select_programs
   [ "$selected" -eq 0 ] || cat "$EMIT/only.corpus"
@@ -2499,7 +2505,7 @@ lane_body() {
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
-[ "$lanes" = tools ] || { queue_acquire; warn_slow_starts; }
+[ "$lanes" = tools ] || { [ "${GATE_QUEUE:-1}" = 0 ] || queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open

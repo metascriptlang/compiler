@@ -162,6 +162,49 @@ main();
 	assert c.ok;
 }
 
+const STORE = `
+class Item { n: int32 = 0; }
+class Conn { n: int32 = 1; }
+class Stmt {
+	conn: Conn;
+	constructor(c: Conn) { this.conn = c; }
+}
+class Db {
+	conn: Conn = new Conn();
+	prepare(): Stmt { return new Stmt(this.conn); }
+}
+actor Store {
+	private db: Db = new Db();
+	private kept: Readonly<Item>[] = [];
+	record(key: string): int32 { return this.db.prepare().conn.n; }
+	keep(it: Readonly<Item>): int32 { this.kept.push(it); return 1; }
+	look(it: Readonly<Item>): int32 { return it.n; }
+	see(it: Readonly<Item>): void { }
+}
+async function main(): Promise<void> {
+	const store = new Store();
+	const item = new Item();
+`;
+
+test "E2E C: a message to an actor crosses with its operands, so the actor's own state stays off the thread-crossing walk" {
+	const rows = [
+		{ name: "a SEND from a spawn thunk", body: "const a = spawn(() => { store.record(\"x\"); return 0; }); await a;" },
+		{ name: "a CALL from a Sendable function", body: "const job: Sendable<() => Promise<int32>> = async (): Promise<int32> => await store.record(\"x\"); await job();" },
+		{ name: "a view lent to a CALL the actor only reads", body: "const job: Sendable<() => Promise<int32>> = async (): Promise<int32> => await store.look(item); await job();" },
+	];
+	for (const row of rows) {
+		const c = compileToC(STORE + row.body + "\n}\nawait main();\n");
+		assert c.ok, row.name;
+	}
+}
+
+test "E2E C: a view operand of an actor message from a task is still refused" {
+	const kept = compileToC(STORE + "const job: Sendable<() => Promise<int32>> = async (): Promise<int32> => await store.keep(item); await job();\n}\nawait main();\n");
+	assert !kept.ok && kept.error.contains("actor method 'keep' keeps its parameter 'it'"), "a CALL whose actor keeps the lent view";
+	const sent = compileToC(STORE + "const a = spawn(() => { store.see(item); return 0; }); await a;\n}\nawait main();\n");
+	assert !sent.ok && sent.error.contains("fire-and-forget actor call would share a plain reference"), "a SEND of a view";
+}
+
 test "E2E C: E24 — compound assignment in spawn thunk fails" {
 	const src = `
 actor W {

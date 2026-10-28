@@ -161,6 +161,18 @@ test "a reference narrowed to one variant refuses another variant's field and a 
 	assert strictErrorCount(NARROWED_HEAD + "function none(d: Data): number { if (d.kind == Kind.A) return d.z; return 0; }") > 0;
 }
 
+const THREE_HEAD = "enum K { A, B, C, E }\ntype D = match (kind: K) {\n\tK.A => { s: string },\n\tK.B => { n: number },\n\tK.C => { t: number },\n\tK.E => { u: boolean },\n};\n";
+
+test "a failed tag-and-check leaves every later tag test narrowing" {
+	assert strictErrorCount(THREE_HEAD + "function pair(a: D, b: D): boolean { if (a.kind == K.A && b.kind == K.A) return a.s == b.s; if (a.kind == K.B && b.kind == K.B) return a.n == b.n; return false; }") == 0;
+	assert strictErrorCount(THREE_HEAD + "function single(a: D): string { if (a.kind == K.B && a.n == 1) return \"one\"; if (a.kind == K.A) return a.s; return \"\"; }") == 0;
+	assert strictErrorCount(THREE_HEAD + "function arms(a: D): number { if (a.kind == K.C && a.t == 0) return 0; return match (a.kind) { K.A => a.s.length, K.B => a.n, K.C => a.t, K.E => 1 }; }") == 0;
+}
+
+test "a failed tag-and-check on an already narrowed residual keeps its tag tests narrowing" {
+	assert strictErrorCount(THREE_HEAD + "function residual(a: D): string { if (a.kind == K.E) return \"\"; if (a.kind == K.B && a.n == 1) return \"\"; if (a.kind == K.A) return a.s; return \"\"; }") == 0;
+}
+
 test "construction of second variant" {
 	const src = "enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction makeB(): Data { return { kind: Kind.B, y: \"hello\" }; }";
 	const ctx = checkSource(src);

@@ -23,7 +23,8 @@ export extern function nonisolated(): void;
 export enum ExitReason {
 	Normal,
 	Shutdown,
-	Error,
+	Killed,
+	Abnormal,
 }
 
 // A timer armed while an actor runs (`__msActors.cur`, set by the mailbox pump) is the

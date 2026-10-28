@@ -20,6 +20,7 @@ import { isIntegerType } from "../checker/types";
 import { TransformContext, newLoweredSym } from "./context";
 import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
 import { createNode } from "../ast/node";
+import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { calleeFormals } from "./lowering/jsVarParamLower";
 
 // ===== Type-based __paValue dispatch =====
@@ -144,7 +145,7 @@ function instrumentAssert(assertNode: Node, ctx: TransformContext): Node {
 	failStmts.push(simpleAssert);
 
 	// Build: if (!result) { ...fail... }
-	const notResult = makeUnary("!", resultRef, loc);
+	const notResult = makeUnary("!", cloneNodeKeepSem(resultRef), loc);
 	const failBlock = makeBlock(failStmts, loc);
 	const ifStmt = makeIf(notResult, failBlock, null, loc);
 	stmts.push(ifStmt);

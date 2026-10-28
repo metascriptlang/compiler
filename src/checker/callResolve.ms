@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -12,8 +12,8 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, stampOwner, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol } from "./context";
-import { branchFitsSlot, comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitArmsToSlot, fitNode, slotRefuses, slotTakesValue, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString } from "./fit";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, stampOwner } from "./context";
+import { branchFitsSlot, comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, fitArmsToSlot, slotTakesValue } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -29,8 +29,8 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkIsolateArg, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
+import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
+import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback, checkIsolateArg } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -585,7 +585,6 @@ function cloneDefaultNode(node: Node): Node {
 	return clone;
 }
 
-let defaultArgTemps: int32 = 0;
 
 function readEarlierParams(ctx: CheckerContext, cloned: Node, paramNames: string[], defIdx: number, args: Node[],
 	defaultOffset: number, paramTypes: Type[], receiverSlot: Node | null, reads: Node[]): Node {
@@ -644,25 +643,9 @@ function readsWithoutEffect(n: Node): boolean {
 interface ArgumentBinding { assign: Node; value: Node; }
 
 function bindArgumentOnce(ctx: CheckerContext, source: Node): ArgumentBinding {
-	defaultArgTemps += 1;
-	const t = source.nodeType!;
-	const loc = source.location;
-	const name = "__dflt_" + String(defaultArgTemps);
-	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
-	setFlag(sym, SymbolFlag.Used);
-	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
-	stampOwner(ctx, sym);
-	sym.location = loc;
-	const decl = createNodeAt(NodeKind.VariableDecl, { declName: name, declType: "", initializer: null as unknown as Node, declKind: DeclKind.Let, nameLocation: loc }, loc);
-	decl.resolvedSym = sym;
-	decl.nodeType = t;
-	decl.flags = decl.flags.incl(NodeFlag.Sem);
-	sym.declNode = decl;
-	ctx.pendingHoisted.push(decl);
-	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: boundRead(sym, loc), right: source }, loc);
-	assign.nodeType = t;
-	assign.flags = assign.flags.incl(NodeFlag.Sem);
-	return { assign, value: boundRead(sym, loc) };
+	const sym = hoistedTemp(ctx, source.nodeType!, source.location);
+	const assign = assignTemp(sym, source);
+	return { assign, value: boundRead(sym, source.location) };
 }
 
 export function takeDefaultArgTemps(ctx: CheckerContext, mark: int32): Node[] {
@@ -683,13 +666,6 @@ function isDefaultArgTemp(n: Node): boolean {
 	return d.initializer == null && d.declType == "";
 }
 
-function boundRead(sym: Symbol, loc: SourceLocation): Node {
-	const id = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
-	id.resolvedSym = sym;
-	id.nodeType = sym.symbolType;
-	id.flags = id.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
-	return id;
-}
 
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
@@ -859,7 +835,9 @@ function thenableAdoption(ctx: CheckerContext, operand: Node, site: string): The
 		arrowBody: createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: thenCall }, loc)] }, loc),
 		arrowFlags: "", arrowReturnType: "", arrowDefaults: [null as unknown as Node, null as unknown as Node, null as unknown as Node],
 	}, loc);
-	const call = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseFromThenable" }, loc), arguments: [operand, callThen], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const adopter = ctx.compilerFuncs.get("promiseFromThenable");
+	if (adopter == null) throw new Error("internal: the prelude declares no @compilerFunc promiseFromThenable");
+	const call = boundCallOf(adopter, [operand, callThen], loc);
 	return { call, promised };
 }
 
@@ -1521,7 +1499,11 @@ function fillFromSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], at:
 	if (args.length > fixed) args.shrink(fixed);
 	if (argTypes.length > fixed) argTypes.shrink(fixed);
 	const remainder = fixed == at ? read.first : cloneNodeKeepSem(read.again);
-	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: "slice", isOptional: false }, loc);
+	const routine = ctx.compilerFuncs.get("restFrom");
+	if (routine == null) throw new Error("internal: the array prelude declares no @compilerFunc restFrom");
+	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: routine.name, isOptional: false }, loc);
+	callee.resolvedSym = routine;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
 	const slice = createNodeAt(NodeKind.CallExpr,
 		{ callee, arguments: [indexLiteral(fixed - at, loc)], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 	const rest = createNodeAt(NodeKind.SpreadExpr, { spreadArg: slice }, loc);
@@ -2942,6 +2924,10 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
 			const sendableArg = fitSendable(ctx, args[pi], paramType, argTypes[pi]);
 			if (sendableArg != null) argTypes[pi] = sendableArg;
+			if (!hasGenericParams(paramType)) {
+				const ownedArg = fitOwnership(ctx, args[pi], peelSink(paramType), argTypes[pi]);
+				if (ownedArg != null) argTypes[pi] = ownedArg;
+			}
 			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi], ctx);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
@@ -4161,6 +4147,15 @@ interface ContextPick {
 	tie: boolean;
 }
 
+function trialScore(candidate: Type, args: Node[], argTypes: Type[], skipMask: boolean[]): CandidateScore {
+	enterSpeculation();
+	try {
+		return scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
+	} finally {
+		leaveSpeculation();
+	}
+}
+
 // The reference's `chooseOverload`: a context-sensitive argument is checked against each
 // candidate's own parameter, and every candidate it fits is ranked with the type it took
 // there, so the most specific fitting overload wins and a tie is an error.
@@ -4177,7 +4172,7 @@ function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[]
 		const formals = winnerFormals(ctx, callNode, candSyms[ci], c, args, argTypes, skipMask, expectedType);
 		if (!contextArgsFit(ctx, args, skipMask, formals.checked)) continue;
 		const typed = typedContextArgs(args, argTypes, skipMask);
-		const score = scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), scored, literalRelations(c.typeChildren, args, typed));
+		const score = trialScore(c, args, typed, scored);
 		while (fitScores.length < ci) fitScores.push(noMatchScore());
 		fitScores.push(score);
 		if (isNoMatch(score)) continue;
@@ -4414,7 +4409,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const score = candType == null || candType.kind != TypeKind.Function || (!implAsFallback && isHiddenImplementation(candSyms[ci], ci < ownCount ? sym : gathered!))
 			? noMatchScore()
 			: spreadAt >= 0 && !spreadFitsCandidate(candType, spreadAt, argTypes[spreadAt], getMinArity(candType)) ? noMatchScore()
-			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
+			: trialScore(candType, args, argTypes, skipMask);
 		scores.push(score);
 		const cmp = score.exactMatches < 0 ? -1 : bestIdx < 0 ? 1 : cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
 		if (cmp > 0) {
@@ -5163,7 +5158,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 	while (i < candidates.length) {
 		if (candidates[i].kind != TypeKind.Function || rejected[i]) { i = i + 1; continue; }
 		const at = typedPer != null ? typedPer[i] : argTypes;
-		const score = scoreCandidateWithSkip(candidates[i].typeChildren, at, getMinArity(candidates[i]), skipMask, literalRelations(candidates[i].typeChildren, args, at));
+		const score = trialScore(candidates[i], args, at, skipMask);
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {

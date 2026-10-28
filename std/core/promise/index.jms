@@ -57,6 +57,7 @@ export function promiseAfterVoid(run: () => void): Promise<void> {
 	return msNewPromise<void>((resolve: (value: void) => void, reject: (reason: Error) => void): void => { resolve(); });
 }
 
+@compilerFunc
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	return msNewPromise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
 		msQueueJob((): void => {

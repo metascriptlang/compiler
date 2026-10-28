@@ -21,7 +21,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -54,12 +54,16 @@ function heldKey(held: Type, holder: NameSet): string {
 	return hasGenericParams(held) || (named && !hasTypeIdentity(held)) ? "" : typeIdentity(held, holder);
 }
 
-function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
+function visitKey(key: string, sawPlainEdge: boolean): string {
+	return sawPlainEdge ? key + "+" : key;
+}
+
+function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet, hopCounted: boolean = false): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
 		TypeKind.Ref => {
 			if (t.typeReturn == null) return true;
-			return cfaAux(t.typeReturn, origKey, true, marker);
+			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !isOwnedRef(t), marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
 		TypeKind.Function | TypeKind.Unknown => true,
 		TypeKind.Struct => {
@@ -71,28 +75,28 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
 			if (t.typeFlags.has(TypeFlag.OpenClass)) return true;
 			const key = typeIdentity(t, marker);
-			if (withRef && key != "" && key == origKey) return true;
+			if (withRef && key != "" && key == origKey) return sawPlainEdge;
 			if (key != "") {
-				if (nameSetContains(marker, key)) return false;
-				nameSetAdd(marker, key);
+				if (nameSetContains(marker, visitKey(key, sawPlainEdge))) return false;
+				nameSetAdd(marker, visitKey(key, sawPlainEdge));
 			}
-			return cfaStructFields(t, origKey, withRef, marker);
+			return cfaStructFields(t, origKey, withRef, sawPlainEdge, marker);
 		},
 		TypeKind.Union => {
 			const key = typeIdentity(t, marker);
-			if (withRef && key != "" && key == origKey) return true;
+			if (withRef && key != "" && key == origKey) return sawPlainEdge;
 			if (key != "") {
-				if (nameSetContains(marker, key)) return false;
-				nameSetAdd(marker, key);
+				if (nameSetContains(marker, visitKey(key, sawPlainEdge))) return false;
+				nameSetAdd(marker, visitKey(key, sawPlainEdge));
 			}
 			for (const variant of t.typeChildren) {
-				if (cfaAux(variant, origKey, withRef, marker)) return true;
+				if (cfaAux(variant, origKey, withRef, sawPlainEdge, marker)) return true;
 			}
 			return false;
 		},
 		TypeKind.Tuple => {
 			for (const child of t.typeChildren) {
-				if (cfaAux(child, origKey, withRef, marker)) return true;
+				if (cfaAux(child, origKey, withRef, sawPlainEdge, marker)) return true;
 			}
 			return false;
 		},
@@ -103,25 +107,25 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 				if (params != "") instantiateGenericBody(t, params);
 			}
 			const key = typeIdentity(t, marker);
-			if (withRef && key != "" && key == origKey) return true;
+			if (withRef && key != "" && key == origKey) return sawPlainEdge;
 			if (key != "") {
-				if (nameSetContains(marker, key)) return false;
-				nameSetAdd(marker, key);
+				if (nameSetContains(marker, visitKey(key, sawPlainEdge))) return false;
+				nameSetAdd(marker, visitKey(key, sawPlainEdge));
 			}
-			return cfaInstanceBody(t.typeReturn, origKey, withRef, marker);
+			return cfaInstanceBody(t.typeReturn, origKey, withRef, sawPlainEdge, marker, hopCounted);
 		},
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => {
 			const key = typeIdentity(t, marker);
-			if (withRef && key == origKey) return true;
-			if (nameSetContains(marker, key)) return false;
-			nameSetAdd(marker, key);
-			return cfaAux(t.typeReturn, origKey, withRef, marker);
+			if (withRef && key == origKey) return sawPlainEdge;
+			if (nameSetContains(marker, visitKey(key, sawPlainEdge))) return false;
+			nameSetAdd(marker, visitKey(key, sawPlainEdge));
+			return cfaAux(t.typeReturn, origKey, withRef, sawPlainEdge, marker);
 		},
 		TypeKind.Varargs => {
-			if (t.typeChildren.length > 0) return cfaAux(t.typeChildren[0], origKey, withRef, marker);
+			if (t.typeChildren.length > 0) return cfaAux(t.typeChildren[0], origKey, withRef, sawPlainEdge, marker);
 			return false;
 		},
-		TypeKind.Distinct | TypeKind.Alias | TypeKind.Var | TypeKind.Sink | TypeKind.Lent | TypeKind.Result => cfaAux(t.typeReturn, origKey, withRef, marker),
+		TypeKind.Distinct | TypeKind.Alias | TypeKind.Var | TypeKind.Sink | TypeKind.Lent | TypeKind.Result => cfaAux(t.typeReturn, origKey, withRef, sawPlainEdge, marker),
 		_ => holdsNoCell(t),
 	};
 }
@@ -148,43 +152,43 @@ function holdsNoCell(t: Type): boolean {
 	};
 }
 
-function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
-	if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
+function cfaStructFields(t: Type, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet): boolean {
+	if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, sawPlainEdge, marker)) return true;
 	for (const child of t.typeChildren) {
-		if (cfaAux(child, origKey, withRef, marker)) return true;
+		if (cfaAux(child, origKey, withRef, sawPlainEdge, marker)) return true;
 	}
-	return cfaHeldBeyond(t, origKey, withRef, marker);
+	return cfaHeldBeyond(t, origKey, withRef, sawPlainEdge, marker);
 }
 
 // An interface or unnamed record stands for every object type the checker accepted behind
 // it (noteHeldBeyond); a cycle can run through any of them. An implementer with generic
 // parameters, or with no key to mark a walk by, has fields no walk can see, so it counts as
 // closing one.
-function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
+function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet): boolean {
 	for (const held of heldBeyond(t)) {
-		if (heldKey(held, marker) == "" || cfaAux(held, origKey, withRef, marker)) return true;
+		if (heldKey(held, marker) == "" || cfaAux(held, origKey, withRef, sawPlainEdge, marker)) return true;
 	}
 	return false;
 }
 
-function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
+function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet, hopCounted: boolean = false): boolean {
 	if (body == null) return false;
 	if (body.kind == TypeKind.Ref) {
 		if (body.typeReturn == null) return true;
-		return cfaInstanceBody(body.typeReturn, origKey, true, marker);
+		return cfaInstanceBody(body.typeReturn, origKey, true, sawPlainEdge || !hopCounted, marker);
 	}
 	if (body.kind == TypeKind.Struct) {
 		if (body.typeFlags.has(TypeFlag.Acyclic)) return false;
 		if (body.typeFlags.has(TypeFlag.OpenClass)) return true;
-		return cfaStructFields(body, origKey, withRef, marker);
+		return cfaStructFields(body, origKey, withRef, sawPlainEdge, marker);
 	}
 	if (body.kind == TypeKind.Union) {
 		for (const variant of body.typeChildren) {
-			if (cfaAux(variant, origKey, withRef, marker)) return true;
+			if (cfaAux(variant, origKey, withRef, sawPlainEdge, marker)) return true;
 		}
 		return false;
 	}
-	return cfaAux(body, origKey, withRef, marker);
+	return cfaAux(body, origKey, withRef, sawPlainEdge, marker);
 }
 
 export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
@@ -208,7 +212,7 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		if (nameSetContains(acyclicCache, key)) return false;
 	}
 	const marker = createSharingNameSet(cyclicCache);
-	const result = cfaAux(subject, key, false, marker) || implementerCanFormAcycle(subject, cyclicCache);
+	const result = cfaAux(subject, key, false, false, marker) || implementerCanFormAcycle(subject, cyclicCache);
 	if (key != "") {
 		if (result) { nameSetAdd(cyclicCache, key); } else { nameSetAdd(acyclicCache, key); }
 	}
@@ -230,7 +234,7 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 			if (key == "") return true;
 			if (nameSetContains(seen, key)) continue;
 			nameSetAdd(seen, key);
-			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createSharingNameSet(cyclicCache))) return true;
+			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, false, createSharingNameSet(cyclicCache))) return true;
 			slots.push(held);
 		}
 	}

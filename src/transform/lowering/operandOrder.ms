@@ -1,15 +1,18 @@
 // Operand order — an expression kind that must become statements (an `await`, a `try`) is
-// hoisted ahead of its statement, so every operand written to its left is evaluated into a
-// temp first, in order: the call operands before it into temps in order. A `Spiller` names the
-// kind: `has` finds it in an operand and `lower` hoists it into `pre`.
+// hoisted ahead of its statement, so every operand written to its left that the hoisted code
+// could change is evaluated into a temp first, in order: the call operands before it into
+// temps in order. A `Spiller` names the kind: `has` finds it in an operand and `lower` hoists
+// it into `pre`.
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
 	CallExprData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
-	ArrayLiteralData, ObjectLiteralData, NewExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
+	ArrayLiteralData, ObjectLiteralData, NewExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
+import { forEachChild, anyDescendant, Visit, isFuncBoundary } from "../../ast/visitor";
+import { isFrameValue } from "../../checker/symbol";
 import { isStructType } from "../../checker/types";
-import { TransformContext, newLoweredSym } from "../context";
+import { TransformContext, FrameReach, newLoweredSym } from "../context";
 import { isAssignOp } from "../../ast/operators";
 export { isAssignOp } from "../../ast/operators";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
@@ -105,7 +108,9 @@ function lowerOperands(sp: Spiller, ops: Node[], pre: Node[], receivers: int32):
 	if (last < 0) return;
 	for (let i = 0; i < ops.length; i += 1) {
 		if (ops[i] == null) continue;
-		ops[i] = bindOperand(sp, sp.lower(ops[i], pre), i < last && i >= receivers, pre);
+		const lowered = sp.lower(ops[i], pre);
+		const snapshot = i < last && i >= receivers && !unchangedByHoist(sp, lowered, ops.slice(i + 1, last + 1));
+		ops[i] = bindOperand(sp, lowered, snapshot, pre);
 	}
 }
 
@@ -175,9 +180,10 @@ export function lowerAssign(sp: Spiller, e: Node, pre: Node[]): Node {
 		return e;
 	}
 	d.left = settleTarget(sp, d.left, pre);
-	const readBack = d.operator == "=" ? null : cloneIfPure(d.left);
+	const readBack = d.operator == "=" || unchangedByHoist(sp, d.left, [d.right]) ? null : cloneIfPure(d.left);
 	if (readBack == null) {
-		d.right = bindIfEarly(sp, sp.lower(d.right, pre), pre);
+		const value = sp.lower(d.right, pre);
+		d.right = d.left.kind == NodeKind.Identifier ? value : bindIfEarly(sp, value, pre);
 		return e;
 	}
 	const before = tempRef(bindTemp(sp, readBack, DeclKind.Const, d.left.nodeType, pre, e.location), e.location);
@@ -185,4 +191,69 @@ export function lowerAssign(sp: Spiller, e: Node, pre: Node[]): Node {
 	d.right = makeBinary(before, d.operator.slice(0, d.operator.length - 1), value, e.location);
 	d.operator = "=";
 	return e;
+}
+
+// A frame value named by one routine only, whose address is never taken: no call and no
+// suspension can change it, so only the code of its own statement can. Its names all lie in
+// the top-level statement that declares it, so a statement with nothing to hoist is skipped.
+export function frameReach(program: Node, hoisted: NodeKind): FrameReach {
+	const fr: FrameReach = { home: new HashMap<Symbol, Node>(), reached: new HashSet<Symbol>() };
+	forEachChild(program, (stmt: Node): void => {
+		if (anyDescendant(stmt, (c: Node): Visit => c.kind == hoisted ? Visit.Hit : Visit.Descend)) noteReach(stmt, program, fr);
+	});
+	return fr;
+}
+
+function isRoutine(n: Node): boolean {
+	return isFuncBoundary(n) || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl
+		|| n.kind == NodeKind.ClassDecl || n.kind == NodeKind.ActorDecl || n.kind == NodeKind.TestDecl;
+}
+
+function aliasesStorage(t: Type | null): boolean {
+	if (t == null) return false;
+	const k = t.kind;
+	return k == TypeKind.Ptr || k == TypeKind.Span || k == TypeKind.Var || k == TypeKind.Lent
+		|| k == TypeKind.Borrow || k == TypeKind.CString;
+}
+
+function addressedPlace(n: Node): Node | null {
+	if (n.kind == NodeKind.HiddenAddr) return (n.data as HiddenDerefData).expr;
+	if (n.kind == NodeKind.OutExpr) return (n.data as OutExprData).outArg;
+	if (n.kind == NodeKind.TypeAssertion && aliasesStorage(n.nodeType)) return (n.data as TypeAssertionData).asExpr;
+	return null;
+}
+
+function noteReach(n: Node | null, routine: Node, fr: FrameReach): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		if (sym == null || !isFrameValue(sym)) return;
+		if (!fr.home.has(sym)) fr.home.set(sym, routine);
+		else if (fr.home.get(sym) != routine) fr.reached.add(sym);
+		return;
+	}
+	const place = addressedPlace(n);
+	if (place != null) {
+		anyDescendant(place, (c: Node): Visit => {
+			if (c.kind == NodeKind.Identifier && c.resolvedSym != null) fr.reached.add(c.resolvedSym);
+			return Visit.Descend;
+		});
+	}
+	const inner = isRoutine(n) ? n : routine;
+	forEachChild(n, (c: Node): void => noteReach(c, inner, fr));
+}
+
+function unchangedByHoist(sp: Spiller, e: Node, later: Node[]): boolean {
+	const fr = sp.ctx.frameReach;
+	if (fr == null || e.kind != NodeKind.Identifier) return false;
+	const sym = e.resolvedSym;
+	if (sym == null || !fr.home.has(sym) || fr.reached.has(sym)) return false;
+	for (const op of later) {
+		if (op != null && namesSym(op, sym)) return false;
+	}
+	return true;
+}
+
+function namesSym(n: Node, sym: Symbol): boolean {
+	return anyDescendant(n, (c: Node): Visit => c.kind == NodeKind.Identifier && c.resolvedSym == sym ? Visit.Hit : Visit.Descend);
 }

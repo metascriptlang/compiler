@@ -92,6 +92,7 @@ export enum TypeFlag {
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
+	IsOwned,              // Owned<T> on a class Ref: the unique owning edge, so a cycle needs a non-owned edge and a copy of it is refused
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -158,6 +159,8 @@ export class Type {
 	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
+	ownedType: Type | null;
+	plainType: Type | null;
 	optionalFields: string[] | null; // Struct: the fields written `name?`, own and inherited
 }
 
@@ -247,6 +250,7 @@ export enum SymbolFlag {
 	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
+	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 }
 
 // ===== Symbol =====
@@ -654,7 +658,6 @@ export class Node {
 	resolvedSym: Symbol | null;
 	flags: BitSet<NodeFlag>;
 	variantSlot: int32;
-	comments: Token[]; // Added for comment preservation
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
@@ -808,7 +811,6 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		resolvedSym: null,
 		flags: 0 as BitSet<NodeFlag>,
 		variantSlot: 0,
-		comments: [],
 		typeExpr: null,
 		typeExprs: null,
 		baseExprs: null,
@@ -950,7 +952,6 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		resolvedSym: null,
 		flags: 0 as BitSet<NodeFlag>,
 		variantSlot: 0,
-		comments: [],
 		typeExpr: null,
 		typeExprs: null,
 		baseExprs: null,

@@ -1,9 +1,10 @@
 // Printer — transforms MetaScript AST → Doc IR
 // Implementation logic follows Biome/Prettier standards (2026).
 
-import { Node, NodeKind, NodeFlag } from "../../../ast/node";
-import { TokenKind } from "../../../lexer/token";
-import { forEachChild } from "../../../ast/visitor";
+import { Node, NodeKind, NodeFlag, makeLoc } from "../../../ast/node";
+import { lex } from "../../../lexer/lexer";
+import { Comments, decorateComments, assertAllFormatted, assertNodeFormatted } from "../comments";
+import { useComments, withComments, markWithin } from "./commentDocs";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup } from "../doc";
 import { formatDocAt } from "../layout";
@@ -14,7 +15,7 @@ import {
 } from "./jsx";
 
 import {
-	indexSourceLines, sourceSpan, rawThroughBlockAt, printNullLiteral, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	indexSourceLines, rawThroughBlockAt, printNullLiteral, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
 	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
@@ -27,7 +28,7 @@ import {
 	printAwaitExpr, printYieldExpr,
 } from "./expressions";
 import {
-	printProgram, printBlock, wrapNodeComments, printVariableDecl, printExprStmt,
+	printProgram, printBlock, printVariableDecl, printExprStmt,
 	printReturnStmt, printIfStmt, printWhileStmt, printForStmt,
 	printForOfStmt, printForInStmt, printDoWhileStmt, printSwitchStmt, printMatchStmt,
 	printFunctionDecl, printThrowStmt, printTryCatchStmt, printDeferStmt,
@@ -43,17 +44,27 @@ import {
 let unprintedKinds: string[] = [];
 
 export function formatNode(node: Node, options: FormatOptions): Result<string, string> {
-	return formatNodeAt(node, options, "");
+	const placed = try decorateSource(node, options.source);
+	return formatNodeAt(node, options, "", placed);
 }
 
-export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string): Result<string, string> {
+export function decorateSource(root: Node, source: string): Result<Comments, string> {
+	if (source == "") return Result.ok(new Comments());
+	const lexed = lex(source);
+	if (!lexed.ok) return Result.err("fmt cannot lex the source: " + lexed.error);
+	return decorateComments(root, lexed.value);
+}
+
+export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string, placed: Comments): Result<string, string> {
 	unprintedKinds = [];
 	indexSourceLines(options.source);
-	fillWhenSpans(node, options.source);
+	useComments(placed);
 	const out = formatDocAt(printNode(node, options), options, baseIndent);
 	if (unprintedKinds.length > 0) {
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
 	}
+	if (node.kind == NodeKind.Program || node.location.endLine == 0) try placed.assertAllFormatted();
+	else try placed.assertNodeFormatted(node);
 	return Result.ok(out);
 }
 
@@ -63,6 +74,7 @@ function printVerbatimBlock(node: Node, options: FormatOptions): Doc {
 		unprintedKinds.push(node.kind.toString());
 		return docNil();
 	}
+	if (node.location.endLine > 0) markWithin(node.location, makeLoc(node.location.endLine, node.location.endColumn));
 	return docText(text);
 }
 
@@ -72,17 +84,6 @@ function printDeref(node: Node, options: FormatOptions): Doc {
 		return docNil();
 	}
 	return printDerefExpr(node, options);
-}
-
-function fillWhenSpans(node: Node, source: string): void {
-	for (const c of node.comments) {
-		if (c.kind != TokenKind.When || c.value != "") continue;
-		const end = c.rawValue.split(":");
-		c.value = sourceSpan(source, c.line, c.column, end[0].parseInt() as int32, end[1].parseInt() as int32);
-	}
-	forEachChild(node, (child: Node): void => {
-		fillWhenSpans(child, source);
-	});
 }
 
 export function printNode(node: Node, options: FormatOptions): Doc {
@@ -187,7 +188,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 
 	const groupDoc = node.flags.has(NodeFlag.Parenthesized) ? docGroup([docText("("), innerDoc, docText(")")]) : innerDoc;
 	const declDoc = node.flags.has(NodeFlag.ExternC) ? docGroup([docText("extern "), groupDoc]) : groupDoc;
-	return wrapNodeComments(node, declDoc);
+	return withComments(node, declDoc);
 }
 
 // Automatically register on module load

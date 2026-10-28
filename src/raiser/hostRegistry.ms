@@ -87,7 +87,7 @@ let _activeObjectHeap: RaiserObjectHeap | null = null;
 let _activeArrayHeap: RaiserArrayHeap | null = null;
 let _activeProgramArgv: string[] | null = null;
 
-export function setActiveHostHeaps(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): void {
+export function setActiveHostHeaps(objHeap: RaiserObjectHeap | null, arrHeap: RaiserArrayHeap | null): void {
 	_activeObjectHeap = objHeap;
 	_activeArrayHeap = arrHeap;
 }

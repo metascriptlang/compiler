@@ -4,6 +4,7 @@
 // Each file isolates a specific handoff route.
 
 import "./helpers";
+import "./transformSharing";
 import "./checkerTypes";
 import "./ccgIntroducedPtr";
 import "./sizeOfType";

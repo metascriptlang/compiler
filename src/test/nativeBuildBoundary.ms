@@ -1,7 +1,7 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
 import {
-	appendFile, chmod, copyFile, ensureDir, exists, readDir, readFile,
+	appendFile, changeStamp, chmod, copyFile, ensureDir, exists, readDir, readFile,
 	remove, removeAll, writeFile,
 } from "std/fs";
 
@@ -627,6 +627,116 @@ function runCompileCache(): void {
 	need(twinBuilt == 0, "twin build");
 	record("a compiler one byte apart reuses every object", "0", recompiledObjects(twinned, "twin"));
 	record("twin build output", "44", value(twinned, "probe2"));
+
+	const appeared = fixture("appeared", "@compile(\"./native.c\");", lateQuery("\"late.h\""));
+	waitForNextSecond();
+	need(build(appeared, "baseline") == 0, "appeared baseline");
+	need(value(appeared) == "11", "appeared baseline value");
+	need(build(appeared, "settled", "probe2", ["--verbose"]) == 0, "appeared settled");
+	record("an absent queried header keeps the object cached", "0", recompiledObjects(appeared, "settled"));
+	put(`${appeared}/late.h`, "#define VALUE 22\n");
+	record("a native header that appears after the build", "22", builtValue(appeared, build(appeared, "appeared")));
+
+	for (const name of ["late.h", "sub/late.h"]) {
+		const remembered = fixture(`remembered ${name}`, "@compile(\"./native.c\");", lateQuery(`"${name}"`));
+		waitForNextSecond();
+		need(build(remembered, "baseline") == 0, `remembered ${name} baseline`);
+		need(value(remembered) == "11", `remembered ${name} baseline value`);
+		waitForNextSecond();
+		waitForNextSecond();
+		need(build(remembered, "settled", "probe", ["--verbose"]) == 0, `remembered ${name} settled`);
+		record(`a settled absent ${name} keeps the object cached`, "0", recompiledObjects(remembered, "settled"));
+		if (name.includes("/")) ensureDir(`${remembered}/sub`);
+		put(`${remembered}/${name}`, "#define VALUE 22\n");
+		record(`a ${name} that appears after its absence settled`, "22", builtValue(remembered, build(remembered, "appeared")));
+	}
+
+	runSearchChanges("local");
+
+	const shadowed = fixture("relative include dirs", "@compile(\"./native.c\");", "#include \"shadow.h\"\nint probeValue(void) { return VALUE; }\n");
+	ensureDir(`${shadowed}/inc1`);
+	ensureDir(`${shadowed}/inc2`);
+	put(`${shadowed}/inc2/shadow.h`, "#define VALUE 11\n");
+	const searched = ["--passC=-Iinc1 -Iinc2"];
+	waitForNextSecond();
+	need(build(shadowed, "baseline", "probe", searched) == 0, "relative include dirs baseline");
+	need(value(shadowed) == "11", "relative include dirs baseline value");
+	put(`${shadowed}/inc1/shadow.h`, "#define VALUE 33\n");
+	record("a header that appears in an earlier relative include dir", "33", builtValue(shadowed, build(shadowed, "shadow", "probe", searched)));
+
+	const relative = fixture("appeared relative", "@compile(\"./src/native.c\");", "", "", "unused.c");
+	ensureDir(`${relative}/src`);
+	put(`${relative}/src/native.c`, lateQuery("\"../late/late.h\""));
+	waitForNextSecond();
+	need(build(relative, "baseline") == 0, "appeared relative baseline");
+	need(value(relative) == "11", "appeared relative baseline value");
+	ensureDir(`${relative}/late`);
+	put(`${relative}/late/late.h`, "#define VALUE 22\n");
+	record("a header named by a relative path that appears after the build", "22", builtValue(relative, build(relative, "appeared")));
+
+	const computed = fixture("appeared macro", "@compile(\"./native.c\");", `#define LATE "late.h"\n${lateQuery("LATE")}`);
+	waitForNextSecond();
+	need(build(computed, "baseline") == 0, "appeared macro baseline");
+	need(value(computed) == "11", "appeared macro baseline value");
+	put(`${computed}/late.h`, "#define VALUE 22\n");
+	record("a header queried through a macro that appears after the build", "22", builtValue(computed, build(computed, "appeared")));
+
+	const moduleAppeared = includedFixture("appeared module", lateQuery("\"sub/late.h\"").replace("int probeValue", "static inline int probeValue"));
+	waitForNextSecond();
+	need(build(moduleAppeared, "baseline") == 0, "appeared module baseline");
+	need(value(moduleAppeared) == "11", "appeared module baseline value");
+	ensureDir(`${moduleAppeared}/sub`);
+	put(`${moduleAppeared}/sub/late.h`, "#define VALUE 22\n");
+	record("a header a module include queries that appears after the build", "22", builtValue(moduleAppeared, build(moduleAppeared, "appeared")));
+}
+
+function searchChange(layer: string, name: string, native: string, before: (dir: string) => void, change: (dir: string) => string, unchangedRebuilds: string = "0"): void {
+	const dir = fixture(`${layer} ${name}`, "@compile(\"./native.c\");", native);
+	before(dir);
+	waitForNextSecond();
+	need(build(dir, "baseline") == 0, `${layer} ${name} baseline`);
+	need(value(dir) == "11", `${layer} ${name} baseline value`);
+	waitForNextSecond();
+	waitForNextSecond();
+	if (layer == "store") removeAll(`${dir}/out`);
+	need(build(dir, "settled", "probe", ["--verbose"]) == 0, `${layer} ${name} settled`);
+	record(`${layer}: ${name}, unchanged, rebuilds ${unchangedRebuilds}`, unchangedRebuilds, recompiledObjects(dir, "settled"));
+	if (layer == "store") removeAll(`${dir}/out`);
+	const expected = change(dir);
+	record(`${layer}: ${name}`, expected, builtValue(dir, build(dir, "changed")));
+	env.delete("C_INCLUDE_PATH");
+}
+
+function runSearchChanges(layer: string): void {
+	searchChange(layer, "a header that appears in a C_INCLUDE_PATH dir", lateQuery("<late.h>"), (dir) => {
+		ensureDir(`${dir}/envinc`);
+		env.set("C_INCLUDE_PATH", `${dir}/envinc`);
+	}, (dir) => {
+		put(`${dir}/envinc/late.h`, "#define VALUE 22\n");
+		return "22";
+	});
+	searchChange(layer, "C_INCLUDE_PATH switched to a dir with another header", "#include <switched.h>\nint probeValue(void) { return VALUE; }\n", (dir) => {
+		ensureDir(`${dir}/a`);
+		ensureDir(`${dir}/b`);
+		put(`${dir}/a/switched.h`, "#define VALUE 11\n");
+		put(`${dir}/b/switched.h`, "#define VALUE 22\n");
+		env.set("C_INCLUDE_PATH", `${dir}/a`);
+	}, (dir) => {
+		env.set("C_INCLUDE_PATH", `${dir}/b`);
+		return "22";
+	});
+	searchChange(layer, "a header that appears spelled in another case", lateQuery("\"late.h\""), (dir) => {}, (dir) => {
+		put(`${dir}/Late.h`, "#define VALUE 22\n");
+		return exists(`${dir}/late.h`) ? "22" : "11";
+	});
+	searchChange(layer, "a header that appears in another Unicode normal form", lateQuery("\"\u00e9.h\""), (dir) => {}, (dir) => {
+		put(`${dir}/e\u0301.h`, "#define VALUE 22\n");
+		return exists(`${dir}/\u00e9.h`) ? "22" : "11";
+	}, "1");
+}
+
+function lateQuery(name: string): string {
+	return `#if __has_include(${name})\n#include ${name}\n#else\n#define VALUE 11\n#endif\nint probeValue(void) { return VALUE; }\n`;
 }
 
 function runLinkCache(): void {
@@ -792,9 +902,11 @@ function projectDriver(dir: string): string {
 		const source = `${dir}/project-cc.c`;
 		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
 		put(source,
-			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
+			"#include <process.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
+			+ "  const char *log = getenv(\"MSC_BOUNDARY_CC_LOG\");\n"
+			+ "  if (log) { FILE *f = fopen(log, \"a\"); if (f) { fprintf(f, \"%s\\n\", argc > 1 ? argv[1] : \"\"); fclose(f); } }\n"
 			+ "  if (getenv(\"MSC_BOUNDARY_REJECT_DISPATCH\")) {\n"
 			+ "    int compile = 0;\n"
 			+ "    for (int i = 1; i < argc; i++) if (strcmp(argv[i], \"-c\") == 0) compile = 1;\n"
@@ -812,6 +924,7 @@ function projectDriver(dir: string): string {
 	}
 	const wrapper = `${dir}/project-cc`;
 	put(wrapper, "#!/bin/sh\n"
+		+ "[ -n \"$MSC_BOUNDARY_CC_LOG\" ] && echo \"$1\" >> \"$MSC_BOUNDARY_CC_LOG\"\n"
 		+ "compile=\nfor a in \"$@\"; do [ \"$a\" = -c ] && compile=1; done\n"
 		+ "if [ -n \"$compile\" ] && [ -n \"$MSC_BOUNDARY_REJECT_DISPATCH\" ]; then\n"
 		+ "  for a in \"$@\"; do case \"$a\" in *_dispatch.*) exit 98 ;; esac; done\n"
@@ -819,6 +932,15 @@ function projectDriver(dir: string): string {
 		+ "exec clang \"$@\"\n");
 	need(chmod(wrapper, 493).ok, "chmod project driver");
 	return wrapper;
+}
+
+function compilerCalls(dir: string, label: string, output: string, flags: string[], driver: string): string {
+	const log = `${dir}/${label}.cc.log`;
+	env.set("MSC_BOUNDARY_CC_LOG", log);
+	need(build(dir, label, output, flags, driver) == 0, `${label} build`);
+	env.delete("MSC_BOUNDARY_CC_LOG");
+	const calls = readFile(log);
+	return calls.ok ? calls.value.split("\n").filter((line) => line != "").join(" ") : "";
 }
 
 function runProjectCache(): void {
@@ -837,6 +959,11 @@ function runProjectCache(): void {
 		need(build(dir, "debug-a-settled", "probe", [], driver) == 0, "project debug settled");
 		need(build(dir, "release-b", "probe-b", ["--release"], driver) == 0, "project release output");
 		need(value(dir, "probe-b") == "163", "project release value");
+		need(build(dir, "release-b-settled", "probe-b", ["--release"], driver) == 0, "project release settled");
+		const cacheBefore = changeStamp(`${dir}/local`);
+		record(`an unchanged debug project runs only the compiler identity check ${name}`, "--version", compilerCalls(dir, "debug-a-unchanged", "probe", [], driver));
+		record(`an unchanged project leaves its cache directory unchanged ${name}`, cacheBefore, changeStamp(`${dir}/local`));
+		record(`an unchanged release project runs only the compiler identity check ${name}`, "--version", compilerCalls(dir, "release-b-unchanged", "probe-b", ["--release"], driver));
 		env.set("MSC_BOUNDARY_REJECT_DISPATCH", "1");
 		const returned = build(dir, "return-debug-a", "probe", [], driver);
 		env.delete("MSC_BOUNDARY_REJECT_DISPATCH");
@@ -1107,6 +1234,19 @@ function runObjectStore(): void {
 	removeAll(`${shadowed}/out`);
 	put(`${shadowed}/inc1/value.h`, "#define VALUE 33\n");
 	record("a stored object after an earlier include dir gained its header", "33", builtValue(shadowed, build(shadowed, "shadow", "probe", searched)));
+
+	const late = fixture("store appeared", "@compile(\"./native.c\");\n@passC(\"-I./inc\");", lateQuery("<late.h>"));
+	ensureDir(`${late}/inc`);
+	waitForNextSecond();
+	need(build(late, "baseline") == 0, "store appeared baseline");
+	need(value(late) == "11", "store appeared baseline value");
+	removeAll(`${late}/out`);
+	need(build(late, "stored", "probe", ["--verbose"]) == 0, "store appeared reuse");
+	record("a stored object with an absent queried header rebuilds nothing", "0", recompiledObjects(late, "stored"));
+	removeAll(`${late}/out`);
+	put(`${late}/inc/late.h`, "#define VALUE 22\n");
+		record("a stored object after a queried header appeared", "22", builtValue(late, build(late, "appeared")));
+	runSearchChanges("store");
 
 	const tool = fixture("store-toolchain", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
 	const firstTool = writeWrapper(tool, 57);

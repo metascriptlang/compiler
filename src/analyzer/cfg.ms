@@ -10,7 +10,7 @@ import { Node, NodeKind, ProgramData, Symbol, BinaryExprData, UnaryExprData, Cal
 import { forEachChild } from "../ast/visitor";
 import { isEagerAssignOp } from "../ast/operators";
 import { flowTally } from "../compiler/flows";
-import { AliasKind, aliases, getRootSym } from "./alias";
+import { AliasKind, aliases, getRootSym, isUnionProjection } from "./alias";
 
 import { makeIdentResolved } from "../transform/util";
 import { getBody, makeTestSym, attachSymAll } from "./testSupport";
@@ -217,7 +217,11 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 			}
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			walkExpr((node.data as HiddenStdConvData).convExpr, ctx);
+			if (isUnionProjection(node) && matchesRoot(node, ctx)) {
+				emitUse(ctx, node);
+			} else {
+				walkExpr((node.data as HiddenStdConvData).convExpr, ctx);
+			}
 		},
 		// Default: descend via canonical walker so new expression kinds still
 		// contribute def/use edges. Function bodies are explicitly skipped

@@ -60,7 +60,7 @@ function greaterUnits(tokens: Token[]): Token[] {
 		}
 		for (let k = 0; k < t.value.byteLength; k += 1) {
 			const assign = t.value.byteAt(k) == "=".code;
-			out.push({ kind: assign ? TokenKind.Assign : TokenKind.Gt, value: assign ? "=" : ">", line: t.line, column: t.column + k, rawValue: "" });
+			out.push({ kind: assign ? TokenKind.Assign : TokenKind.Gt, value: assign ? "=" : ">", line: t.line, column: t.column + k, endLine: t.line, endColumn: t.column + k + 1, rawValue: "" });
 		}
 	}
 	return out;

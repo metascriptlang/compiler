@@ -253,8 +253,7 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 	if (fnType.typeReturn == null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 	const named = paramNames != null;
-	const names = paramNames != null ? paramNames : [];
-	const count = named ? names.length : fnType.typeChildren.length;
+	const count = paramNames != null ? paramNames.length : fnType.typeChildren.length;
 	const parts: string[] = [];
 	if (nrvo) parts.push(cRetType + "* __result");
 	for (let i = 0; i < count; i += 1) {
@@ -262,8 +261,8 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
 		if (typed && isOpenArrayParam(fnType.typeChildren[i])) {
 			const elemPtr = getTypeDesc(g, skipModifier(fnType.typeChildren[i])!.typeReturn) + "*";
-			parts.push(named ? `${elemPtr} ${openArrayDataName(paramCName(names[i], i))}` : elemPtr);
-			parts.push(named ? `int64_t ${openArrayLenName(paramCName(names[i], i))}` : "int64_t");
+			parts.push(named ? `${elemPtr} ${openArrayDataName(paramCName(paramNames![i], i))}` : elemPtr);
+			parts.push(named ? `int64_t ${openArrayLenName(paramCName(paramNames![i], i))}` : "int64_t");
 			continue;
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
@@ -272,7 +271,7 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
-		parts.push(named ? `${pType} ${paramCName(names[i], i)}` : pType);
+		parts.push(named ? `${pType} ${paramCName(paramNames![i], i)}` : pType);
 	}
 	const paramList = parts.length > 0 ? parts.join(", ") : "void";
 	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;

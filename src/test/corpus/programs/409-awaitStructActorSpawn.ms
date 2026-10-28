@@ -1,12 +1,10 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 40
-// @maxatomics(darwin-arm64) 470
-// @maxatomics(linux-x86_64) 131
+// @maxatomics(darwin-arm64) 513
+// @maxatomics(linux-x86_64) 135
 // @stdout: await-struct-actorspawn acc=2600000
 // @serial
-// @ledger-slack(Svc) 1
-// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: GREEN regression guard for the struct-future-layout fix (paired with the RED await-struct-returns). `await` on a struct-with-heap-field (tag: string) return from an actor CALL and from spawn — both BOXED (msSinkBoxStruct → msMsgCompletePtr / spawn box), read by awaitLower's msWaitFor(void*)+msUnboxStruct. Locks the actor/spawn boxed path so the Amendment-F fix (boxing async struct returns) can't silently regress them — the DRC-ownership-transfer surface where a heap string double-frees or leaks if the box mishandles it. acc=2600000 (100000 × ((5+9)+(3+9))).
 
 struct Msg { tag: string; n: number; }

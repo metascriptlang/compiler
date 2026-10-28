@@ -4,6 +4,7 @@ import { TransformContext, freshTempSym, reportTransformError } from "../context
 import { walkNode, walkExpandBlocks, mapExprChildren, mapExprChildrenWith } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hoistStmtValue } from "../blockExpand";
 import { moveWhileTestIntoBody, moveDoWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { lowerForStmt } from "./forLoopLower";
@@ -145,14 +146,14 @@ function foldWordHashes(words: Node[], loc: SourceLocation): Node {
 
 function lowerWordHash(recv: Node, repr: Type, loc: SourceLocation): Node {
 	if (repr.kind != TypeKind.Uint64) return foldWordHashes([recv], loc);
-	const shifted = typedBinary(recv, ">>", typedNumber(32, int32Type(), loc), repr, loc);
+	const shifted = typedBinary(cloneNodeKeepSem(recv), ">>", typedNumber(32, int32Type(), loc), repr, loc);
 	return foldWordHashes([asUint32(recv, loc), asUint32(shifted, loc)], loc);
 }
 
 function lowerWordCard(recv: Node, repr: Type, loc: SourceLocation): Node {
 	if (repr.kind != TypeKind.Uint64) return cardCall(recv, loc);
 	const low = cardCall(asUint32(recv, loc), loc);
-	const shifted = typedBinary(recv, ">>", typedNumber(32, int32Type(), loc), repr, loc);
+	const shifted = typedBinary(cloneNodeKeepSem(recv), ">>", typedNumber(32, int32Type(), loc), repr, loc);
 	const high = cardCall(asUint32(shifted, loc), loc);
 	return typedBinary(low, "+", high, int32Type(), loc);
 }
@@ -406,10 +407,18 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 
 // ===== operand hoisting: array-class operands are read once per word =====
 
+function isTwoWordCountOp(d: CallExprData): boolean {
+	const op = setOpOf(d.callee);
+	if (op != SetOp.Size && op != SetOp.Hash) return false;
+	const repr = isSetOperand(d.arguments[0]) ? setRepr(d.arguments[0].nodeType) : null;
+	return repr != null && repr.kind == TypeKind.Uint64;
+}
+
 function isArrayOp(node: Node): boolean {
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
-		return d.arguments.length > 0 && arrayRepr(d.arguments[0].nodeType) != null && setOpOf(d.callee) != null;
+		if (d.arguments.length == 0) return false;
+		return arrayRepr(d.arguments[0].nodeType) != null && setOpOf(d.callee) != null || isTwoWordCountOp(d);
 	}
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
