@@ -472,6 +472,37 @@ function runRivals(): void {
 
 if (only.length == 0 || only.some((name) => RIVALS.includes(name))) runRivals();
 
+const CHECKOUTS = "two checkouts of one project at different paths";
+
+function checkoutBuild(dir: string, trim: boolean): string[] {
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/a.ms`, "export function fa(x: int32): int32 { return x + 4100; }\n");
+	put(`${dir}/main.ms`, "import { fa } from \"./a\";\nconsole.log(`${fa(41)}`);\n");
+	const args = ["build", "main.ms", "--output=app", "--verbose", "--cc=clang"];
+	if (trim) args.push("--trimpath");
+	const built = execFileCapture(compiler, args, dir);
+	if (!built.ok) return ["build failed", "0"];
+	let restored = 0;
+	for (const line of built.value.split("\n")) {
+		if (line.indexOf("  stored ", 0) >= 0 && line.indexOf("/proj/", 0) >= 0) restored = restored + 1;
+	}
+	const ran = execFileCapture(`${dir}/app`, []);
+	return [ran.ok ? ran.value.trim() : "run failed", `${restored}`];
+}
+
+function runCheckouts(): void {
+	if (windows) return;
+	for (const trim of [true, false]) {
+		const mode = trim ? "trimpath" : "default";
+		const first = checkoutBuild(`${root}/checkouts-${mode}/a/proj`, trim);
+		const second = checkoutBuild(`${root}/checkouts-${mode}/b/proj`, trim);
+		results.push({ name: `store: ${CHECKOUTS}, ${mode}: the second restores the project modules the first published and prints the same`, expected: `4141 4141 restored ${trim ? 2 : 0}`, actual: `${first[0]} ${second[0]} restored ${second[1]}` });
+	}
+}
+
+if (only.length == 0 || only.some((name) => CHECKOUTS.includes(name))) runCheckouts();
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
