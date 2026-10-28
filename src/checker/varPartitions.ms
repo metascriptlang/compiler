@@ -8,7 +8,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
-import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
+import { hasGenericParams, isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
@@ -439,11 +439,15 @@ function reachesNonText(t: Type | null): boolean {
 	return false;
 }
 
-function externSummary(sym: Symbol): ResizeSummary {
+// A generic formal stands for what the call passes: a body-less routine reaches through its
+// argument only as far as the argument's own type reaches.
+function externSummary(sym: Symbol, args: Node[]): ResizeSummary {
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return anyResize();
-	for (const formal of t.typeChildren) {
-		if (reachesNonText(formal)) return anyResize();
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const formal = t.typeChildren[i];
+		const passed = i < args.length ? args[i].nodeType : null;
+		if (reachesNonText(hasGenericParams(formal) && passed != null ? passed : formal)) return anyResize();
 	}
 	return noResize();
 }
@@ -456,7 +460,7 @@ function calleeSummary(call: Node): ResizeSummary {
 	if (isDispatched(sym)) return anyResize();
 	if (routineBody(sym.declNode) == null) {
 		if (receiverOf(call) != null && !hasFlag(sym, SymbolFlag.ImportC)) return noResize();
-		return externSummary(sym);
+		return externSummary(sym, (call.data as CallExprData).arguments);
 	}
 	return summaryOf(sym);
 }
