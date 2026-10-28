@@ -36,6 +36,7 @@ test "a view is refused while the storage it reads can move or be freed" {
 		`${xs} const sp: Span<S> = xs; if (sp.length > 0) { const t = xs; } return sp[0].n;`,
 		"let s = \"ab\" + String(1); const b = s.asBytes(); s = \"x\"; return b[0] as int32;",
 		"let rows: R[] = [{ items: [1, 2], k: 0 }]; const v: Span<int32> = rows[0].items; rows[0] = { items: [7], k: 1 }; return v[0];",
+		`${xs} const sp: Span<S> = xs; const r: Result<S[], int32> = Result.ok(xs); return sp[0].n;`,
 	];
 	for (const body of refused) {
 		assert refusedWith(body, "is potentially changed at"), body;
