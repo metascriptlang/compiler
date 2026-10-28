@@ -1719,7 +1719,9 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
 		NodeKind.FunctionExpr => processFuncExpr(stmt, dctx, sloc),
 		NodeKind.TestDecl => processTestDecl(stmt, dctx, sloc),
-		_ => stmt,
+		NodeKind.ImportDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.InterfaceDecl
+			| NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ActorDecl | NodeKind.UnreachableStmt => stmt,
+		_ => { throw new Error("internal: processStmt has no arm for " + NodeKind[stmt.kind]); },
 	};
 
 	return result;
@@ -2835,6 +2837,20 @@ test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");
 	const result = processBlockBody(null as unknown as Node, dctx, false, false, testLoc());
 	assert result == null;
+}
+
+test "processStmt passes a declaration through and refuses a statement kind it has no arm for" {
+	const dctx = testDrcContext("const x = 1;");
+	const unreachable = createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: "" }, testLoc());
+	assert processStmt(unreachable, 0, [unreachable], dctx, testLoc()) == unreachable;
+	const deferred = createNodeAt(NodeKind.DeferStmt, { deferExpr: unreachable }, testLoc());
+	let refused = "";
+	try {
+		processStmt(deferred, 0, [deferred], dctx, testLoc());
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: processStmt has no arm for DeferStmt";
 }
 
 test "recordMoveInContext finds correct scope" {
