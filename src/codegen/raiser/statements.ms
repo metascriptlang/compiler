@@ -25,7 +25,7 @@ import {
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { compileOwnershipStmt } from "./drcLower";
-import { emitStoreCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
+import { emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 
 // --- Statement compilation ---
