@@ -11,7 +11,7 @@ import {
 	Doc, docText, docGroup, docGroupBreak, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil,
 	docBreakParent, docBestFitting, docWillBreak,
 } from "../doc";
-import { callPrintNode } from "./callbacks";
+import { callPrintNode, isStatementExpression } from "./callbacks";
 import { rawTemplateAt, blankLineBefore, sourceSpan } from "./literals";
 import {
 	printAtom, writtenTypeArgs, listBody, writtenArrowBody,
@@ -522,8 +522,404 @@ export function printCallArguments(call: Node | null, args: Node[], node: Node, 
 }
 
 
+enum ChainKind {
+	Static,
+	Call,
+	Computed,
+	NonNull,
+	Plain,
+}
+
+enum CallPosition {
+	Start,
+	Middle,
+	End,
+}
+
+interface ChainMember {
+	kind: ChainKind;
+	node: Node;
+	position: CallPosition;
+	leading: boolean;
+	trailing: boolean;
+	moved: SourceComment[];
+}
+
+function newMember(kind: ChainKind, node: Node, position: CallPosition): ChainMember {
+	return { kind, node, position, leading: hasLeadingComments(node), trailing: hasTrailingComments(node), moved: [] };
+}
+
+function isChainStep(node: Node): boolean {
+	return !node.flags.has(NodeFlag.Parenthesized)
+		&& (node.kind == NodeKind.MemberExpr || node.kind == NodeKind.ArrayAccess || node.kind == NodeKind.CallExpr);
+}
+
+function collectMembers(root: Node): ChainMember[] {
+	const out: ChainMember[] = [];
+	let current: Node | null = root;
+	let isRoot = true;
+	while (current != null) {
+		const node: Node = current;
+		current = null;
+		if (node.flags.has(NodeFlag.Parenthesized) && !isRoot) {
+			out.push(newMember(ChainKind.Plain, node, CallPosition.Start));
+			break;
+		}
+		if (node.kind == NodeKind.CallExpr) {
+			const callee = (node.data as CallExprData).callee;
+			const chained = isChainStep(callee);
+			if (chained) current = callee;
+			out.push(newMember(ChainKind.Call, node, isRoot ? CallPosition.End : (!chained ? CallPosition.Start : CallPosition.Middle)));
+		} else if (node.kind == NodeKind.MemberExpr) {
+			current = (node.data as MemberExprData).object;
+			out.push(newMember(ChainKind.Static, node, CallPosition.Start));
+		} else if (node.kind == NodeKind.ArrayAccess) {
+			current = (node.data as ArrayAccessData).array;
+			out.push(newMember(ChainKind.Computed, node, CallPosition.Start));
+		} else if (isNonNull(node)) {
+			current = (node.data as TypeAssertionData).asExpr;
+			out.push(newMember(ChainKind.NonNull, node, CallPosition.Start));
+		} else {
+			out.push(newMember(ChainKind.Plain, node, CallPosition.Start));
+		}
+		isRoot = false;
+	}
+	out.reverse();
+	for (let i = 1; i < out.length; i += 1) {
+		out[i].moved = takeOwnLineTrailing(out[i - 1].node);
+		if (out[i].moved.length > 0) {
+			out[i].leading = true;
+			out[i - 1].trailing = hasTrailingComments(out[i - 1].node);
+		}
+	}
+	return out;
+}
+
+function isCallLike(m: ChainMember): boolean {
+	return m.kind == ChainKind.Call || (m.kind == ChainKind.Plain && (m.node.kind == NodeKind.CallExpr || m.node.kind == NodeKind.NewExpr));
+}
+
+function isNumberIndex(m: ChainMember): boolean {
+	return m.kind == ChainKind.Computed && (m.node.data as ArrayAccessData).index.kind == NodeKind.NumberLiteral;
+}
+
+interface ChainGroups {
+	head: ChainMember[];
+	tail: ChainMember[][];
+}
+
+function splitHead(members: ChainMember[]): ChainGroups {
+	let accessStart = members.length;
+	for (let i = 1; i < members.length; i += 1) {
+		const m = members[i];
+		if (m.kind == ChainKind.Call || m.kind == ChainKind.NonNull) continue;
+		if (m.kind == ChainKind.Computed && isNumberIndex(m)) continue;
+		accessStart = i;
+		break;
+	}
+	let headEnd = accessStart;
+	if (members[0].kind != ChainKind.Call) {
+		let memberEnd = members.length - accessStart;
+		for (let i = accessStart; i < members.length; i += 1) {
+			const m = members[i];
+			if (m.kind == ChainKind.Static || m.kind == ChainKind.Computed) {
+				const nextIsMember = i + 1 < members.length && (members[i + 1].kind == ChainKind.Computed || members[i + 1].kind == ChainKind.Static);
+				if (!nextIsMember) {
+					memberEnd = i - accessStart;
+					break;
+				}
+			} else {
+				memberEnd = i - accessStart;
+				break;
+			}
+		}
+		headEnd = accessStart + memberEnd;
+	}
+	return { head: members.slice(0, headEnd), tail: remainingGroups(members.slice(headEnd)) };
+}
+
+function remainingGroups(members: ChainMember[]): ChainMember[][] {
+	const groups: ChainMember[][] = [];
+	let current: ChainMember[] = [];
+	let seenCall = false;
+	for (const m of members) {
+		const startsGroup = (m.kind == ChainKind.Static || m.kind == ChainKind.Computed) && !isNumberIndex(m) && seenCall;
+		if (startsGroup) {
+			groups.push(current);
+			current = [];
+			seenCall = false;
+		}
+		const isMember = m.kind == ChainKind.Static || m.kind == ChainKind.Computed;
+		if (!isMember && m.kind != ChainKind.NonNull && m.kind != ChainKind.Call && !isCallLike(m) && current.length == 0) {
+			throw new Error("internal: a member chain group continues before it starts");
+		}
+		current.push(m);
+		if (m.kind == ChainKind.Call || (m.kind == ChainKind.Plain && isCallLike(m))) seenCall = true;
+		if (m.trailing) {
+			groups.push(current);
+			current = [];
+			seenCall = false;
+		}
+	}
+	if (current.length > 0) groups.push(current);
+	return groups;
+}
+
+function isFactoryName(name: string): boolean {
+	if (name.length == 0) return false;
+	const first = name.charCodeAt(0);
+	if (first == "_".code || first == "$".code) {
+		for (let i = 1; i < name.length; i += 1) {
+			const c = name.charCodeAt(i);
+			if (c != "_".code && c != "$".code) return false;
+		}
+		return true;
+	}
+	return first >= "A".code && first <= "Z".code;
+}
+
+function shouldMergeTailWithHead(groups: ChainGroups, root: Node, options: FormatOptions): boolean {
+	if (groups.tail.length == 0) return false;
+	const firstMember = groups.tail[0][0];
+	if (firstMember.leading || firstMember.trailing) return false;
+	const hasComputed = firstMember.kind == ChainKind.Computed;
+	if (groups.head.length == 1) {
+		const only = groups.head[0];
+		if (only.kind != ChainKind.Plain) return false;
+		if (only.node.kind != NodeKind.Identifier) return false;
+		const name = (only.node.data as IdentifierData).name;
+		if (name == "this") return true;
+		return hasComputed || isFactoryName(name) || (isStatementExpression(root) && name.length <= options.tabWidth);
+	}
+	const last = groups.head[groups.head.length - 1];
+	if (last.kind == ChainKind.Static) return hasComputed || isFactoryName((last.node.data as MemberExprData).property);
+	return false;
+}
+
+function memberDocs(m: ChainMember, isRoot: boolean, options: FormatOptions): Doc[] {
+	const docs: Doc[] = [];
+	if (m.kind == ChainKind.Plain) {
+		docs.push(printAtom(m.node, options));
+		return docs;
+	}
+	if (m.kind == ChainKind.Call && m.position == CallPosition.Start) {
+		docs.push(callPrintNode(m.node, options));
+		return docs;
+	}
+	for (const d of leadingDocs(m.moved)) docs.push(d);
+	if (!isRoot) for (const d of commentLeading(m.node)) docs.push(d);
+	if (m.kind == ChainKind.Static) {
+		const d = m.node.data as MemberExprData;
+		docs.push(docText((d.isOptional ? "?." : ".") + d.property));
+	} else if (m.kind == ChainKind.Computed) {
+		const d = m.node.data as ArrayAccessData;
+		docs.push(docText(m.node.flags.has(NodeFlag.OptionalLink) ? "?.[" : "["));
+		docs.push(callPrintNode(d.index, options));
+		docs.push(docText("]"));
+	} else if (m.kind == ChainKind.NonNull) {
+		docs.push(docText("!"));
+	} else {
+		const d = m.node.data as CallExprData;
+		const prefix = (m.node.flags.has(NodeFlag.OptionalLink) ? "?." : "") + writtenTypeArgs(m.node, d.callee, options);
+		for (const part of printCallArguments(m.node, d.arguments, m.node, prefix, options)) docs.push(part);
+	}
+	if (!isRoot) for (const d of commentTrailing(m.node)) docs.push(d);
+	return docs;
+}
+
+function groupDocs(group: ChainMember[], rootNode: Node, options: FormatOptions): Doc[] {
+	const docs: Doc[] = [];
+	for (const m of group) {
+		for (const d of memberDocs(m, m.node == rootNode, options)) docs.push(d);
+	}
+	return docs;
+}
+
+function anyWillBreak(docs: Doc[]): boolean {
+	for (const d of docs) {
+		if (docWillBreak(d)) return true;
+	}
+	return false;
+}
+
+function chainHasComments(groups: ChainGroups, root: Node): boolean {
+	const members: ChainMember[] = [...groups.head];
+	for (const g of groups.tail) for (const m of g) members.push(m);
+	if (members.length > 0 && members[0].trailing) return true;
+	for (let i = 1; i < members.length; i += 1) {
+		if (members[i].node == root) continue;
+		if (members[i].leading || members[i].trailing) return true;
+	}
+	return false;
+}
+
+function groupCallArguments(call: Node): Node[] {
+	return (call.data as CallExprData).arguments;
+}
+
+function hasFunctionArgument(call: Node): boolean {
+	for (const arg of groupCallArguments(call)) {
+		if (isFunctionLike(arg)) return true;
+	}
+	return false;
+}
+
+function isMemberCallChain(call: Node): boolean {
+	const groups = buildGroups(call);
+	return groups.tail.length > 1 || chainHasComments(groups, call);
+}
+
+function isShortArgument(arg: Node, threshold: int32, options: FormatOptions): boolean {
+	if (hasAnyComments(arg)) return false;
+	const raw = rawTemplateAt(arg, options);
+	if (raw != "") return !raw.includes("${") && !raw.includes("\n") && raw.length - 2 <= threshold;
+	return match (arg.kind) {
+		NodeKind.Identifier => (arg.data as IdentifierData).name.length <= threshold || (arg.data as IdentifierData).name == "this",
+		NodeKind.UnaryExpr => {
+			const d = arg.data as UnaryExprData;
+			return (d.unaryOp == "-" || d.unaryOp == "+") && d.operand.kind == NodeKind.NumberLiteral && !hasAnyComments(d.operand);
+		},
+		NodeKind.RegexLiteral => (arg.data as RegexLiteralData).regexPattern.length <= threshold,
+		NodeKind.StringLiteral => (arg.data as StringLiteralData).value.length + 2 <= threshold,
+		NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral | NodeKind.BigIntLiteral => true,
+		_ => false,
+	};
+}
+
+function hasComplexTypeArguments(call: Node): boolean {
+	const written = call.typeArg;
+	return written.includes(",") || written.includes("|") || written.includes("&") || written.includes("{");
+}
+
+export function isPoorlyBreakableMemberOrCallChain(expression: Node, options: FormatOptions): boolean {
+	const threshold = options.printWidth / 4;
+	let isChain = false;
+	let headIsSimple = false;
+	const calls: Node[] = [];
+	let current: Node | null = expression;
+	while (current != null) {
+		const node: Node = current;
+		current = null;
+		if (node.flags.has(NodeFlag.Parenthesized)) break;
+		if (isNonNull(node)) {
+			current = (node.data as TypeAssertionData).asExpr;
+		} else if (node.kind == NodeKind.CallExpr) {
+			isChain = true;
+			calls.push(node);
+			current = (node.data as CallExprData).callee;
+		} else if (node.kind == NodeKind.MemberExpr) {
+			isChain = true;
+			current = (node.data as MemberExprData).object;
+		} else if (node.kind == NodeKind.ArrayAccess) {
+			isChain = true;
+			current = (node.data as ArrayAccessData).array;
+		} else if (node.kind == NodeKind.Identifier) {
+			headIsSimple = true;
+		}
+	}
+	if (!isChain || !headIsSimple) return false;
+	for (const call of calls) {
+		if (isMemberCallChain(call)) return false;
+		const args = (call.data as CallExprData).arguments;
+		if (args.length > 1 || (args.length == 1 && !isShortArgument(args[0], threshold, options))) return false;
+		if (hasComplexTypeArguments(call)) return false;
+	}
+	return true;
+}
+
+function buildGroups(root: Node): ChainGroups {
+	const members = collectMembers(root);
+	return splitHead(members);
+}
+
+function printMemberChain(root: Node, options: FormatOptions): Doc {
+	const groups = buildGroups(root);
+	const hasComments = chainHasComments(groups, root);
+	if (shouldMergeTailWithHead(groups, root, options)) {
+		const first = groups.tail.shift()!;
+		for (const m of first) groups.head.push(m);
+	}
+	const headDocs = groupDocs(groups.head, root, options);
+	const tailDocs: Doc[][] = [];
+	for (const g of groups.tail) tailDocs.push(groupDocs(g, root, options));
+
+	const oneLine: Doc[] = [...headDocs];
+	for (const g of tailDocs) for (const d of g) oneLine.push(d);
+
+	if (groups.tail.length <= 1 && !hasComments) {
+		const callee = (root.data as CallExprData).callee;
+		if (groups.head.length >= 2 && isTestCall(callee, groupCallArguments(root), options)) {
+			const tailOnly: Doc[] = [docLine()];
+			for (const g of tailDocs) for (const d of g) tailOnly.push(d);
+			return docGroup([...headDocs, docIndent(tailOnly)]);
+		}
+		return docGroup(oneLine);
+	}
+
+	const tail: Doc[] = [];
+	for (let i = 0; i < tailDocs.length; i += 1) {
+		const firstOfGroup = groups.tail[i][0];
+		if (emptyLineBeforeMember(firstOfGroup)) {
+			tail.push(docHardLine());
+			tail.push(docHardLine());
+		} else {
+			tail.push(docHardLine());
+		}
+		for (const d of tailDocs[i]) tail.push(d);
+	}
+	const expanded: Doc[] = [...headDocs, docIndent([docGroup(tail)])];
+
+	if (chainShouldBreak(groups, headDocs, tailDocs, hasComments, options)) return docGroup(expanded);
+
+	const parts: Doc[] = [];
+	const emptyLineBeforeTail = groups.tail.length > 0 && emptyLineBeforeMember(groups.tail[0][0]);
+	const lastDocs = tailDocs.length > 0 ? tailDocs[tailDocs.length - 1] : headDocs;
+	if (emptyLineBeforeTail || anyWillBreak(lastDocs)) parts.push(docBreakParent());
+	parts.push(docBestFitting([oneLine, expanded]));
+	return docGroup(parts);
+}
+
+function emptyLineBeforeMember(m: ChainMember): boolean {
+	if (m.kind != ChainKind.Static && m.kind != ChainKind.Computed) return false;
+	if (m.moved.length > 0) return false;
+	const inner = m.kind == ChainKind.Static ? (m.node.data as MemberExprData).object : (m.node.data as ArrayAccessData).array;
+	return inner.location.endLine > 0 && m.node.location.line > inner.location.endLine && blankLineBefore(m.node.location.line);
+}
+
+function chainShouldBreak(groups: ChainGroups, headDocs: Doc[], tailDocs: Doc[][], hasComments: boolean, options: FormatOptions): boolean {
+	if (hasComments) return true;
+	const calls: Node[] = [];
+	const all: ChainMember[] = [...groups.head];
+	for (const g of groups.tail) for (const m of g) all.push(m);
+	for (const m of all) {
+		if (m.kind == ChainKind.Call) calls.push(m.node);
+	}
+	let anyFunctionArgument = false;
+	let anyComplexArgs = false;
+	for (let i = 0; i < calls.length; i += 1) {
+		if (i < calls.length - 1 && hasFunctionArgument(calls[i])) anyFunctionArgument = true;
+		for (const arg of groupCallArguments(calls[i])) {
+			if (!isSimple(arg, options)) anyComplexArgs = true;
+		}
+	}
+	if (calls.length > 2 && anyComplexArgs) return true;
+	const lastGroup = tailDocs.length > 0 ? groups.tail[groups.tail.length - 1] : groups.head;
+	const lastDocs = tailDocs.length > 0 ? tailDocs[tailDocs.length - 1] : headDocs;
+	if (lastGroup[lastGroup.length - 1].kind == ChainKind.Call && anyWillBreak(lastDocs) && anyFunctionArgument) return true;
+	if (tailDocs.length > 0 && anyWillBreak(headDocs)) return true;
+	for (let i = 0; i < tailDocs.length - 1; i += 1) {
+		if (anyWillBreak(tailDocs[i])) return true;
+	}
+	for (let i = 1; i < groups.tail.length; i += 1) {
+		if (emptyLineBeforeMember(groups.tail[i][0])) return true;
+	}
+	return false;
+}
+
+
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as CallExprData;
+	if (isChainStep(d.callee) && d.callee.kind != NodeKind.CallExpr) return printMemberChain(node, options);
 	const prefix = (node.flags.has(NodeFlag.OptionalLink) ? "?." : "") + writtenTypeArgs(node, d.callee, options);
 	return docGroup([printAtom(d.callee, options), ...printCallArguments(node, d.arguments, node, prefix, options)]);
 }

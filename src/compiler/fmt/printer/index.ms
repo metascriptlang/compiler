@@ -8,7 +8,7 @@ import { useComments, withComments, markWithin } from "./commentDocs";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup } from "../doc";
 import { formatDocAt } from "../layout";
-import { registerNodePrinter } from "./callbacks";
+import { registerNodePrinter, callPrintNode } from "./callbacks";
 import {
 	printJsxElement, printJsxFragment, printJsxText, printJsxExpressionContainer,
 	printJsxAttribute, printJsxSpreadAttribute,
@@ -60,7 +60,7 @@ export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: str
 	unprintedKinds = [];
 	indexSourceLines(options.source);
 	useComments(placed);
-	const out = formatDocAt(printNode(node, options), options, baseIndent);
+	const out = formatDocAt(callPrintNode(node, options), options, baseIndent);
 	if (unprintedKinds.length > 0) {
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
 	}
