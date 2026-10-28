@@ -350,8 +350,17 @@ export function widenEqualityOperand(ctx: CheckerContext, d: BinaryExprData): vo
 	const right = comparedUnion(d.right.nodeType);
 	if ((left == null) == (right == null)) return;
 	if (ctx.extensionRegistry != null && resolveUserOperator(ctx, "==", [d.left.nodeType!, d.right.nodeType!]) != null) return;
-	if (left != null) d.right = widenToSlotUnion(ctx, d.right, left);
-	else d.left = widenToSlotUnion(ctx, d.left, right!);
+	if (left != null) d.right = widenToSlotUnion(ctx, d.right, readInStoredLayout(d.left, left));
+	else d.left = widenToSlotUnion(ctx, d.left, readInStoredLayout(d.right, right!));
+}
+
+// A narrowed read is held in the layout of its declared union, so a comparison reads it as that union
+// and the value on the other side is widened into the same layout.
+export function readInStoredLayout(read: Node, narrowed: Type): Type {
+	const declared = declaredTagUnionOf(read);
+	if (declared == null || sameType(declared, narrowed) || !convertsBetweenUnions(declared, narrowed)) return narrowed;
+	read.nodeType = declared;
+	return declared;
 }
 
 export function boundCallOf(sym: Symbol, args: Node[], loc: SourceLocation): Node {
