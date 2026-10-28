@@ -81,4 +81,5 @@ import "./scenarios/spreadLiteralFieldRefusals";
 import "./scenarios/unionLiteralDiscriminant";
 import "./scenarios/restTupleArity";
 import "./scenarios/mappedTypeRefusals";
+import "./scenarios/readonlyArrayForms";
 import "./scenarios/literalLocalKeepsType";

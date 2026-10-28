@@ -840,13 +840,14 @@ function distributiveOver(check: Type, extendsType: Type, keep: boolean): Type {
 // the prelude, like `Readonly<T>`, so a builder that predates mapped types still reads std.
 function utilityType(head: string, args: string[], ctx: CheckerContext, line: int32, col: int32): Type | null {
 	const arity = match (head) {
-		"Partial" | "Required" => 1,
+		"Partial" | "Required" | "NonNullable" => 1,
 		"Pick" | "Omit" | "Record" | "Exclude" | "Extract" => 2,
 		_ => 0,
 	};
 	if (arity == 0 || args.length != arity) return null;
 	const first = resolveAnnotation(args[0], ctx, line, col);
 	if (first.kind == TypeKind.Error) return first;
+	if (head == "NonNullable") return distributiveOver(first, nullType(), false);
 	const second = arity == 2 ? resolveAnnotation(args[1], ctx, line, col) : null;
 	if (second != null && second.kind == TypeKind.Error) return second;
 	if (head == "Exclude" || head == "Extract") return distributiveOver(first, second!, head == "Extract");
@@ -1268,6 +1269,15 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		}
 	}
 
+	if (trimmed.length > 9 && trimmed.slice(0, 9) == "readonly ") {
+		const element = trimmed.slice(9, trimmed.length).trim();
+		if (!element.endsWith("[]") && !element.endsWith("[ ]")) {
+			addError(ctx, "'readonly' applies only to an array type: write 'readonly T[]' or 'Readonly<T>'", line, col);
+			return errorType();
+		}
+		return peelAnnotation(layers, AnnotationWrap.Readonly, element, 0);
+	}
+
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
 		const inner = trimmed.slice(0, trimmed.length - 3).trim();
@@ -1353,6 +1363,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		}
 		if (builtinHead == "Readonly" && args.length == 1) {
 			return peelAnnotation(layers, AnnotationWrap.Readonly, args[0], 0);
+		}
+		if (builtinHead == "ReadonlyArray" && args.length == 1) {
+			return peelAnnotation(layers, AnnotationWrap.Readonly, "(" + args[0] + ")[]", 0);
 		}
 		if (builtinHead == "Sendable" && args.length == 1) {
 			const fn = resolveAnnotation(args[0], ctx, line, col);
