@@ -1434,6 +1434,11 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 	// Resolve types from ExportRegistry
 	const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+	if (isCHeaderPath(sourcePath) && definedValue(getParserDefines(), "backend") == "js" && !isBuiltinStubHeader(sourcePath)) {
+		addError(ctx, `'${d.importSource}' is a C header and has no JS implementation; provide a .jms sibling or import it inside \`when (c) { … }\``,
+			node.location.line, node.location.column);
+		return;
+	}
 	if (isCHeaderPath(sourcePath)) includeHeader(ctx, sourcePath);
 
 	// Namespace import: import * as ns from "path"
