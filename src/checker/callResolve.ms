@@ -2621,6 +2621,13 @@ function sharesArrayReceiver(recvFormal: Type): boolean {
 	return inner.kind == TypeKind.Array || inner.kind == TypeKind.SizedArray || inner.kind == TypeKind.Span;
 }
 
+function closureIntoCPointerRefusal(calleeName: string, calleeType: Type, pi: int32, argType: Type, paramType: Type): string {
+	if (argType.kind != TypeKind.Function || paramType.kind != TypeKind.Function) return "";
+	if (argType.callConv != CallingConvention.CcClosure || paramType.callConv == CallingConvention.CcClosure) return "";
+	const name = pi < calleeType.typeNames.length ? calleeType.typeNames[pi] : String(pi);
+	return "'" + calleeName + "' parameter '" + name + "' is a C function pointer, which holds no environment: a closure cannot fill it; pass a module-level function";
+}
+
 function argLabel(pi: int32, hasReceiver: boolean): string {
 	if (!hasReceiver) return "arg " + String(pi);
 	return pi == 0 ? "receiver" : "arg " + String(pi - 1);
@@ -2914,7 +2921,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						} else {
 							const calleeName = getCalleeName(d.callee);
 							const variantRefusal = variantIntoObjectRefusal(args[pi], argTypes[pi], paramType);
-							addError(ctx, variantRefusal != "" ? variantRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							const pointerRefusal = closureIntoCPointerRefusal(calleeName, calleeType, pi, argTypes[pi], paramType);
+							addError(ctx, variantRefusal != "" ? variantRefusal : pointerRefusal != "" ? pointerRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}

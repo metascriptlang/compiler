@@ -280,6 +280,13 @@ export function closureStorageType(t: Type): Type {
 	return c;
 }
 
+export function plainFunctionPointerType(t: Type): Type {
+	if (t.kind != TypeKind.Function || t.callConv != CallingConvention.CcClosure) return t;
+	const p = copyTypeShallow(t);
+	p.callConv = CallingConvention.CcDefault;
+	return p;
+}
+
 export function createEnum(name: string, members: string[], values: number[] = []): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
