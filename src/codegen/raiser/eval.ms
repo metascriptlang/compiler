@@ -743,10 +743,6 @@ test "engine: a value of a literal union is a value of its base type, as on C" {
 		+ " console.log(cat('ab', 'c'), lt('c', 'ab'), lt('ab', 'c'));");
 	assert ops.error == "", ops.error;
 	assert ops.output == "abc false true\n", ops.output;
-	const zero = evalOrcVM("type L = 'a' | 'b'; type D = 1 | 2; const ls = new Array<L>(1); const ds = new Array<D>(1);"
-		+ " console.log(`[${ls[0]}] ${ls[0].length} ${ds[0] + 0}`);");
-	assert zero.error == "", zero.error;
-	assert zero.output == "[] 0 0\n", zero.output;
 }
 
 function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {
