@@ -4,7 +4,7 @@ import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cm
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -1604,6 +1604,40 @@ export function stampOwner(ctx: CheckerContext, sym: Symbol): void {
 	sym.modulePath = ctx.modulePath;
 	if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
 	stampItem(ctx, sym);
+}
+
+let hoistedTemps: int32 = 0;
+
+export function assignTemp(sym: Symbol, value: Node): Node {
+	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: boundRead(sym, value.location), right: value }, value.location);
+	assign.nodeType = sym.symbolType;
+	assign.flags = assign.flags.incl(NodeFlag.Sem);
+	return assign;
+}
+
+export function hoistedTemp(ctx: CheckerContext, t: Type, loc: SourceLocation): Symbol {
+	hoistedTemps += 1;
+	const name = "__dflt_" + String(hoistedTemps);
+	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
+	setFlag(sym, SymbolFlag.Used);
+	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
+	stampOwner(ctx, sym);
+	sym.location = loc;
+	const decl = createNodeAt(NodeKind.VariableDecl, { declName: name, declType: "", initializer: null as unknown as Node, declKind: DeclKind.Let, nameLocation: loc }, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = t;
+	decl.flags = decl.flags.incl(NodeFlag.Sem);
+	sym.declNode = decl;
+	ctx.pendingHoisted.push(decl);
+	return sym;
+}
+
+export function boundRead(sym: Symbol, loc: SourceLocation): Node {
+	const id = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
+	id.resolvedSym = sym;
+	id.nodeType = sym.symbolType;
+	id.flags = id.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
+	return id;
 }
 
 export function stampItem(ctx: CheckerContext, sym: Symbol): void {
