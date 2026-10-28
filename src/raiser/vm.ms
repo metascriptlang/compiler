@@ -1729,6 +1729,13 @@ function releaseSpawnEnv(vm: RaiserVM, s: RaiserStrand): void {
 	s.spawnEnv = 0;
 }
 
+function releaseMovedOut(vm: RaiserVM, handle: int64): void {
+	if (handle == 0 || !rcDecIsLast(vm.arrayHeap, vm.objectHeap, handle)) return;
+	const pending = vm.dropped.length;
+	vmDestroyWalk(vm, handle);
+	while (vm.dropped.length > pending) vmDestroyWalk(vm, vm.dropped.pop());
+}
+
 function releaseEntryRefs(vm: RaiserVM): void {
 	const own = getModuleFunc(vm.mod, vm.funcIdx).ownRefs;
 	for (let i = 0; i < own.length; i += 1) {
@@ -1748,11 +1755,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) {
 		futureComplete(vm, s.resultFuture, value);
-		if ((value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) && value.intVal != 0) {
-			if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, value.intVal)) vmDestroyTop(vm, value.intVal);
-			else vmRegisterCyclic(vm, value.intVal);
-			vmDrain(vm);
-		}
+		if (value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) releaseMovedOut(vm, value.intVal);
 	}
 	if (vm.current != 0) releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
