@@ -443,7 +443,7 @@ void msPoolWakeThief(int ownerSchedulerID) {
 	msThreadPool* pool = msPoolGet();
 	if (pool == NULL) return;
 	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
-	idle &= ((uint64_t)1 << pool->workerCount) - 1;
+	if (pool->workerCount < 64) idle &= ((uint64_t)1 << pool->workerCount) - 1;
 	if (ownerSchedulerID >= 1) idle &= ~((uint64_t)1 << (ownerSchedulerID - 1));
 	if (idle == 0) return;
 	msPoolWakeWorker(msCtz64(idle) + 1);
