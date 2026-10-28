@@ -154,6 +154,8 @@ function derivesFrom(cls: Symbol, owner: Symbol): boolean {
 	return false;
 }
 
+const everyFieldGrant = "*every-field*";
+
 function enclosingGrant(ctx: CheckerContext, owner: Symbol, protectedMember: boolean): Symbol | null {
 	let scope: Scope | null = ctx.table.current;
 	while (scope != null) {
@@ -169,6 +171,7 @@ function enclosingGrant(ctx: CheckerContext, owner: Symbol, protectedMember: boo
 
 function reportClassMember(ctx: CheckerContext, owner: Symbol, name: string, what: string, protectedMember: boolean, receiver: Symbol | null, line: int32, column: int32): boolean {
 	const through = enclosingGrant(ctx, owner, protectedMember);
+	if (through == null && befriends(ctx, everyFieldGrant)) return false;
 	if (through == null) {
 		const where = protectedMember ? "inside that class and its subclasses" : "inside that class";
 		addError(ctx, `'${name}' is a ${protectedMember ? "protected" : "private"} ${what} of class '${owner.name}' and is only accessible ${where}`, line, column);
@@ -210,11 +213,20 @@ export function markExpansion(ctx: CheckerContext, node: Node | null, friends: s
 	if (node != null && friends.length > 0) ctx.expansionFriends.set(node, friends);
 }
 
+// A routine the compiler synthesizes per value type (`valueDump<T>`) reads every field of T through
+// the macro it expands: the access is built from the field list, so it carries no visibility.
+function readsEveryField(ctx: CheckerContext): boolean {
+	const fn = ctx.currentFunction;
+	if (fn == null) return false;
+	return hasFlag(originOf(fn), SymbolFlag.CompilerProc);
+}
+
 export function expansionOf(ctx: CheckerContext, origin: Node, macroModule: string): string[] {
 	const inherited = expansionFriendsOf(ctx, origin);
 	const friends: string[] = [];
 	for (const m of inherited) friends.push(m);
 	if (macroModule != "") friends.push(macroModule);
+	if (readsEveryField(ctx)) friends.push(everyFieldGrant);
 	return friends;
 }
 
@@ -223,7 +235,7 @@ function isProtectedMember(owner: Symbol, name: string): boolean {
 }
 
 function structFieldVisible(ctx: CheckerContext, owner: Symbol): boolean {
-	return owner.modulePath == ctx.modulePath || befriends(ctx, owner.modulePath);
+	return owner.modulePath == ctx.modulePath || befriends(ctx, owner.modulePath) || befriends(ctx, everyFieldGrant);
 }
 
 export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | null {
@@ -255,7 +267,7 @@ export function hiddenPrivateField(ctx: CheckerContext, typeSym: Symbol | null, 
 		const owner = privateFieldOwner(typeSym, f);
 		if (owner == null) continue;
 		const visible = isClassLike(owner)
-			? enclosingGrant(ctx, owner, isProtectedMember(owner, f)) != null
+			? enclosingGrant(ctx, owner, isProtectedMember(owner, f)) != null || befriends(ctx, everyFieldGrant)
 			: structFieldVisible(ctx, owner);
 		if (!visible) return f;
 	}

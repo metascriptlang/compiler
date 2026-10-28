@@ -76,6 +76,15 @@ test "fieldVisibility: a private class member is visible inside its class body o
 	assert refusesPrivate("export const unused = 0;\n", cls + "const b = new B();\nb.secret = 9;\n", "secret");
 	assert refusesPrivate("export const unused = 0;\n", cls + "function outside(b: B): int32 { return b.secret; }\n", "secret");
 	assert refusesPrivate("export const unused = 0;\n", "class P { private s: int32 = 1; }\nclass Q extends P { peek(): int32 { return this.s; } }\n", "s");
+	assert errorsOf("export const unused = 0;\n", cls + "console.log(new B(), [new B()]);\n").length == 0;
+	assert refusesPrivate("export const unused = 0;\n", cls + "console.log(new B().secret);\n", "secret");
+	assert refusesPrivate("export const unused = 0;\n", cls + "console.log(`${new B().secret}`);\n", "secret");
+}
+
+test "fieldVisibility: printing a value reads every field of its type, private ones included, and only the printing does" {
+	const lib = "export struct Seal { private word: int32; n: int32; }\nexport function seal(): Seal { return { word: 1, n: 2 }; }\n";
+	assert errorsOf(lib, "import { seal } from \"./lib\";\nconsole.log(seal(), seal() == seal());\n").length == 0;
+	assert refusesPrivate(lib, "import { seal } from \"./lib\";\nconsole.log(seal().word);\n", "word");
 }
 
 test "fieldVisibility: a generic class reaches its private members from methods, statics and initializers" {
