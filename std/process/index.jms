@@ -16,6 +16,7 @@ extern class process {
 	static extern platform: string;
 	static extern arch: string;
 	static extern argv: string[];
+	static extern execPath: string;
 }
 extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
 extern function existsSync(path: string): boolean;
@@ -36,6 +37,7 @@ export { readFile, writeFile } from "../fs/index";
 // Dropping node's own executable makes index 0 the program on both.
 const nodeArgv: string[] = process.argv;
 export const argv: string[] = nodeArgv.slice(1);
+export const execPath: string = process.execPath;
 
 // Platform identifier — normalize Node's "win32" to our "windows" so MS code
 // sees the same values across backends.
