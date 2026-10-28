@@ -1,6 +1,7 @@
 import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
-import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
+import { declaresUserHook } from "../../checker/instantiate";
+import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, isPlainDataType, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocDyn, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
@@ -8,7 +9,7 @@ import { getOpByKey } from "../c/types";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
-import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
+import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, nullIsZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
 import {
 	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT, ROW_TRACE, ROW_SET_LEN,
 	ownershipName, ownershipRow,
@@ -71,7 +72,8 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
 		return;
 	}
-	if (needsValueCopy(place.nodeType) && !(leavesEmptyArray && isArrayType(place.nodeType))) {
+	if (leavesEmptyArray && isPlainDataType(place.nodeType, declaresUserHook)) return;
+	if (needsValueCopy(place.nodeType) && !(leavesEmptyArray && (isArrayType(place.nodeType) || nullIsZeroValue(place.nodeType)))) {
 		const cleared = allocReg(s, RaiserRegClass.Ref);
 		emitLoadConst(s, cleared, raiserNil());
 		emitPlaceStore(s, name, place, cleared);
@@ -115,7 +117,7 @@ function emitStoreInto(s: RaiserCompState, name: string, dest: Node, incoming: i
 		emitRebind(s, name, dest, incoming, oldSource);
 		return;
 	}
-	if (placeOf(dest).kind == NodeKind.HiddenDeref) {
+	if (placeOf(dest).kind == NodeKind.HiddenDeref && !isMaybeHeld(placeOf(dest).nodeType)) {
 		emitCellSwap(s, oldSource, incoming, placeOf(dest).nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.RcDec, incoming, 0, 0));
 		return;
