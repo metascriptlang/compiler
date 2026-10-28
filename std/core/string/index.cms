@@ -150,6 +150,7 @@ export function fromCharCode(this typeof String, ...codes: int32[]): string {
 /** Converts any value to its string representation. Delegates to .toString(). */
 @builtin("ToString")
 export extern function String<T>(val: T): string;
+export { encodeURIComponent, decodeURIComponent } from "./uri";
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";

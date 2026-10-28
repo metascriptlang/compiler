@@ -192,6 +192,25 @@ export function stripInPlace(this s: string): void {
 }
 
 
+extern function nativeEncodeURIComponent(s: string): string from "globalThis.encodeURIComponent(#)";
+extern function nativeDecodeURIComponent(s: string): string from "globalThis.decodeURIComponent(#)";
+
+export function encodeURIComponent(s: string): string {
+	try {
+		return nativeEncodeURIComponent(s);
+	} catch (e) {
+		throw new URIError("URI malformed");
+	}
+}
+
+export function decodeURIComponent(s: string): string {
+	try {
+		return nativeDecodeURIComponent(s);
+	} catch (e) {
+		throw new URIError("URI malformed");
+	}
+}
+
 export function fromCodePoint(cp: number): string {
 	@emit(`return (${cp} < 0 || ${cp} > 1114111) ? "" : String.fromCodePoint(${cp});`);
 	unreachable;
