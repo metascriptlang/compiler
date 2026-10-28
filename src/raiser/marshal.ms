@@ -20,7 +20,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapArrayRc,
-	heapAllocString, heapStringText, handleIndex,
+	heapAllocString, heapStringText, handleIndex, handleHeapKind, RaiserHeapKind, stringHandleRc, rcDecrefHandle, heapStringHandles,
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
@@ -289,6 +289,17 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	assert back.field("binds").at(1).field("text").text() == "home";
 	assert back.field("fontSize").root.kind == RaiserValueKind.Nil;
 	assert back.field("absent").root.kind == RaiserValueKind.Nil;
+}
+
+test "a boxed string a host value takes leaves no string live on the strand's heap" {
+	const strandArrays = createArrayHeap();
+	setActiveHostHeaps(createStructHeap(), strandArrays);
+	const taken = hostValue(boxString("hello"));
+	assert taken.text() == "hello";
+	assert heapStringHandles(strandArrays).length == 0;
+	const failure = hostObject(["path", "message"], [hostValue(boxString("a.txt")), hostValue(boxString("no such file"))]);
+	copyToVm(strandArrays, createStructHeap(), failure);
+	assert heapStringHandles(strandArrays).length == 2;
 }
 
 test "a host value refuses a walk its kind does not have" {
