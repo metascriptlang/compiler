@@ -3987,6 +3987,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		&& fnExpected.kind == TypeKind.Function
 		&& fnExpected.typeReturn != null
 		&& !isUnresolvedType(fnExpected.typeReturn)
+		&& !holdsInferred(fnExpected.typeReturn)
 		&& !hasGenericParams(fnExpected.typeReturn)) {
 		explicitReturnType = isAsync && !isGenerator && promisesContext(fnExpected.typeReturn)
 			? createPromise(fnExpected.typeReturn)
