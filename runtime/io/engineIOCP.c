@@ -433,8 +433,8 @@ void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
 	 * target — mirrors the readiness + io_uring backends' msSchedWakeRegister. */
 	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
 	msSchedWakeRegister(msMySchedulerID, e);
-	extern bool msWakeIocpRegister(void* port);  /* dispatchFull.c */
-	(void)msWakeIocpRegister(e->iocp);
+	extern void msWakeIocpRegister(void* port);  /* dispatchFull.c */
+	msWakeIocpRegister(e->iocp);
 }
 
 /* IOCP arm of the engine wake (Amendment B / I16): post a NULL-overlapped completion to break a
