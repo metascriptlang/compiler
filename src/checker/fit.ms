@@ -273,7 +273,20 @@ function rearmLiteral(lit: Node): void {
 	}
 }
 
+function arrayLiteralFitsTuple(literal: Node, other: Type): boolean {
+	const tuple = valueShape(other);
+	if (tuple.kind != TypeKind.Tuple || hasGenericParams(tuple)) return false;
+	const elements = (literal.data as ArrayLiteralData).elements;
+	if (elements.length != tuple.typeChildren.length) return false;
+	for (let i = 0; i < elements.length; i++) {
+		const el = elements[i];
+		if (el == null || el.nodeType == null || slotRefuses(el.nodeType, tuple.typeChildren[i])) return false;
+	}
+	return true;
+}
+
 export function literalArmJoinsInto(literal: Node, other: Type | null): boolean {
+	if (literal != null && literal.kind == NodeKind.ArrayLiteral && other != null) return arrayLiteralFitsTuple(literal, other);
 	if (literal == null || literal.kind != NodeKind.ObjectLiteral || other == null) return false;
 	const lit = anonLiteralStruct(literal.nodeType);
 	if (lit == null || anonLiteralStruct(other) != null || hasGenericParams(other)) return false;
