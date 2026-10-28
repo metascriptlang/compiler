@@ -114,6 +114,7 @@ int32_t msPoolPendingPeek(void);
 void msPoolWakeWorker(int schedulerID);
 void msPoolWakeThief(int ownerSchedulerID);
 bool msWorkerEnginePoll(void);
+bool msWorkerEnginePark(int timeoutMs);
 bool msWorkerEngineLive(void);
 int64_t msWorkerEnginePolls(void);
 
