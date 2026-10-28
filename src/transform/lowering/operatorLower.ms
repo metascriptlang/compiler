@@ -14,9 +14,13 @@ import { forEachChild } from "../../ast/visitor";
 import { parseInput, getStmts, firstExprKind, bindCStd } from "../testUtil";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
-// lowering unbound calls a prelude or extension operator, the same one in every scope.
+// lowering unbound calls a prelude or extension operator, the same one in every scope: a module
+// that imports no text operators (a std module whose generic body is instantiated for text) still
+// meets the prelude's.
 function extensionOperator(ctx: TransformContext, op: string, types: Type[]): ExtensionMethod {
-	return resolveOperatorCall(null, ctx.checkerCtx.extensionRegistry, op, types);
+	const own = resolveOperatorCall(null, ctx.checkerCtx.extensionRegistry, op, types);
+	if (own != null || ctx.checkerCtx.preludeCtx == null) return own;
+	return resolveOperatorCall(null, ctx.checkerCtx.preludeCtx.extensionRegistry, op, types);
 }
 
 // ===== Type Resolution =====
