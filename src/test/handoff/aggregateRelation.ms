@@ -166,7 +166,7 @@ function nestedWrappers(depth: int32): string {
 }
 
 test "aggregate relation: annotation nesting depth costs no checker stack per level" {
-	for (const typeName of [nestedArray(400), nestedWrappers(400)]) {
+	for (const typeName of [nestedArray(400), nestedWrappers(400), nestedWrappers(600)]) {
 		assert strictErrorCount("function f(x: " + typeName + "): int32 { return 0; }") == 0, typeName.slice(0, 40);
 		assert strictErrorCount("function f(x: " + typeName + "): int32 { return x; }") == 1, typeName.slice(0, 40);
 	}
