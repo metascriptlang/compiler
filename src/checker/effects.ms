@@ -1009,7 +1009,8 @@ function viewArgEffect(call: Node): EffectCause | null {
 	const sym = isSuperCall(callee) ? callee!.resolvedSym : call.resolvedSym;
 	if (!isRoutine(sym)) return null;
 	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
-	const passed: (Node | null)[] = shift == 1 ? [receiverOf(call)] : [];
+	const actorPidNotView = isMessageToAnotherActor(call);
+	const passed: (Node | null)[] = shift == 1 ? [actorPidNotView ? null : receiverOf(call)] : [];
 	for (const a of (call.data as CallExprData).arguments) passed.push(a);
 	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : isSuperCall(callee) ? "super" : sym!.name;
 	const targets: Symbol[] = [sym!];
