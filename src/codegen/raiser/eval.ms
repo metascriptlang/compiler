@@ -560,8 +560,9 @@ export function engineRecheckCount(): int32 {
 // A method has no body of its own in the engine: its class compiles whole, in the class scope its `this` and fields live in.
 function compileMethodOwner(method: Symbol): int32 {
 	const fnType = method.symbolType;
-	const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
-	if (self == null || self.sym == null || ensureCompiledIntoEngine(self.sym) < 0) return -1;
+	const owner = method.staticOwner;
+	const self = owner != null ? owner : fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]).sym : null;
+	if (self == null || ensureCompiledIntoEngine(self) < 0) return -1;
 	const idx = _engine.funcMap.symbolIndices.get(method);
 	return idx != null ? idx : -1;
 }
@@ -598,7 +599,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		engineName = "$comptime:helper";
 		(clone.data as FunctionDeclData).fnName = engineName;
 	}
-	callComptimeHelperPreparer(clone, seedCtx != null ? seedCtx : _engineToken);
+	callComptimeHelperPreparer(clone, seedCtx != null ? seedCtx : _engineToken, sym);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	_engineRecheckCount += 1;

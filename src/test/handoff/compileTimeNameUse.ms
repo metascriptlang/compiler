@@ -117,3 +117,28 @@ export class Host<T> {
 	assert occurrences(messages, "'div' is imported but never used") == 1, messages.join("\n");
 	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
 }
+
+test "compileTimeNameUse: a type written only in a macro body, as an annotation, a cast or a nested helper signature, counts as a use; a dead import still warns" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/kind.ms", entrySource: `export class Box { value: int32 = 0; }
+export class Spare { value: int32 = 0; }
+export function boxOf(n: int32): Box { const b = new Box(); b.value = n; return b; }
+` },
+		{ entryPath: "src/mac.ms", entrySource: `import { Node, NodeKind, ArrayLiteralData } from "std/meta";
+import { Box, Spare, boxOf } from "./kind";
+export macro seven(at: Node): Node {
+	function make(): Box { return boxOf(7); }
+	const b: Box = make();
+	const count = (at as ArrayLiteralData).elements.length;
+	return { kind: NodeKind.NumberLiteral, line: at.line, column: at.column, value: b.value + count };
+}
+` },
+		{ entryPath: "src/main.ms", entrySource: `import { seven } from "./mac";
+console.log(String(seven([1])));
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/mac.ms");
+	assert occurrences(messages, "'Box' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'ArrayLiteralData' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
+}
