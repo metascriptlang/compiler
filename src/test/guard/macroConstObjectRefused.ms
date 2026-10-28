@@ -1,10 +1,12 @@
-// macroConstObjectRefused — a module-level const that holds an object FAILS LOUD in macro-time code.
+// macroConstObjectRefused — macro-time code that writes to an object held by a module-level const FAILS LOUD.
 //
-// The VM compiles a const through its initializer at every use, so a Map, a Set, an
-// array or a class instance would be a new object at each read: a write through one use
-// is lost to the next. Reading such a const refuses instead of inlining it.
+// The VM compiles a const through its initializer at every use, so a Map, a Set or a class
+// instance would be a new object at each read, and a write through a const array would never
+// reach the next read. A const class instance is refused on any use; a const array is refused
+// on a write (assignment, update, push and the other mutating array methods) and read freely.
 //
 // GUARD-CHECK-FAIL a module-level const of type
+// GUARD-CHECK-FAIL a write through a module-level const array
 
 import { Node, NodeKind } from "std/meta";
 
@@ -12,8 +14,7 @@ const SEEN: Map<string, int32> = new Map();
 const LOG: string[] = [];
 
 function remember(k: string): int32 {
-	SEEN.set(k, 1); // GUARD-REFUSED
-	return 1;
+	return SEEN.has(k) ? 1 : 0; // GUARD-REFUSED
 }
 
 function note(k: string): int32 {

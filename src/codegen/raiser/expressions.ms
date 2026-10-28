@@ -43,11 +43,9 @@ import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 // (transformForEngine), so resolve the bridge NOW and report a missing one
 // at the call site with a span — the procIsCallback-resolved-at-codegen
 // shape, one phase earlier than the reference needs it.
-// A value an inlined initializer cannot stand for: a second evaluation is a second object.
+// A class instance an inlined initializer cannot stand for: a second evaluation is a second object.
 function holdsIdentity(t: Type | null): boolean {
-	if (t == null || isReadonlyView(t)) return false;
-	const body = unwrapRef(t);
-	return classBodyOf(t) != null || (body != null && body.kind == TypeKind.Array);
+	return classBodyOf(t) != null;
 }
 
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
@@ -623,7 +621,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
 				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.VariableDecl
 				&& holdsIdentity(node.resolvedSym.symbolType)) {
-				const heldMsg = `cannot evaluate '${d.name}' at comptime: a module-level const of type ${typeDisplayName(node.resolvedSym.symbolType)} is a single object, and macro-time code would build a new one at every use; keep it in a local or pass it as a parameter`;
+				const heldMsg = `cannot evaluate '${d.name}' at comptime: a module-level const of type ${typeDisplayName(node.resolvedSym.symbolType)} is one object, and macro-time code would build a new one at every use; keep it in a local or pass it as a parameter`;
 				queueRaiserCompileError(heldMsg, node.location.line, node.location.column);
 				return emitTrapValue(s, heldMsg, node.nodeType);
 			}
