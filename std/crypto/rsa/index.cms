@@ -37,6 +37,8 @@
 @passC("-Ivendor/mbedtls/library");
 @passC("-Wno-deprecated-declarations");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -97,28 +99,28 @@ export function rsaExportPublic(key: int64): Result<string, CryptoError> {
 	return Result.ok(pem);
 }
 
-export function rsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
+export function rsaSign(key: int64, data: Bytes, algorithm: string): Result<Buffer, CryptoError> {
 	if (algorithm == "") algorithm = "sha256";
-	const sig = msCryptoRsaSign(key, algorithm, data);
+	const sig = msCryptoRsaSign(key, algorithm, rawString(data));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsaSign", "signing failed"));
-	return Result.ok(sig);
+	return Result.ok(rawBuffer(sig));
 }
 
-export function rsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
+export function rsaVerify(key: int64, data: Bytes, signature: Bytes, algorithm: string): boolean {
 	if (algorithm == "") algorithm = "sha256";
-	return msCryptoRsaVerify(key, algorithm, data, signature);
+	return msCryptoRsaVerify(key, algorithm, rawString(data), rawString(signature));
 }
 
-export function rsaEncrypt(key: int64, data: string): Result<string, CryptoError> {
-	const encrypted = msCryptoRsaEncrypt(key, data);
+export function rsaEncrypt(key: int64, data: Bytes): Result<Buffer, CryptoError> {
+	const encrypted = msCryptoRsaEncrypt(key, rawString(data));
 	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsaEncrypt", "RSA-OAEP encryption failed"));
-	return Result.ok(encrypted);
+	return Result.ok(rawBuffer(encrypted));
 }
 
-export function rsaDecrypt(key: int64, data: string): Result<string, CryptoError> {
-	const decrypted = msCryptoRsaDecrypt(key, data);
+export function rsaDecrypt(key: int64, data: Bytes): Result<Buffer, CryptoError> {
+	const decrypted = msCryptoRsaDecrypt(key, rawString(data));
 	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsaDecrypt", "RSA-OAEP decryption failed"));
-	return Result.ok(decrypted);
+	return Result.ok(rawBuffer(decrypted));
 }
 
 export function rsaFree(key: int64): void {
@@ -158,24 +160,24 @@ export function ecExportPublic(key: int64): Result<string, CryptoError> {
 	return Result.ok(pem);
 }
 
-export function ecdsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
+export function ecdsaSign(key: int64, data: Bytes, algorithm: string): Result<Buffer, CryptoError> {
 	if (algorithm == "") algorithm = "sha256";
-	const sig = msCryptoEcdsaSign(key, algorithm, data);
+	const sig = msCryptoEcdsaSign(key, algorithm, rawString(data));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ecdsaSign", "ECDSA signing failed"));
-	return Result.ok(sig);
+	return Result.ok(rawBuffer(sig));
 }
 
-export function ecdsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
+export function ecdsaVerify(key: int64, data: Bytes, signature: Bytes, algorithm: string): boolean {
 	if (algorithm == "") algorithm = "sha256";
-	return msCryptoEcdsaVerify(key, algorithm, data, signature);
+	return msCryptoEcdsaVerify(key, algorithm, rawString(data), rawString(signature));
 }
 
 // ===== ECDH =====
 
-export function ecdhDerive(privateKey: int64, publicKey: int64): Result<string, CryptoError> {
+export function ecdhDerive(privateKey: int64, publicKey: int64): Result<Buffer, CryptoError> {
 	const shared = msCryptoEcdhDerive(privateKey, publicKey);
 	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ecdhDerive", "ECDH key agreement failed"));
-	return Result.ok(shared);
+	return Result.ok(rawBuffer(shared));
 }
 
 export function ecFree(key: int64): void {
@@ -188,15 +190,15 @@ export async function rsaGenerateAsync(bits: int32): Promise<Result<int64, Crypt
 	return await spawn(() => { return rsaGenerate(bits); });
 }
 
-export async function rsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
+export async function rsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return rsaSign(key, data, algorithm); });
 }
 
-export async function rsaEncryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
+export async function rsaEncryptAsync(key: int64, data: string): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return rsaEncrypt(key, data); });
 }
 
-export async function rsaDecryptAsync(key: int64, data: string): Promise<Result<string, CryptoError>> {
+export async function rsaDecryptAsync(key: int64, data: string): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return rsaDecrypt(key, data); });
 }
 
@@ -204,6 +206,6 @@ export async function ecGenerateAsync(curve: string): Promise<Result<int64, Cryp
 	return await spawn(() => { return ecGenerate(curve); });
 }
 
-export async function ecdsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<string, CryptoError>> {
+export async function ecdsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return ecdsaSign(key, data, algorithm); });
 }

@@ -7,7 +7,7 @@ import { gunzip } from "std/compress/inflate";
 export function label(): string {
 	const key = ed25519FromSeed("a".repeat(32));
 	const packed = gzip("native first use");
-	const nativeReady = hash("abc") > 0 && blake2b("native first use").byteLength == 32 && key.ok;
+	const nativeReady = hash("abc") > 0 && blake2b("native first use").length == 32 && key.ok;
 	if (!nativeReady || !packed.ok) return "native failed";
 	const unpacked = gunzip(packed.value);
 	return unpacked.ok && unpacked.value == "native first use" ? "inflate roundtrip" : "native failed";

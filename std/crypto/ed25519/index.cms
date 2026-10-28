@@ -14,6 +14,8 @@
 // Include paths
 @passC("-Ivendor/monocypher/src");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -34,54 +36,58 @@ function validateSecretKey(secretKey: string, op: string): Result<boolean, Crypt
 
 // ===== Key Generation =====
 
-export function ed25519Generate(): Result<string, CryptoError> {
+export function ed25519Generate(): Result<Buffer, CryptoError> {
 	const sk = msEd25519Generate();
 	if (sk == "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ed25519Generate", "key generation failed"));
-	return Result.ok(sk);
+	return Result.ok(rawBuffer(sk));
 }
 
-export function ed25519FromSeed(seed: string): Result<string, CryptoError> {
+export function ed25519FromSeed(seedBytes: Bytes): Result<Buffer, CryptoError> {
+	const seed = rawString(seedBytes);
 	if (seed.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "seed must be 32 bytes"));
 	}
 	const sk = msEd25519FromSeed(seed);
 	if (sk == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "failed to derive key from seed"));
-	return Result.ok(sk);
+	return Result.ok(rawBuffer(sk));
 }
 
-export function ed25519PublicKey(secretKey: string): Result<string, CryptoError> {
+export function ed25519PublicKey(secretKeyBytes: Bytes): Result<Buffer, CryptoError> {
+	const secretKey = rawString(secretKeyBytes);
 	const _v1 = try validateSecretKey(secretKey, "ed25519PublicKey");
 	const pk = msEd25519PublicKey(secretKey);
 	if (pk == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519PublicKey", "failed to extract public key"));
-	return Result.ok(pk);
+	return Result.ok(rawBuffer(pk));
 }
 
-export function ed25519ToSeed(secretKey: string): Result<string, CryptoError> {
+export function ed25519ToSeed(secretKeyBytes: Bytes): Result<Buffer, CryptoError> {
+	const secretKey = rawString(secretKeyBytes);
 	const _v2 = try validateSecretKey(secretKey, "ed25519ToSeed");
 	const seed = msEd25519ToSeed(secretKey);
 	if (seed == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519ToSeed", "failed to extract seed"));
-	return Result.ok(seed);
+	return Result.ok(rawBuffer(seed));
 }
 
 // ===== Sign / Verify =====
 
-export function ed25519Sign(secretKey: string, message: string): Result<string, CryptoError> {
+export function ed25519Sign(secretKeyBytes: Bytes, messageBytes: Bytes): Result<Buffer, CryptoError> {
+	const secretKey = rawString(secretKeyBytes);
 	const _v3 = try validateSecretKey(secretKey, "ed25519Sign");
-	const sig = msEd25519Sign(secretKey, message);
+	const sig = msEd25519Sign(secretKey, rawString(messageBytes));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519Sign", "signing failed"));
-	return Result.ok(sig);
+	return Result.ok(rawBuffer(sig));
 }
 
-export function ed25519Verify(signature: string, publicKey: string, message: string): boolean {
-	return msEd25519Verify(signature, publicKey, message);
+export function ed25519Verify(signature: Bytes, publicKey: Bytes, message: Bytes): boolean {
+	return msEd25519Verify(rawString(signature), rawString(publicKey), rawString(message));
 }
 
 // ===== Async (spawn for batch signing) =====
 
-export async function ed25519GenerateAsync(): Promise<Result<string, CryptoError>> {
+export async function ed25519GenerateAsync(): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return ed25519Generate(); });
 }
 
-export async function ed25519SignAsync(secretKey: string, message: string): Promise<Result<string, CryptoError>> {
+export async function ed25519SignAsync(secretKey: string, message: string): Promise<Result<Buffer, CryptoError>> {
 	return await spawn(() => { return ed25519Sign(secretKey, message); });
 }

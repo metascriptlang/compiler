@@ -22,6 +22,8 @@
 @passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
 @passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 
 // C bindings
@@ -43,16 +45,17 @@ function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
 
 /**
  * Encrypt with AES-GCM. Auto-generates 12-byte nonce.
- * Returns: nonce(12) || cipherText || authTag(16) as single binary string.
+ * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
  * Key: 16 bytes (AES-128) or 32 bytes (AES-256).
  */
-export function seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
+export function seal(keyBytes: Bytes, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
 	const _v1 = try validateAesKey(key, "seal");
-	const result = msCryptoAesSeal(key, plainText, aad);
+	const result = msCryptoAesSeal(key, rawString(plainTextBytes), rawString(aadBytes));
 	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "AES-GCM encryption failed"));
 	}
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }
 
 /**
@@ -60,16 +63,18 @@ export function seal(key: string, plainText: string, aad: string = ""): Result<s
  * Input: nonce(12) || cipherText || authTag(16).
  * Returns plainText or error if authentication fails.
  */
-export function open(key: string, sealed: string, aad: string = ""): Result<string, CryptoError> {
+export function open(keyBytes: Bytes, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
+	const sealed = rawString(sealedBytes);
 	const _v2 = try validateAesKey(key, "open");
 	if (sealed.byteLength < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
 	let plainText = "";
-	if (msCryptoAesOpen(key, sealed, aad, plainText) != 1) {
+	if (msCryptoAesOpen(key, sealed, rawString(aadBytes), plainText) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
-	return Result.ok(plainText);
+	return Result.ok(rawBuffer(plainText));
 }
 
 // ===== CBC Mode (expert use — no authentication) =====
@@ -79,30 +84,34 @@ export function open(key: string, sealed: string, aad: string = ""): Result<stri
  * Key: 16 or 32 bytes. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
-export function cbcEncrypt(key: string, plainText: string, iv: string): Result<string, CryptoError> {
+export function cbcEncrypt(keyBytes: Bytes, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
+	const iv = rawString(ivBytes);
 	const _v3 = try validateAesKey(key, "cbcEncrypt");
 	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
-	const result = msCryptoAesCbcEncrypt(key, plainText, iv);
+	const result = msCryptoAesCbcEncrypt(key, rawString(plainTextBytes), iv);
 	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", "AES-CBC encryption failed"));
 	}
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }
 
 /**
  * AES-CBC decrypt with PKCS7 unpadding.
  * Key: 16 or 32 bytes. IV: must be 16 bytes.
  */
-export function cbcDecrypt(key: string, cipherText: string, iv: string): Result<string, CryptoError> {
+export function cbcDecrypt(keyBytes: Bytes, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
+	const iv = rawString(ivBytes);
 	const _v4 = try validateAesKey(key, "cbcDecrypt");
 	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
-	const result = msCryptoAesCbcDecrypt(key, cipherText, iv);
+	const result = msCryptoAesCbcDecrypt(key, rawString(cipherTextBytes), iv);
 	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }

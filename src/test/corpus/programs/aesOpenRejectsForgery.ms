@@ -18,8 +18,8 @@ function row(key: string, plainText: string): string {
 	const sealed = seal(key, plainText, "header");
 	if (!sealed.ok) throw new Error("seal failed");
 	const genuine = open(key, sealed.value, "header");
-	const genuineOk = genuine.ok && genuine.value == plainText;
-	const forged = open(key, zeros(sealed.value.byteLength), "header");
+	const genuineOk = genuine.ok && genuine.value.asString() == plainText;
+	const forged = open(key, zeros(sealed.value.length), "header");
 	const wrongAad = open(key, sealed.value, "other");
 	const label = plainText.byteLength == 0 ? "empty" : "text";
 	return `${key.byteLength} ${label} genuine ${genuineOk} forged ${forged.ok} aad ${wrongAad.ok}`;

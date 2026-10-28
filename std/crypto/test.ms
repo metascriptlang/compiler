@@ -3,6 +3,7 @@
 import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, randomUUID,
 	timingSafeEqual, createHash, createHmac, isHashSupported, init,
 	toHex, fromHex, toBase64, fromBase64, hashBuffer, hmacBuffer } from "std/crypto";
+import { Buffer } from "std/core/buffer";
 
 @include("runtime/crypto/hash.h");
 extern function hashInto(
@@ -54,12 +55,11 @@ test "digest scratch accepts exact small and maximum capacities" {
 	assert hmacInto("sha512", "key", "abc", bytes, 64) == 64;
 }
 
-test "crypto codecs preserve raw binary strings" {
+test "crypto codecs preserve every byte" {
 	const bytes: uint8[] = [];
 	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
-	const binary = bytes.asString();
-	assert fromHex(toHex(binary)) == binary;
-	assert fromBase64(toBase64(binary)) == binary;
+	assert Buffer.compare(fromHex(toHex(bytes)), bytes) == 0;
+	assert Buffer.compare(fromBase64(toBase64(bytes)), bytes) == 0;
 	assert toHex(fromBase64("/w==")) == "ff";
 	assert toHex(fromHex("AaFf00")) == "aaff00";
 }
@@ -71,7 +71,7 @@ test "crypto base64 encodes all tail lengths and UTF-8" {
 	];
 	for (let i = 0; i < plain.length; i++) {
 		assert toBase64(plain[i]) == encoded[i];
-		assert fromBase64(encoded[i]) == plain[i];
+		assert fromBase64(encoded[i]).asString() == plain[i];
 	}
 }
 
@@ -110,7 +110,7 @@ test "streaming hash digest encoding consumes its context once" {
 			assert expected.ok;
 			if (expected.ok) assert hasher.digest(encoding) == expected.value;
 			assert hasher.digest(encoding) == "";
-			assert hasher.digestBuffer() == "";
+			assert hasher.digestBuffer().length == 0;
 		}
 	}
 	assert createHash("bogus").digest() == "";
@@ -119,14 +119,14 @@ test "streaming hash digest encoding consumes its context once" {
 
 test "crypto codecs retain malformed input results" {
 	for (const text of ["", "0", "000", "gg", "00gg", "00 0", "\0f", "é"]) {
-		assert fromHex(text) == "";
+		assert fromHex(text).length == 0;
 	}
 	for (const text of ["", "Zg", " Zg==", "Zg==\n", "====", "_w==", "AAA?", "AA\0A"]) {
-		assert fromBase64(text) == "";
+		assert fromBase64(text).length == 0;
 	}
 	assert toHex(fromBase64("AB==")) == "00";
 	for (const text of ["AA=A", "AA==AAAA", "AAA=AAAA", "AB=C", "A=AA", "AAAA=AAA", "AA=AAAAA"]) {
-		assert fromBase64(text) == "";
+		assert fromBase64(text).length == 0;
 	}
 }
 
@@ -234,7 +234,7 @@ test "hmac with unsupported algorithm" {
 test "randomBytes generates correct length" {
 	const result = randomBytes(32);
 	assert result.ok;
-	// Raw bytes returned as msString — length should be 32
+	assert result.value.length == 32;
 }
 
 test "randomBytes different each call" {
@@ -242,7 +242,7 @@ test "randomBytes different each call" {
 	const b = randomBytes(16);
 	assert a.ok;
 	assert b.ok;
-	assert a.value != b.value;
+	assert Buffer.compare(a.value, b.value) != 0;
 }
 
 test "randomInt in range" {

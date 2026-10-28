@@ -10,6 +10,8 @@
 @compile("vendor/monocypher/src/monocypher.c");
 @passC("-Ivendor/monocypher/src");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -20,22 +22,25 @@ extern function msX25519SharedSecret(secretKey: string, publicKey: string): stri
 
 // ===== Key Exchange =====
 
-export function x25519Generate(): Result<string, CryptoError> {
+export function x25519Generate(): Result<Buffer, CryptoError> {
 	const sk = msX25519Generate();
 	if (sk == "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "x25519Generate", "key generation failed"));
-	return Result.ok(sk);
+	return Result.ok(rawBuffer(sk));
 }
 
-export function x25519PublicKey(secretKey: string): Result<string, CryptoError> {
+export function x25519PublicKey(secretKeyBytes: Bytes): Result<Buffer, CryptoError> {
+	const secretKey = rawString(secretKeyBytes);
 	if (secretKey.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519PublicKey", "secret key must be 32 bytes"));
 	}
 	const pk = msX25519PublicKey(secretKey);
 	if (pk == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519PublicKey", "failed to derive public key"));
-	return Result.ok(pk);
+	return Result.ok(rawBuffer(pk));
 }
 
-export function x25519SharedSecret(secretKey: string, publicKey: string): Result<string, CryptoError> {
+export function x25519SharedSecret(secretKeyBytes: Bytes, publicKeyBytes: Bytes): Result<Buffer, CryptoError> {
+	const secretKey = rawString(secretKeyBytes);
+	const publicKey = rawString(publicKeyBytes);
 	if (secretKey.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519SharedSecret", "secret key must be 32 bytes"));
 	}
@@ -44,5 +49,5 @@ export function x25519SharedSecret(secretKey: string, publicKey: string): Result
 	}
 	const shared = msX25519SharedSecret(secretKey, publicKey);
 	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "x25519SharedSecret", "key agreement failed"));
-	return Result.ok(shared);
+	return Result.ok(rawBuffer(shared));
 }

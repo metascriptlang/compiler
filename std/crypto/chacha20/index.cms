@@ -10,6 +10,8 @@
 @compile("vendor/monocypher/src/monocypher.c");
 @passC("-Ivendor/monocypher/src");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -26,21 +28,24 @@ function validateKey(key: string, op: string): Result<boolean, CryptoError> {
 	return Result.ok(true);
 }
 
-export function chacha20Seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
+export function chacha20Seal(keyBytes: Bytes, plainText: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
 	const _v = try validateKey(key, "chacha20Seal");
-	const result = msChacha20Seal(key, plainText, aad);
+	const result = msChacha20Seal(key, rawString(plainText), rawString(aad));
 	if (result == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }
 
-export function chacha20Open(key: string, sealed: string, aad: string = ""): Result<string, CryptoError> {
+export function chacha20Open(keyBytes: Bytes, sealedBytes: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
+	const key = rawString(keyBytes);
+	const sealed = rawString(sealedBytes);
 	const _v = try validateKey(key, "chacha20Open");
 	if (sealed.byteLength < 40) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "chacha20Open", "sealed data too short (need nonce+mac)"));
 	}
-	const result = msChacha20Open(key, sealed, aad);
+	const result = msChacha20Open(key, sealed, rawString(aad));
 	if (result == "" && sealed.byteLength > 40) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "chacha20Open", "authentication tag mismatch"));
 	}
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }

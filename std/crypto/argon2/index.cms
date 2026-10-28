@@ -19,6 +19,8 @@
 @passC("-Ivendor/argon2/include");
 @passC("-Ivendor/argon2/src");
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "../bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -38,11 +40,12 @@ extern function msCryptoArgon2HashRaw(password: string, salt: string, timeCost: 
  * parallelism: threads (default 4)
  * hashLen: output bytes (default 32)
  */
-export function argon2Hash(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
+export function argon2Hash(password: Bytes, saltBytes: Bytes, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
+	const salt = rawString(saltBytes);
 	if (salt.byteLength < 8) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", "salt must be at least 8 bytes"));
 	}
-	const result = msCryptoArgon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	const result = msCryptoArgon2Hash(rawString(password), salt, timeCost, memoryCost, parallelism, hashLen);
 	if (result == "") {
 		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2Hash", "Argon2id hashing failed"));
 	}
@@ -61,15 +64,16 @@ export function argon2Verify(encoded: string, password: string): boolean {
  * Hash with raw binary output (not encoded).
  * Use when you need the hash bytes directly (e.g., for key derivation).
  */
-export function argon2HashRaw(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
+export function argon2HashRaw(password: Bytes, saltBytes: Bytes, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<Buffer, CryptoError> {
+	const salt = rawString(saltBytes);
 	if (salt.byteLength < 8) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", "salt must be at least 8 bytes"));
 	}
-	const result = msCryptoArgon2HashRaw(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	const result = msCryptoArgon2HashRaw(rawString(password), salt, timeCost, memoryCost, parallelism, hashLen);
 	if (result == "") {
 		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2HashRaw", "Argon2id raw hashing failed"));
 	}
-	return Result.ok(result);
+	return Result.ok(rawBuffer(result));
 }
 
 // ===== Async (spawn to worker thread — Argon2 is intentionally slow) =====

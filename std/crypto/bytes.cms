@@ -1,0 +1,13 @@
+import { Buffer } from "std/core/buffer";
+import { wellFormedString } from "../core/string/bytes";
+
+export type Bytes = string | Buffer;
+
+export function rawString(data: Bytes): string {
+	if (typeof data == "string") return data;
+	return wellFormedString(data);
+}
+
+export function rawBuffer(raw: string): Buffer {
+	return Buffer.fromString(raw, "latin1");
+}
