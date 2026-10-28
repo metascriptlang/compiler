@@ -162,6 +162,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
 	msIoOpsAdd(-1);
 	e->live--;
+	if (r->fut != NULL) { void* held = r->fut; r->fut = NULL; msFutureDrcDestroy(held); }
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
@@ -260,6 +261,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	req->fd = listenFd;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) { msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1); freeRequest(e, req); return fut; }
@@ -281,6 +283,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) { free(req->buf); msFutureCompleteT(fut, MS_EMPTY_STRING); freeRequest(e, req); return fut; }
@@ -302,6 +305,7 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	req->len = len;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) { msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1); freeRequest(e, req); return fut; }
@@ -325,6 +329,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	req->strRef = data;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) {
@@ -535,6 +540,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	req->buf = (char*)msMemAlloc(MS_FS_WATCH_BUFFER);
 	req->len = MS_FS_WATCH_BUFFER;
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	fsWatchArm(e, w, req);
 	return fut;
 }
