@@ -104,8 +104,15 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 
 function isDottedReference(node: Node | null): boolean {
 	if (node == null) return false;
-	if (node.kind == NodeKind.Identifier) return true;
-	if (node.kind == NodeKind.MemberExpr) return isDottedReference((node.data as MemberExprData).object);
+	const n = skipReferenceHidden(node);
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.MemberExpr) return isDottedReference((n.data as MemberExprData).object);
+	if (n.kind == NodeKind.ArrayAccess) {
+		const ad = n.data as ArrayAccessData;
+		const index = ad.index == null ? null : skipReferenceHidden(ad.index);
+		return isDottedReference(ad.array) && index != null
+			&& (index.kind == NodeKind.NumberLiteral || index.kind == NodeKind.StringLiteral || index.kind == NodeKind.Identifier);
+	}
 	return false;
 }
 
