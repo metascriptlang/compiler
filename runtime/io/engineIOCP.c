@@ -144,6 +144,8 @@ msIoEngine* msIoEngineCreate(void) {
 void msIoEngineDestroy(msIoEngine* e) {
 	if (e == NULL) return;
 	msSchedWakeUnregisterEngine(e);  /* Amendment B: drop targeted-wake reg before freeing */
+	extern void msWakeIocpUnregister(void* port);  /* dispatchFull.c */
+	msWakeIocpUnregister(e->iocp);
 	CloseHandle(e->iocp);
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
@@ -425,12 +427,14 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 }
 
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
-	(void)fd;  /* external-fd chained-poll is PR-2's concern; the actor wake uses PostQueued below */
+	(void)fd;  /* the loop is woken through its port, not a pollable fd */
 	if (e == NULL) return;
 	/* Amendment B / I16: register this engine as its scheduler's targeted cross-thread actor-wake
 	 * target — mirrors the readiness + io_uring backends' msSchedWakeRegister. */
 	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
 	msSchedWakeRegister(msMySchedulerID, e);
+	extern bool msWakeIocpRegister(void* port);  /* dispatchFull.c */
+	(void)msWakeIocpRegister(e->iocp);
 }
 
 /* IOCP arm of the engine wake (Amendment B / I16): post a NULL-overlapped completion to break a
