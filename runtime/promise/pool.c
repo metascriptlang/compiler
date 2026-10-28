@@ -311,6 +311,10 @@ static void msPoolRunQueued(struct msSpawnCtx* task) {
 
 /* ===== Worker Loop ===== */
 
+static void msPoolSignalWorker(msThreadPool* pool, int idx);
+bool msWorkerEngineArm(int schedId);
+bool msWorkerEnginePark(int timeoutMs);
+
 #ifdef _WIN32
 static DWORD WINAPI msPoolWorkerLoop(LPVOID arg) {
 #else
@@ -329,6 +333,7 @@ static void* msPoolWorkerLoop(void* arg) {
 	extern int msWorkerTimerDelayMs(void);
 	extern bool msWorkerLoopPending(void);
 	while (1) {
+		bool engineParks = msWorkerEngineArm(mySchedID);
 		int timerMs = msWorkerTimerDelayMs();
 		MS_LOCK(pool);
 		if (spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_SPARE && msPoolSparesActive > msPoolSparesWanted) {
@@ -345,7 +350,11 @@ static void* msPoolWorkerLoop(void* arg) {
 			!msWorkerLoopPending() &&
 			!pool->shutdown) {
 			if (!retired) msPoolIdleSet(pool, myWorkerIdx);
-			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
+			if (engineParks) {
+				MS_UNLOCK(pool);
+				(void)msWorkerEnginePark(timerMs);
+				MS_LOCK(pool);
+			} else if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			if (!retired) msPoolIdleClear(pool, myWorkerIdx);
 		}
@@ -384,7 +393,7 @@ static void* msPoolWorkerLoop(void* arg) {
 			 * fast enough). Chain-wake ensures each queued task gets a worker. */
 			if (pool->head != pool->tail) {
 				int wake = msPoolIdleFirst(pool, 0);
-				if (wake >= 0) MS_SIGNAL(pool->workerConds[wake]);
+				if (wake >= 0) msPoolSignalWorker(pool, wake);
 			}
 		}
 		MS_UNLOCK(pool);
@@ -480,11 +489,12 @@ bool msPoolQuiescentWith(bool (*mainIdle)(void)) {
 	return idle;
 }
 
-/* A worker's I/O engine is its loop's selector (ULTRALOCK A1): an actor visit a worker
- * stole registers its reads there. While the engine holds an operation the worker polls
- * it between tasks and parks with a bounded wait; with none outstanding it parks without
- * a bound. Ceiling: one wake per MS_WORKER_ENGINE_POLL_MS while an operation is
- * outstanding (a backend wake into the park would remove it). */
+/* A loop's I/O engine is its selector (ULTRALOCK A1): an actor visit a worker stole
+ * registers its reads there. While the engine holds an operation the loop polls it between
+ * tasks and, when it would park, parks inside msIoEnginePoll with the next timer as the
+ * timeout. Every wake source reaches that park through msIoEngineWake: the targeted
+ * msPoolWakeWorker and msPoolSignalWorker for a worker, the loop-port and wake-pipe
+ * registrations for the main loop. */
 static _Atomic(int64_t) gEnginePolls = 0;
 
 int64_t msWorkerEnginePolls(void) { return atomic_load_explicit(&gEnginePolls, memory_order_relaxed); }
@@ -499,12 +509,54 @@ bool msWorkerEngineLive(void) {
 }
 
 bool msWorkerEnginePoll(void) {
+	return msWorkerEnginePark(0);
+}
+
+/* Poll the calling thread's engine for up to timeoutMs (-1 = until woken). On the main loop
+ * the first park also puts the loop's wake pipe into the engine's selector. */
+bool msWorkerEnginePark(int timeoutMs) {
 #if MS_IO_HAS_ENGINE
-	if (!msWorkerEngineLive()) return false;
+	msIoEngine* e = msGetIoEngineIfExists();
+	if (e == NULL || msIoEngineLive(e) <= 0) return false;
+#ifndef _WIN32
+	if (timeoutMs != 0 && !msIsPoolWorker) {
+		static _Atomic(msIoEngine*) wired;
+		if (atomic_load_explicit(&wired, memory_order_acquire) != e) {
+			msIoEngineAddWakeFd(e, msGetWakePipeFd());
+			atomic_store_explicit(&wired, e, memory_order_release);
+		}
+	}
+#endif
 	atomic_fetch_add_explicit(&gEnginePolls, 1, memory_order_relaxed);
-	return msIoEnginePoll(msGetIoEngineIfExists(), 0) > 0;
+	return msIoEnginePoll(e, timeoutMs) > 0;
 #else
+	(void)timeoutMs;
 	return false;
+#endif
+}
+
+/* A worker about to park publishes its engine as its scheduler's wake target when the
+ * engine holds an operation, and says whether it parks there instead of on its condvar. */
+bool msWorkerEngineArm(int schedId) {
+#if MS_IO_HAS_ENGINE
+	msIoEngine* e = msGetIoEngineIfExists();
+	if (e == NULL || msIoEngineLive(e) <= 0) return false;
+	msSchedWakeRegister(schedId, e);
+	return true;
+#else
+	(void)schedId;
+	return false;
+#endif
+}
+
+static void msPoolSignalWorker(msThreadPool* pool, int idx) {
+	MS_SIGNAL(pool->workerConds[idx]);
+#if MS_IO_HAS_ENGINE
+	int sid = idx + 1;
+	if (sid < MS_SCHED_WAKE_MAX) {
+		msIoEngine* e = atomic_load_explicit(&gSchedWakeEngine[sid], memory_order_acquire);
+		if (e != NULL) msIoEngineWake(e);
+	}
 #endif
 }
 
@@ -527,7 +579,7 @@ void msPoolWakeWorkers(void) {
 	MS_LOCK(pool);
 	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
 	for (int i = 0; i < count; i++) {
-		MS_SIGNAL(pool->workerConds[i]);
+		msPoolSignalWorker(pool, i);
 	}
 	MS_UNLOCK(pool);
 }
@@ -653,7 +705,7 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 	/* Signal one IDLE worker (find via bitmask — guaranteed to be sleeping) */
 	int wake = msPoolIdleFirst(pool, 0);
-	if (wake >= 0) MS_SIGNAL(pool->workerConds[wake]);
+	if (wake >= 0) msPoolSignalWorker(pool, wake);
 	/* If no idle workers, task waits in queue — next worker finishing a task will dequeue it */
 	MS_UNLOCK(pool);
 }
@@ -822,7 +874,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	}
 	int idle = msPoolIdleFirst(pool, 0);
 	if (idle >= 0) {
-		MS_SIGNAL(pool->workerConds[idle]);
+		msPoolSignalWorker(pool, idle);
 		MS_UNLOCK(pool);
 		return false;
 	}
@@ -836,7 +888,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 		msPoolSparesWanted++;
 		msPoolSpares++;
 		atomic_store_explicit(&msPoolActorWake[i], true, memory_order_release);
-		MS_SIGNAL(pool->workerConds[i]);
+		msPoolSignalWorker(pool, i);
 		MS_UNLOCK(pool);
 		return true;
 	}
@@ -880,7 +932,7 @@ void msPoolCompensateEnd(void) {
 	 * signal per end is not enough: ends that come before the signalled spare runs
 	 * would all signal that same spare. */
 	for (int idle = msPoolIdleFirst(pool, pool->workerCount); idle >= 0; idle = idle + 1 < MS_POOL_MAX_WORKERS ? msPoolIdleFirst(pool, idle + 1) : -1) {
-		MS_SIGNAL(pool->workerConds[idle]);
+		msPoolSignalWorker(pool, idle);
 	}
 	MS_UNLOCK(pool);
 }
@@ -918,7 +970,7 @@ void msPoolShutdown(void) {
 	gPool->shutdown = true;
 	int threads = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
 	for (int i = 0; i < threads; i++) {
-		MS_SIGNAL(gPool->workerConds[i]);
+		msPoolSignalWorker(gPool, i);
 	}
 	MS_BROADCAST(gPool->space);
 	MS_UNLOCK(gPool);
