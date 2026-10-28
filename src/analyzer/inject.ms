@@ -214,7 +214,7 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 	// copied whole into a sink (injectdestructors p sinkArg → passCopyToSink); a conversion
 	// between managed types, or into or out of a distinct type, forwards the mode to its
 	// operand like nkConv/nkObjUpConv.
-	if (mode == DrcMode.SinkArg && (isReprCast(node, dctx) || isValueUpcast(node))) {
+	if (mode == DrcMode.SinkArg && (isReprCast(node, dctx) || isValueUpcast(node) || readsCheckedLocation(node, dctx))) {
 		ta.asExpr = processNode(ta.asExpr, dctx, DrcMode.Normal);
 		return passCopyToSink(node, dctx, true);
 	}
@@ -238,6 +238,10 @@ function isReprCast(node: Node, dctx: DrcContext): boolean {
 	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
 	if (node.nodeType.kind == TypeKind.Distinct || operand.nodeType.kind == TypeKind.Distinct) return false;
 	return sinkClassify(operand.nodeType, dctx).needsCleanup != sinkClassify(node.nodeType, dctx).needsCleanup;
+}
+
+function readsCheckedLocation(node: Node, dctx: DrcContext): boolean {
+	return node.nodeType != null && isRuntimeProcCall(skipConversionWrappers(node), "msMaybeGet") && sinkClassify(node.nodeType, dctx).needsCleanup;
 }
 
 function rhsMode(rhs: Node): DrcMode {
@@ -271,7 +275,7 @@ function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		}
 		return node;
 	}
-	if (mode == DrcMode.SinkArg && node.kind == NodeKind.HiddenStdConv && isReprCast(node, dctx)) {
+	if (mode == DrcMode.SinkArg && ((node.kind == NodeKind.HiddenStdConv && isReprCast(node, dctx)) || readsCheckedLocation(node, dctx))) {
 		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
 		return passCopyToSink(node, dctx, true);
 	}
