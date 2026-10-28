@@ -157,8 +157,8 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// processNode is a hand-written dispatch — without these the walk STOPS at the
 		// wrapper and never reaches a fresh RC call inside it (e.g. `provide().field`
 		// lowers the object to `HiddenDeref(provide())`), so ensureDestruction never
-		// captures it → leak. Recurse through, same mode (mirrors the generic walker
-		// and Nim's p() over nkHiddenDeref/nkHiddenAddr).
+		// captures it → leak. Recurse through; an address reads its operand in place, so the
+		// operand is never consumed (mirrors the reference's p() over nkHiddenDeref/nkHiddenAddr).
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => processHiddenWrapper(node, dctx, mode),
 		// `x as T` is transparent for ownership — a fresh RC call inside it still produces an
 		// owned value that needs capture. Without recursing, `(provide() as Box).field` stops
@@ -204,7 +204,7 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 		}
 		return node;
 	}
-	hd.expr = processNode(hd.expr, dctx, mode);
+	hd.expr = processNode(hd.expr, dctx, DrcMode.Normal);
 	return node;
 }
 
