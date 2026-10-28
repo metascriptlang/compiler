@@ -326,7 +326,6 @@ static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
 	if (maxBytes > 8192) maxBytes = 8192;
 	ms_ssize_t r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
 	if (r <= 0) return MS_EMPTY_STRING;
-	_msRecvTlBuf[r] = '\0';
 	return msStringNew(_msRecvTlBuf, (int64_t)r);
 }
 
