@@ -3532,17 +3532,7 @@ export function tupleTypeName(t: Readonly<Type | null>): string {
 
 export function tupleTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null || t.kind != TypeKind.Tuple) return "";
-	let key = "tuple:";
-	let i = 0;
-	while (i < t.typeChildren.length) {
-		if (i > 0) key = key + ",";
-		const child = t.typeChildren[i];
-		if (child != null) {
-			key = key + typeKeyIn(roots, child, []);
-		}
-		i += 1;
-	}
-	return "msTuple_" + _stdHashToBase36(key);
+	return "msTuple_" + _stdHashToBase36(typeKeyIn(roots, t, []));
 }
 
 export function spelled(t: Type): Type {
@@ -3714,6 +3704,7 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(roots, t.typeReturn, keying);
 	if (t.kind == TypeKind.GenericParam && t.sym != null) return genericParamKey(roots, t.typeName, t.sym);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKeyIn(roots, t));
+	if (t.kind == TypeKind.StringLiteral) return "strlit" + t.typeName.length.toString() + ":" + t.typeName;
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Set) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
@@ -3739,24 +3730,24 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			return "Array(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Tuple => {
-			let k = "tuple:";
+			let k = "tuple(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
 				k = k + typeKeyIn(roots, t.typeChildren[i], keying);
 				i += 1;
 			}
-			return k;
+			return k + ")";
 		},
 		TypeKind.Function => {
-			let k = "fn(";
+			let k = "fn" + callConvKey(t) + "(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
 				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void") + callConvKey(t);
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void");
 		},
 		TypeKind.Union => {
 			let k = "union(";
@@ -3796,7 +3787,14 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			}
 			return k + ")";
 		},
-		_ => t.kind.toString(),
+		_ => {
+			let k = "k" + (t.kind as number).toString() + "<" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "") + ">(";
+			for (let i = 0; i < t.typeChildren.length; i += 1) {
+				if (i > 0) k = k + ",";
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "null");
+			}
+			return k + ")";
+		},
 	};
 }
 
@@ -6719,6 +6717,20 @@ test "a tuple refuses a named member that has no declaring symbol" {
 		refused = e.message;
 	}
 	assert refused.contains("OrphanCell");
+}
+
+test "a tuple name keeps nested members grouped and a literal member apart from a type of its spelling" {
+	const i32 = int32Type();
+	const str = stringType();
+	assert tupleTypeName(createTuple([i32, createTuple([str, i32])])) != tupleTypeName(createTuple([i32, createTuple([str]), i32]));
+	assert tupleTypeName(createTuple([createStringLiteral("int32"), booleanType()])) != tupleTypeName(createTuple([i32, booleanType()]));
+	assert tupleTypeName(createTuple([createStringLiteral("a,b")])) != tupleTypeName(createTuple([createStringLiteral("a"), createStringLiteral("b")]));
+}
+
+test "a calling convention keys the function type it belongs to, not its return type" {
+	const plainInClosure = createClosureType([], [], createFunction([], [], numberType()));
+	const closureInPlain = createFunction([], [], createClosureType([], [], numberType()));
+	assert typeKey(plainInClosure) != typeKey(closureInPlain);
 }
 
 test "a named type has identity only from its symbol or the Spelled flag" {
