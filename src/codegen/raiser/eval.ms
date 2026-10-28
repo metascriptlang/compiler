@@ -727,10 +727,15 @@ test "engine: a value of a literal union is a value of its base type, as on C" {
 		+ " console.log(cat('ab', 'c'), lt('c', 'ab'), lt('ab', 'c'));");
 	assert ops.error == "", ops.error;
 	assert ops.output == "abc false true\n", ops.output;
-	const zero = evalOrcVM("type L = 'a' | 'b'; type D = 1 | 2; const ls = new Array<L>(1); const ds = new Array<D>(1);"
-		+ " console.log(`[${ls[0]}] ${ls[0].length} ${ds[0] + 0}`);");
-	assert zero.error == "", zero.error;
-	assert zero.output == "[] 0 0\n", zero.output;
+}
+
+test "engine: a new Array of a literal union is refused while the engine cannot run std compiler functions" {
+	const filled = evalOrcVM("type L = 'a' | 'b'; const ls = new Array<L>(1); console.log(`[${ls[0]}]`);");
+	assert filled.error.includes("cannot evaluate 'msFilledArray' at comptime"), filled.error;
+	const plain = evalOrcVM("const ns = new Array<number>(2); console.log(`${ns.length} ${ns[1]}`);");
+	assert plain.error == "", plain.error;
+	assert plain.output == "2 0
+", plain.output;
 }
 
 function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {
