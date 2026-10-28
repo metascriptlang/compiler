@@ -25,7 +25,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay } from "../../checker/types";
+import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay } from "../../checker/types";
 import { isSlotUnion, storesUnionTag } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -37,7 +37,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
-import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
 import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
@@ -2398,7 +2398,8 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	for (let i = 0; i < d.keys.length; i = i + 1) {
 		const fieldType = node.nodeType != null
 			? fieldTypeView(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
-		const valReg = compileExpr(s, d.properties[i]);
+		const nullField = d.properties[i].kind == NodeKind.NullLiteral && node.nodeType != null ? declaredFieldType(node.nodeType, d.keys[i]) : null;
+		const valReg = nullIsZeroValue(nullField) ? emitZeroValue(s, nullField) : compileExpr(s, d.properties[i]);
 		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
 		emitInst(s, fieldInst(s, node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));
 	}

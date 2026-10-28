@@ -318,6 +318,11 @@ function emitZeroElements(s: RaiserCompState, array: int32, count: int32, elemen
 	patchJumpTo(s, toDone, codeLen(s));
 }
 
+export function nullIsZeroValue(valueType: Type | null): boolean {
+	const t = valueType != null ? zeroShape(unwrapRef(valueType)) : null;
+	return t != null && (t.kind == TypeKind.Tuple || t.kind == TypeKind.SizedArray || isValueStruct(t));
+}
+
 export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32 {
 	return emitZeroOf(s, valueType, []);
 }
