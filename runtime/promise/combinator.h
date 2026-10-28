@@ -394,7 +394,6 @@ MS_DEFINE_FUTURE_THEN(msFutureThen_ref,    msFuture_ptr,    void*,   void*, MS_D
  *                  not own its value (completed across threads): it has one reader,
  *                  so collecting moves the value out and clears the slot:
  *                  same-type primitives:   MS_COPY_SAME        *(dst) = *(src)
- *                  widening primitives:    MS_COPY_TO_DOUBLE   *(dst) = (DstT)*(src)
  *                  ref elements:           MS_COPY_MOVE_PTR    move ptr, NULL the slot
  *                  string elements:        MS_COPY_MOVE_STRING (system.h) move, zero slot
  *                  boxed struct elements:  MS_COPY_BOXED_MOVE  move bits out of the heap
@@ -521,7 +520,6 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
 
 /* Per-pair collect helpers. dst/src are pointers; *src is SrcT, *dst is DstT. */
 #define MS_COPY_SAME(dst, src)     (*(dst) = *(src))          /* same-type primitive */
-#define MS_COPY_TO_DOUBLE(dst, src) (*(dst) = (double)*(src))  /* widen int/bool → double */
 /* Ref element: move the future's owned ref into the slot (consume). */
 #define MS_COPY_MOVE_PTR(dst, src) (*(dst) = *(src), *(src) = NULL)
 /* Boxed struct element (generic future, heap box in the void* slot — both value
@@ -534,13 +532,11 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
 
 /* Pre-instances for element types whose array mapping is stable across codegen:
  *   number[]  → msNumberArray (double element storage)
- *   boolean[] → msNumberArray (codegen stores boolean[] as msNumberArray)
  *   Ref<T>[]  → msRefArray    (all reference/pointer arrays collapse to void*[])
  * int32[] / int64[] / user-struct[] map to per-type codegen-emitted array typedefs
  * (int32_tArray / int64_tArray / T##Array) — the matching MS_PROMISE_ALL_FOR
  * instance is emitted by codegen at the msFuture_<T> struct site. */
 MS_PROMISE_ALL_FOR(double, msFuture_double, double, msNumberArray, msNumberPayload, MS_COPY_SAME, msNumberArrayDestroy)
-MS_PROMISE_ALL_FOR(bool,   msFuture_bool,   double, msNumberArray, msNumberPayload, MS_COPY_TO_DOUBLE, msNumberArrayDestroy)
 MS_PROMISE_ALL_FOR(void*,  msFuture_ptr,    void*,  msRefArray,    msRefPayload,    MS_COPY_MOVE_PTR, msRefArrayDestroy)
 
 typedef struct {
