@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn, openArrayDataName, openArrayLenName } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -3107,20 +3107,16 @@ function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: 
 	const key = "disp:" + dispName;
 	if (typeCacheHas(g.forwTypeCache, key)) return dispName;
 	typeCacheSet(g.forwTypeCache, key, dispName);
-	const retC = ft.typeReturn != null && ft.typeReturn.kind != TypeKind.Void ? getTypeDesc(g, ft.typeReturn) : "void";
-	let params = "";
-	let fwdArgs = "";
-	let i = 0;
-	while (i < ft.typeChildren.length) {
-		const pC = getTypeDesc(g, ft.typeChildren[i]);
-		const pN = "p" + i.toString();
-		params = params == "" ? pC + " " + pN : params + ", " + pC + " " + pN;
-		if (i > 0) fwdArgs = fwdArgs == "" ? pN : fwdArgs + ", " + pN;
-		i += 1;
-	}
-	addLine(sec(g, CSection.ProcHeaders), `static ${retC} ${dispName}(${params});`);
+	const baseSig = baseSym.symbolType!;
+	const baseMut: int32 = baseSym.mutatedParams;
+	const pNames: string[] = [];
+	for (let i = 0; i < ft.typeChildren.length; i += 1) pNames.push("p");
+	const header = procHeader(g, dispName, ft, pNames, baseMut, false);
+	const nrvo = isNrvoReturnType(ft.typeReturn, ft);
+	const voidRet = !nrvo && (ft.typeReturn == null || ft.typeReturn.kind == TypeKind.Void);
+	addLine(sec(g, CSection.ProcHeaders), `static ${header};`);
 	const s = sec(g, CSection.GlobalVars);
-	addLine(s, `static ${retC} ${dispName}(${params}) {`);
+	addLine(s, `static ${header} {`);
 	for (const ov of overrides) {
 		if (ov.symbolType == null || ov.symbolType.typeChildren.length == 0) continue;
 		const ovName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, ov, ov.name, ov.overloadIdx);
@@ -3128,24 +3124,42 @@ function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: 
 			ensureCrossModuleProto(g, ovName, ov.symbolType, ov);
 		}
 		let recvInner = ov.symbolType.typeChildren[0];
-		const castC = getTypeDesc(g, recvInner);
 		if (recvInner.kind == TypeKind.Ref && recvInner.typeReturn != null) recvInner = recvInner.typeReturn;
-		const callArgs = fwdArgs == "" ? `(${castC})p0` : `(${castC})p0, ${fwdArgs}`;
-		const callStr = `${ovName}(${callArgs})`;
-		if (retC == "void") {
-			addLine(s, `  if (msIsInstance(p0, ${typeInfoRef(g, recvInner)})) { ${callStr}; return; }`);
+		const callStr = dispatcherForward(g, ft, nrvo, baseMut, ovName, ov.symbolType, ov.mutatedParams);
+		if (voidRet || nrvo) {
+			addLine(s, `  if (msIsInstance(${paramCName("p", 0)}, ${typeInfoRef(g, recvInner)})) { ${callStr}; return; }`);
 		} else {
-			addLine(s, `  if (msIsInstance(p0, ${typeInfoRef(g, recvInner)})) return ${callStr};`);
+			addLine(s, `  if (msIsInstance(${paramCName("p", 0)}, ${typeInfoRef(g, recvInner)})) return ${callStr};`);
 		}
 	}
-	const baseArgs = fwdArgs == "" ? "p0" : "p0, " + fwdArgs;
-	if (retC == "void") {
-		addLine(s, `  ${calleeName}(${baseArgs});`);
-	} else {
-		addLine(s, `  return ${calleeName}(${baseArgs});`);
-	}
+	const baseCall = dispatcherForward(g, ft, nrvo, baseMut, calleeName, baseSig, baseMut);
+	addLine(s, voidRet || nrvo ? `  ${baseCall};` : `  return ${baseCall};`);
 	addLine(s, `}`);
 	return dispName;
+}
+
+function dispatcherForward(g: CGen, ft: Readonly<Type>, nrvo: boolean, baseMut: int32, callee: string, calleeType: Readonly<Type>, calleeMut: int32): string {
+	let args = nrvo ? "__result, " : "";
+	args = args + `(${getTypeDesc(g, calleeType.typeChildren[0])})${paramCName("p", 0)}`;
+	for (let i = 1; i < ft.typeChildren.length; i += 1) {
+		const bt = ft.typeChildren[i];
+		if (hasNoRuntimeRepr(bt)) continue;
+		const name = paramCName("p", i);
+		if (isOpenArrayParam(bt)) {
+			args = args + `, ${openArrayDataName(name)}, ${openArrayLenName(name)}`;
+			continue;
+		}
+		const baseInd = isIndirectParam(g, bt, (baseMut & (1 << (i as int32))) != 0);
+		const ovInd = i < calleeType.typeChildren.length && isIndirectParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0);
+		args = args + ", " + (baseInd == ovInd ? name : baseInd ? `*${name}` : `&${name}`);
+	}
+	return `${callee}(${args})`;
+}
+
+function isIndirectParam(g: CGen, t: Readonly<Type>, mut: boolean): boolean {
+	if (!shouldIndirectParam(g.target, t, mut, false)) return false;
+	const desc = getTypeDesc(g, t);
+	return desc.byteLength == 0 || desc.charAt(desc.byteLength - 1) != "*";
 }
 
 // ===== Binary helpers =====
