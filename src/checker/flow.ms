@@ -1568,6 +1568,7 @@ function constrainAssignedToMaybe(rhs: Type, declared: Type): Type {
 	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null) return declared;
 	const inner = unwrapMaybeType(declared);
 	if (inner.kind == TypeKind.Union) return rhs.kind == TypeKind.Union ? declared : constrainToDeclared(rhs, inner);
+	if (inner.kind == TypeKind.Function && rhs.kind == TypeKind.Function && typeRelation(inner, rhs) != TypeRelation.None) return inner;
 	if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
 	return declared;
 }
