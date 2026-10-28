@@ -2,7 +2,7 @@ import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind, ArrayAccessData, createNodeAt, TypeAssertionData,
 	MemberExprData, HiddenStdConvData, BinaryExprData, ConditionalExprData, ObjectLiteralData, ArrayLiteralData,
 	CallExprData, VariableDeclData, ReturnStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
-	ArrowFunctionData, FunctionExprData, ProgramData,
+	ArrowFunctionData, FunctionExprData, ProgramData, CallingConvention,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isScopeBoundary } from "../ast/shape";
@@ -30,6 +30,7 @@ function bareSource(source: Type | null): Type | null {
 }
 
 function storedInline(t: Type): boolean {
+	if (t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure) return false;
 	return isValueStorage(t) || t.kind == TypeKind.SizedArray;
 }
 

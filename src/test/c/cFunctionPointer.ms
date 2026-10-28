@@ -10,7 +10,8 @@ const SORT = "typedef int (*Compare)(const void *, const void *);\n"
 	+ "typedef int (*Unary)(int);\n"
 	+ "typedef struct Holder { Unary op; int k; } Holder;\n"
 	+ "typedef struct Table { Unary fs[2]; int k; } Table;\n"
-	+ "Table makeTable(void);\n";
+	+ "Table makeTable(void);\n"
+	+ "int setOpt(int option, const void *value);\n";
 
 function compileC(main: string): string {
 	const t = createDefineTable();
@@ -88,4 +89,10 @@ test "C: a closure assigned to an element of a header struct's function-pointer 
 	const c = compileC(TABLE + "let t = makeTable();\nlet k: int32 = 3;\nt.fs[1] = (n: int32): int32 => n + k;\n");
 	assert c.startsWith("ERROR"), c;
 	assert c.contains("is not assignable to a C function pointer"), c;
+}
+
+test "C: a function-pointer binding cast to Ptr<void> is the pointer's value, not its address" {
+	const c = compileC("import { Unary, setOpt } from \"./sort.h\";\nfunction twice(n: int32): int32 { return n * 2; }\nconst u: Unary = twice;\nsetOpt(1, u as Ptr<void>);\n");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("(void*)&"), c;
 }
