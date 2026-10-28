@@ -58,6 +58,11 @@ export function nativeAddressSource(source: Type | null, target: Type | null): T
 export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node, target: Type): void {
 	const source = bareSource(expr.nodeType);
 	const dest = bareSource(target);
+	if (source != null && dest != null && source.kind == TypeKind.Function && source.callConv == CallingConvention.CcClosure && dest.kind == TypeKind.Ptr) {
+		addError(ctx, "cannot cast " + typeDisplayName(source) + " to " + typeDisplayName(target)
+			+ ": a closure carries an environment, which a C pointer cannot hold; cast a module-level function instead", expr.location.line, expr.location.column);
+		return;
+	}
 	if (source != null && dest != null && dest.kind == TypeKind.Span && dest.typeReturn != null) {
 		let view = source;
 		if (view.kind == TypeKind.Ref && view.typeReturn != null) view = peelTransparentInstance(view.typeReturn);

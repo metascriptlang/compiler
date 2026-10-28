@@ -96,3 +96,22 @@ test "C: a function-pointer binding cast to Ptr<void> is the pointer's value, no
 	assert !c.startsWith("ERROR"), c;
 	assert !c.contains("(void*)&"), c;
 }
+
+const CAST = "import { Unary, setOpt } from \"./sort.h\";\nfunction add(n: int32): int32 { return n + 1; }\nlet k: int32 = 3;\n";
+
+test "C: a closure cast to Ptr<void> is refused" {
+	const c = compileC(CAST + "const lam = (n: int32): int32 => n + k;\nsetOpt(1, lam as Ptr<void>);\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("a closure carries an environment"), c;
+}
+
+test "C: a closure held in a typed binding cast to Ptr<void> is refused" {
+	const c = compileC(CAST + "const f: (n: int32) => int32 = add;\nsetOpt(1, f as Ptr<void>);\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("a closure carries an environment"), c;
+}
+
+test "C: a module-level function cast to Ptr<void> still compiles" {
+	const c = compileC(CAST + "setOpt(1, add as Ptr<void>);\n");
+	assert !c.startsWith("ERROR"), c;
+}
