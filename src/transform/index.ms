@@ -86,6 +86,7 @@ import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
+import { lowerMethodDispatch } from "./lowering/methodDispatchLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
@@ -256,6 +257,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// already match what we want at the source level).
 	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); flowLap("pass.lowerMethodToFunction"); }
 	if (!jsBackend) { result = lowerUserOperators(result, ctx); flowLap("pass.lowerUserOperators"); }
+	if (!jsBackend) { result = lowerMethodDispatch(result, ctx); flowLap("pass.lowerMethodDispatch"); }
 	if (!jsBackend && liftTables != null) noteUnitDecls(liftTables!, checkerCtx.modulePath, result);
 	if (!jsBackend) { result = lowerLambda(result, ctx); flowLap("pass.lowerLambda"); }
 	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans

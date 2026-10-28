@@ -1007,13 +1007,10 @@ function viewImportedCArray(g: CGen, node: Readonly<Node>, ctx: ExprEvalCtx): vo
 
 // ===== Discover phase: push leaf results or Emit + children =====
 
-function dispatchedName(g: CGen, facts: Readonly<CEmissionFacts>, idSym: Readonly<Symbol>, calleeName: string): string {
+function refuseUndispatched(facts: Readonly<CEmissionFacts>, idSym: Readonly<Symbol>): void {
 	const dispatched = facts.dispatchOverrides;
 	if (dispatched == null) throw new Error(`internal: '${idSym.name}' is emitted before the dispatch table reached emission`);
-	const ovSyms = dispatched.readonlyGet(idSym);
-	if (ovSyms == null) return calleeName;
-	const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
-	return dn != "" ? dn : calleeName;
+	if (dispatched.readonlyGet(idSym) != null) throw new Error(`internal: '${idSym.name}' has overrides and reaches emission without its dispatcher`);
 }
 
 function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx): void {
@@ -1141,7 +1138,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
 			const dispatches = g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch);
-			ctx.results.push(dispatches ? dispatchedName(g, g.emissionFacts, idSym, calleeName) : calleeName);
+			if (dispatches) refuseUndispatched(g.emissionFacts, idSym);
+			ctx.results.push(calleeName);
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
@@ -3093,68 +3091,6 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string): void {
 	const snippet = genExpr(g, p, node);
 	addLine(pStmts(p), `${destSnippet} = ${snippet};`);
-}
-
-// ===== Method Dispatcher (Nim cgmeth genIfDispatcher analog) =====
-// One static per-TU dispatcher per overridden instance method: msIsInstance
-// if-chain, most-derived-first, falling through to the base implementation.
-// C emission is whole-program-fresh every build, so the chain always reflects
-// the complete override set even across modules.
-function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: string, overrides: Readonly<Symbol[]>): string {
-	const ft = baseSym.symbolType;
-	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length == 0) return "";
-	const dispName = "msDisp_" + calleeName;
-	const key = "disp:" + dispName;
-	if (typeCacheHas(g.forwTypeCache, key)) return dispName;
-	typeCacheSet(g.forwTypeCache, key, dispName);
-	const baseSig = baseSym.symbolType!;
-	const baseMut: int32 = baseSym.mutatedParams;
-	const pNames: string[] = [];
-	for (let i = 0; i < ft.typeChildren.length; i += 1) pNames.push("p");
-	const header = procHeader(g, dispName, ft, pNames, baseMut, false);
-	const nrvo = isNrvoReturnType(ft.typeReturn, ft);
-	const voidRet = !nrvo && (ft.typeReturn == null || ft.typeReturn.kind == TypeKind.Void);
-	addLine(sec(g, CSection.ProcHeaders), `static ${header};`);
-	const s = sec(g, CSection.GlobalVars);
-	addLine(s, `static ${header} {`);
-	for (const ov of overrides) {
-		if (ov.symbolType == null || ov.symbolType.typeChildren.length == 0) continue;
-		const ovName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, ov, ov.name, ov.overloadIdx);
-		if (ov.modulePath != null && ov.modulePath != "" && ov.modulePath != g.modulePath) {
-			ensureCrossModuleProto(g, ovName, ov.symbolType, ov);
-		}
-		let recvInner = ov.symbolType.typeChildren[0];
-		if (recvInner.kind == TypeKind.Ref && recvInner.typeReturn != null) recvInner = recvInner.typeReturn;
-		const callStr = dispatcherForward(g, ft, nrvo, baseMut, ovName, ov.symbolType, ov.mutatedParams);
-		if (voidRet || nrvo) {
-			addLine(s, `  if (msIsInstance(${paramCName("p", 0)}, ${typeInfoRef(g, recvInner)})) { ${callStr}; return; }`);
-		} else {
-			addLine(s, `  if (msIsInstance(${paramCName("p", 0)}, ${typeInfoRef(g, recvInner)})) return ${callStr};`);
-		}
-	}
-	const baseCall = dispatcherForward(g, ft, nrvo, baseMut, calleeName, baseSig, baseMut);
-	addLine(s, voidRet || nrvo ? `  ${baseCall};` : `  return ${baseCall};`);
-	addLine(s, `}`);
-	return dispName;
-}
-
-function dispatcherForward(g: CGen, ft: Readonly<Type>, nrvo: boolean, baseMut: int32, callee: string, calleeType: Readonly<Type>, calleeMut: int32): string {
-	let args = nrvo ? "__result, " : "";
-	args = args + `(${getTypeDesc(g, calleeType.typeChildren[0])})${paramCName("p", 0)}`;
-	const forwarded = calleeType.typeChildren.length < ft.typeChildren.length ? calleeType.typeChildren.length : ft.typeChildren.length;
-	for (let i = 1; i < forwarded; i += 1) {
-		const bt = ft.typeChildren[i];
-		if (hasNoRuntimeRepr(bt)) continue;
-		const name = paramCName("p", i);
-		if (isOpenArrayParam(bt)) {
-			args = args + `, ${openArrayDataName(name)}, ${openArrayLenName(name)}`;
-			continue;
-		}
-		const baseInd = isPromotedParam(g, bt, (baseMut & (1 << (i as int32))) != 0, false, false);
-		const ovInd = isPromotedParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0, false, false);
-		args = args + ", " + (baseInd == ovInd ? name : baseInd ? `*${name}` : `&${name}`);
-	}
-	return `${callee}(${args})`;
 }
 
 // ===== Binary helpers =====
