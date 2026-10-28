@@ -6,6 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
+import { holdsOnlySendableValues } from "./sendable";
 import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -801,7 +802,8 @@ function borrowedOf(value: Node | null): BorrowSource | null {
 function spreadCopiesRefFree(spread: Node): boolean {
 	let t = (spread.data as SpreadExprData).spreadArg.nodeType;
 	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
-	return t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn);
+	if (t == null) return false;
+	return t.kind == TypeKind.Array ? !typeCarriesRef(t.typeReturn) : holdsOnlySendableValues(t);
 }
 
 function spreadBorrow(n: Node): BorrowSource | null {
