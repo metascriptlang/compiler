@@ -357,12 +357,59 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
 	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
 }
 
-/* Amendment H (Windows): deferred closure-env release — same kind=-3 message
- * msPostEnvRelease posts, reached through the queue-named API thread.h calls
- * under MS_FUTURE_SUBMIT_REF. */
+/* A closure env's release runs on the thread that owns the cell (ULTRALOCK M1,
+ * A1). A pool worker owns a loop of its own on POSIX; on Windows its loop is
+ * this inbox, drained by msWorkerLoopPump. The main thread has none and its
+ * releases ride the IOCP. */
+typedef struct msEnvReleaseNode { struct msEnvReleaseNode* next; void* env; } msEnvReleaseNode;
+typedef struct msEnvInbox {
+	_Atomic(msEnvReleaseNode*) head;
+	struct msEnvInbox* nextInbox;
+	int schedId;
+} msEnvInbox;
+
+static _Atomic(msEnvInbox*) gEnvInboxes = NULL;
+static MS_THREAD_LOCAL msEnvInbox* tlEnvInbox = NULL;
+
+void* msEnvReleaseQueue(void) {
+	if (!msIsPoolWorker) return NULL;
+	if (tlEnvInbox == NULL) {
+		msEnvInbox* in = (msEnvInbox*)msMemAlloc(sizeof(msEnvInbox));
+		atomic_store_explicit(&in->head, NULL, memory_order_relaxed);
+		in->schedId = msPoolWorkerSchedId;
+		msEnvInbox* top = atomic_load_explicit(&gEnvInboxes, memory_order_relaxed);
+		do { in->nextInbox = top; } while (!atomic_compare_exchange_weak_explicit(&gEnvInboxes, &top, in, memory_order_release, memory_order_relaxed));
+		tlEnvInbox = in;
+	}
+	return tlEnvInbox;
+}
+
+static bool msEnvInboxDrain(msEnvInbox* in) {
+	msEnvReleaseNode* n = atomic_exchange_explicit(&in->head, NULL, memory_order_acquire);
+	bool didWork = n != NULL;
+	while (n != NULL) {
+		msEnvReleaseNode* next = n->next;
+		msReleaseEnvOnLoop(n->env);
+		free(n);
+		msPoolPendingAdd(-1);
+		n = next;
+	}
+	return didWork;
+}
+
 void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
-	(void)ownerQueue;
-	msPostEnvRelease(env);
+	if (ownerQueue == NULL) {
+		msPostEnvRelease(env);
+		return;
+	}
+	if (env == NULL) return;
+	msEnvInbox* in = (msEnvInbox*)ownerQueue;
+	msEnvReleaseNode* n = (msEnvReleaseNode*)msMemAlloc(sizeof(msEnvReleaseNode));
+	n->env = env;
+	msPoolPendingAdd(1);
+	msEnvReleaseNode* top = atomic_load_explicit(&in->head, memory_order_relaxed);
+	do { n->next = top; } while (!atomic_compare_exchange_weak_explicit(&in->head, &top, n, memory_order_release, memory_order_relaxed));
+	if (in != tlEnvInbox) msPoolWakeWorker(in->schedId);
 }
 
 /* Amendment H on Windows: deferred future releases ride the same IOCP as
@@ -443,10 +490,16 @@ bool msCompletionQueueDrain(void) {
 	return didWork;
 }
 
-bool msCompletionQueueDrainAll(void) { return msCompletionQueueDrain(); }
+bool msCompletionQueueDrainAll(void) {
+	bool didWork = msCompletionQueueDrain();
+	for (msEnvInbox* in = atomic_load_explicit(&gEnvInboxes, memory_order_acquire); in != NULL; in = in->nextInbox) {
+		if (msEnvInboxDrain(in)) didWork = true;
+	}
+	return didWork;
+}
 void* msLoopCompletionQueue(void) { return NULL; }
-bool msWorkerLoopPump(void) { return false; }
-bool msWorkerLoopPending(void) { return false; }
+bool msWorkerLoopPump(void) { return tlEnvInbox != NULL && msEnvInboxDrain(tlEnvInbox); }
+bool msWorkerLoopPending(void) { return tlEnvInbox != NULL && atomic_load_explicit(&tlEnvInbox->head, memory_order_acquire) != NULL; }
 int msWorkerTimerDelayMs(void) { return -1; }
 static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
