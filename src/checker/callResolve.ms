@@ -18,7 +18,7 @@ import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, omittedFieldDefault, needsLiteralDefault } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -1021,6 +1021,20 @@ function newNamesExpected(ctx: CheckerContext, newSym: Symbol | null, expected: 
 	return bound == wanted || (bound.modulePath == wanted.modulePath && bound.name == wanted.name && bound.disamb == wanted.disamb);
 }
 
+// `new Array<T>(n)` of an element type whose default is no zero (a union of literals, a struct
+// holding one) is `msFilledArray(n, default)`: the array is built, then every slot takes the default.
+function fillNewArray(ctx: CheckerContext, node: Node, d: NewExprData, elemType: Type): Type | null {
+	if (d.newArguments.length != 1) return null;
+	const value = omittedFieldDefault(ctx, elemType, node.location);
+	if (value == null) return null;
+	const factory = ctx.compilerFuncs.get("msFilledArray");
+	if (factory == null) throw new Error("internal: the prelude declares no @compilerFunc msFilledArray");
+	const call = boundCallOf(factory, [d.newArguments[0], value], node.location);
+	node.kind = NodeKind.CallExpr;
+	node.data = call.data;
+	return checkCallExpr(ctx, node, null);
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -1104,7 +1118,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			if (d.newArguments.length > 0 && hiddenHolder(ctx, expectedArrInner.typeReturn, 0) != null) {
 				addError(ctx, `new Array(count) would fill the array with default values: ${noDefaultReason(ctx, expectedArrInner.typeReturn)} — push values instead`, node.location.line, node.location.column);
 			}
-			return expected;
+			const filled = fillNewArray(ctx, node, d, expectedArrInner.typeReturn!);
+			return filled != null ? filled : expected;
 		}
 		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
 		if (head == "Array") {
@@ -1129,7 +1144,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				if (d.newArguments.length > 0 && requiresInit(ctx, elemType)) {
 					addError(ctx, `new Array<${trimmed}>(count) would fill the array with default values: ${noDefaultReason(ctx, elemType)} — push values instead`, node.location.line, node.location.column);
 				}
-				return arrType;
+				const filled = fillNewArray(ctx, node, d, elemType);
+				return filled != null ? filled : arrType;
 			}
 		}
 		// Promise, Map, Set all resolve through resolveGenericNewExpr below
@@ -1722,7 +1738,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	refuseHiddenMethodCall(ctx, node);
 	refuseHookCall(ctx, node);
 	refuseSuspendingLockCallback(ctx, node);
-	return evalCompileTimeCall(ctx, node, foldTypeTrait(ctx, node, r));
+	return evalCompileTimeCall(ctx, node, foldDefaultOf(ctx, node, foldTypeTrait(ctx, node, r)));
 }
 
 function settleUnassignedArgs(ctx: CheckerContext, from: int32): void {
@@ -1748,7 +1764,34 @@ export function typeTraitOf(node: Node): Symbol | null {
 	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
 	if (sym == null) return null;
 	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray"
-		|| sym.builtinKind == "IsObject" || sym.builtinKind == "IsPlainObject" ? sym : null;
+		|| sym.builtinKind == "IsObject" || sym.builtinKind == "IsPlainObject" || sym.builtinKind == "HasLiteralDefault" ? sym : null;
+}
+
+function foldDefaultOf(ctx: CheckerContext, node: Node, callType: Type): Type {
+	if (node.kind != NodeKind.CallExpr) return callType;
+	const d = node.data as CallExprData;
+	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
+	if (sym == null || sym.builtinKind != "DefaultOf") return callType;
+	const typeArg = findCallTypeArg(node);
+	if (typeArg == "" || d.arguments.length > 0) {
+		addError(ctx, "'defaultOf' asks a type and takes no value: write defaultOf<T>()", node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	const asked = resolveAnnotation(typeArg, ctx, node.location.line, node.location.column);
+	if (asked.kind == TypeKind.GenericParam || hasGenericParams(asked)) return callType;
+	const value = omittedFieldDefault(ctx, asked, node.location);
+	if (value == null) {
+		addError(ctx, `'defaultOf<${typeArg}>' is refused: the default of '${typeArg}' is its zero, which hasLiteralDefault<${typeArg}>() reports`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	node.kind = value.kind;
+	node.data = value.data;
+	node.flags = value.flags;
+	node.resolvedSym = value.resolvedSym;
+	node.nodeType = value.nodeType;
+	return node.nodeType!;
 }
 
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
@@ -1770,6 +1813,7 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		: trait.builtinKind == "IsArray" ? isArrayType(asked)
 		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
 		: trait.builtinKind == "IsPlainObject" ? isPlainObjectType(asked)
+		: trait.builtinKind == "HasLiteralDefault" ? needsLiteralDefault(asked, [])
 		: needsValueCopy(asked);
 	node.kind = NodeKind.BooleanLiteral;
 	node.data = { boolValue: answer } as BooleanLiteralData;
