@@ -23,6 +23,10 @@ test "an overloaded function two overloads of which fit the slot equally is refu
 	assert hasError("function k(a: int32): string { return \"1\"; }\nfunction k(a: int32, b: int32): string { return \"2\"; }\nconst t: (a: int32, b: int32, c: int32) => string = k;", "'k' is ambiguous here");
 }
 
+test "an overloaded function whose overloads fit the slot at equal arity and relation is refused, not picked by inheritance depth" {
+	assert hasError("class A {}\nclass B extends A {}\nclass C extends B {}\nfunction q(x: A): string { return \"A\"; }\nfunction q(x: B): string { return \"B\"; }\nconst t: (x: C) => string = q;", "'q' is ambiguous here");
+}
+
 test "a set of overload signatures used as a value is refused" {
 	assert hasError("function s(x: int32): string;\nfunction s(x: string): string;\nfunction s(x: int32 | string): string { return \"impl\"; }\nconst v: (x: int32) => string = s;", "declared by overload signatures");
 }
