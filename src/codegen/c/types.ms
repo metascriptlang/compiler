@@ -1056,6 +1056,7 @@ export enum PromiseAllShape {
 	None,
 	Int32,
 	Int64,
+	Bool,
 	Integer,
 	Boxed,
 }
@@ -1065,7 +1066,8 @@ export function promiseAllShape(inner: Readonly<Type | null>): PromiseAllShape {
 	if (inner.kind == TypeKind.Sink || inner.kind == TypeKind.Lent || inner.kind == TypeKind.Distinct) return promiseAllShape(inner.typeReturn);
 	const simple = getSimpleTypeDesc(inner);
 	if (simple != "") {
-		if (simple == "double" || simple == "bool" || simple == "MS_BOOL" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
+		if (simple == "bool" || simple == "MS_BOOL") return PromiseAllShape.Bool;
+		if (simple == "double" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
 		if (simple == "int32_t") return PromiseAllShape.Int32;
 		if (simple == "int64_t") return PromiseAllShape.Int64;
 		if (isIntegerType(inner)) return PromiseAllShape.Integer;
@@ -1855,6 +1857,7 @@ export function getArrayTypeName(elemType: string): string {
 	if (elemType == "msString") return "msStringArray";
 	if (elemType == "MS_BOOL") return "msUint8Array";
 	if (elemType == "uint8_t") return "msUint8Array";
+	if (elemType == "void") return "msUint8Array";
 	if (elemType == "msClosure") return "msClosureArray";
 	return mangle(elemType) + "Array";
 }
@@ -2119,7 +2122,7 @@ export function genClFullCastNrvo(g: CGen, t: Readonly<Type>, nrvoType: string):
 // msPromiseAllFor_msFuture_<T>. Resolves the element type T to its
 // (SrcT, DstT, arrType, payloadType, copyStmt) tuple and ensures the
 // instance is emitted once per module (via the #ifndef guard inside
-// emitPromiseAllInstance). Pre-instantiated types (double / bool / ptr
+// emitPromiseAllInstance). Pre-instantiated types (double / ptr
 // in combinator.h, msString in system.h) short-circuit — caller skips.
 // Returns true if handled (either emitted now or pre-instantiated),
 // false if innerType is an unsupported shape (void, nested array).
@@ -2134,6 +2137,10 @@ export function ensurePromiseAllInstance(g: CGen, arrT: Readonly<Type>): string 
 	if (shape == PromiseAllShape.Int32) {
 		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int32";
+	}
+	if (shape == PromiseAllShape.Bool) {
+		emitPromiseAllInstance(g, "msFuture_bool", "bool", "uint8_t", "msUint8Array", "msUint8Payload", "MS_COPY_SAME", arrTypeInfo);
+		return "msPromiseAllFor_msFuture_bool";
 	}
 	if (shape == PromiseAllShape.Int64) {
 		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
@@ -2150,7 +2157,7 @@ export function ensurePromiseAllInstance(g: CGen, arrT: Readonly<Type>): string 
 // Emit an MS_PROMISE_ALL_FOR instance for element-future-type `futName` whose
 // MetaScript source type is T[] (array type `arrName`, payload `payloadName`,
 // storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
-// Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
+// Pre-instantiated types (msFuture_double / msFuture_ptr in
 // combinator.h, msFuture_msString in system.h) are skipped at call sites.
 function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, arrTypeInfo: string): void {
 	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
