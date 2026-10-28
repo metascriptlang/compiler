@@ -1,5 +1,6 @@
 import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
+import { TAG_FIELD, VALUE_FIELD } from "../../transform/lowering/unionTagLower";
 import { getOpByKey } from "../c/types";
 import { isSlotUnion } from "../../checker/fit";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
@@ -249,7 +250,8 @@ export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: s
 	const body = t != null && t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
 	const destroyOp = t != null && body != null && (body.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
 	if (fields.length == 0 && destroyOp == null) return 0;
-	const classType = createClassType("", -1, [], fields, kinds);
+	const tagged = fields.length == 0 && body != null && body.kind == TypeKind.Union;
+	const classType = tagged ? createClassType("", -1, [], [TAG_FIELD, VALUE_FIELD], [RaiserRegClass.Word, RaiserRegClass.Dyn]) : createClassType("", -1, [], fields, kinds);
 	const cyclic = slotCyclicOf(t);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
 	const uncounted = slotUncountedOf(t);

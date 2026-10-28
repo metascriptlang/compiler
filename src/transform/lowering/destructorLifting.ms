@@ -1443,6 +1443,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		if (objType.kind == TypeKind.Union) {
 			if (lctx.raiserBackend && raiserBareUnion(objType)) {
 				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
+			} else if (lctx.raiserBackend && !walksCells(hook) && (raiserFlatCellUnion(objType) || storesUnionTag(objType))) {
+				if (hook != "destroy") valueCellOp(hook, x1, x2, false, lctx, buf, loc);
 			} else if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {

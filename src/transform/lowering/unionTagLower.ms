@@ -6,8 +6,8 @@ import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
 import { memberLabels, accessHead } from "../native/unionProjectLower";
 
-const TAG_FIELD = "$tag";
-const VALUE_FIELD = "$v";
+export const TAG_FIELD = "$tag";
+export const VALUE_FIELD = "$v";
 const ECHO_BUILTIN_KINDS = ["Echo", "ToString", "UnionText", "UnionDebug"];
 
 export function lowerUnionTags(program: Node, ctx: TransformContext): Node {
