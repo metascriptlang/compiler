@@ -1,0 +1,106 @@
+ImageFileHeader {
+  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)
+  SectionCount: 9
+  TimeDateStamp: 2026-03-11 01:50:49 (0x69B0CA79)
+  PointerToSymbolTable: 0x0
+  SymbolCount: 0
+  StringTableSize: 0
+  OptionalHeaderSize: 240
+  Characteristics [ (0x22)
+    IMAGE_FILE_EXECUTABLE_IMAGE (0x2)
+    IMAGE_FILE_LARGE_ADDRESS_AWARE (0x20)
+  ]
+}
+ImageOptionalHeader {
+  Magic: 0x20B
+  MajorLinkerVersion: 14
+  MinorLinkerVersion: 0
+  SizeOfCode: 5783552
+  SizeOfInitializedData: 1516544
+  SizeOfUninitializedData: 0
+  AddressOfEntryPoint: 0x26D5E4
+  BaseOfCode: 0x1000
+  ImageBase: 0x140000000
+  SectionAlignment: 4096
+  FileAlignment: 512
+  MajorOperatingSystemVersion: 6
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 6
+  MinorSubsystemVersion: 0
+  SizeOfImage: 8966144
+  SizeOfHeaders: 1024
+  CheckSum: 0x0
+  Subsystem: IMAGE_SUBSYSTEM_WINDOWS_CUI (0x3)
+  Characteristics [ (0x8160)
+    IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE (0x40)
+    IMAGE_DLL_CHARACTERISTICS_HIGH_ENTROPY_VA (0x20)
+    IMAGE_DLL_CHARACTERISTICS_NX_COMPAT (0x100)
+    IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE (0x8000)
+  ]
+  SizeOfStackReserve: 10000000
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  NumberOfRvaAndSize: 16
+  DataDirectory {
+    ExportTableRVA: 0x0
+    ExportTableSize: 0x0
+    ImportTableRVA: 0x6C2468
+    ImportTableSize: 0x50
+    ResourceTableRVA: 0x883000
+    ResourceTableSize: 0x410
+    ExceptionTableRVA: 0x863000
+    ExceptionTableSize: 0x1C1DC
+    CertificateTableRVA: 0x0
+    CertificateTableSize: 0x0
+    BaseRelocationTableRVA: 0x884000
+    BaseRelocationTableSize: 0x8A90
+    DebugRVA: 0x0
+    DebugSize: 0x0
+    ArchitectureRVA: 0x0
+    ArchitectureSize: 0x0
+    GlobalPtrRVA: 0x0
+    GlobalPtrSize: 0x0
+    TLSTableRVA: 0x672B60
+    TLSTableSize: 0x28
+    LoadConfigTableRVA: 0x66C180
+    LoadConfigTableSize: 0x140
+    BoundImportRVA: 0x0
+    BoundImportSize: 0x0
+    IATRVA: 0x6C2A00
+    IATSize: 0x548
+    DelayImportDescriptorRVA: 0x6C23A8
+    DelayImportDescriptorSize: 0x60
+    CLRRuntimeHeaderRVA: 0x0
+    CLRRuntimeHeaderSize: 0x0
+    ReservedRVA: 0x0
+    ReservedSize: 0x0
+  }
+}
+Import {
+  Name: ntdll.dll
+  ImportLookupTableRVA: 0x6C2970
+  ImportAddressTableRVA: 0x6C2EB8
+  Symbol: RtlCaptureContext (778)
+  Symbol: RtlGetLastNtStatus (1097)
+  Symbol: RtlLookupFunctionEntry (1302)
+  Symbol: RtlPcToFileHeader (1344)
+  Symbol: RtlUnwind (1612)
+  Symbol: RtlUnwindEx (1613)
+  Symbol: RtlVirtualUnwind (1640)
+}
+DelayImport {
+  Name: ole32.dll
+  Attributes: 0x1
+  ModuleHandle: 0x6D1AD8
+  ImportAddressTable: 0x6D1AF0
+  ImportNameTable: 0x6C2418
+  BoundDelayImportTable: 0x0
+  UnloadDelayImportTable: 0x0
+  Import {
+    Symbol: CoTaskMemFree (0)
+    Address: 0x140584F79
+  }
+}
