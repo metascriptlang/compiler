@@ -9,7 +9,7 @@ function grow(b: MbBox): MbBox { return new MbBox(b.s + "+"); }
 function look(b: MbBox): int32 { return b.s.length; }
 function lookS(b: MbS): int32 { return b.s.length; }
 function growS(b: MbS): MbS { return { s: b.s + "+" }; }
-function relay(b: MbBox): int32 { return look(move b); }
+function relay(b: MbBox): int32 { return look(b); }
 
 function inBranch(c: boolean): string {
 	let x = new MbBox("a");
