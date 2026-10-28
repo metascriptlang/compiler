@@ -26,7 +26,7 @@ function define(row: int32, names: string[]): void {
 
 define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
 define(ROW_DECREF, [
-	"msDecref", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
+	"msDecref", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
 	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayAtomicRefDestroy",
 	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msAtomicRefArrayDestroy",
 ]);
