@@ -815,7 +815,8 @@ function unionMemberKey(t: Readonly<Type>): string {
 		depth += 1;
 	}
 	const ownerName = owner != null && owner.sym != null ? mangleModuleName(buildModuleNameRoots(), owner.sym.modulePath) : "";
-	return typeKey(t) + "\u0001" + ownerName;
+	const spelling = t.kind == TypeKind.StringLiteral ? t.typeName + "\u0001" : "";
+	return spelling + typeKey(t) + "\u0001" + ownerName;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
