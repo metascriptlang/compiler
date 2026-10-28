@@ -121,13 +121,21 @@ function verdictPath(): string {
 
 function jsonText(s: string): string {
 	let out = "\"";
+	let runStart: int32 = 0;
 	for (let i: int32 = 0; i < s.byteLength; i += 1) {
 		const b = s.byteAt(i);
-		if (b == "\\".code || b == "\"".code) out = out + "\\" + s.byteSlice(i, i + 1);
-		else if (b < 32) out = out + "\\u" + b.toString(16).padStart(4, "0");
-		else out = out + s.byteSlice(i, i + 1);
+		if (b != "\\".code && b != "\"".code && b >= 32) continue;
+		out = out + s.byteSlice(runStart, i);
+		if (b < 32) out = out + "\\u" + b.toString(16).padStart(4, "0");
+		else out = out + "\\" + s.byteSlice(i, i + 1);
+		runStart = i + 1;
 	}
-	return out + "\"";
+	return out + s.byteSlice(runStart, s.byteLength as int32) + "\"";
+}
+
+test "jsonText escapes quotes and keeps non-ASCII text whole" {
+	assert jsonText("é\"x") == "\"é\\\"x\"";
+	assert jsonText("a\\\n€😀") == "\"a\\\\\\u000a€😀\"";
 }
 
 function verdictKey(kind: ReloadKind): string {
