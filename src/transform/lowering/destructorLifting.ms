@@ -1143,6 +1143,15 @@ function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(t, "trace", lctx);
 }
 
+function hookedNullableDistinct(held: Type, lctx: LiftCtx): boolean {
+	let t: Type | null = held;
+	while (t != null && t.kind == TypeKind.Distinct) {
+		if (hasAnyUserHook(t, lctx)) return true;
+		t = t.typeReturn;
+	}
+	return false;
+}
+
 function distinctTakesOp(t: Type, hook: string, lctx: LiftCtx): boolean {
 	return walksCells(hook) ? hasUserDefinedHook(t, "trace", lctx) : hasAnyUserHook(t, lctx);
 }
@@ -1446,7 +1455,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
 		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
 		const firstOwn = owner != null ? owner.typeNames.length : 0;
-		if (objType.kind == TypeKind.Union) {
+		if (objType.kind == TypeKind.Union && unwrapRefNullUnion(objType) != null) {
+			x1.nodeType = objType;
+			fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
+		} else if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
@@ -2290,7 +2302,11 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
 	}
 	const nullableRef = unwrapRefNullUnion(t);
-	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
+	if (nullableRef != null) {
+		liftTypeOps(nullableRef, lctx, loc);
+		if (hookedNullableDistinct(nullableRef, lctx)) ensureHooks(anonUnionCName(t), t, null as unknown as Type, t, false, lctx, loc);
+		return;
+	}
 	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 		// with the defining module's emission or codegen's ensureTypeInfoDef.
