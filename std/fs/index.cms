@@ -3,8 +3,8 @@
 @include("runtime/fs/header.h");
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
-import { validText } from "./text";
-import { validText } from "./text";
+import { utf8Text } from "../core/string/bytes";
+import { utf8Text } from "../core/string/bytes";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
@@ -545,7 +545,7 @@ function readRaw(path: string): Result<string, IoError> {
 // Each ill-formed UTF-8 sequence reads as U+FFFD; `readFileBytes` returns the bytes untouched.
 export function readFile(path: string): Result<string, IoError> {
 	const raw = try readRaw(path);
-	return Result.ok(validText(raw));
+	return Result.ok(utf8Text(raw, false));
 }
 
 export function readFileBytes(path: string): Result<Buffer, IoError> {
@@ -623,7 +623,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 // ===== Predicates (stay as boolean — not fallible) =====
 
 export function exists(path: string): boolean { return existsKernel(path); }
-export function realpath(path: string): string { return validText(realpathKernel(path)); }
+export function realpath(path: string): string { return utf8Text(realpathKernel(path), false); }
 export function isFile(path: string): boolean { return isFileKernel(path); }
 export function isDir(path: string): boolean { return isDirKernel(path); }
 export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
@@ -637,7 +637,7 @@ export function changeStamp(path: string): string { return changeStampKernel(pat
 // when the directory is empty — callers that need to distinguish should
 // check `exists(path) && isDir(path)` first.
 export function readDir(path: string): string[] {
-	return entriesOf(validText(msFsReadDirEntries(path)));
+	return entriesOf(utf8Text(msFsReadDirEntries(path), false));
 }
 
 function entriesOf(listing: string): string[] {

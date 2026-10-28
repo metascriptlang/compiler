@@ -11,7 +11,7 @@
 @include("runtime/process.h");
 
 import { isExecutable } from "../fs";
-import { validText } from "../fs/text";
+import { utf8Text } from "../core/string/bytes";
 import {
 	ProcessError, ProcessErrorKind,
 	spawnFailed, startFailed, errnoName, nonZeroExit, signalTerminated, pipeError,
@@ -46,7 +46,7 @@ const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
 
 // Each ill-formed UTF-8 sequence reads as U+FFFD, as TextDecoder reads it.
 function textOf(raw: string): string {
-	return validText(raw);
+	return utf8Text(raw, false);
 }
 
 // =============================================================================

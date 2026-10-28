@@ -21,7 +21,7 @@ import {
 	outputOverflow,
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
-import { utf8String } from "../core/string/bytes";
+import { utf8Text } from "../core/string/bytes";
 
 extern function msProcChildSpawn(
 	path: string,
@@ -130,7 +130,7 @@ export class ChildProcess {
 	takeStderr(): string {
 		const raw = this.held[1] + msProcChildTake(this.handle, ChildStream.Stderr as int32);
 		this.held[1] = "";
-		return utf8String(raw.asBytes(), false);
+		return utf8Text(raw, false);
 	}
 
 	private takeText(which: int32): string {
@@ -138,14 +138,14 @@ export class ChildProcess {
 		const kept = incompleteTail(raw.asBytes());
 		const length = raw.byteLength;
 		this.held[which] = raw.byteSlice(length - kept, length);
-		return utf8String(raw.byteSlice(0, length - kept).asBytes(), false);
+		return utf8Text(raw.byteSlice(0, length - kept), false);
 	}
 
 	// At end of stream a held partial sequence is ill-formed: it reads as U+FFFD.
 	private endText(which: int32): ReadChunk {
 		const raw = this.held[which];
 		this.held[which] = "";
-		return { data: utf8String(raw.asBytes(), false), ended: raw == "" };
+		return { data: utf8Text(raw, false), ended: raw == "" };
 	}
 
 	private readFailure(stream: ChildStream, code: int32, timeoutMs: int32): ProcessError {
