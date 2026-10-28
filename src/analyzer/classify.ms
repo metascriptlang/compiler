@@ -249,6 +249,20 @@ export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
 	return structs > 0;
 }
 
+// A Raiser union of value structs and class or interface refs, with no tag beside it, is the member's own object:
+// the released object carries its own class, so a release by dynamic kind frees the held struct cell or the ref.
+export function raiserStructRefUnion(t: Readonly<Type>): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	let structs = 0;
+	let refs = 0;
+	for (const child of t.typeChildren) {
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind == TypeKind.Ref && !isAtomicRef(child) && (child.sym == null || child.sym.symbolKind != SymbolKind.Actor)) refs += 1;
+		else return false;
+	}
+	return structs > 0 && refs > 0;
+}
+
 // A Raiser union whose members are class refs, closures, strings or scalars stays the member's own value, with no tag
 // beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
 export function raiserBareUnion(t: Type): boolean {
