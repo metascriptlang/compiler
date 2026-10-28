@@ -1652,6 +1652,20 @@ function calleeParamTypes(sym: Symbol | null): Type[] | null {
 	return declared != null && declared.kind == TypeKind.Function ? declared.typeChildren : null;
 }
 
+function constructorParamTypes(classSym: Symbol): Type[] | null {
+	const decl = classDeclNodeOf(placedInstanceOf(placedInstances(), classSym));
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return null;
+	for (const member of (decl.data as ClassDeclData).classBody) {
+		if (member.kind != NodeKind.ConstructorDecl) continue;
+		const params = member.paramSyms;
+		if (params == null) throw new Error(`internal: the constructor of '${classSym.name}' reached codegen without parameter symbols`);
+		const types: Type[] = [];
+		for (let i = 1; i < params.length; i += 1) types.push(params[i].symbolType!);
+		return types;
+	}
+	return null;
+}
+
 function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	for (let i = 0; i < args.length; i = i + 1) {
 		compileExprInto(s, args[i], dest + 1 + i);
@@ -2519,7 +2533,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 					node.location.line, node.location.column);
 				callArgs = [];
 			}
-			const dest = callBlock(s, node.nodeType, callArgs, null);
+			const dest = callBlock(s, node.nodeType, callArgs, sym != null ? constructorParamTypes(sym) : null);
 			emitCallArgs(s, dest, callArgs);
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
 			return dest;
