@@ -120,7 +120,7 @@ export function buildCpu(targetOs: string, cpuTarget: string): string {
 	if (cpuTarget != "") return cpuTarget;
 	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
 	if (targetOs == "solana") return "sbf";
-	if (targetOs == platform || targetOs == "bare") return arch;
+	if (targetOs == platform || targetOs == "bare" || (platform == "darwin" && targetOs == "macos")) return arch;
 	return "amd64";
 }
 
@@ -601,6 +601,11 @@ test "int64 alignment packs to 4 only on i386 outside windows" {
 test "buildCpu: a host build and a bare build take the compiler's own cpu" {
 	assert buildCpu(platform, "") == arch;
 	assert buildCpu("bare", "") == arch;
+}
+
+test "buildCpu: the documented spelling of the host os keeps the host cpu" {
+	assert buildCpu(platform == "darwin" ? "macos" : platform, "") == arch;
+	assert buildCpu(platform == "darwin" ? "macos" : platform, "i386") == "i386";
 }
 
 test "buildCpu: a cross build without --cpu takes amd64, as the C compiler is told" {
