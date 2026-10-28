@@ -6,6 +6,7 @@
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node, NodeKind, CallExprData } from "../ast/node";
 import { walkNode } from "./walker";
+import { WriteSummaries } from "../analyzer/writeEffects";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerEnumNames } from "./native/builtinLower";
@@ -63,12 +64,13 @@ import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, rangeChecks: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, liftTables: WriteSummaries | null = null, rangeChecks: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.rangeChecks = rangeChecks;
+		ctx.liftTables = liftTables;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
@@ -185,7 +187,7 @@ test "the raiser lowering keeps the enum range check by default and drops it whe
 	const parsed = parseInput("enum Color { Red, Green, Blue }\nfunction raw(): int32 { return 9; }\nconst c = raw() as Color;");
 	assert parsed.ok;
 	const checkerCtx = checkProgram(parsed.value);
-	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false, false);
+	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false, null, false);
 	let checks = 0;
 	walkNode(lowered, (n: Node): Node => {
 		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks += 1;
