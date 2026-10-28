@@ -319,7 +319,7 @@ test "a host string is built on its own heap and never on the heap of a running 
 	const running = createArrayHeap();
 	setActiveHostHeaps(createStructHeap(), running);
 	const key = hostObject(["code"], [hostString("KeyA")]);
-	assert running.strings.texts.length == 0;
+	assert heapStringHandles(running).length == 0;
 	const vmArrays = createArrayHeap();
 	const vmObjects = createStructHeap();
 	const placed = copyToVm(vmArrays, vmObjects, hostArray([key, hostString("日本")]));
