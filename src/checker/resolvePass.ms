@@ -1181,9 +1181,11 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 					if (afterBracket.length > 0 && afterBracket.charAt(0) == ":") {
 						const valueType = afterBracket.slice(1, afterBracket.length).trim();
 						if (keyType != "" && valueType != "") {
-							// Rewrite to Map<K, V> (ordered) and recurse — reuses all generic resolution.
-							const mapAnnotation = "Map<" + keyType + ", " + valueType + ">";
-							return resolveAnnotation(mapAnnotation, ctx, line, col);
+							const mapSym = stdSymbol(ctx, "Map");
+							if (mapSym == null) throw new Error("internal: the prelude declares no Map for an index signature");
+							ensureShaped(mapSym, ctx);
+							const args = [resolveAnnotation(keyType, ctx, line, col), resolveAnnotation(valueType, ctx, line, col)];
+							return genericInstanceOf(ctx, mapSym, symGenericParams(mapSym), args, line, col);
 						}
 					}
 				}
