@@ -117,6 +117,7 @@ void msPoolWakeWorker(int schedulerID);
 void msPoolWakeThief(int ownerSchedulerID);
 bool msWorkerEnginePoll(void);
 bool msWorkerEngineLive(void);
+int64_t msWorkerEnginePolls(void);
 
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void);
