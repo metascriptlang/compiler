@@ -1764,7 +1764,7 @@ function foldDefaultOf(ctx: CheckerContext, node: Node, callType: Type): Type {
 	if (asked.kind == TypeKind.GenericParam || hasGenericParams(asked)) return callType;
 	const value = omittedFieldDefault(ctx, asked, node.location);
 	if (value == null) {
-		addError(ctx, `'defaultOf<${typeArg}>' is refused: the default of '${typeArg}' is its zero, which hasLiteralDefault<${typeArg}>() reports`, node.location.line, node.location.column);
+		addError(ctx, `'defaultOf<${typeArg}>' is refused: the default of '${typeArg}' is its zero, so hasLiteralDefault<${typeArg}>() is false`, node.location.line, node.location.column);
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
