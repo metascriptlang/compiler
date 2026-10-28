@@ -105,3 +105,4 @@ import "./raiseCheckBeforeEnclosingCall";
 import "./generatorInlineInPlace";
 import "./numberVecFieldCopy";
 import "./forOfConstArrayBorrow";
+import "./instanceofNullableUnion";
