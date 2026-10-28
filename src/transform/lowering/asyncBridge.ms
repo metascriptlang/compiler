@@ -269,9 +269,24 @@ function rewriteAsyncReturn(node: Node, promiseType: Type, fnReturnInner: Type |
 	if (node.kind == NodeKind.ReturnStmt) {
 		const rd = node.data as ReturnStmtData;
 		const isVoidReturn = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
-		const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutSym, ctx);
+		const finallies = finalliesBeforeReturn(pendingFinallies);
 		const blockStmts: Node[] = [];
-		for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(cloneNodeKeepSem(fs));
+		let argument = rd.argument;
+		if (finallies.length > 0 && argument != null) {
+			if (isVoidReturn) {
+				blockStmts.push(makeExprStmt(argument, loc));
+				argument = null;
+			} else {
+				const valueSym = mintSym(ctx, SymbolKind.Variable, retFutSym.name + "_r", fnReturnInner!);
+				const valueDecl = makeVarDecl(valueSym.name, argument, DeclKind.Const, loc);
+				valueDecl.nodeType = fnReturnInner;
+				valueDecl.resolvedSym = valueSym;
+				blockStmts.push(valueDecl);
+				argument = makeTypedIdentResolved(valueSym, fnReturnInner, loc);
+			}
+		}
+		const completeStmts = makeFutureCompleteStmts(argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutSym, ctx);
+		for (const fs of finallies) blockStmts.push(cloneNodeKeepSem(fs));
 		blockStmts.push(makeStateAssign(-1, loc, stateSym));
 		for (const cs of completeStmts) blockStmts.push(cs);
 		blockStmts.push(makeReturn(makeNull(loc), loc));
@@ -554,6 +569,10 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
 	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutSym, [], stateSym, ctx);
+	for (const stmt of bodyStmts) {
+		collectStateLocals(stmt, ctx, locals);
+		collectVarTypes(stmt, varTypes);
+	}
 
 	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
