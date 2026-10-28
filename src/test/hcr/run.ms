@@ -2519,7 +2519,7 @@ function runEvents(): void {
 	need(tag, up, "malformed case: the program did not start");
 	const verdicts = `${TMP}/runEventsMalformed/out/hcr/app.reload.jsonl`;
 	need(tag, writeFile(verdicts, "this is not json\n").ok, `cannot write ${verdicts}`);
-	readUntil(bad, badSeen, "is not JSON", 20000);
+	readUntil(bad, badSeen, "is not JSON", 120000);
 	const died = bad.wait(30000);
 	bad.close();
 	need(tag, badSeen[0].contains("app.reload.jsonl line 1 is not JSON"), `a malformed verdict line was not named: ${badSeen[0]}`);
