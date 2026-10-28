@@ -79,6 +79,12 @@ export class SyntaxError extends Error {
 	}
 }
 
+export class URIError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 export class TypeError extends Error {
 	constructor(message: string) {
 		super(message);
