@@ -279,6 +279,66 @@ class PublicationTest(TempCase):
         with self.assertRaises(FileNotFoundError):
             pr.renameNoReplace(self.path("gone"), self.path("out"))
 
+    def onWindows(self, rename):
+        """renameNoReplace as win32 runs it: os.rename is the answer and libc is never loaded."""
+        patches = (mock.patch.object(pr.sys, "platform", "win32"), mock.patch.object(pr.os, "rename", side_effect=rename),
+                   mock.patch.object(pr.ctypes, "CDLL", side_effect=AssertionError("libc loaded on win32")))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return pr.os.rename
+
+    def test_windows_publishes_with_os_rename_and_never_loads_libc(self):
+        rename = self.onWindows(lambda source, destination: None)
+        pr.renameNoReplace(self.path("partial"), self.path("out"))
+        rename.assert_called_once_with(self.path("partial"), self.path("out"))
+
+    def test_windows_passes_spaces_and_unicode_paths_through_unchanged(self):
+        source, destination = self.path("a partial dir"), self.path("bundle \u00e9\u4e2d", "out put")
+        rename = self.onWindows(lambda source, destination: None)
+        pr.renameNoReplace(source, destination)
+        rename.assert_called_once_with(source, destination)
+
+    def test_windows_refuses_an_existing_destination_by_the_platform_error_naming_it(self):
+        def exists(source, destination):
+            raise FileExistsError(183, "Cannot create a file when that file already exists", destination)
+        self.onWindows(exists)
+        for destination in (self.path("out"), self.path("a dir", "out")):
+            with self.subTest(destination=destination):
+                with self.assertRaisesRegex(pe.EngineError, "output %s exists; it is never replaced" % destination.replace("\\", "\\\\")):
+                    pr.renameNoReplace(self.path("partial"), destination)
+
+    def test_windows_keeps_every_other_failure_loud_and_unchanged(self):
+        failures = (PermissionError(13, "Access is denied"), FileNotFoundError(2, "gone"), OSError(5, "I/O error"),
+                    OSError(32, "sharing violation"))
+        for failure in failures:
+            self.onWindows(mock.Mock(side_effect=failure))
+            with self.subTest(failure=failure):
+                with self.assertRaises(type(failure)) as caught:
+                    pr.renameNoReplace(self.path("partial"), self.path("out"))
+                self.assertIs(caught.exception, failure)
+
+    def test_windows_never_checks_first_or_overwrites(self):
+        source, destination = self.path("partial"), self.path("out")
+        write(os.path.join(source, "payload"))
+        write(destination, "keep")
+        self.onWindows(mock.Mock(side_effect=FileExistsError(183, "exists", destination)))
+        with mock.patch.object(pr.os, "replace", side_effect=AssertionError("os.replace")), \
+                mock.patch.object(pr.shutil, "move", side_effect=AssertionError("shutil.move")), \
+                mock.patch.object(pr.os.path, "lexists", side_effect=AssertionError("precheck")), \
+                mock.patch.object(pr.os.path, "exists", side_effect=AssertionError("precheck")):
+            with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+                pr.renameNoReplace(source, destination)
+        self.assertEqual(read(destination), "keep")
+        self.assertTrue(os.path.isfile(os.path.join(source, "payload")))
+
+    def test_a_platform_with_no_known_no_replace_rename_is_still_refused_and_not_renamed(self):
+        for platform in ("freebsd14", "cygwin", "sunos5"):
+            with self.subTest(platform=platform), mock.patch.object(pr.sys, "platform", platform), \
+                    mock.patch.object(pr.os, "rename", side_effect=AssertionError("os.rename")):
+                with self.assertRaisesRegex(pe.EngineError, "no atomic no-replace rename is known for %s" % platform):
+                    pr.renameNoReplace(self.path("partial"), self.path("out"))
+
 
 class CopyTest(TempCase):
     def test_missing_artifact_is_refused(self):

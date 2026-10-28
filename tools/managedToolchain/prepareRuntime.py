@@ -629,6 +629,12 @@ def checkEngineRelative(engineRelative):
 
 def renameNoReplace(source, destination):
     """Move source to destination atomically, failing when destination exists even if empty."""
+    if sys.platform == "win32":
+        try:
+            os.rename(source, destination)
+        except FileExistsError:
+            raise pe.EngineError("output %s exists; it is never replaced" % destination)
+        return
     libc = ctypes.CDLL(None, use_errno=True)
     paths = (os.fsencode(source), os.fsencode(destination))
     if sys.platform == "darwin":
