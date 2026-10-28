@@ -1,3 +1,4 @@
+import { CBlock } from "./context";
 // C Codegen — Statement Emission
 //
 // Follows standard reference implementation patterns for statement emission.
@@ -48,6 +49,16 @@ function blockLeaveActions(g: CGen, p: CProc, howManyTrys: number): void {
 	for (let j = stack.length - 1; j >= 0; j -= 1) {
 		p.nestedTryStmts.push(stack[j]);
 	}
+}
+
+// A labelled block's C labels carry the block id, which is fresh at every emission,
+// so a finally body emitted on several leave paths never repeats a label.
+function continueTarget(blk: Readonly<CBlock>): string {
+	return `${blk.label}_${blk.id}_c_`;
+}
+
+function breakTarget(blk: Readonly<CBlock>): string {
+	return blk.landing != "" ? blk.landing : `${blk.label}_${blk.id}_x_`;
 }
 
 // ===== NRVO Call Site Helpers =====
@@ -957,10 +968,10 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 		}
 	}
 	const whileLabel = whileLabelOf(node);
-	if (whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${whileLabel}: ;`); }
+	if (whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${continueTarget(whileBlk)}: ;`); }
 	popBlock(p);
 	emitStmtsLine(p, "}");
-	if (whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${whileLabel}_x_: ;`); }
+	if (whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${breakTarget(whileBlk)}: ;`); }
 }
 
 // ===== While Statement =====
@@ -1015,11 +1026,11 @@ function genWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	} else {
 		genStmt(g, p, d.whileBody);
 	}
-	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
+	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${continueTarget(whileBlk)}: ;`); }
 
 	popBlock(p);
 	emitStmtsLine(p, "}");
-	if (d.whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${d.whileLabel}_x_: ;`); }
+	if (d.whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${breakTarget(whileBlk)}: ;`); }
 }
 
 // ===== Do-While Statement =====
@@ -1047,11 +1058,11 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		genStmt(g, p, d.doBody);
 	}
 
-	if (d.dwLabel != "" && dwBlk.continueUsed) { emitStmtsLine(p, `${d.dwLabel}: ;`); }
+	if (d.dwLabel != "" && dwBlk.continueUsed) { emitStmtsLine(p, `${continueTarget(dwBlk)}: ;`); }
 	const condSnippet = genExpr(g, p, d.doCondition);
 	popBlock(p);
 	emitStmtsLine(p, `} while ${wrapCond(condSnippet)};`);
-	if (d.dwLabel != "" && dwBlk.breakUsed) { emitStmtsLine(p, `${d.dwLabel}_x_: ;`); }
+	if (d.dwLabel != "" && dwBlk.breakUsed) { emitStmtsLine(p, `${breakTarget(dwBlk)}: ;`); }
 }
 
 // ===== Block Statement =====
@@ -1146,7 +1157,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	}
 	if (d.breakLabel != "" && idx >= 0) {
 		p.blocks[idx].breakUsed = true;
-		emitStmtsLine(p, `goto ${p.blocks[idx].landing != "" ? p.blocks[idx].landing : d.breakLabel + "_x_"};`);
+		emitStmtsLine(p, `goto ${breakTarget(p.blocks[idx])};`);
 		return;
 	}
 	emitStmtsLine(p, "break;");
@@ -1166,7 +1177,12 @@ function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		blockLeaveActions(g, p, delta);
 		if (d.continueLabel != "") { p.blocks[idx].continueUsed = true; }
 	}
-	emitStmtsLine(p, d.continueLabel != "" ? `goto ${d.continueLabel};` : "continue;");
+	if (d.continueLabel != "") {
+		if (idx < 0) throw new Error(`internal: continue targets label ${d.continueLabel} with no enclosing block`);
+		emitStmtsLine(p, `goto ${continueTarget(p.blocks[idx])};`);
+		return;
+	}
+	emitStmtsLine(p, "continue;");
 }
 
 // ===== Throw Statement =====
