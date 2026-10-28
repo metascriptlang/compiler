@@ -112,6 +112,9 @@ int32_t msPoolPendingPeek(void);
 
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);
+void msPoolWakeThief(int ownerSchedulerID);
+bool msWorkerEnginePoll(void);
+bool msWorkerEngineLive(void);
 
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void);
