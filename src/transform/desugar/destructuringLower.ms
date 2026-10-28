@@ -14,7 +14,7 @@ import { nullishLowered } from "../coercion/nullishCoalesce";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef, counterType, makeCounterStep } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
-const REST_NOT_LAST = "A rest element must be last in a destructuring pattern.";
+const REST_NOT_LAST_REACHED = "internal: a rest element before the end of a destructuring pattern reached the lowering; the checker refuses it";
 
 // ===== Main Entry Point =====
 
@@ -84,10 +84,7 @@ export function expandArrayRet(
 	const items: Node[] = [];
 	for (let i = 0; i < apd.patternElements.length; i += 1) {
 		const elem = apd.patternElements[i];
-		if (elem.kind == NodeKind.SpreadExpr && i != apd.patternElements.length - 1) {
-			reportTransformError(ctx, REST_NOT_LAST, elem.location);
-			continue;
-		}
+		if (elem.kind == NodeKind.SpreadExpr && i != apd.patternElements.length - 1) throw new Error(REST_NOT_LAST_REACHED);
 
 		// Rest element: last + hasRestElement
 		if (apd.hasRestElement && i == apd.patternElements.length - 1) {
@@ -151,10 +148,7 @@ export function expandObjectRet(
 	}
 	for (let i = 0; i < opd.patternProps.length; i += 1) {
 		const prop = opd.patternProps[i];
-		if (prop.kind == NodeKind.SpreadExpr && i != opd.patternProps.length - 1) {
-			reportTransformError(ctx, REST_NOT_LAST, prop.location);
-			continue;
-		}
+		if (prop.kind == NodeKind.SpreadExpr && i != opd.patternProps.length - 1) throw new Error(REST_NOT_LAST_REACHED);
 		if (prop.kind == NodeKind.SpreadExpr) {
 			const inner = (prop.data as SpreadExprData).spreadArg;
 			if (inner.kind != NodeKind.Identifier) continue;
@@ -229,10 +223,7 @@ function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: Tran
 		for (let i = 0; i < elements.length; i += 1) {
 			const target = elements[i];
 			if (target.kind == NodeKind.SpreadExpr) {
-				if (i != elements.length - 1) {
-					reportTransformError(ctx, REST_NOT_LAST, target.location);
-					continue;
-				}
+				if (i != elements.length - 1) throw new Error(REST_NOT_LAST_REACHED);
 				const restTarget = (target.data as SpreadExprData).spreadArg;
 				const restType = isGrowableArray(restTarget.nodeType) ? restTarget.nodeType : destrRestElemType(base.nodeType);
 				const rest = arrayRestValue(base, i, restType, loc, ctx, items);

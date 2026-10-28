@@ -185,6 +185,8 @@ function markAssignedTargets(ctx: CheckerContext, target: Node): void {
 	else if (target.kind == NodeKind.ArrayLiteral) for (const el of (target.data as ArrayLiteralData).elements) markAssignedTargets(ctx, el);
 }
 
+export const REST_NOT_LAST = "A rest element must be last in a destructuring pattern.";
+
 function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 	if (target.kind != NodeKind.ArrayLiteral) {
 		if (target.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = target;
@@ -201,7 +203,13 @@ function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 	const types: Type[] = [];
 	let restElem: Type | null = null;
 	let untyped = false;
-	for (const el of d.elements) {
+	for (let i = 0; i < d.elements.length; i += 1) {
+		const el = d.elements[i];
+		if (el.kind == NodeKind.SpreadExpr && i != d.elements.length - 1) {
+			addError(ctx, REST_NOT_LAST, el.location.line, el.location.column);
+			untyped = true;
+			continue;
+		}
 		if (el.kind == NodeKind.SpreadExpr) {
 			checkAssignTarget(ctx, (el.data as SpreadExprData).spreadArg);
 			el.nodeType = inferredType();

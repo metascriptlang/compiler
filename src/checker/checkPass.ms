@@ -39,7 +39,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
+import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -2404,6 +2404,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					markInitialized(ctx.initTracker, id.name);
 				}
 			} else if (elem.kind == NodeKind.SpreadExpr) {
+				if (i != apd.patternElements.length - 1) addError(ctx, REST_NOT_LAST, elem.location.line, elem.location.column);
 				const inner = (elem.data as SpreadExprData).spreadArg;
 				if (inner.kind == NodeKind.Identifier) {
 					const id = inner.data as IdentifierData;
@@ -2441,8 +2442,10 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (hidden != "") refusePrivateField(ctx, sourceOwner, hidden, prop.location.line, prop.location.column);
 			}
 		}
-		for (const prop of opd.patternProps) {
+		for (let pi = 0; pi < opd.patternProps.length; pi += 1) {
+			const prop = opd.patternProps[pi];
 			if (prop.kind == NodeKind.SpreadExpr) {
+				if (pi != opd.patternProps.length - 1) addError(ctx, REST_NOT_LAST, prop.location.line, prop.location.column);
 				const inner = (prop.data as SpreadExprData).spreadArg;
 				if (inner.kind == NodeKind.Identifier) {
 					const restId = inner.data as IdentifierData;
