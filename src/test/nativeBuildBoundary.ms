@@ -45,8 +45,8 @@ const cacheRootGroups = [
 	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
-	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
 	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
@@ -1061,6 +1061,29 @@ function runManualCrossModuleThrow(): void {
 	record("a throw in another module is caught under the default memory mode", expected, value(dir, "probeDrc"));
 }
 
+function ranLoadedGraph(dir: string, label: string): string {
+	const r = command(dir, label, compiler, ["run", "--verbose", "main.ms"]);
+	need(r.code == 0, `${label} run`);
+	const log = readFile(`${dir}/${label}.log`);
+	need(log.ok, `${label} log`);
+	const loaded = log.ok && log.value.indexOf("loading module graph", 0) >= 0 ? "loaded" : "skipped";
+	return `${loaded} ${r.stdout.trim().split("\n").pop()}`;
+}
+
+function runRunCache(): void {
+	const dir = `${root}/run cache`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 71; }\n");
+	put(`${dir}/main.ms`, "import { probeValue } from \"./lib\";\nconsole.log(probeValue());\n");
+	waitForNextSecond();
+	record("a first run builds", "loaded 71", ranLoadedGraph(dir, "run-first"));
+	record("a rerun of an unchanged program reuses the build", "skipped 71", ranLoadedGraph(dir, "run-unchanged"));
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 73; }\n");
+	record("a run after editing an imported module rebuilds", "loaded 73", ranLoadedGraph(dir, "run-edited"));
+	record("a rerun after the rebuild reuses it", "skipped 73", ranLoadedGraph(dir, "run-edited-again"));
+}
+
 function runAudit(): void {
 	const linkOptions = fixture("link options", "", "");
 	const firstArchive = makeArchive(linkOptions, "first", 41);
@@ -2022,6 +2045,7 @@ if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "manual-cross-module-throw" || group == "all") runManualCrossModuleThrow();
+if (group == "run-cache" || group == "all") runRunCache();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();

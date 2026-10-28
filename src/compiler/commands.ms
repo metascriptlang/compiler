@@ -127,7 +127,6 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 	const binName = replaceExt(basename(filePath), "");
 	const tmpBin = "out/debug/" + binName + exeSuffix();
 	opts.outputPath = tmpBin;
-	opts.forceRebuild = true;
 	cmdBuildC(filePath, opts);
 
 	if (opts.showTime) printTiming("compiled", t0);
