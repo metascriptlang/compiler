@@ -2001,8 +2001,16 @@ function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
 	return ci < literal.length && literal[ci];
 }
 
+// A value-type `X | null` is a Maybe, which a bare X converts into: another argument bound to the
+// same parameter fits it when it fits the payload.
+function fitsBound(candidate: Type, bound: Type): boolean {
+	if (isAssignable(candidate, bound)) return true;
+	return isMaybeType(bound) && bound.typeReturn != null && isAssignable(candidate, bound.typeReturn);
+}
+
 function candidateFits(candidate: Type, fromLiteral: boolean, bound: Type): boolean {
-	return fromLiteral ? literalShapeFits(candidate, bound) : isAssignable(candidate, bound);
+	if (!fromLiteral) return fitsBound(candidate, bound);
+	return literalShapeFits(candidate, bound) || (isMaybeType(bound) && bound.typeReturn != null && literalShapeFits(candidate, bound.typeReturn));
 }
 
 // An object literal's own type against a declared type: the literal is retyped by the
