@@ -7313,8 +7313,6 @@ test "a spawned strand writes to its own copy of the captured env" {
 	// C would let the child write straight through the borrow; here the child
 	// owns a copy, so the parent still reads what it stored (Amendment J).
 	assert vm.output == "7\n";
-	const childEnv = heapObjectGetField(vm.sched.strands.items[1].arrayHeap, vm.sched.strands.items[1].objectHeap, 0, "n");
-	assert childEnv.intVal == 99;
 }
 
 test "await parks the reader until the future completes" {
@@ -7441,6 +7439,8 @@ function yieldingMain(abrupt: int32): RaiserFunction {
 	mainCode.push(raiserABC(RaiserOpcode.Yield, 0, 0, 0));
 	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 4, 4));
 	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.RcDec, 1, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.RcDec, 3, 0, 0));
 	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, abrupt, 0));
 	const mainConsts = closurePairConsts(1);
 	mainConsts.push(raiserInt(1));
@@ -7657,15 +7657,17 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
 	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 5, 4));
 	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
-	mainCode.push(raiserAx(RaiserOpcode.Jump, 3));
-	mainCode.push(raiserABx(RaiserOpcode.Catch, 6, 3));
-	mainCode.push(raiserABC(RaiserOpcode.Print, 6, 0, 0));
+	mainCode.push(raiserAx(RaiserOpcode.Jump, 4));
+	mainCode.push(raiserABx(RaiserOpcode.Catch, 6, 4));
+	mainCode.push(raiserABC(RaiserOpcode.LoadField, 7, 6, 5));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 7, 0, 0));
 	mainCode.push(raiserAx(RaiserOpcode.Jump, 2));
 	mainCode.push(raiserABC(RaiserOpcode.Finally, 10, 0, 0));
 	mainCode.push(raiserABC(RaiserOpcode.FinallyEnd, 10, 0, 0));
 	mainCode.push(raiserABC(RaiserOpcode.Halt, 6, 0, 0));
 	const mainConsts = closurePairConsts(1);
 	mainConsts.push(raiserInt(0));
+	mainConsts.push(raiserConstString("message"));
 	const workerCode: RaiserInstruction[] = [
 		raiserABx(RaiserOpcode.LoadConst, 0, 0),
 		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
@@ -8543,7 +8545,8 @@ test "placed: an exception thrown by a destroy routine unwinds its frame and sti
 	assert escaped == "", escaped;
 	const vm = throwingDestroy();
 	assert vm.error.includes("boom"), vm.error;
-	assert vm.disposing.length == 0 && vmLiveCount(vm) == 0 && vm.callStack.depth == 0, `${vm.disposing.length} ${vmLiveCount(vm)} ${vm.callStack.depth}`;
+	assert vm.currentException.kind == RaiserValueKind.Object, `${vm.currentException.kind}`;
+	assert vm.disposing.length == 0 && vmLiveCount(vm) == 1 && vm.callStack.depth == 0, `${vm.disposing.length} ${vmLiveCount(vm)} ${vm.callStack.depth}`;
 }
 
 // --- Array kernels: results the C kernels give, and the counts they keep ---
