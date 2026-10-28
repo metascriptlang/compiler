@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: a 2 b 2 main 1
 // @serial
 actor Counter {
