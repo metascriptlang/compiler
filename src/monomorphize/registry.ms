@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { callConvKey, createFunction, createClosureType, numberType, nominalTypeKeyIn, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
+import { callConvKey, createFunction, createClosureType, createTuple, createUnion, numberType, int32Type, stringType, booleanType, nominalTypeKeyIn, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
 import { ModuleNameRoots, buildModuleNameRoots, mangleModuleName, setModuleNameRoots } from "../codegen/c/names";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
@@ -165,11 +165,11 @@ function monoTypeKeyBody(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): s
 			return "distinct_" + name;
 		},
 		TypeKind.Function => {
-			let key = "fn";
+			let key = "fn" + t.typeChildren.length.toString() + callConvKey(t);
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
-			return key + "_r_" + monoTypeKeyIn(roots, t.typeReturn) + callConvKey(t);
+			return key + "_r_" + monoTypeKeyIn(roots, t.typeReturn);
 		},
 		TypeKind.Union => {
 			if (t.typeName != "") {
@@ -178,14 +178,14 @@ function monoTypeKeyBody(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): s
 				if (owner != "") return name + "_" + ownerHash(roots, owner);
 				return name;
 			}
-			let key = "union";
+			let key = "union" + t.typeChildren.length.toString();
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
 			return key;
 		},
 		TypeKind.Tuple => {
-			let key = "tuple";
+			let key = "tuple" + t.typeChildren.length.toString();
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
@@ -193,9 +193,9 @@ function monoTypeKeyBody(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): s
 		},
 		// Keep output spelling total for the remaining concrete type kinds.
 		_ => {
-			let key = "k" + (t.kind as number).toString();
+			let key = "k" + (t.kind as number).toString() + "n" + t.typeChildren.length.toString();
 			if (t.typeName != "") key = key + "_" + hashToBase36(t.typeName);
-			if (t.typeReturn != null) key = key + "_" + monoTypeKeyIn(roots, t.typeReturn);
+			key = key + (t.typeReturn != null ? "_r_" + monoTypeKeyIn(roots, t.typeReturn) : "_v");
 			for (const child of t.typeChildren) key = key + "_" + monoTypeKeyIn(roots, child);
 			return key;
 		},
@@ -356,5 +356,25 @@ test "a plain function type and a closure type of one signature have distinct ke
 	const plain = createFunction([numberType()], ["n"], numberType());
 	const closure = createClosureType([numberType()], ["n"], numberType());
 	assert monoTypeKey(plain) != monoTypeKey(closure);
-	assert monoTypeKey(closure) == "fn_float64_r_float64";
+	assert monoTypeKey(closure) == "fn1_float64_r_float64";
+}
+
+test "type arguments that differ only in how nested members group mangle apart" {
+	const i32 = int32Type();
+	const str = stringType();
+	const pairA = [createTuple([i32]), createTuple([str, i32])];
+	const pairB = [createTuple([i32, createTuple([str])]), i32];
+	assert mangleMonoName("show", pairA) != mangleMonoName("show", pairB);
+	const inTwo = createTuple([createUnion([booleanType(), i32]), str]);
+	const inOne = createTuple([createUnion([booleanType(), i32, str])]);
+	assert mangleMonoName("two", [inTwo]) != mangleMonoName("two", [inOne]);
+	const twoParams = createClosureType([createTuple([i32]), str], ["a", "b"], numberType());
+	const oneParam = createClosureType([createTuple([i32, str])], ["a"], numberType());
+	assert mangleMonoName("keep", [twoParams]) != mangleMonoName("keep", [oneParam]);
+}
+
+test "a calling convention keys the function type it belongs to, not its return type" {
+	const plainInClosure = createClosureType([], [], createFunction([], [], numberType()));
+	const closureInPlain = createFunction([], [], createClosureType([], [], numberType()));
+	assert monoTypeKey(plainInClosure) != monoTypeKey(closureInPlain);
 }
