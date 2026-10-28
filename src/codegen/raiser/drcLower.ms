@@ -189,7 +189,8 @@ function isCellType(type: Type | null): boolean {
 }
 
 function isCopiedAsValue(type: Type | null): boolean {
-	const t = valueCopyRepr(type);
+	const repr = valueCopyRepr(type);
+	const t = repr != null && repr.kind == TypeKind.GenericInstance && repr.typeReturn != null && repr.typeReturn.kind == TypeKind.Union ? repr.typeReturn : repr;
 	return isMaybeHeld(type) || (t != null && t.kind == TypeKind.Union && (t.typeFlags.has(TypeFlag.ValueUnion) || raiserFlatCellUnion(t)));
 }
 
