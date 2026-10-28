@@ -139,7 +139,7 @@ function emitParams(t: CType, outHandles: boolean): string {
 }
 
 function emitFuncType(t: CType): string {
-	return "(" + emitParams(t, false) + ") => " + cTypeToMs(t.returnType);
+	return "(" + emitParams(t, false) + ") => " + nullablePointer(t.returnType, cTypeToMs(t.returnType));
 }
 
 // ===== Emit Declarations =====
@@ -563,6 +563,11 @@ test "emit pointer types" {
 	const ms = translateHeaderModule("extern void *handle;\nextern const char *name;").source;
 	assert ms.indexOf("handle: Ptr<void>") >= 0;
 	assert ms.indexOf("name: cstring") >= 0;
+}
+
+test "a function-pointer type's pointer return is nullable like its pointer parameters" {
+	const ms = translateHeaderModule("typedef void* (*Alloc)(void* ctx, unsigned long len);\ntypedef struct Vt { Alloc alloc; } Vt;").source;
+	assert ms.indexOf("(ctx: Ptr<void> | null, len: uint64) => Ptr<void> | null") >= 0, ms;
 }
 
 test "opaque struct-pointer typedef points at its tag declared under its C name" {
