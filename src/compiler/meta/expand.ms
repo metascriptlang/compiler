@@ -2414,8 +2414,9 @@ registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, ma
 	preprocessMacroBody(body, macroScopeOf(ctx, macroSym), macroSym.name, params);
 	return bakeMacroBody(body, ctx, macroSym, macroName, false, params, null);
 });
-registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
+registerComptimeHelperPreparer((decl: Node, scope: CheckerContext, helper: Symbol): void => {
 	preprocessMacroBody(decl, scope, "", []);
+	bakeMacroBody(decl, scope, helper, helper.name, false, [], null);
 });
 
 // ===== Tests =====
