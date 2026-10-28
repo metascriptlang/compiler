@@ -531,7 +531,11 @@ bool msPoolSetWorkerCount(int32_t count) {
 
 static void msPoolInit(void) {
 	gPool = (msThreadPool*)msMemAlloc0(sizeof(msThreadPool));
+#ifdef MS_POOL_WORKERS
+	int cpus = msPoolWorkersWanted > 0 ? msPoolWorkersWanted : MS_POOL_WORKERS;
+#else
 	int cpus = msPoolWorkersWanted > 0 ? msPoolWorkersWanted : msDetectCPUs();
+#endif
 	gPool->workerCount = cpus < MS_POOL_MAX_WORKERS ? cpus : MS_POOL_MAX_WORKERS;
 	gPool->cap = MS_POOL_MAX_QUEUE;
 	gPool->queue = (msSpawnCtx*)msMemAllocN0(gPool->cap, sizeof(msSpawnCtx));

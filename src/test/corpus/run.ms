@@ -272,7 +272,18 @@ const DANGER_PASSL = (IS_WIN && HAS_CLANG) ? " --passL=-pthread" : "";
 // And the same generated-C warning class SAN_PASSC downgrades: mingw clang
 // makes -Wincompatible-pointer-types a hard error (protocol-receiver upcasts
 // in method calls), zig cc keeps it a warning.
-const DANGER_PASSC = (IS_WIN && HAS_CLANG) ? " --passC=-Wno-error=incompatible-pointer-types" : "";
+const DANGER_PASSC_FLAG = (IS_WIN && HAS_CLANG) ? "-Wno-error=incompatible-pointer-types" : "";
+
+// A debug build's per-thread cost is the toolchain's, not the program's: zig's UBSan runtime holds a
+// 256 KB thread-local signal stack, so a pool of one worker per CPU grows RSS with the host
+// (26 MB on 96 CPUs against 12 MB on 26). An RSS cell sizes its pool as an 8-CPU host would.
+const RSS_POOL_WORKERS = 8;
+
+function rssPassC(spec: Readonly<Spec>, platform: string): string {
+	if (spec.maxRssMb < 0.0) { return platform == "" ? "" : " --passC=" + platform; }
+	const define = "-DMS_POOL_WORKERS=" + RSS_POOL_WORKERS;
+	return " --passC=\"" + (platform == "" ? define : platform + " " + define) + "\"";
+}
 
 // SAN lane needs a driver that links the ASan runtime itself. zig cc 0.16
 // targeting linux-gnu compiles -fsanitize=address objects fine but its link
@@ -1245,9 +1256,9 @@ function planJobs(specs: Spec[]): BuildJob[] {
 			continue;
 		}
 		const cbin = OUT_DIR + "bin/" + spec.name + ".c";
-		jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --output=" + cbin, cell: makeCell(spec, "c", cbin) });
+		jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + rssPassC(spec, "") + " --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 		const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --danger" + DANGER_CC + rssPassC(spec, DANGER_PASSC_FLAG) + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
 		// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
 		// include js (so @xfail(js) keeps validating), only this host
 		// cannot execute the cell.
