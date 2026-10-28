@@ -10,7 +10,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapSeqHandles, heapAllocArray, heapAllocObject,
-	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
+	heapObjectSetField, heapArrayPush, rcIncref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
 	handleHeapKind, raiserNil, rcDecrefHandle, rcForgetRoot, ORC_COLOR_MASK, ORC_ROOT_SHIFT, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
 	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, objectCellFieldValue, objectCellStoreField, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
@@ -84,8 +84,7 @@ interface OrcEnv {
 }
 
 function collectableHandle(held: RaiserValue): int64 {
-	const v = heldHandle(held);
-	return v.kind == RaiserValueKind.Array || v.kind == RaiserValueKind.Object ? v.intVal : 0;
+	return held.kind == RaiserValueKind.Array || held.kind == RaiserValueKind.Object ? held.intVal : 0;
 }
 
 function pushSlot(env: OrcEnv, owner: int64, index: int32, held: RaiserValue): void {

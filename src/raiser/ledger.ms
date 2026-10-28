@@ -7,7 +7,7 @@ import {
 	RaiserObjectData, RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapStringText, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
 	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldNameAt, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
-	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
+	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle, holdsCount
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
 import { objectCellNew, objectCellSetSlot } from "./objectCell";
@@ -27,7 +27,7 @@ function zeros(count: int32): int32[] {
 }
 
 function tallyRef(tally: LedgerTally, v: RaiserValue, holder: string): void {
-	if (v.kind < RaiserValueKind.String) return;
+	if (!holdsCount(v.kind)) return;
 	const named = tally.holders.get(v.intVal);
 	if (named != null) named.push(holder);
 	else tally.holders.set(v.intVal, [holder]);

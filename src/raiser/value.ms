@@ -188,10 +188,8 @@ export function kindFitsClass(kind: RaiserValueKind, cls: RaiserRegClass): boole
 	};
 }
 
-export function heldHandle(v: RaiserValue): RaiserValue {
-	if (v.kind == RaiserValueKind.ElemAddr) return raiserArray(v.intVal);
-	if (v.kind == RaiserValueKind.FieldAddr) return raiserObject(v.intVal);
-	return v;
+export function holdsCount(kind: RaiserValueKind): boolean {
+	return kind >= RaiserValueKind.String && kind != RaiserValueKind.ElemAddr && kind != RaiserValueKind.FieldAddr;
 }
 
 // --- String Heap ---
@@ -1423,11 +1421,11 @@ export function heapObjectSetField(arr: RaiserArrayHeap, heap: RaiserObjectHeap,
 // heap object is self-describing). Only a kind from String up holds a handle.
 
 export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	if (held.kind >= RaiserValueKind.String) rcIncrefHandle(arrHeap, objHeap, held.intVal);
+	if (holdsCount(held.kind)) rcIncrefHandle(arrHeap, objHeap, held.intVal);
 }
 
 export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	if (held.kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, held.intVal);
+	if (holdsCount(held.kind)) rcDecrefHandle(arrHeap, objHeap, held.intVal);
 }
 
 export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
@@ -1633,7 +1631,7 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, in
 		if (kinds[i] == RaiserRegClass.Ref && !data.classType.uncounted[i] && data.slots[i] != 0) rcDecrefHandle(arrHeap, objHeap, data.slots[i]);
 	}
 	for (let i = 0; i < data.values.length; i += 1) {
-		if (data.values[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.values[i].intVal);
+		if (holdsCount(data.values[i].kind)) rcDecrefHandle(arrHeap, objHeap, data.values[i].intVal);
 	}
 	data.slots.length = 0;
 	data.wordSlots = 0;
@@ -1671,7 +1669,7 @@ function rcDestroyBox(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handl
 // Reaching a node allocates its destination shell and queues a job to fill it, so a chain as long as the heap
 // costs job-list space, not stack frames.
 
-enum RaiserCopyKind { Array, Object, Slot }
+enum RaiserCopyKind { Array, Object }
 
 interface RaiserCopyJob {
 	kind: RaiserCopyKind;
@@ -1682,40 +1680,22 @@ interface RaiserCopyJob {
 export interface RaiserCopyMap {
 	arrays: Map<int64, int64>;
 	objects: Map<int64, int64>;
-	registerSlots: Map<int64, int64>;
-	globalSlots: Map<int64, int64>;
 	jobs: RaiserCopyJob[];
 	viewFixups: int64[];
-	sourceGlobals: RaiserValue[] | null;
-	destGlobals: RaiserValue[] | null;
 }
 
 export function createCopyMap(): RaiserCopyMap {
 	return {
 		arrays: new Map<int64, int64>(),
 		objects: new Map<int64, int64>(),
-		registerSlots: new Map<int64, int64>(),
-		globalSlots: new Map<int64, int64>(),
 		jobs: [],
 		viewFixups: [],
-		sourceGlobals: null,
-		destGlobals: null,
 	};
 }
 
 export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue): RaiserValue {
 	const map = createCopyMap();
 	return copyGraphWith(srcArr, srcObj, dstArr, dstObj, val, map);
-}
-
-// The value in the register a RegAddr names: its intVal is the slot's address | register class.
-function copiedRegisterValue(address: int64): RaiserValue {
-	const cls = (address & 7) as RaiserRegClass;
-	const w = ld64(address - (address & 7));
-	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) return handleValue(w);
-	if (cls == RaiserRegClass.Word) return raiserInt(w);
-	if (cls == RaiserRegClass.Bool) return raiserBool(w != 0);
-	return raiserFloat(bitsToFloat(w));
 }
 
 function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: int64): void {
@@ -1730,38 +1710,14 @@ function disownFresh(dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, handle: 
 	}
 }
 
-function copySlotShell(dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	const isRegister = val.kind == RaiserValueKind.RegAddr;
-	const source = map.sourceGlobals;
-	if (!isRegister) {
-		if (source == null || val.intVal < 0 || val.intVal >= source.length) throw new Error("internal: a copied slot address must have its source storage");
-		if (map.destGlobals != null) return raiserGlobalAddr(val.intVal);
-	}
-	const slots = isRegister ? map.registerSlots : map.globalSlots;
-	if (slots.has(val.intVal)) return raiserElemAddr(slots.get(val.intVal)!, 0);
-	const handle = heapAllocArray(dstArr);
-	heapArraySetRc(dstArr, handle, 0);
-	slots.set(val.intVal, handle);
-	const held = isRegister ? copiedRegisterValue(val.intVal) : source![val.intVal];
-	map.jobs.push({ kind: RaiserCopyKind.Slot, source: held, dst: handle });
-	return raiserElemAddr(handle, 0);
-}
-
 function copyArrayShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	const isArray = val.kind == RaiserValueKind.Array;
-	if (map.arrays.has(val.intVal)) {
-		const known = map.arrays.get(val.intVal)!;
-		return isArray ? raiserArray(known) : raiserElemAddr(known, val.floatVal as int64);
-	}
-	if (seqBase(seqCellOf(val.intVal)) != 0) {
-		const view = copySeqViewShell(srcArr, dstArr, val.intVal, map);
-		return isArray ? raiserArray(view) : raiserElemAddr(view, val.floatVal as int64);
-	}
+	if (map.arrays.has(val.intVal)) return raiserArray(map.arrays.get(val.intVal)!);
+	if (seqBase(seqCellOf(val.intVal)) != 0) return raiserArray(copySeqViewShell(srcArr, dstArr, val.intVal, map));
 	const dstHandle = heapAllocArrayLike(dstArr, srcArr, val.intVal);
 	heapArraySetRc(dstArr, dstHandle, 0);
 	map.arrays.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Array, source: raiserArray(val.intVal), dst: dstHandle });
-	return isArray ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
+	return raiserArray(dstHandle);
 }
 
 // A view of a typed array is copied as a view of the copy of the array it stands on; it points into that copy's
@@ -1785,34 +1741,26 @@ function copySeqViewShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, view
 }
 
 function copyObjectShell(srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	const isObject = val.kind == RaiserValueKind.Object;
-	if (map.objects.has(val.intVal)) {
-		const known = map.objects.get(val.intVal)!;
-		return isObject ? raiserObject(known) : raiserFieldAddrAt(known, val.floatVal as int64);
-	}
+	if (map.objects.has(val.intVal)) return raiserObject(map.objects.get(val.intVal)!);
 	if (isObjectCell(val.intVal)) {
 		const cellCopy = objectCellHandle(heapNewObjectCell(dstArr.mem, objectCellClass(val.intVal), 0));
 		map.objects.set(val.intVal, cellCopy);
 		map.jobs.push({ kind: RaiserCopyKind.Object, source: raiserObject(val.intVal), dst: cellCopy });
-		return isObject ? raiserObject(cellCopy) : raiserFieldAddrAt(cellCopy, val.floatVal as int64);
+		return raiserObject(cellCopy);
 	}
-	if (handleIndex(val.intVal) >= srcObj.objects.length) {
-		if (!isObject) throw new Error("internal: a copied field address must have an object owner");
-		return raiserNil();
-	}
+	if (handleIndex(val.intVal) >= srcObj.objects.length) return raiserNil();
 	const dstHandle = heapAllocObject(dstObj);
 	dstObj.objects[handleIndex(dstHandle)].classType = srcObj.objects[handleIndex(val.intVal)].classType;
 	dstObj.objects[handleIndex(dstHandle)].rc = 0;
 	map.objects.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Object, source: raiserObject(val.intVal), dst: dstHandle });
-	return isObject ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
+	return raiserObject(dstHandle);
 }
 
-// The destination of one value: a scalar is itself, a node is its destination shell, filled by a queued job.
+// The destination of one value: a scalar or an address is itself, a node is its destination shell, filled by a queued job.
 function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) return copySlotShell(dstArr, val, map);
-	if (val.kind == RaiserValueKind.Array || val.kind == RaiserValueKind.ElemAddr) return copyArrayShell(srcArr, dstArr, val, map);
-	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) return copyObjectShell(srcObj, dstArr, dstObj, val, map);
+	if (val.kind == RaiserValueKind.Array) return copyArrayShell(srcArr, dstArr, val, map);
+	if (val.kind == RaiserValueKind.Object) return copyObjectShell(srcObj, dstArr, dstObj, val, map);
 	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) {
 		const text = heapAllocString(dstArr, heapStringText(srcArr, val));
 		disownFresh(dstArr, dstObj, text.intVal);
@@ -1872,12 +1820,6 @@ function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: R
 	}
 }
 
-function fillSlot(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
-	const copied = copyShell(srcArr, srcObj, dstArr, dstObj, job.source, map);
-	heapArrayPush(dstArr, job.dst, copied);
-	rcIncref(dstArr, dstObj, copied);
-}
-
 export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	const root = copyShell(srcArr, srcObj, dstArr, dstObj, val, map);
 	while (map.jobs.length > 0) {
@@ -1885,31 +1827,31 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		match (job.kind) {
 			RaiserCopyKind.Array => fillArray(srcArr, srcObj, dstArr, dstObj, job, map),
 			RaiserCopyKind.Object => fillObject(srcArr, srcObj, dstArr, dstObj, job, map),
-			RaiserCopyKind.Slot => fillSlot(srcArr, srcObj, dstArr, dstObj, job, map),
 		}
 	}
 	for (let f = 0; f < map.viewFixups.length; f += 2) seqPointViewInto(seqCellOf(map.viewFixups[f]), map.viewFixups[f + 1]);
 	return root;
 }
 
-test "copyGraph relocates a field address that points into its own owner" {
+test "copyGraph copies a field address as itself: it still names the source field and holds no count on it" {
 	const sArr = createArrayHeap();
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
-	const padding = heapAllocObject(sObj);
-	heapObjectSetField(sArr, sObj, padding, "text", raiserConstString("unrelated"));
 	const owner = heapAllocObject(sObj);
 	heapObjectSetField(sArr, sObj, owner, "text", heapAllocString(sArr, "source"));
 	heapObjectSetField(sArr, sObj, owner, "pointer", raiserFieldAddr(owner, "text"));
+	const counted = rcCountOf(sArr, sObj, owner);
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(owner));
 	const pointer = heapObjectGetField(dArr, dObj, copied.intVal, "pointer");
-	heapObjectSetField(dArr, dObj, pointer.intVal, fieldAddrName(pointer), heapAllocString(dArr, "destination"));
-	assert heapObjectGetString(dArr, dObj, copied.intVal, "text") == "destination";
-	assert heapObjectGetString(sArr, sObj, owner, "text") == "source";
+	assert pointer.kind == RaiserValueKind.FieldAddr && pointer.intVal == owner;
+	assert rcCountOf(sArr, sObj, owner) == counted;
+	heapObjectSetField(sArr, sObj, pointer.intVal, fieldAddrName(pointer), heapAllocString(sArr, "written"));
+	assert heapObjectGetString(sArr, sObj, owner, "text") == "written";
+	assert heapObjectGetString(dArr, dObj, copied.intVal, "text") == "source";
 }
 
-test "copyGraph preserves aliases to a register snapshot without retaining its source slot" {
+test "copyGraph copies a register address as itself, so two copies still alias the one source slot" {
 	const sArr = createArrayHeap();
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
@@ -1919,13 +1861,11 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	const owner = heapAllocArray(sArr);
 	heapArrayPush(sArr, owner, raiserRegAddr(slot | 1));
 	heapArrayPush(sArr, owner, raiserRegAddr(slot | 1));
-	const map = createCopyMap();
-	const copied = copyGraphWith(sArr, sObj, dArr, dObj, raiserArray(owner), map);
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(owner));
 	const first = heapArrayGet(dArr, copied.intVal, 0);
 	const second = heapArrayGet(dArr, copied.intVal, 1);
-	assert heapStringText(dArr, heapArrayGet(dArr, first.intVal, first.floatVal as int64)) == "source";
-	heapArraySet(dArr, first.intVal, first.floatVal as int64, heapAllocString(dArr, "destination"));
-	assert heapStringText(dArr, heapArrayGet(dArr, second.intVal, second.floatVal as int64)) == "destination";
+	assert first.kind == RaiserValueKind.RegAddr && first.intVal == (slot | 1);
+	assert second.kind == RaiserValueKind.RegAddr && second.intVal == (slot | 1);
 	assert heapStringText(sArr, handleValue(ld64(slot))) == "source";
 }
 
