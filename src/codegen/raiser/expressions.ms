@@ -2348,7 +2348,8 @@ function isArrayPush(node: Node): boolean {
 function isArraySetLengthCall(s: RaiserCompState, node: Node): boolean {
 	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
-	if (d.property != "setLength") return false;
+	if (d.property != "setLength" && d.property != "rawSetLength") return false;
+	if (node.resolvedSym != null && node.resolvedSym.nativeName == "") return false;
 	return !exprIsString(s, d.object);
 }
 
