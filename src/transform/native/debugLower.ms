@@ -4,7 +4,8 @@
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
-import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull } from "../util";
+import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull, makeIf } from "../util";
+import { cloneIfPure } from "../place";
 import { charToString } from "./stringOpLower";
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
@@ -41,6 +42,28 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	}
 	if (isMaybeType(t)) {
 		const payload = unwrapMaybeType(t);
+		if (cloneIfPure(arg) == null) {
+			const m = mintSym(ctx, SymbolKind.Parameter, "m", t);
+			const held = makeMember(makeTypedIdentResolved(m, t, loc), "present", loc);
+			held.nodeType = booleanType();
+			const text = makeMember(makeTypedIdentResolved(m, t, loc), "value", loc);
+			text.nodeType = payload;
+			const none = makeString("null", loc);
+			none.nodeType = stringType();
+			const body = makeBlock([
+				makeIf(held, makeBlock([makeReturn(echoCoerceArg(text, loc, ctx), loc)], loc), null, loc),
+				makeReturn(none, loc),
+			], loc);
+			const sym = mintSym(ctx, SymbolKind.Function, "$placeholder" + _placeholderFnDecls.length.toString(), null);
+			const fnNode = makeFnDecl(sym.name, [m], ["unknown"], body, "", "string", loc);
+			fnNode.nodeType = createFunction([t], ["m"], stringType());
+			sym.symbolType = fnNode.nodeType;
+			fnNode.resolvedSym = sym;
+			_placeholderFnDecls.push(fnNode);
+			const once = makeCall(makeTypedIdentResolved(sym, fnNode.nodeType, loc), [arg], loc);
+			once.nodeType = stringType();
+			return once;
+		}
 		const val = makeMember(arg, "value", loc);
 		val.nodeType = payload;
 		const present = makeMember(arg, "present", loc);
