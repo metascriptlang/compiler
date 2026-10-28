@@ -1074,6 +1074,8 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	if (cd.fnBody != null && !hasFlag(sym, SymbolFlag.Borrow)) {
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
+		const savedJsxDepth = bodyCtx.jsxMacroArgDepth;
+		bodyCtx.jsxMacroArgDepth = 0;
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
 		// Reference parity (instantiateGenericParamList): inject concrete type
@@ -1139,6 +1141,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		}
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
+		bodyCtx.jsxMacroArgDepth = savedJsxDepth;
 		// Clean up injected symbols to avoid polluting prelude scope
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		bodyCtx.table.current = callerScope;
@@ -1503,6 +1506,8 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 	if (clonedBody != null) {
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
+		const savedJsxDepth = bodyCtx.jsxMacroArgDepth;
+		bodyCtx.jsxMacroArgDepth = 0;
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
@@ -1530,6 +1535,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		}
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
+		bodyCtx.jsxMacroArgDepth = savedJsxDepth;
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		bodyCtx.table.current = callerScope;
 		truncateCallerExtensions(bodyCtx, extPreCount);
