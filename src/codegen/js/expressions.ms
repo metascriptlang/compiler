@@ -97,6 +97,10 @@ const JS_RESERVED: HashSet<string> = new HashSet<string>([
 	"void", "volatile", "while", "with", "yield", "globalThis",
 ]);
 
+function unknownOperatorChar(name: string, at: int32): string {
+	throw new Error(`internal: operator name '${name}' has no JS identifier spelling for '${name.charAt(at)}'`);
+}
+
 function isJsWordByte(b: int32): boolean {
 	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code) || b == "_".code;
 }
@@ -123,8 +127,15 @@ export function safeJsName(name: string): string {
 				"%".code => "pct",
 				"[".code => "lbr",
 				"]".code => "rbr",
+				"&".code => "amp",
+				"|".code => "bar",
+				"^".code => "roof",
+				"~".code => "tilde",
+				"?".code => "qmark",
+				"@".code => "at",
+				".".code => "dot",
 				":".code => "colon",
-				_ => isJsWordByte(name.byteAt(i)) ? name.charAt(i) : "",
+				_ => isJsWordByte(name.byteAt(i)) ? name.charAt(i) : unknownOperatorChar(name, i),
 			};
 			i = i + 1;
 		}
