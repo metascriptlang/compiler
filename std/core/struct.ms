@@ -375,6 +375,11 @@ export class HashMap<K, V> {
 	data: Vec<HashMapEntry<K, V>>;
 	size: int32;
 	writing: boolean;
+	constructor(pairs: Array<[K, V]> = []) {
+		for (const pair of pairs) {
+			this.set(pair[0], pair[1]);
+		}
+	}
 }
 
 function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: Readonly<K>): int32 {
@@ -713,6 +718,11 @@ export class Map<K, V> {
 	size: int32;
 	tombstones: int32;
 	writing: boolean;
+	constructor(pairs: Array<[K, V]> = []) {
+		for (const pair of pairs) {
+			this.set(pair[0], pair[1]);
+		}
+	}
 }
 
 function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {

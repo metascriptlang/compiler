@@ -14,6 +14,7 @@ export extern function int64Bits(u: uint64): int64 from "BigInt.asIntN(64, #)";
 @builtin("StdSet")
 export extern class Set<T> {
 	size: number;
+	constructor(items: T[] = []) {}
 }
 
 export extern function add<T>(this s: Set<T>, value: T): void from "#.add(#)";
@@ -25,6 +26,7 @@ export extern function forEach<T>(this s: Set<T>, fn: (value: T) => void): void 
 @builtin("IndexableMap")
 export extern class Map<K, V> {
 	size: number;
+	constructor(pairs: Array<[K, V]> = []) {}
 }
 
 export extern function set<K, V>(this m: Map<K, V>, key: K, sink value: V): void from "#.set(#, #)";
@@ -53,6 +55,7 @@ export extern function forEach<K, V>(this m: Readonly<Map<K, V>>, fn: (value: Re
 @builtin("IndexableMap")
 export extern class HashMap<K, V> {
 	size: number;
+	constructor(pairs: Array<[K, V]> = []) {}
 }
 
 export extern function set<K, V>(this m: HashMap<K, V>, key: K, sink value: V): void from "#.set(#, #)";
@@ -75,6 +78,7 @@ export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K
 @builtin("StdSet")
 export extern class HashSet<T> {
 	size: number;
+	constructor(items: T[] = []) {}
 }
 
 export extern function add<T>(this s: HashSet<T>, value: T): void from "#.add(#)";
