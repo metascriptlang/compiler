@@ -15,7 +15,7 @@ test "fmt: a comment after a decorated declaration stays between the two declara
 
 test "fmt: inline struct field decorators that overflow break one per line on the first pass" {
 	const long = "export struct CappedAccounts {\n\towner: Signer;\n\t@hasOne(owner) @constraint(vault.stamp == 7, ProgramError.userError(4)) vault: Owned<Capped>;\n}\n";
-	const expected = "export struct CappedAccounts {\n  owner: Signer;\n  @hasOne(owner)\n  @constraint(vault.stamp == 7, ProgramError.userError(4))\n  vault: Owned<Capped>;\n}\n";
+	const expected = "export struct CappedAccounts {\n\towner: Signer;\n\t@hasOne(owner)\n\t@constraint(vault.stamp == 7, ProgramError.userError(4))\n\tvault: Owned<Capped>;\n}\n";
 	assert fmt(long) === expected;
 	assert fmt(expected) === expected;
 	assert assertFmtIdempotent("struct S {\n\t@hasOne(owner, counted(3)) @constraint(safe.limit > 5, counted(5)) safe: Owned<Safe>;\n\t@a(1) b: int32;\n}\n");

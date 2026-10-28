@@ -12,7 +12,7 @@ export enum TrailingComma {
 export interface FormatOptions {
 	printWidth: int32;      // Default: 80
 	tabWidth: int32;        // Default: 2
-	useTabs: boolean;        // Default: false
+	useTabs: boolean;        // Default: true
 	semi: boolean;           // Default: true
 	singleQuote: boolean;    // Default: false
 	trailingComma: TrailingComma; // Default: All
@@ -24,7 +24,7 @@ export function defaultFormatOptions(): FormatOptions {
 		printWidth: 80,
 		tabWidth: 2,
 		source: "",
-		useTabs: false,
+		useTabs: true,
 		semi: true,
 		singleQuote: false,
 		trailingComma: TrailingComma.All,

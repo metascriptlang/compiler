@@ -17,7 +17,7 @@ test "fmt: struct field decorators written on their own line stay on their own l
 	assert assertFmtPreservesAst(src);
 	assert assertFmtLossless(src);
 	assert assertFmtIdempotent(src);
-	assert assertFmtContains(src, "@signer\n  @address(Pubkey.systemProgram())\n  vault: int32;");
+	assert assertFmtContains(src, "@signer\n\t@address(Pubkey.systemProgram())\n\tvault: int32;");
 }
 
 test "fmt: interface field decorators and a trailing comment on a decorated field survive" {

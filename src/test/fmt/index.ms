@@ -132,3 +132,4 @@ import "./cases/mappedTypeSpace";
 import "./cases/typeLiteralSemicolon";
 import "./cases/commentTrailingBlanks";
 import "./cases/externFromEscapes";
+import "./cases/defaultIndent";

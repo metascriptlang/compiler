@@ -47,7 +47,7 @@ const LONG = "function f(): Node {\n\treturn <panel title=\"a fairly long title 
 
 test "fmt edit: continuation lines keep the statement's tab indentation" {
 	const out = reformatAt(LONG, 2, 3);
-	assert out.contains("\n\t  title=\"a fairly long title value\"\n");
+	assert out.contains("\n\t\ttitle=\"a fairly long title value\"\n");
 	assert out.contains("\n\t>body</panel>;\n}\n");
 }
 

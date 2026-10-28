@@ -38,8 +38,8 @@ function options(printWidth: int32, tabWidth: int32, useTabs: boolean, singleQuo
 	return o;
 }
 
-test "fmt options: the defaults indent two spaces and keep a short block inline" {
-	assert layoutHolds(defaultFormatOptions(), HEAD + "  if (a > 0) { return m.call(alpha, beta, gamma); }\n  return 0;\n}\n");
+test "fmt options: the defaults indent one tab per level and keep a short block inline" {
+	assert layoutHolds(defaultFormatOptions(), HEAD + "\tif (a > 0) { return m.call(alpha, beta, gamma); }\n\treturn 0;\n}\n");
 }
 
 test "fmt options: useTabs indents with one tab per level" {
