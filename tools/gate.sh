@@ -1066,7 +1066,7 @@ queue_self_test() {
   out="$GATES_DIR.out" QUEUE_POLL=0.2
   fake() { printf '%s %s fake\n' "$3" "$2" >"$GATES_DIR/$1"; }
   live() { sleep 120 >/dev/null 2>&1 & LIVE=$!; pids="$pids $LIVE"; }
-  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; }
+  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; : >"$out"; }
   seen() { for ((i = 0; i < 100; i++)); do grep -q "$1" "$2" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
   held() { for ((i = 0; i < 50; i++)); do grep -q ' hold ' "$GATES_DIR/$$" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
   queue_acquire >"$out"
