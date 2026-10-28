@@ -7,8 +7,8 @@
 // @exit: 0
 
 struct Line { text: string; runs: Vec<int32>; }
-function hash(this l: Line): int64 { return l.text.length as int64; }
-function `==`(a: Line, b: Line): boolean { return a.text == b.text; }
+function hash(this l: Readonly<Line>): int64 { return l.text.length as int64; }
+function `==`(a: Readonly<Line>, b: Readonly<Line>): boolean { return a.text == b.text; }
 
 struct Tag { name: string; n: int32; }
 export function hash(this t: Tag): int64 { return t.name.length as int64; }
