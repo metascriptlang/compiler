@@ -253,3 +253,10 @@ test "E2E JS: a nullish read of a field through a ref parameter dereferences the
 	assert js.value.contains("(q[0][q[1]].o !== null) ? q[0][q[1]].o :");
 	assert !js.value.contains("][0][q[0][q[1]][1]]");
 }
+
+test "E2E JS: a class display name is a plain static field, so a bundler can drop an unused class" {
+	const js = compileToJS("class Unused { value: int32 = 0; }\nclass Used { value: int32 = 1; }\nconsole.log(new Used().value);");
+	assert js.ok;
+	assert js.value.contains("static \"metascript.typeDisplayName\" = \"Unused\";");
+	assert !js.value.contains("Symbol.for(\"metascript.typeDisplayName\")");
+}
