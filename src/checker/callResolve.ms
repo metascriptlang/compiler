@@ -3663,7 +3663,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const declRest = restIdx >= 0 ? calleeType.typeChildren[restIdx] : null;
 	const deferredRest = declRest != null && declRest.kind == TypeKind.Varargs && restAwaitsInstance(declRest);
 	const tupleRest = restTupleOf(calleeType) != null;
-	const limit = tupleRest ? argTypes.length
+	const elementRest = declRest != null && declRest.kind == TypeKind.Varargs && !deferredRest && !tupleRest;
+	const limit = tupleRest || elementRest ? argTypes.length
 		: argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	const candParams: Type[] = [];
 	const candTypes: Type[] = [];
@@ -3681,6 +3682,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (element == null || argTypes[i] == null) continue;
 			const ab = createUnifyBindings();
 			unifyType(element, argTypes[i], ab);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral, candMapped);
+		} else if (elementRest && i >= restIdx) {
+			const restArr = unwrapRef(unwrapVarargs(declRest!));
+			const spread = cd.arguments[i].kind == NodeKind.SpreadExpr ? (cd.arguments[i].data as SpreadExprData).spreadArg.nodeType : null;
+			if (argTypes[i] == null) continue;
+			const ab = createUnifyBindings();
+			if (spread != null) unifyType(restArr, unwrapRef(spread), ab);
+			else unifyType(getElementType(restArr), argTypes[i], ab);
 			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral, candMapped);
 		} else if (argTypes[i] != null) {
 			// Per-arg filter: a binding whose bound type still CONTAINS generic
