@@ -61,6 +61,7 @@ function raisedError(reason: string | Error): Error {
 	return reason;
 }
 
+@compilerFunc
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
 	try {

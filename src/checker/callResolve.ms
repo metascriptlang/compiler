@@ -832,7 +832,9 @@ function thenableAdoption(ctx: CheckerContext, operand: Node, site: string): The
 		arrowBody: createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: thenCall }, loc)] }, loc),
 		arrowFlags: "", arrowReturnType: "", arrowDefaults: [null as unknown as Node, null as unknown as Node, null as unknown as Node],
 	}, loc);
-	const call = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseFromThenable" }, loc), arguments: [operand, callThen], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const adopter = ctx.compilerFuncs.get("promiseFromThenable");
+	if (adopter == null) throw new Error("internal: the prelude declares no @compilerFunc promiseFromThenable");
+	const call = boundCallOf(adopter, [operand, callThen], loc);
 	return { call, promised };
 }
 
