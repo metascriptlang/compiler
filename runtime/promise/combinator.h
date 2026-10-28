@@ -104,8 +104,8 @@ void* msPromiseAny(msRefArray* futures);
 /* A future completed by generated code owns its result when it completes on the owner
  * thread (Amendment O): readers copy it and the future drops what is left. A pool
  * worker completes across threads, where the one reader takes the value. */
-static inline void msFutureOwnResult(msFuture* out, msClosure drop) {
-    if (drop.fn != NULL && !msIsPoolWorker) msFutureSetValueDrop(out, drop);
+static inline void msFutureOwnResult(void* out, msClosure drop) {
+    if (drop.fn != NULL && !msIsPoolWorker) msFutureSetValueDrop((msFuture*)out, drop);
 }
 
 /* ===== Promise.then / .catch / .finally ===== */
