@@ -624,6 +624,7 @@ function cloneDefaultNode(node: Node): Node {
 	return clone;
 }
 
+const defaultsAwaitingInstance: HashSet<Node> = new HashSet<Node>();
 
 function readEarlierParams(ctx: CheckerContext, cloned: Node, paramNames: string[], defIdx: number, args: Node[],
 	defaultOffset: number, paramTypes: Type[], receiverSlot: Node | null, reads: Node[]): Node {
@@ -740,7 +741,9 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 		const expectedType = paramTypes != null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
-		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		const awaitsInstance = expectedType != null && hasGenericParams(expectedType);
+		const fitted = expectedType != null && !awaitsInstance ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		if (awaitsInstance) defaultsAwaitingInstance.add(fitted);
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
 		args.push(fitted);
 		argIdx = argIdx + 1;
@@ -3664,6 +3667,19 @@ function ownTypeParams(sym: Symbol, genericNames: string[]): Type[] {
 	return sym.typeParams.length == genericNames.length ? sym.typeParams : [];
 }
 
+function fitDefaultToInstance(ctx: CheckerContext, call: Node, callee: Symbol, param: string, def: Node, formal: Type): Node {
+	const defCtx = pickBodyCtx(callee.modulePath, ctx);
+	const mark = defCtx.errors.length;
+	const fitted = fitNode(defCtx, def, formal, def.nodeType);
+	const misfits: string[] = [];
+	for (let ei = mark; ei < defCtx.errors.length; ei += 1) misfits.push(defCtx.errors[ei].message);
+	defCtx.errors.shrink(mark);
+	for (const why of misfits) {
+		addError(ctx, `the default of parameter '${param}' of '${callee.name}' does not fit this call, where '${param}' is ${typeDisplayName(formal)}: ${why}; pass '${param}' explicitly or declare a default that fits every instance`, call.location.line, call.location.column);
+	}
+	return fitted;
+}
+
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
@@ -3828,6 +3844,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const rawFormal = deferredTuple != null && pi >= restIdx ? deferredTuple.typeChildren[pi - restIdx] : calleeType.typeChildren[pi];
 		const substituted = applySubstitutions(rawFormal, eb);
 		if (substituted == null) continue;
+		if (defaultsAwaitingInstance.has(arg) && !hasGenericParams(substituted)) {
+			defaultsAwaitingInstance.delete(arg);
+			cd.arguments[pi] = fitDefaultToInstance(ctx, node, sym, pi < calleeType.typeNames.length ? calleeType.typeNames[pi] : String(pi), arg, substituted);
+			continue;
+		}
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
 			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
 			if (thunkArg != null as unknown as Node) {

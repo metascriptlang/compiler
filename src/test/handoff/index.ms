@@ -175,6 +175,7 @@ import "./classExtendsInterface";
 import "./useBeforeAssign";
 import "./outParameterWrites";
 import "./paramModeFunctionSlot";
+import "./genericDefaultPerInstance";
 import "./sinkParamModes";
 import "./borrowReturn";
 import "./arrayLengthGrowth";
