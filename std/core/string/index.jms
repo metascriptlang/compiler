@@ -117,6 +117,13 @@ export function equals(this s: string, other: string): boolean {
 	return msStringEquals(s, other);
 }
 
+/** Returns the character at the index, counting from the end for a negative one; an index out of range gives null, like `find` on a miss. */
+export function at(this s: string, idx: int32): string | null {
+	const i = idx < 0 ? s.length + idx : idx;
+	if (i < 0 || i >= s.length) return null;
+	return s.charAt(i);
+}
+
 export function substring(this s: string, start: int32, end: int32 = 2147483647): string {
 	const a = clampIndex(start, s.length);
 	const b = clampIndex(end, s.length);
