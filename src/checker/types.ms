@@ -284,6 +284,10 @@ export function callConvKey(t: Readonly<Type>): string {
 	return t.callConv == CallingConvention.CcClosure ? "" : "@" + (t.callConv as number).toString();
 }
 
+export function isPlainFunctionPointer(t: Readonly<Type>): boolean {
+	return t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure;
+}
+
 export function plainFunctionPointerType(t: Type): Type {
 	if (t.kind != TypeKind.Function || t.callConv != CallingConvention.CcClosure) return t;
 	const p = copyTypeShallow(t);
@@ -4064,7 +4068,7 @@ export function hasAsgnFlag(t: Readonly<Type>): boolean {
 export function arrayElementNeedsCleanup(elem: Type): boolean {
 	if (elem == null) return false;
 	if (elem.kind == TypeKind.String || elem.kind == TypeKind.Ref
-		|| elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Function
+		|| elem.kind == TypeKind.Ptr || (elem.kind == TypeKind.Function && !isPlainFunctionPointer(elem))
 		|| elem.kind == TypeKind.BigInt || elem.kind == TypeKind.Unknown) return true;
 	if (elem.kind == TypeKind.Distinct && elem.typeReturn != null) {
 		return arrayElementNeedsCleanup(elem.typeReturn);

@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -101,7 +101,7 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 	if (elem != null && elem.kind == TypeKind.Uint8) {
 		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
-	if (elem == null || isPrimitiveKind(elem.kind) || elem.kind == TypeKind.Set) {
+	if (elem == null || isPrimitiveKind(elem.kind) || elem.kind == TypeKind.Set || isPlainFunctionPointer(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	if (elem.kind == TypeKind.String) {
