@@ -3523,25 +3523,22 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 			const tb = retag(OPERAND_KINDS[k + 1], ib);
 			const tc = retag(OPERAND_KINDS[k + 2], ic);
 			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
-				ip = vm.ip;
 				if (vm.halted) { vmNoteSite(vm, func, pc); break; }
-				slots = vm.regs.slots;
-				objects = vm.objectHeap.objects;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
 				if (vm.halted) vmNoteSite(vm, func, pc);
 				if (vm.halted || vm.yielded) break;
-				ip = vm.ip;
-				fb = vm.base;
-				if (vm.funcIdx != funcIdx) {
-					funcIdx = vm.funcIdx;
-					func = mod.functions[funcIdx];
-					code = func.packed;
-					if (code.length != func.code.length) assertPacked(func);
-				}
-				slots = vm.regs.slots;
-				objects = vm.objectHeap.objects;
 			}
+			ip = vm.ip;
+			fb = vm.base;
+			if (vm.funcIdx != funcIdx) {
+				funcIdx = vm.funcIdx;
+				func = mod.functions[funcIdx];
+				code = func.packed;
+				if (code.length != func.code.length) assertPacked(func);
+			}
+			slots = vm.regs.slots;
+			objects = vm.objectHeap.objects;
 			budget = vm.loopLimit - vm.loopCount;
 		}
 	}
