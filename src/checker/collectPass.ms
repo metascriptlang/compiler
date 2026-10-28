@@ -2,6 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
+import { expandParamProperties, hasParamProperties, paramPropertyIndex } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
@@ -735,7 +736,15 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = node.resolvedSym;
 	if (sym == null || sym.symbolKind != SymbolKind.Class) return;
-	d.classBody = expandAutoAccessors(d.classBody);
+	d.classBody = expandParamProperties(expandAutoAccessors(d.classBody));
+	for (const member of d.classBody) {
+		if (paramPropertyIndex(member, d.classBody) < 0) continue;
+		const name = (member.data as PropertyDeclData).propName;
+		for (const other of d.classBody) {
+			if (other == member || other.kind != NodeKind.PropertyDecl || (other.data as PropertyDeclData).propName != name) continue;
+			addError(ctx, `Duplicate identifier '${name}': the constructor parameter that declares field '${name}' (line ${member.location.line}) and this member name the same field; keep one`, other.location.line, other.location.column);
+		}
+	}
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.DecoratedDecl || !isAutoAccessorField((member.data as DecoratedDeclData).decoratedNode)) continue;
 		const field = (member.data as DecoratedDeclData).decoratedNode;
@@ -815,6 +824,9 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 	const sym = node.resolvedSym;
 	if (sym == null || sym.symbolKind != SymbolKind.Actor) return;
 	for (const member of d.actorBody) {
+		if (member.kind == NodeKind.ConstructorDecl && hasParamProperties(member)) {
+			addError(ctx, `Actor '${d.actorName}': a constructor parameter written public, private, protected or readonly declares a field, which an actor constructor does not do; declare the field in the actor and assign it`, member.location.line, member.location.column);
+		}
 		if (member.kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);
 		}

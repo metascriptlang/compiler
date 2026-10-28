@@ -19,6 +19,7 @@ import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentRes
 import { createFunction, voidType, classParentOf } from "../../checker/types";
 import { parentClassSymOf, makeSymbol } from "../../checker/symbol";
 import { ctorRoutineFor, ctorFormalTypes } from "../../checker/ctorRoutine";
+import { paramPropertyIndex } from "../../checker/paramProperty";
 import { instantiateParentClass } from "../../checker/instantiate";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts, checkedCtx } from "../testUtil";
@@ -58,6 +59,27 @@ function fieldInitStatements(classNode: Node, cd: ClassDeclData, thisSym: Symbol
 	return stmts;
 }
 
+// A parameter property's field takes its constructor parameter's value before any field initializer runs.
+function paramPropertyStatements(classNode: Node, cd: ClassDeclData, ctorNode: Node, thisSym: Symbol | null): Node[] {
+	const stmts: Node[] = [];
+	for (const member of cd.classBody) {
+		const at = paramPropertyIndex(member, cd.classBody);
+		if (at < 0) continue;
+		const name = (member.data as PropertyDeclData).propName;
+		if (ctorNode.paramSyms == null || at + 1 >= ctorNode.paramSyms.length) {
+			throw new Error(`internal: parameter property '${name}' of class '${cd.className}' has no constructor parameter symbol`);
+		}
+		const paramSym = ctorNode.paramSyms[at + 1];
+		const receiver = thisSym != null
+			? makeTypedIdentResolved(thisSym, classNode.nodeType, member.location)
+			: makeTypedIdent("this", classNode.nodeType, member.location);
+		const target = makeMember(receiver, name, member.location);
+		target.nodeType = member.nodeType;
+		stmts.push(makeExprStmt(makeAssign(target, makeTypedIdentResolved(paramSym, paramSym.symbolType, member.location), member.location), member.location));
+	}
+	return stmts;
+}
+
 function isSuperCallStmt(stmt: Node): boolean {
 	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return false;
 	const ed = stmt.data as ExprStmtData;
@@ -71,7 +93,7 @@ function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void
 	const ctorData = ctorNode.data as ConstructorDeclData;
 	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const thisSym = ctorNode.paramSyms != null && ctorNode.paramSyms.length > 0 ? ctorNode.paramSyms[0] : null;
-	const inits = fieldInitStatements(classNode, cd, thisSym);
+	const inits = paramPropertyStatements(classNode, cd, ctorNode, thisSym).concat(fieldInitStatements(classNode, cd, thisSym));
 	if (inits.length == 0) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	let at = 0;

@@ -27,6 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
+import { paramPropertyIndex } from "./paramProperty";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
@@ -1685,6 +1686,7 @@ function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: st
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(ctx, member.nodeType)) continue;
+		if (paramPropertyIndex(member, body) >= 0) continue;
 		let assigned = true;
 		for (const exit of ctorExits) {
 			if (!exit.includes("this." + pd.propName)) assigned = false;

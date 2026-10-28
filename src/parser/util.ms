@@ -115,7 +115,9 @@ export function isPropertyName(token: Token): boolean {
 // typeAnnotation is "" if no annotation present.
 // Use extractParamNames/extractParamTypes to split the result.
 // Handles: rest params, destructured params, type annotations, default values,
-// constructor modifiers (public/private/protected/readonly)
+// constructor parameter properties (public/private/protected/readonly) keep their modifiers as
+// `public:` / `private:` / `protected:` / `readonly:` name prefixes, which the checker's member
+// collection turns into fields (expandParamProperties)
 
 // Module-level: defaults from the last parseParamList call.
 // Indexed by param position (0-based). null = no default.
@@ -237,7 +239,11 @@ function hasBodyAfterParams(state: ParserState): boolean {
 	return kind == TokenKind.LBrace || kind == TokenKind.Arrow;
 }
 
-export function parseParamList(state: ParserState, fnName: string): string[] {
+function startsParamName(token: Token): boolean {
+	return isIdentLike(token) || token.kind == TokenKind.LBrace || token.kind == TokenKind.LBracket || token.kind == TokenKind.DotDotDot;
+}
+
+export function parseParamList(state: ParserState, fnName: string, isCtor: boolean = false): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
 	_lastParamTypeExprs = [];
@@ -250,11 +256,30 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		let paramPrefix = "";
 		if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
-		// Skip constructor param modifiers: public/private/protected
-		if (current(state).kind == TokenKind.Public || current(state).kind == TokenKind.Private ||
-			current(state).kind == TokenKind.Protected) {
+		let propPrefix = "";
+		const accessTok = current(state);
+		if ((accessTok.kind == TokenKind.Public || accessTok.kind == TokenKind.Private || accessTok.kind == TokenKind.Protected) && startsParamName(peek(state, 1))) {
+			propPrefix = `${accessTok.value}:`;
 			advance(state);
 		}
+		if (isCtor && current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1))) {
+			propPrefix = `${propPrefix}readonly:`;
+			advance(state);
+		}
+		if (propPrefix != "") {
+			if (!isCtor) {
+				addError(state, `A parameter property is only allowed in a constructor: '${propPrefix.slice(0, propPrefix.length - 1)}' on a parameter of '${fnName}' at line ${accessTok.line} declares a field, so write the field in the class and assign it`);
+				propPrefix = "";
+			} else if (paramPrefix.indexOf("...") >= 0 || current(state).kind == TokenKind.DotDotDot) {
+				if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
+				addError(state, `A parameter property cannot be declared using a rest parameter (line ${accessTok.line})`);
+				propPrefix = "";
+			} else if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
+				addError(state, `A parameter property may not be declared using a binding pattern (line ${accessTok.line})`);
+				propPrefix = "";
+			}
+		}
+		paramPrefix = `${paramPrefix}${propPrefix}`;
 		// Out parameter: out name: Type → stored as "out:name". `out` is a contextual keyword:
 		// it's the modifier only when a param name follows; `out: Type` / `out, …` / `out)` mean
 		// `out` is itself the param name (same rule as the out-expression parser).

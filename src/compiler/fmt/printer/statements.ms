@@ -519,7 +519,9 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 			}
 		}
 		let p = spellParamModifiers(names[i]);
-		let written = p.startsWith("...") ? p.byteSlice(3, p.byteLength) : p;
+		const colon = names[i].lastIndexOf(":");
+		const bare = colon >= 0 ? names[i].slice(colon + 1) : names[i];
+		let written = bare.startsWith("...") ? bare.byteSlice(3, bare.byteLength) : bare;
 		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
 			const pattern = rawBalancedAt(options.source, locs[i].line, locs[i].column);
 			if (pattern != "") { p = pattern; written = pattern; }
@@ -621,7 +623,7 @@ function spellParamModifiers(name: string): string {
 	let more = true;
 	while (more) {
 		more = false;
-		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "]]) {
+		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "], ["public:", "public "], ["private:", "private "], ["protected:", "protected "], ["readonly:", "readonly "]]) {
 			if (rest.startsWith(code) && rest.byteLength > code.byteLength) {
 				spelled = spelled + word;
 				rest = rest.byteSlice(code.byteLength, rest.byteLength);

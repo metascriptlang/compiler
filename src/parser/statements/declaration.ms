@@ -1414,7 +1414,7 @@ function parseClassMember(state: ParserState): NodeResult {
 function parseClassConstructor(state: ParserState, visibility: string): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
-	const raw = parseParamList(state, "constructor");
+	const raw = parseParamList(state, "constructor", true);
 	const ctorParamTypeExprs = getLastParamTypeExprs();
 	const ctorParamLocs = getLastParamLocations();
 	const ctorPatterns = getLastParamPatterns();
