@@ -944,7 +944,23 @@ function joinCoversParent(parent: Type, members: Type[]): boolean {
 	return true;
 }
 
+// The halves of a Maybe split by a null test, joined again, are the Maybe: a payload that is
+// itself a union would otherwise be flattened into a nameless union that has lost its extensions.
+function joinRestoresMaybe(parent: Type, members: Type[]): boolean {
+	const payload = parent.typeReturn;
+	if (!isMaybeType(parent) || payload == null) return false;
+	let nulls = 0;
+	let payloads = 0;
+	for (const m of members) {
+		if (m.kind == TypeKind.Null) nulls += 1;
+		else if (sameType(m, payload)) payloads += 1;
+		else return false;
+	}
+	return nulls > 0 && payloads > 0;
+}
+
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent != null && joinRestoresMaybe(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union && parent.typeChildren != null && joinCoversParent(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
