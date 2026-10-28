@@ -363,7 +363,7 @@ export function receiverOf(call: Node): Node | null {
 
 function isModuleState(sym: Symbol): boolean {
 	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Property) return false;
-	return hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || sym.staticOwner != null;
+	return hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Static) || sym.staticOwner != null;
 }
 
 // A deep Readonly module const built in its own initializer is never written and lives as long as
@@ -561,6 +561,7 @@ function pointsAtConstantState(sym: Symbol, e: Effect): boolean {
 }
 
 function stateName(sym: Symbol): string {
+	if (hasFlag(sym, SymbolFlag.Static)) return "static '" + sym.name + "'";
 	if (sym.staticOwner != null) return "static '" + sym.staticOwner.name + "." + sym.name + "'";
 	return "module-level '" + sym.name + "'";
 }
