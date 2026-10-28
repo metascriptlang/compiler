@@ -65,6 +65,7 @@ import "./ctorOwnership";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
+import "./trimLineDirective";
 import "./forOfCounterEmit";
 import "./finallyScaffoldEmit";
 import "./computedGoto";

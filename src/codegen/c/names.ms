@@ -188,12 +188,12 @@ function pathUnder(path: string, root: string): string {
 	return path.slice(root.byteLength + 1, path.byteLength);
 }
 
-interface RootedModulePath {
+export interface RootedModulePath {
 	mark: string;
 	path: string;
 }
 
-function rootModulePath(modulePath: string, roots: Readonly<ModuleNameRoots>): RootedModulePath {
+export function rootModulePath(modulePath: string, roots: Readonly<ModuleNameRoots>): RootedModulePath {
 	if (!isAbsolute(modulePath)) return { mark: "", path: modulePath };
 	const inCompiler = pathUnder(modulePath, roots.compiler);
 	if (inCompiler != "") return { mark: "S", path: inCompiler };

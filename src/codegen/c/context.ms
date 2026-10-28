@@ -9,7 +9,7 @@ import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { hasFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { headerIncludes } from "../../module/cimport/emit";
-import { ModuleNameRoots } from "./names";
+import { ModuleNameRoots, rootModulePath } from "./names";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -686,6 +686,7 @@ export class CEmissionFacts {
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
 	inlineDecls: HashMap<Symbol, Node> = new HashMap<Symbol, Node>();
 	headerIncludes: HashMap<string, string[]> | null = null;
+	trimPaths: boolean = false;
 }
 
 function noteFactWrite(facts: CEmissionFacts, write: string): void {
@@ -860,8 +861,16 @@ export function emitLineDir(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (loc.line == g.lastLineLine && g.modulePath == g.lastLineFile) return;
 	g.lastLineLine = loc.line;
 	g.lastLineFile = g.modulePath;
-	const safePath = g.modulePath.replaceAll("\\", "/");
+	const safePath = lineDirPath(g).replaceAll("\\", "/");
 	emitStmts(p, `\n#line ${loc.line} "${safePath}"\n`);
+}
+
+function lineDirPath(g: CGen): string {
+	if (!g.emissionFacts.trimPaths) return g.modulePath;
+	const rooted = rootModulePath(g.modulePath, g.emissionFacts.moduleNameRoots!);
+	if (rooted.mark == "S") return `msc/${rooted.path}`;
+	if (rooted.mark == "P") return `pkg/${rooted.path}`;
+	return rooted.path;
 }
 
 // ===== Final Assembly — concatenate all sections =====
