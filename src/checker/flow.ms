@@ -920,7 +920,25 @@ export function canonicalizeBranchJoin(t: Type): Type {
 	return nullableUnionOf(rebuilt);
 }
 
+// A join whose branches together hold every member of the declared union is the declared union
+// itself: a rebuilt spelling in another order loses the discriminant's variant index.
+function joinCoversParent(parent: Type, members: Type[]): boolean {
+	const held: Type[] = [];
+	for (const m of members) {
+		if (m.kind == TypeKind.Union && m.typeChildren != null) {
+			for (const c of m.typeChildren) held.push(c);
+		} else {
+			held.push(m);
+		}
+	}
+	for (const member of parent.typeChildren) {
+		if (!held.includes(member)) return false;
+	}
+	return true;
+}
+
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent != null && parent.kind == TypeKind.Union && parent.typeChildren != null && joinCoversParent(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
