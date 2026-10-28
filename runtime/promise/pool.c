@@ -437,21 +437,29 @@ void msPoolWakeWorker(int schedulerID) {
 	}
 }
 
-/* A worker's I/O engine is its loop's selector (ULTRALOCK A1): an actor visit a worker stole
- * registers its reads there, so the worker polls it between tasks and parks with a
- * bounded wait while it exists. */
-bool msWorkerEnginePoll(void) {
+/* A worker's I/O engine is its loop's selector (ULTRALOCK A1): an actor visit a worker
+ * stole registers its reads there. While the engine holds an operation the worker polls
+ * it between tasks and parks with a bounded wait; with none outstanding it parks without
+ * a bound. Ceiling: one wake per MS_WORKER_ENGINE_POLL_MS while an operation is
+ * outstanding (a backend wake into the park would remove it). */
+static _Atomic(int64_t) gEnginePolls = 0;
+
+int64_t msWorkerEnginePolls(void) { return atomic_load_explicit(&gEnginePolls, memory_order_relaxed); }
+
+bool msWorkerEngineLive(void) {
 #if MS_IO_HAS_ENGINE
 	msIoEngine* e = msGetIoEngineIfExists();
-	return e != NULL && msIoEnginePoll(e, 0) > 0;
+	return e != NULL && msIoEngineLive(e) > 0;
 #else
 	return false;
 #endif
 }
 
-bool msWorkerEngineLive(void) {
+bool msWorkerEnginePoll(void) {
 #if MS_IO_HAS_ENGINE
-	return msGetIoEngineIfExists() != NULL;
+	if (!msWorkerEngineLive()) return false;
+	atomic_fetch_add_explicit(&gEnginePolls, 1, memory_order_relaxed);
+	return msIoEnginePoll(msGetIoEngineIfExists(), 0) > 0;
 #else
 	return false;
 #endif

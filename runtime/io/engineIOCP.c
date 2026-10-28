@@ -49,6 +49,7 @@ struct msIoEngine {
 	HANDLE iocp;
 	msIoRequest* freeList;
 	int freeCount;
+	int live;                 /* requests allocated and not yet freed: operations and watches outstanding */
 	msIocpOv* ovFreeList;
 	int ovFreeCount;
 };
@@ -56,6 +57,7 @@ struct msIoEngine {
 /* ===== Request Pool ===== */
 
 static msIoRequest* allocRequest(msIoEngine* e) {
+	e->live++;
 	if (e->freeList != NULL) {
 		msIoRequest* r = e->freeList;
 		e->freeList = r->next;
@@ -67,10 +69,13 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
+	e->live--;
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
 }
+
+int msIoEngineLive(msIoEngine* e) { return e->live; }
 
 /* ===== OVERLAPPED Wrapper Pool ===== */
 
