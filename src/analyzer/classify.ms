@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, setRepr } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, markDuVariant, isCountedRef, isUncountedElement, createPromise, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, setRepr } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -218,10 +218,6 @@ function isDuVariantHashName(name: string): boolean {
 
 function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
-	// INLINE union-variant payloads (DuVariant, stamped at createUnion): C storage is
-	// the DU machinery's <Union>_vN carrier — msAnon hooks would name a type that
-	// doesn't exist in that TU. The machinery owns their lifecycle; defer.
-	if (t.typeFlags.has(TypeFlag.DuVariant)) return noRcInfo();
 	// Anon structs (typeName "" or checker "__anon" pseudo-name) are named msAnon_<hash>
 	// by codegen (anonTypeName); destructorLifting's field recursion generates their
 	// hooks under that name — resolve identically here (same recipe as fillBody's
@@ -763,13 +759,25 @@ test "nameless anon struct with RC field → owned msAnon hooks" {
 	assert info.typeName.startsWith("msAnon_");
 }
 
-test "DuVariant-flagged payload defers to the DU machinery" {
+test "nameless DuVariant payload defers to the DU machinery" {
 	const ctx = makeCtx();
 	const v = createStruct("", ["vpay"], [stringType()], false);
 	createUnion([v, numberType()]);
 	assert v.typeFlags.has(TypeFlag.DuVariant);
 	const info = classifyType(v, ctx);
 	assert !info.needsCleanup;
+}
+
+test "named DuVariant arm with RC field → its own lifted ops" {
+	const ctx = makeCtx();
+	const arm = declaredTestStruct(createStruct("Shape.Circle", ["armLabel"], [stringType()], false));
+	markDuVariant(arm);
+	const info = classifyType(liftTestOps(arm, "ShapeCircle"), ctx);
+	assert info.rcKind == RcKind.Named;
+	assert info.needsCleanup;
+	assert (info.destroyFn as Symbol).name == "ShapeCircleDestroy";
+	assert (info.copyFn as Symbol).name == "ShapeCircleCopy";
+	assert (info.sinkFn as Symbol).name == "ShapeCircleSink";
 }
 
 test "structurally-equal copy of a registered variant defers via hash registry" {
