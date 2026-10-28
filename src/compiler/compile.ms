@@ -2565,20 +2565,28 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 //   Pass 2: Full pipeline + codegen + per-module compile to .o
 //   Link all .o files into final binary
 
-export function targetBinarySuffix(targetOs: string, dynLib: boolean): string {
+export function targetBinarySuffix(targetOs: string, cpuTarget: string, dynLib: boolean): string {
 	if (targetOs == "windows") return dynLib ? ".dll" : ".exe";
 	if (targetOs == "macos" || targetOs == "darwin" || targetOs == "ios") return dynLib ? ".dylib" : "";
 	if (targetOs == "linux" || targetOs == "freebsd" || targetOs == "android") return dynLib ? ".so" : "";
-	return dynLib ? soSuffix() : exeSuffix();
+	if (targetOs == "solana") return ".so";
+	if (targetOs == "wasm") return ".wasm";
+	if (targetOs == "emcc") return ".js";
+	if (targetOs == "bare") return cpuTarget == "wasm32" ? ".wasm" : dynLib ? soSuffix() : exeSuffix();
+	throw new Error(`internal: no output suffix for target os "${targetOs}"`);
 }
 
 test "a cross build's output suffix comes from the target os, not the host" {
-	assert targetBinarySuffix("linux", true) == ".so";
-	assert targetBinarySuffix("linux", false) == "";
-	assert targetBinarySuffix("macos", true) == ".dylib";
-	assert targetBinarySuffix("ios", true) == ".dylib";
-	assert targetBinarySuffix("windows", true) == ".dll";
-	assert targetBinarySuffix("windows", false) == ".exe";
+	assert targetBinarySuffix("linux", "", true) == ".so";
+	assert targetBinarySuffix("linux", "", false) == "";
+	assert targetBinarySuffix("macos", "", true) == ".dylib";
+	assert targetBinarySuffix("ios", "", true) == ".dylib";
+	assert targetBinarySuffix("windows", "", true) == ".dll";
+	assert targetBinarySuffix("windows", "", false) == ".exe";
+	assert targetBinarySuffix("solana", "", false) == ".so";
+	assert targetBinarySuffix("wasm", "", false) == ".wasm";
+	assert targetBinarySuffix("bare", "wasm32", false) == ".wasm";
+	assert targetBinarySuffix("emcc", "", false) == ".js";
 }
 
 export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
@@ -3147,14 +3155,8 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
 		const dynLib = opts.isHcr || opts.appMode == "lib";
-		let suffix = targetBinarySuffix(opts.targetOs, dynLib);
-		if (opts.appMode == "staticlib") suffix = ".a";
-		if (opts.targetOs == "solana") suffix = ".so";
-		if (opts.targetOs == "wasm" ||
-			(opts.targetOs == "bare" && opts.cpuTarget == "wasm32" && opts.appMode != "staticlib")) {
-			suffix = ".wasm";
-		}
-		if (opts.targetOs == "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
+		let suffix = targetBinarySuffix(opts.targetOs, opts.cpuTarget, dynLib);
+		if (opts.appMode == "staticlib" && opts.targetOs != "solana" && opts.targetOs != "wasm" && opts.targetOs != "emcc") suffix = ".a";
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}
 	outBinary = normalize(outBinary);
