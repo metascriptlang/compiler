@@ -6,9 +6,9 @@
 import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt } from "../ast/node";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
-import { CheckerContext, addError, findAllExtensionsByName, findFirstMatchingExt } from "./context";
+import { CheckerContext, addError, assignTemp, boundRead, findAllExtensionsByName, findFirstMatchingExt, hoistedTemp } from "./context";
 import { lookupSymbol } from "./symbol";
-import { peelTransparentInstance, errorType, isArrayType, isNumeric, peelToStruct, skipModifier, typeDisplayName, typeNameOf } from "./types";
+import { peelTransparentInstance, errorType, isArrayType, isNumeric, peelToStruct, skipModifier, typeDisplayName, typeNameOf, int32Type } from "./types";
 import { declaringSymOf } from "./visibility";
 
 function isStdProxy(sym: Symbol | null): boolean {
@@ -443,7 +443,7 @@ export function callThroughProxy(ctx: CheckerContext, node: Node, expected: Type
 }
 
 // `for (const x of p)` over a Proxy<E[], H> reads `length` and each index through the traps,
-// as JavaScript's array iterator does: `{ const $items = p; for (let $i = 0; $i < $items.length; $i += 1) { const x = $items[$i]; body } }`.
+// as JavaScript's array iterator does: `{ items = p; for (i = 0; i < items.length; i += 1) { const x = items[i]; body } }`.
 export function iterateThroughProxy(ctx: CheckerContext, node: Node): boolean {
 	const d = node.data as ForOfStmtData;
 	const parts = proxyPartsOf(ctx, d.forOfIterable.nodeType);
@@ -453,23 +453,23 @@ export function iterateThroughProxy(ctx: CheckerContext, node: Node): boolean {
 		addError(ctx, `for-of over a Proxy needs an array target; '${typeDisplayName(parts[0])}' is not one`, loc.line, loc.column);
 		return true;
 	}
-	const items = createNodeAt(NodeKind.VariableDecl, { declName: "$items", declType: "", initializer: d.forOfIterable, declKind: DeclKind.Const, nameLocation: loc }, loc);
-	const index = createNodeAt(NodeKind.VariableDecl, { declName: "$i", declType: "", initializer: numberLiteral(0, loc), declKind: DeclKind.Let, nameLocation: loc }, loc);
-	const element = createNodeAt(NodeKind.ArrayAccess, { array: ident("$items", loc), index: ident("$i", loc) }, loc);
+	const items = hoistedTemp(ctx, d.forOfIterable.nodeType!, loc);
+	const index = hoistedTemp(ctx, int32Type(), loc);
+	const element = createNodeAt(NodeKind.ArrayAccess, { array: boundRead(items, loc), index: boundRead(index, loc) }, loc);
 	const binding = d.forOfPattern != null
 		? createNodeAt(NodeKind.DestructuringDecl, { destrPattern: d.forOfPattern, destrInit: element, destrIsConst: d.forOfIsConst }, loc)
 		: createNodeAt(NodeKind.VariableDecl, { declName: d.forOfBinding, declType: "", initializer: element, declKind: d.forOfIsConst ? DeclKind.Const : DeclKind.Let, nameLocation: d.bindingLocation }, d.bindingLocation);
 	const bound = ctx.adoptedDecls.get(node);
 	if (bound != null) { ctx.adoptedDecls.delete(node); ctx.adoptedDecls.set(binding, bound); }
 	const loop = createNodeAt(NodeKind.ForStmt, {
-		forInit: index,
-		forCondition: createNodeAt(NodeKind.BinaryExpr, { left: ident("$i", loc), operator: "<", right: member(ident("$items", loc), "length", loc) }, loc),
-		forUpdate: createNodeAt(NodeKind.BinaryExpr, { left: ident("$i", loc), operator: "+=", right: numberLiteral(1, loc) }, loc),
+		forInit: statement(assignTemp(index, numberLiteral(0, loc))),
+		forCondition: createNodeAt(NodeKind.BinaryExpr, { left: boundRead(index, loc), operator: "<", right: member(boundRead(items, loc), "length", loc) }, loc),
+		forUpdate: createNodeAt(NodeKind.BinaryExpr, { left: boundRead(index, loc), operator: "+=", right: numberLiteral(1, loc) }, loc),
 		forBody: block([binding, d.forOfBody], loc),
 		forLabel: d.forOfLabel,
 	}, loc);
 	node.kind = NodeKind.BlockStmt;
-	node.data = { statements: [items, loop] };
+	node.data = { statements: [statement(assignTemp(items, d.forOfIterable)), loop] };
 	node.flags = node.flags.excl(NodeFlag.Sem);
 	callCheckStmt(ctx, node);
 	return true;
