@@ -46,7 +46,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGens
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
 import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
+import { boundModuleCtx, callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild, literalHeldClosures } from "../ast/visitor";
@@ -1260,18 +1260,12 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	restoreComptimeOuter(outer);
 }
 
-let _boundModuleFn: (modulePath: string) => CheckerContext | null = (modulePath: string): CheckerContext | null => null;
-
-export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext | null): void {
-	_boundModuleFn = fn;
-}
-
 function enterOwnerModule(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
 	if (!isForeign(ctx, sym) || lookupModuleCtx(sym.modulePath) == ctx) return ctx;
 	const owner = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (owner.modulePath == sym.modulePath) return owner;
-	const bound = isEngineCheckMode() ? null : _boundModuleFn(sym.modulePath);
-	if (bound == null || bound.modulePath != sym.modulePath) return null;
+	const bound = boundModuleCtx(sym.modulePath);
+	if (bound == null) return null;
 	const program = lookupModuleProgram(bound.modulePath);
 	if (program != null) enterComptimeOuter(bound, program);
 	return bound;

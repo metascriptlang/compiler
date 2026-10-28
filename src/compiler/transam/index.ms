@@ -45,9 +45,10 @@ import {
 } from "./cancel";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
+import { registerBoundModuleFn } from "../../checker/checkerCallbacks";
 import { transformProgram } from "../../transform/index";
 import { lowerIterInline } from "../../transform/lowering/iterInline";
 import { createTransformContextWithChecker } from "../../transform/context";
