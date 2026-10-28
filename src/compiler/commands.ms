@@ -24,7 +24,7 @@ import { error, success, bold, cyan, dim, green, red, path } from "../utils/colo
 import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
 import { formatNode } from "./fmt/printer/index";
 import { checkLossless } from "./fmt/lossless";
-import { FmtSection, ResolveSection, defaultResolveSection } from "./buildConfig";
+import { FmtSection } from "./buildConfig";
 
 // -- dump-tokens --
 
@@ -60,9 +60,9 @@ export function cmdDumpAst(filePath: string): void {
 
 // -- check --
 
-export function cmdCheck(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+export function cmdCheck(filePath: string, opts: CliOptions): void {
 	const t0 = performance.now();
-	cmdCheckC(filePath, opts, resolveSection);
+	cmdCheckC(filePath, opts);
 	if (opts.showTime) printTiming("checked", t0);
 }
 

@@ -62,6 +62,27 @@ record("run --target=raiser takes resolve.alias from build.ms", "hi", run(aliase
 record("run --target=raiser takes the alias of the entry's project from another cwd", "hi", run(root, ["run", "--target=raiser", "aliased/main.ms"]));
 record("run --target=raiser takes deps from build.ms", "hi", run(depended, ["run", "--target=raiser", "main.ms"]));
 
+function lastLine(out: string): string {
+	return out.startsWith("exit ") ? out : out.split("\n").pop();
+}
+
+function passes(out: string): string {
+	return out.startsWith("exit ") ? out : "passed";
+}
+
+const TEST_OF_HELLO = "test \"the imported package answers\" { assert hello() == \"hi\"; }\n";
+put(`${depended}/check.ms`, `import { hello } from "mylib";\n${TEST_OF_HELLO}`);
+put(`${aliased}/check.ms`, `import { hello } from "@lib/index";\n${TEST_OF_HELLO}`);
+
+record("run takes deps from build.ms", "hi", lastLine(run(depended, ["run", "main.ms"])));
+record("run --target=js takes deps from build.ms", "hi", lastLine(run(depended, ["run", "--target=js", "main.ms"])));
+record("build --target=js takes deps from build.ms", "passed", passes(run(depended, ["build", "--target=js", "main.ms"])));
+record("test takes deps from build.ms", "passed", passes(run(depended, ["test", "check.ms"])));
+record("test --target=js takes deps from build.ms", "passed", passes(run(depended, ["test", "--target=js", "check.ms"])));
+record("run takes resolve.alias from build.ms", "hi", lastLine(run(aliased, ["run", "main.ms"])));
+record("run --target=js takes resolve.alias from build.ms", "hi", lastLine(run(aliased, ["run", "--target=js", "main.ms"])));
+record("test takes resolve.alias from build.ms", "passed", passes(run(aliased, ["test", "check.ms"])));
+
 const UNFORMATTED = "function f(): int32 {\nconst a = 1;\nreturn a;\n}\n";
 const formatted = project("formatted", "{ entry: \"a.ms\", fmt: { useTabs: false, tabWidth: 3 } }");
 

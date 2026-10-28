@@ -74,7 +74,7 @@ import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, DirectiveHit, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeLayouts, sameClaims } from "./buildSession";
 import { dbLower, dbStoreLowered } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } from "./buildConfig";
+import { DepsSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
@@ -172,29 +172,29 @@ export function depRoots(projectRoot: string): DepsSection {
 	return roots;
 }
 
-export function buildResolverConfig(target: Target, resolve: ResolveSection, targetOs: string = platform, projectRoot: string = ""): ResolverConfig {
-	let backend = Backend.C;
-	if (target == Target.JS) { backend = Backend.JS; }
-	if (target == Target.Raiser) { backend = Backend.Raiser; }
-	if (targetOs == "wasm" || targetOs == "emcc") { backend = Backend.Wasm; }
+export function buildResolverConfig(target: Target, opts: Readonly<CliOptions>): ResolverConfig {
+	const resolve = opts.resolve;
+	const backend = match (target) {
+		Target.C => opts.targetOs == "wasm" || opts.targetOs == "emcc" ? Backend.Wasm : Backend.C,
+		Target.JS => Backend.JS,
+		Target.Raiser => Backend.Raiser,
+	};
 	// Resolve stdPath from project root.
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(backend, stdPath);
 	// Override with build.ms settings if provided
 	if (resolve.extensions.length > 0) {
-		config.extensions = resolve.extensions;
+		config.extensions = [...resolve.extensions];
 	}
 	if (resolve.searchPaths.length > 0) {
-		config.searchPaths = resolve.searchPaths;
+		config.searchPaths = [...resolve.searchPaths];
 	}
 	if (resolve.aliasKeys.length > 0) {
-		config.aliasKeys = resolve.aliasKeys;
-		config.aliasValues = resolve.aliasValues;
+		config.aliasKeys = [...resolve.aliasKeys];
+		config.aliasValues = [...resolve.aliasValues];
 	}
-	// projectRoot is found by walking up from CWD for build.ms (Go/Rust convention)
-	// and passed in from the CLI entry point.
-	const roots = depRoots(projectRoot);
+	const roots = depRoots(opts.projectRoot);
 	let ri = 0;
 	while (ri < roots.keys.length) {
 		config.aliasKeys.push(roots.keys[ri]);
@@ -432,7 +432,6 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 
 // Load module graph, validate, and cross-module type check. Exits on errors.
 // Always config-aware — uses ResolverConfig for backend extensions, std/, search paths.
-// Commands without build.ms pass buildResolverConfig(target, defaultResolveSection()).
 // Module-level ExportRegistry + PreludeContext — populated by loadAndCheckGraph, used by build loops
 let graphRegistry: ExportRegistry = null as unknown as ExportRegistry;
 let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
@@ -1632,7 +1631,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
-	const config = buildResolverConfig(Target.JS, defaultResolveSection());
+	const config = buildResolverConfig(Target.JS, opts);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
 
@@ -1905,12 +1904,12 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 // continuing into transform/analyze/codegen. loadAndCheckGraph reports and
 // exits on any module or type error.
 
-export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+export function cmdCheckC(entryPath: string, opts: CliOptions): void {
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
 	_renderErrorMax = opts.errorMax;
 	resolveTargetGcMode(opts);
-	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
+	const config = buildResolverConfig(opts.target, opts);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
@@ -2589,11 +2588,11 @@ test "a cross build's output suffix comes from the target os, not the host" {
 	assert targetBinarySuffix("emcc", "", false) == ".js";
 }
 
-export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const session = createBuildSession(false);
 	let status = BuildStatus.Built;
 	try {
-		status = buildC(entryPath, opts, resolveSection, session);
+		status = buildC(entryPath, opts, session);
 	} catch (e) {
 		if (e.message != BUILD_STOPPED) printError(`internal: the build threw '${e.message}'`);
 		exit(1);
@@ -2748,7 +2747,6 @@ function copyForReplay(from: string, to: string): void {
 interface WatchRun {
 	entryPath: string;
 	opts: CliOptions;
-	resolveSection: ResolveSection;
 	session: BuildSession;
 	feed: WatchFeed | null;
 	replay: string[][];
@@ -2756,7 +2754,7 @@ interface WatchRun {
 	changed: string[];
 }
 
-function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
+function openWatch(entryPath: string, opts: CliOptions): WatchRun {
 	if (!opts.isHcr) {
 		printError(`--watch needs --hcr: warm rebuilds are verified against cold builds only for HCR module images`);
 		exit(1);
@@ -2783,7 +2781,7 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 		feed = opened;
 	}
 	setRecoverableBuild(true);
-	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0, changed: [] };
+	return { entryPath, opts, session: createBuildSession(true), feed, replay, step: 0, changed: [] };
 }
 
 function watchBuild(run: WatchRun): boolean {
@@ -2796,7 +2794,7 @@ function watchBuild(run: WatchRun): boolean {
 	let stopped = false;
 	let internal = "";
 	try {
-		status = buildC(run.entryPath, opts, run.resolveSection, run.session);
+		status = buildC(run.entryPath, opts, run.session);
 	} catch (e) {
 		if (e.message == BUILD_STOPPED) stopped = true;
 		else internal = e.message;
@@ -2806,7 +2804,7 @@ function watchBuild(run: WatchRun): boolean {
 		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
 		run.session = createBuildSession(true);
 		try {
-			status = buildC(run.entryPath, opts, run.resolveSection, run.session);
+			status = buildC(run.entryPath, opts, run.session);
 		} catch (e) {
 			if (e.message == BUILD_STOPPED) stopped = true;
 			else internal = e.message;
@@ -2840,8 +2838,8 @@ function watchNext(run: WatchRun, stopped: () => boolean): boolean {
 	return changed;
 }
 
-export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
-	const run = openWatch(entryPath, opts, resolveSection);
+export function cmdWatchC(entryPath: string, opts: CliOptions): void {
+	const run = openWatch(entryPath, opts);
 	while (true) {
 		watchBuild(run);
 		if (run.step == 1) warmHcrSession(opts);
@@ -2975,7 +2973,7 @@ function hcrHostMissesEngine(graph: ModuleGraph, stdPath: string): boolean {
 	return findModule(graph, canonicalModulePath(`${stdPath}/hcr/engine.cms`)) == null;
 }
 
-export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+export function cmdRunHcr(entryPath: string, opts: CliOptions): void {
 	if (opts.watchReplay != "") {
 		printError(`msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
 		exit(1);
@@ -2992,7 +2990,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 		printError(`cannot create the events file '${events}'`);
 		exit(1);
 	}
-	const run = openWatch(entryPath, opts, resolveSection);
+	const run = openWatch(entryPath, opts);
 	while (!watchBuild(run)) {
 		if (!watchNext(run, (): boolean => false)) {
 			emitEvent("exit", `,"code":1`);
@@ -3073,15 +3071,15 @@ function frontendIdentity(entryPath: string, opts: CliOptions, config: ResolverC
 		+ ` std=${config.stdPath} ext=${config.extensions.join(",")} search=${config.searchPaths.join(",")} alias=${aliases.join(",")}`;
 }
 
-export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
+export function buildC(entryPath: string, opts: CliOptions, session: BuildSession): BuildStatus {
 	const fTotal = flowStart();
-	const status = buildCPhases(entryPath, opts, resolveSection, session);
+	const status = buildCPhases(entryPath, opts, session);
 	flowStop("total", fTotal);
 	flowsWrite();
 	return status;
 }
 
-function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
+function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession): BuildStatus {
 	const fSetup = flowStart();
 	startSessionBuild(session);
 	_hcrWarmJobs = [];
@@ -3106,7 +3104,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	useDriverPlans(session.keep && opts.isHcr);
-	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
+	const config = buildResolverConfig(Target.C, opts);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
@@ -4067,7 +4065,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	requirePreparedToolchain();
-	const config = buildResolverConfig(Target.C, defaultResolveSection());
+	const config = buildResolverConfig(Target.C, opts);
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
 resetLiftedOps();
@@ -4567,7 +4565,7 @@ function testRootName(entryPath: string): string {
 
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
-	const config = buildResolverConfig(Target.JS, defaultResolveSection());
+	const config = buildResolverConfig(Target.JS, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
@@ -4968,9 +4966,9 @@ function entryExports(unitCtxs: CheckerContext[], unitPaths: string[], entryPath
 	return entry != null ? entry.symbols : [];
 }
 
-export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
+export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
-	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
+	const config = buildResolverConfig(Target.Raiser, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
@@ -5056,9 +5054,9 @@ export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: R
 	return ctx;
 }
 
-export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
+export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string = ""): void {
 	const t0 = performance.now();
-	const raiserMod = compileRaiser(filePath, opts, resolveSection);
+	const raiserMod = compileRaiser(filePath, opts);
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];

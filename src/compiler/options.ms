@@ -15,7 +15,7 @@ import {
 	seedProjectDir,
 } from "./defines";
 import {
-	BuildConfig, BuildSection, defaultBuildSection, loadBuildConfig, validateCacheDirectory,
+	BuildConfig, BuildSection, ResolveSection, defaultBuildSection, defaultResolveSection, loadBuildConfig, validateCacheDirectory,
 } from "./buildConfig";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { setExtraGlobalImports, setModulePasses } from "../checker/prelude";
@@ -92,6 +92,7 @@ export interface CliOptions {
 	defines: DefineTable;      // -d:name[=value] conditional symbols (Nim condsyms.nim)
 	showDefines: boolean;      // --help-defines: list every define, then exit
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
+	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
 
@@ -196,6 +197,7 @@ export function newCliOptions(): CliOptions {
 		defines: createDefineTable(),
 		showDefines: false,
 		projectRoot: "",
+		resolve: defaultResolveSection(),
 		extraArgs: [],
 	};
 }
@@ -307,6 +309,7 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 	opts.projectRoot = projectRoot;
 	const buildMsPath = join(projectRoot, "build.ms");
 	const config = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
+	opts.resolve = config.resolve;
 	try applyCacheConfig(opts, config.build, projectRoot);
 	if (config.valid) {
 		const targeted = applyBuildTarget(opts, config.build.target);

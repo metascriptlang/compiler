@@ -99,7 +99,7 @@ export function main(): int32 {
 		"version" => console.log(`${bold("Metascript")} ${green(`v${VERSION}`)}`),
 		"check" => {
 			requireFile(opts);
-			cmdCheck(opts.inputFile, opts, cfg.resolve);
+			cmdCheck(opts.inputFile, opts);
 		},
 		"dump-tokens" => { requireFile(opts); cmdDumpTokens(opts.inputFile); },
 		"dump-ast" => { requireFile(opts); cmdDumpAst(opts.inputFile); },
@@ -112,9 +112,9 @@ export function main(): int32 {
 			if (opts.target == Target.JS) {
 				cmdRunJS(opts.inputFile, opts);
 			} else if (opts.target == Target.Raiser) {
-				cmdRunRaiser(opts.inputFile, opts, cfg.resolve);
+				cmdRunRaiser(opts.inputFile, opts);
 			} else if (opts.isHcr) {
-				cmdRunHcr(opts.inputFile, opts, cfg.resolve);
+				cmdRunHcr(opts.inputFile, opts);
 			} else {
 				cmdRun(opts.inputFile, opts);
 			}
@@ -152,8 +152,8 @@ export function main(): int32 {
 				if (cfg.valid && opts.outputPath == "" && cfg.build.outFile != "") {
 					opts.outputPath = cfg.build.outFile;
 				}
-				if (opts.watch) cmdWatchC(opts.inputFile, opts, cfg.resolve);
-				else cmdBuildC(opts.inputFile, opts, cfg.resolve);
+				if (opts.watch) cmdWatchC(opts.inputFile, opts);
+				else cmdBuildC(opts.inputFile, opts);
 			}
 		},
 		"add" | "remove" | "install" => {

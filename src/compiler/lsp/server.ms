@@ -19,7 +19,6 @@ import { registrySrcPath } from "../package/cache";
 import { env } from "std/process";
 import { newCliOptions, applyProjectConfig } from "../options";
 import { buildResolverConfig } from "../compile";
-import { defaultResolveSection } from "../buildConfig";
 import { resetCancel } from "../transam/cancel";
 import { CompletionCache, createCompletionCache, markDependentsStale } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
@@ -93,8 +92,7 @@ function selectProject(state: LspServerState, root: string): string {
 	let db = state.dbs.get(root);
 	if (db == null) {
 		db = createTransAmDb(512);
-		const resolve = applied.ok ? applied.value.resolve : defaultResolveSection();
-		dbSetResolverConfig(db, buildResolverConfig(opts.target, resolve, opts.targetOs, root));
+		dbSetResolverConfig(db, buildResolverConfig(opts.target, opts));
 		if (state.initialized) dbEnsurePrelude(db);
 		db.cancelCtx.inputPending = state.inputPending;
 		state.dbs.set(root, db);
