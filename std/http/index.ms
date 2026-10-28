@@ -49,7 +49,7 @@ export {
 // For URL-based dispatch (`fetch(url)` auto-detecting http vs https), use
 // the global `fetch` from the prelude (see `std/core/fetch`).
 export {
-	HttpClient, createClient,
+	HttpClient, createClient, text,
 	request, requestWithRedirects,
 } from "./client";
 

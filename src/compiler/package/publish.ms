@@ -295,9 +295,9 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 
 	// --- Parse response ---
 	if (resp.status == 201) {
-		const publishedVer = extractJsonField(resp.body, "version");
-		const tarUrl = extractJsonField(resp.body, "archiveUrl");
-		const srvIntegrity = extractJsonField(resp.body, "integrity");
+		const publishedVer = extractJsonField(resp.text(), "version");
+		const tarUrl = extractJsonField(resp.text(), "archiveUrl");
+		const srvIntegrity = extractJsonField(resp.text(), "integrity");
 		const showVer = publishedVer != "" ? publishedVer : version;
 		console.log("");
 		console.log(`${green("+ published")} ${cyan(name)}@${cyan(showVer)}`);

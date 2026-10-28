@@ -97,7 +97,7 @@ function fetchLatestVersion(): string {
 	const r = fetch(RELEASES_API, opts);
 	if (!r.ok) return "";
 	if (r.value.status != 200) return "";
-	return extractTagName(r.value.body);
+	return extractTagName(r.value.text());
 }
 
 // ===== Opt-out =====

@@ -3,7 +3,7 @@
 // graph clean: only the plain-TCP transport becomes alive, mbedtls is NOT
 // pulled in unless std/https or fetch() are also referenced.
 export {
-	HttpClient, createClient, ResolvedOptions,
+	HttpClient, createClient, ResolvedOptions, text,
 	request, requestWithRedirects,
 	doRequestOver, requestWithRedirectsOver,
 	resolveFetchOptions, urlPath,

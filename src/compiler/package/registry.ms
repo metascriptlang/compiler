@@ -72,10 +72,10 @@ export function registryRequest(method: string, path: string, body: string, toke
 
 // The message of a non-2xx response: its JSON "error" field, else the whole body.
 export function registryErrorText(resp: HttpResponse): string {
-	const parsed = parseJson(resp.body);
-	if (!parsed.ok) return resp.body;
+	const parsed = parseJson(resp.text());
+	if (!parsed.ok) return resp.text();
 	const message = parsed.value.getDynamicField("error").asString();
-	return message != "" ? message : resp.body;
+	return message != "" ? message : resp.text();
 }
 
 // Build the API path for a package name, handling scoped names.
@@ -114,7 +114,7 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 		return Result.err(httpError(HttpErrorKind.InvalidResponse, "registry returned HTTP " + resp.status.toString()));
 	}
 
-	const parsed = parseJson(resp.body);
+	const parsed = parseJson(resp.text());
 	if (!parsed.ok || parsed.value.kind != JsonKind.Object) {
 		return Result.err(invalidResponse("invalid JSON from registry"));
 	}
@@ -151,7 +151,7 @@ export function latestVersion(pkg: RegistryPackage): RegistryVersion | null {
 }
 
 function testResponse(body: string): HttpResponse {
-	return { status: 400, statusText: "Bad Request", headers: createHeaders(), body: body };
+	return { status: 400, statusText: "Bad Request", headers: createHeaders(), bytes: Buffer.fromString(body, "utf8") };
 }
 
 function testPackage(versions: string[]): RegistryPackage {

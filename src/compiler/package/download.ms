@@ -8,11 +8,11 @@
 //      cache/extracted/<name>@<version>/ (the rename is the commit)
 //   5. every extracted file is chmod 0444
 
-import { exists, writeFile, ensureDir, chmod, rename, removeAll } from "std/fs";
+import { exists, writeFileBytes, ensureDir, chmod, rename, removeAll } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { createHeaders } from "std/http/headers";
 import { sha256 } from "std/crypto";
-import { rawString } from "std/core/buffer/bytes";
+import { Buffer } from "std/core/buffer";
 import { openZip, zipEntries, zipExtract, zipFindByName, closeZip, ZipReader, newZipWriter, zipAdd, zipFinalize, closeZipWriter } from "std/compress/zip";
 import { tmpDir } from "../../utils/path";
 import { registryDownloadPath, registrySrcPath } from "./cache";
@@ -40,7 +40,7 @@ export function packageErrorMessage(e: PackageError): string {
 	};
 }
 
-function verifyIntegrity(archiveBytes: string, expectedIntegrity: string): Result<void, PackageError> {
+function verifyIntegrity(archiveBytes: Buffer, expectedIntegrity: string): Result<void, PackageError> {
 	if (expectedIntegrity == "") return Result.err(PackageError.Integrity);
 	const hash = sha256(archiveBytes, "base64");
 	if (!hash.ok) return Result.err(PackageError.Integrity);
@@ -71,14 +71,14 @@ function writeEntries(reader: ZipReader, destDir: string): Result<int32, Package
 
 		const outPath = join(destDir, entryPath);
 		if (!ensureDir(dirname(outPath)).ok) return Result.err(PackageError.Write);
-		if (!writeFile(outPath, rawString(content.value)).ok) return Result.err(PackageError.Write);
+		if (!writeFileBytes(outPath, content.value).ok) return Result.err(PackageError.Write);
 		if (!chmod(outPath, 292 as int32).ok) return Result.err(PackageError.Write);
 		written = written + 1;
 	}
 	return Result.ok(written);
 }
 
-export function extractArchive(archiveBytes: string, destDir: string): Result<int32, PackageError> {
+export function extractArchive(archiveBytes: Buffer, destDir: string): Result<int32, PackageError> {
 	const zip = openZip(archiveBytes);
 	if (!zip.ok) return Result.err(PackageError.BadArchive);
 	const result = writeEntries(zip.value, destDir);
@@ -108,14 +108,14 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	});
 	if (!resp.ok) return Result.err(PackageError.Download);
 	if (resp.value.status != 200) return Result.err(PackageError.HttpStatus);
-	const archiveBytes = resp.value.body;
+	const archiveBytes = resp.value.bytes;
 
 	const _verified = try verifyIntegrity(archiveBytes, expectedIntegrity);
 
 	const dlPath = registryDownloadPath(name, version);
 	if (dlPath != "") {
 		if (!ensureDir(dirname(dlPath)).ok) return Result.err(PackageError.Write);
-		if (!writeFile(dlPath, archiveBytes).ok) return Result.err(PackageError.Write);
+		if (!writeFileBytes(dlPath, archiveBytes).ok) return Result.err(PackageError.Write);
 	}
 
 	const partialPath = partialDirFor(extractedPath);
@@ -135,16 +135,16 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	return Result.ok(null);
 }
 
-function testArchive(names: string[]): string {
+function testArchive(names: string[]): Buffer {
 	const made = newZipWriter();
-	if (!made.ok) return "";
+	if (!made.ok) return Buffer.alloc(0);
 	for (const n of names) {
-		if (!zipAdd(made.value, n, "x").ok) return "";
+		if (!zipAdd(made.value, n, "x").ok) return Buffer.alloc(0);
 	}
 	const bytes = zipFinalize(made.value);
 	closeZipWriter(made.value);
-	if (!bytes.ok) return "";
-	return rawString(bytes.value);
+	if (!bytes.ok) return Buffer.alloc(0);
+	return bytes.value;
 }
 
 function freshDir(label: string): string {
@@ -182,7 +182,7 @@ test "an absolute entry is refused" {
 }
 
 test "bytes that are not a zip are refused" {
-	const r = extractArchive("not a zip", freshDir("bad"));
+	const r = extractArchive(Buffer.fromString("not a zip", "utf8"), freshDir("bad"));
 	assert !r.ok;
 	if (!r.ok) assert r.error == PackageError.BadArchive;
 }

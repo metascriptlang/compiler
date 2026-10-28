@@ -11,3 +11,4 @@
 // imports). This barrel just surfaces the TLS-forced request API.
 
 export { request, requestWithRedirects } from "std/core/fetch/tls";
+export { text } from "std/core/fetch/client";

@@ -115,14 +115,14 @@ export async function cmdLogin(projectRoot: string): Promise<boolean> {
 		return false;
 	}
 
-	const deviceCode = parseUrlEncoded(deviceResp.body, "device_code");
-	const userCode = parseUrlEncoded(deviceResp.body, "user_code");
-	const verificationUri = percentDecode(parseUrlEncoded(deviceResp.body, "verification_uri"));
-	let interval = pollIntervalSeconds(parseUrlEncoded(deviceResp.body, "interval"));
+	const deviceCode = parseUrlEncoded(deviceResp.text(), "device_code");
+	const userCode = parseUrlEncoded(deviceResp.text(), "user_code");
+	const verificationUri = percentDecode(parseUrlEncoded(deviceResp.text(), "verification_uri"));
+	let interval = pollIntervalSeconds(parseUrlEncoded(deviceResp.text(), "interval"));
 
 	if (deviceCode == "" || userCode == "") {
 		console.log("error: invalid response from GitHub");
-		console.log(deviceResp.body);
+		console.log(deviceResp.text());
 		return false;
 	}
 
@@ -149,7 +149,7 @@ export async function cmdLogin(projectRoot: string): Promise<boolean> {
 		const pollResult = httpsPost("github.com", "/login/oauth/access_token", pollBody, "application/x-www-form-urlencoded");
 
 		if (pollResult.ok && pollResult.value.status == 200) {
-			const body = pollResult.value.body;
+			const body = pollResult.value.text();
 			const token = parseUrlEncoded(body, "access_token");
 			if (token != "") {
 				githubToken = token;
@@ -190,8 +190,8 @@ export async function cmdLogin(projectRoot: string): Promise<boolean> {
 		return false;
 	}
 
-	const registryToken = extractJsonField(authResult.value.body, "token");
-	const username = extractJsonField(authResult.value.body, "username");
+	const registryToken = extractJsonField(authResult.value.text(), "token");
+	const username = extractJsonField(authResult.value.text(), "username");
 
 	if (registryToken == "") {
 		console.log("error: invalid response from registry");
@@ -227,7 +227,7 @@ export function cmdLogout(): boolean {
 
 	let revoked = false;
 	if (meResult.ok && meResult.value.status == 200) {
-		const tokenId = extractJsonField(meResult.value.body, "tokenId");
+		const tokenId = extractJsonField(meResult.value.text(), "tokenId");
 		if (tokenId != "") {
 			const delResult = registryRequest("DELETE", "/auth/tokens/" + tokenId, "", existing);
 			if (delResult.ok && delResult.value.status >= 200 && delResult.value.status < 300) {
@@ -304,7 +304,7 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 
 	// Response shape: { "user": { "username", "displayName", "avatarUrl", "githubUrl" } }
-	const body = result.value.body;
+	const body = result.value.text();
 	if (jsonOutput) {
 		console.log(userObjectJson(body));
 		return true;

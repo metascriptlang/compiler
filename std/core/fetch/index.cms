@@ -46,7 +46,7 @@ when (!bare && !solana) {
 	} from "./parser";
 
 	export {
-		HttpClient, createClient, ResolvedOptions,
+		HttpClient, createClient, ResolvedOptions, text,
 		request, requestWithRedirects,
 		doRequestOver, requestWithRedirectsOver,
 		resolveFetchOptions, urlPath,

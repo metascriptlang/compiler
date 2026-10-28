@@ -33,6 +33,7 @@ import {
 	getContentLength, isChunked,
 } from "./headers";
 import { parseResponse, parseUrl, decodeChunked } from "./parser";
+import { utf8String, wellFormedString } from "../string/bytes";
 
 // ===== Constants =====
 
@@ -42,6 +43,11 @@ export const RECV_CHUNK_SIZE: int32 = 8192;
 // Max total bytes for response headers section — prevents unbounded buffering
 // on malicious/broken servers. GitHub's headers are ~4-6 KB; 64 KB is ample.
 export const MAX_HEADER_BYTES: int32 = 65536;
+
+// The body as text: each ill-formed UTF-8 sequence reads as U+FFFD. `bytes` holds the body untouched.
+export function text(this response: HttpResponse): string {
+	return utf8String(response.bytes, false);
+}
 
 // ===== Client Interface =====
 
@@ -177,7 +183,7 @@ export function doRequestOver(
 		status: parsed.value.status,
 		statusText: parsed.value.statusText,
 		headers: parsed.value.headers,
-		body: body,
+		bytes: Buffer.fromString(body, "utf8"),
 	});
 }
 
@@ -326,3 +332,39 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 //      downloads a real .dmg artifact and hash-matches sha256 exactly.
 // Both live in lightcube vendor probes; revisit when the test shim grows
 // native-buffer support.
+
+function wireOf(head: string, body: number[]): string {
+	return head + wellFormedString(Buffer.fromArray(body));
+}
+
+function unitsOf(value: string): string {
+	const out: string[] = [];
+	for (let i = 0; i < value.length; i++) out.push(value.charCodeAt(i).toString(16));
+	return out.join(",");
+}
+
+test "a response keeps every body byte and reads as valid text" {
+	const wire = wireOf("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", [0x61, 0xFF, 0x62, 0x00]);
+	let served = false;
+	const options: RequestOptions = {
+		method: HttpMethod.GET, hostname: "h", port: 80, path: "/",
+		headers: createHeaders(), body: "", timeout: 1000, tls: false,
+	};
+	const response = doRequestOver(
+		options,
+		(data: string) => 0,
+		(maxBytes: int32) => {
+			if (served) return "";
+			served = true;
+			return wire;
+		},
+		() => {},
+	);
+	assert response.ok;
+	if (response.ok) {
+		assert response.value.bytes.length == 4;
+		assert response.value.bytes[1] == 0xFF;
+		assert response.value.text().length == 4;
+		assert unitsOf(response.value.text()) == "61,fffd,62,0";
+	}
+}

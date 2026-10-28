@@ -122,7 +122,7 @@ function orgList(): boolean {
 		return false;
 	}
 
-	const parsed = parseJson(resp.body);
+	const parsed = parseJson(resp.text());
 	if (!parsed.ok) {
 		console.log(`${errStyle("error")}: invalid response`);
 		return false;
@@ -162,7 +162,7 @@ function orgMembers(args: string[]): boolean {
 		return false;
 	}
 
-	const parsed = parseJson(resp.body);
+	const parsed = parseJson(resp.text());
 	if (!parsed.ok) {
 		console.log(`${errStyle("error")}: invalid response`);
 		return false;

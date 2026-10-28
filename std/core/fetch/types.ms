@@ -38,7 +38,7 @@ export interface HttpResponse {
 	status: int32;
 	statusText: string;
 	headers: HttpHeaders;
-	body: string;
+	bytes: Buffer;
 }
 
 // Mutable response builder (server-side, handler fills via writeHead/write/end).
