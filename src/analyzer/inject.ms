@@ -515,12 +515,11 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
 	const sym = node.resolvedSym;
 
-	let receiverFormal: Type | null = null;
-	let sinkParams = calledRoutineType(node)?.typeChildren ?? null;
-	if (sinkParams != null && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr && sinkParams.length > 0) {
-		receiverFormal = sinkParams[0];
-		sinkParams = sinkParams.slice(1);
-	}
+	const routineType = calledRoutineType(node);
+	const routineParams: Type[] | null = routineType != null ? routineType.typeChildren : null;
+	const receiverCall = routineParams != null && routineParams.length > 0 && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr;
+	const receiverFormal: Type | null = receiverCall ? routineParams![0] : null;
+	const sinkParams: Type[] | null = receiverCall ? routineParams!.slice(1) : routineParams;
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
