@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -1179,7 +1179,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 	const sym = findOverloadImpl(called!) ?? called!;
 	const fi = ai + (call.flags.has(NodeFlag.ExtCall) ? 1 : 0);
 	const formals = sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
-	if (formals == null || fi >= formals.length || formals[fi] == null || formals[fi].kind == TypeKind.Sink) return true;
+	if (formals == null || fi >= formals.length || formals[fi] == null || isSinkTypeForParam(formals[fi])) return true;
 	return retainsParam(w, sym, fi);
 }
 

@@ -36,7 +36,7 @@ import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, rout
 import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
-import { isAwaitable, isReadonlyView, withoutReadonlyView } from "../checker/types";
+import { isAwaitable, isReadonlyView, withoutReadonlyView, ownedEdgeOf, isSinkTypeForParam } from "../checker/types";
 import { skipConvDfa } from "./alias";
 
 // ===== VarFlag (per-variable analysis flags) =====
@@ -67,7 +67,7 @@ function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): 
 
 function isViewVar(p: Partitions, id: int32): boolean {
 	const sym = p.vars[id].sym;
-	return sym != null && isReadonlyView(sym.symbolType);
+	return sym != null && (isReadonlyView(sym.symbolType) || lentOwnedElement(sym));
 }
 
 function getIdentSym(node: Node): Symbol | null {
@@ -326,7 +326,7 @@ function readOnlyFormal(formals: Type[] | null, i: int32): boolean {
 }
 
 function sinkFormal(formals: Type[] | null, i: int32): boolean {
-	return formals != null && i < formals.length && formals[i] != null && formals[i].kind == TypeKind.Sink;
+	return formals != null && i < formals.length && isSinkTypeForParam(formals[i]);
 }
 
 function isViewArg(arg: Node): boolean {
@@ -372,7 +372,7 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
-				if (src.resolvedSym == null || !isImmutableModuleConst(src.resolvedSym)) p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+				if ((src.resolvedSym == null || !isImmutableModuleConst(src.resolvedSym)) && !lentOwnedElement(p.vars[destIdx].sym!)) p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 			} else {
 				ufConnect(p, p.vars[destIdx].sym, p.vars[srcId].sym);
 				// [x] or {field: x} context — container owns a copy
@@ -817,6 +817,12 @@ function preventCaptures(p: Partitions): void {
 
 // ===== Pass 2: traverse (build graphs) =====
 
+// A for-of binding over an owned element is a lent view at any scope, so a global source
+// does not prevent the cursor; writtenWhileAlive still refuses it when the body can write the source.
+function lentOwnedElement(sym: Symbol): boolean {
+	return hasFlag(sym, SymbolFlag.ForVar) && ownedEdgeOf(sym.symbolType) != null;
+}
+
 function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): void {
 	const destId = variableId(p, dest);
 	if (destId < 0) return;
@@ -832,7 +838,7 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
-			if (!isImmutableModuleConst(srcSym)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
+			if (!isImmutableModuleConst(srcSym) && !lentOwnedElement(dest!)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			continue;
 		}
 		const srcId = variableId(p, srcSym);
@@ -1177,7 +1183,7 @@ export function inferCaptureCursors(w: WriteEffects, body: Node, params: Symbol[
 
 function borrowedParam(p: Symbol): boolean {
 	const t = p.symbolType;
-	return t != null && t.kind != TypeKind.Sink && t.kind != TypeKind.Var;
+	return t != null && !isSinkTypeForParam(t) && t.kind != TypeKind.Var;
 }
 
 function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] {

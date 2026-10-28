@@ -13,7 +13,7 @@
 
 import { Node, NodeKind, Symbol, Type, TypeKind, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
-import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant } from "../checker/types";
+import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, isTagCarriedUnion, matchUnionBehindInstance, instantiatedUnionBehind, isCountedRef, isLiteralSet } from "../checker/types";
 import { makeHiddenDeref } from "../transform/util";
 import { getBody, makeTestSym, attachSymAll } from "./testSupport";
 
@@ -37,6 +37,36 @@ export function skipConvDfa(n: Node): Node {
 	};
 }
 
+export function isUnionProjection(node: Node): boolean {
+	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
+	const target = (node.data as HiddenStdConvData).convType;
+	if (target == null) return false;
+	if (unwrapRefNullUnion(target) != null) return true;
+	if (isMaybeType(target)) return !isTagCarriedUnion(unwrapMaybeType(target));
+	return !isTagCarriedUnion(matchUnionBehindInstance(target));
+}
+
+export function isUnionSlotLocation(node: Node): boolean {
+	if (!isUnionProjection(node)) return false;
+	const d = node.data as HiddenStdConvData;
+	const target = d.convType!;
+	if (isMaybeType(target) || unwrapRefNullUnion(target) != null) return false;
+	if (instantiatedUnionBehind(target).kind == TypeKind.Union && !isLiteralSet(target)) return false;
+	const source = d.convExpr;
+	return source.nodeType != null && !isMaybeType(source.nodeType) && isSlotLocation(source);
+}
+
+function isSlotLocation(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.MemberExpr) return isSlotLocation((n.data as MemberExprData).object);
+	if (n.kind == NodeKind.HiddenDeref) return isSlotLocation((n.data as HiddenDerefData).expr);
+	if (n.kind == NodeKind.ArrayAccess) {
+		const ad = n.data as ArrayAccessData;
+		return isSlotLocation(ad.array) && (ad.index.kind == NodeKind.Identifier || ad.index.kind == NodeKind.NumberLiteral);
+	}
+	return false;
+}
+
 // ===== isAnalysableFieldAccess — ownership gatekeeper =====
 // Reference: walk down path operations to root symbol. Check ownership constraints.
 // Returns true if DRC can reason about this field/array access.
@@ -49,7 +79,7 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 		match (n.kind) {
 			NodeKind.MemberExpr => {
 				const md = n.data as MemberExprData;
-				if (readsUnionDiscriminant(md)) return false;
+				if (readsUnionDiscriminant(md) || readsThroughReference(md)) return false;
 				n = skipConvDfa(md.object);
 			},
 			NodeKind.ArrayAccess => {
@@ -71,6 +101,14 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 		};
 	}
 	return false;
+}
+
+function readsThroughReference(md: MemberExprData): boolean {
+	const objNode = md.object;
+	const t: Type | null = objNode.nodeType != null ? objNode.nodeType
+		: (objNode.resolvedSym != null ? objNode.resolvedSym.symbolType : null);
+	if (t == null) return true;
+	return isCountedRef(t) || unwrapRefNullUnion(t) != null || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow;
 }
 
 function readsUnionDiscriminant(md: MemberExprData): boolean {
