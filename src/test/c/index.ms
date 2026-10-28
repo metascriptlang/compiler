@@ -58,6 +58,7 @@ import "./nrvoOutTempZero";
 import "./emissionOwnership";
 import "./arraySpliceEmit";
 import "./arrayLengthAssignEmit";
+import "./matchIntoNamedUnionEmit";
 import "./hoistedOperandAppendEmit";
 import "./raiseChecks";
 import "./ctorOwnership";

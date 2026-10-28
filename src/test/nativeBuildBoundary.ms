@@ -1367,6 +1367,34 @@ function runUpcastCast(): void {
 	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
 }
 
+function runUnionCodecCast(): void {
+	const dir = `${root}/union-codec-cast`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"enum Kind { Click, Key }",
+		"interface Click { kind: Kind.Click; x: int32; }",
+		"interface Key { kind: Kind.Key; code: int32; }",
+		"type Event = Click | Key;",
+		"interface Circle { shape: \"circle\"; r: int32; }",
+		"interface Square { shape: \"square\"; side: int32; }",
+		"type Shape = Circle | Square;",
+		"function pick(n: int32): Event {",
+		"\tconst v: Event = match (n) {",
+		"\t\t1 => ({ kind: Kind.Click, x: n }),",
+		"\t\t_ => ({ kind: Kind.Key, code: n }),",
+		"\t};",
+		"\treturn v;",
+		"}",
+		"const e = JSON.parse<Event>(JSON.stringify(pick(2)));",
+		"const s = JSON.parse<Shape>(`{\"shape\":\"square\",\"side\":3}`);",
+		"console.log(`${e.ok && e.value.kind == Kind.Key} ${s.ok && s.value.shape == \"square\"}`);",
+		"",
+	].join("\n"));
+	need(build(dir, "union-codec-cast", "probe", ["--passC=-Werror=incompatible-pointer-types"]) == 0, "union-codec-cast build under -Werror=incompatible-pointer-types");
+	record("a match and the JSON codec store into a declared union alias through its own struct", "true true", value(dir));
+}
+
 function moduleNamesTree(parent: string): string {
 	const app = `${parent}/app`;
 	ensureDir(`${app}/sub`);
@@ -1833,7 +1861,10 @@ if (group == "project-cache" || group == "all") {
 }
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
-if (group == "upcast-cast" || group == "all") runUpcastCast();
+if (group == "upcast-cast" || group == "all") {
+	runUpcastCast();
+	runUnionCodecCast();
+}
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 if (group == "emcc-jspi" || group == "all") runEmccJspi();

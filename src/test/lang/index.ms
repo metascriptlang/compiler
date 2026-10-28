@@ -53,6 +53,7 @@ import "./macroPrefixIdentity";
 import "./macroSourceForms";
 import "./matchDispatch";
 import "./nominalInstantiation";
+import "./matchIntoNamedUnion";
 import "./nullable";
 import "./nullableInstantiation";
 import "./numericLiteralTypes";
