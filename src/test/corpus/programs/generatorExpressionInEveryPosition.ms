@@ -5,6 +5,7 @@
 // @stdout: immediate 11
 // @stdout: assigned 5
 // @stdout: if body 3
+// @stdout: for body 33
 // @stdout: arrow body 9
 // @stdout: async body 4
 // note: a `function*` expression is lowered wherever it appears, as every routine is. Before the fix C lowered it only as a `const` initializer, and in any other position it reached codegen with its `yield` unlowered.
@@ -49,12 +50,23 @@ console.log(`assigned ${sum(later())}`);
 function inIfBody(flag: boolean): int32 {
 	let s: int32 = 0;
 	if (flag) {
-		function* g(): Iterator<int32> { yield 1; yield 2; }
+		const base: int32 = 1;
+		function* g(): Iterator<int32> { yield base; yield base + 1; }
 		s = sum(g());
 	}
 	return s;
 }
 console.log(`if body ${inIfBody(true)}`);
+
+function inForBody(): int32 {
+	let s: int32 = 0;
+	for (let i: int32 = 1; i <= 2; i++) {
+		function* g(): Iterator<int32> { yield i; yield i * 10; }
+		s = s + sum(g());
+	}
+	return s;
+}
+console.log(`for body ${inForBody()}`);
 
 const inArrow = (k: int32): int32 => {
 	function* g(): Iterator<int32> { yield k; yield k * 2; }
