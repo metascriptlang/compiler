@@ -179,3 +179,12 @@ void msDrainUntilIdle(void) {
 		idleSweeps++;
 	}
 }
+
+static _Atomic(msExitHookFn) msActorExitHook = NULL;
+void msSetActorExitHook(msExitHookFn hook) { atomic_store_explicit(&msActorExitHook, hook, memory_order_release); }
+
+void msDrainAtExit(void) {
+	msDrainUntilIdle();
+	msExitHookFn hook = atomic_load_explicit(&msActorExitHook, memory_order_acquire);
+	if (hook != NULL) hook();
+}

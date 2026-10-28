@@ -1120,6 +1120,11 @@ static bool msNothingCanSettle(void) {
 	return msPoolQuiescentWith(msMainLoopIdle) && !msRunOnce(0);
 }
 
+void msRunUntilNothingCanSettle(void) {
+	msGetDispatcher();
+	while (msRunOnce(msMainWaitMs()) || !msNothingCanSettle()) {}
+}
+
 static void msExitUnsettledAwait(void) {
 	fflush(stdout);
 	fputs("Warning: Detected unsettled await: no task, timer, message or I/O is left to settle it\n", stderr);

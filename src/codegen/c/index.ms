@@ -448,7 +448,7 @@ export function genProjectDispatcher(
 			addLine(b, "  cmdCount = argc;");
 			addLine(b, "  gEnv = env;");
 			addLine(b, "  MsMain();");
-			addLine(b, "  msDrainUntilIdle();");
+			addLine(b, "  msDrainAtExit();");
 			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
 			addLine(b, "  MsDestroyGlobals();");
 			addLine(b, "  return msProgramResult;");
@@ -671,6 +671,8 @@ test "dispatcher destroys globals after the drain, entry module first then depen
 	const depCall = out.indexOf(`${mangleModuleName(buildModuleNameRoots(), dep.modulePath)}__Deinit000();`);
 	assert entryCall >= 0 && entryCall < midCall && midCall < depCall;
 	assert out.indexOf(`${mangleModuleName(buildModuleNameRoots(), quiet.modulePath)}__Deinit000`) < 0;
+	const exitDrain = out.indexOf("  msDrainAtExit();");
+	assert exitDrain >= 0 && exitDrain < out.indexOf("msReportOrphanFailures()");
 	assert out.indexOf("msReportOrphanFailures()") < out.indexOf("  MsDestroyGlobals();");
 	const lib = genProjectDispatcher(paths, entry.modulePath, "", true, [dep, mid, quiet, entry]);
 	assert lib.indexOf("void MsDestroyGlobals(void) {") >= 0 && lib.indexOf("int main") < 0;

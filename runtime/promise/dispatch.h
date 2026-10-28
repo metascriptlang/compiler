@@ -106,6 +106,9 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 
 /* ===== Exit drain (drain.c) — Node semantics: program ends when the loop is empty ===== */
 void msDrainUntilIdle(void);
+typedef void (*msExitHookFn)(void);
+void msSetActorExitHook(msExitHookFn hook);
+void msDrainAtExit(void);
 int msReportOrphanFailures(void);
 void msNoteOrphanFailure(void* fut);
 void msAdoptOrphanFailure(void* fut);

@@ -12,7 +12,8 @@ export extern function nonisolated(): void;
 
 export enum ExitReason {
 	Normal,     // clean shutdown
-	Killed,     // forced kill (supervisor restart, system shutdown)
+	Shutdown,   // program exit
+	Killed,     // forced kill (supervisor restart)
 	Abnormal,   // crash (unhandled panic/error)
 }
 
