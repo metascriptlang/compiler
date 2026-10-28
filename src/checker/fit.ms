@@ -2770,7 +2770,7 @@ export function isSlotUnion(t: Type): boolean {
 export function convertsBetweenUnions(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null || source.kind != TypeKind.Union || target.kind != TypeKind.Union) return false;
 	if (hasGenericParams(source) || hasGenericParams(target)) return false;
-	return isSlotUnion(source) && isSlotUnion(target) && !sameType(source, target);
+	return isSlotUnion(source) && isSlotUnion(target) && (!sameType(source, target) || source.typeName != target.typeName);
 }
 
 function unionMembers(t: Type): Type[] {
