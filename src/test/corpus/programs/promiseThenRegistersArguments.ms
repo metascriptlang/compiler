@@ -1,5 +1,4 @@
 // @stdout: selected after 2 | captured 2
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: then reads its callback argument once, where the call is written: a call that returns the
 // callback runs before the code after the then, and a variable names the callback it held then,
 // not the one assigned to it before the promise settles.

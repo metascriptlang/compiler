@@ -1,5 +1,4 @@
 // @stdout: num 7 5 | text fallback hi | pair 4 p4 4 p4 p4 | caught 9 caught | reject plain! | finally 5 -1 sss 2 p2 count 4 | thrown -3 | two 3 2 from f g bad 9 8
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: catch gives a Promise<T> whose value is the handler's result on a rejection and the
 // input's value otherwise; finally forwards the input's value or rejection after its handler
 // ran, and a throw inside the catch handler rejects the result. A two-callback then runs its second

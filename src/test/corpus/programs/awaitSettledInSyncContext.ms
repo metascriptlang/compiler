@@ -1,5 +1,4 @@
 // @stdout: t1 a1 t2a t2b a2 t3 a3 c1 a4 c2 a5 s1 a6w n v1 a7 p1 a8
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs; the Raiser resumes an await of a finished future at once
 // note: an await outside an async function (module top level, a nested block) resumes behind the callbacks
 // queued before it, as in TypeScript, whether the promise is already settled or still pending: one callback (t1 a1),
 // two in queue order (t2a t2b a2), inside a block (t3 a3), a string or void value (s1 a6w, v1 a7) and a timer (p1 a8).

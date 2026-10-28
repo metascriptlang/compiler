@@ -1,5 +1,4 @@
 // @stdout: abc abc ab2 abc abc abc abc abc | abc abc! ab-c abc abc abc | abc 1 abc
-// @xfail(raiser): a `+=` on a string array element stops with an internal register error (inbox 2026-10-26-raiser-string-element-compound-append-fails-register-check)
 // note: a string `+=`, `s = s + …` or template that appends to its own target reads the target before the right side runs, as TS does, when a call there writes it: a global, a self-concat, a field, an element (also when the call grows the array), a captured local, a field the callee appends to, a template and a chain, a method writing `this.body`, a function value, a target reached through a call (which still runs once), a `+=` in a for-loop update. A plain local, a read-only neighbour and a method writing another field keep the in-place append and print the same.
 
 let g = "ab";

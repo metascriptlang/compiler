@@ -1,5 +1,4 @@
 // @stdout: then 100 | string e2! | finally -1 1 | flatten 55 | ran 1
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a rejection passes through a value-returning `.then` and `.finally` without running the
 // then callback and reaches the `.catch` after them, which gives the handler's value: number and
 // string payloads, a finally that runs on the way, and a then whose callback returns a promise.

@@ -1,5 +1,4 @@
 // @stdout: string text-5! text-5! text-5 | struct 5 pair-4? 5 pair-4? pair-4 | class 6 6 3 | dropped 400
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: the future a value-returning then makes is an async method's and owns its result
 // (PARALOCK Amendment O): awaiting it twice copies, the input stays readable, and results
 // nobody reads are released (the SAN lane reports a leak or a double free here).

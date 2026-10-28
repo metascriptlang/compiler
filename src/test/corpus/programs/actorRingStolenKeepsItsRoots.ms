@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: steps 320000
 // @serial
 // note: eight actors each hold a 64-node ring and build garbage rings in every visit, while each
