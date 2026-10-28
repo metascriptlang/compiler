@@ -108,3 +108,4 @@ import "./generatorInlineInPlace";
 import "./numberVecFieldCopy";
 import "./forOfConstArrayBorrow";
 import "./instanceofNullableUnion";
+import "./nullableDeclaredUnionJoin";
