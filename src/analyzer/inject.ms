@@ -2242,8 +2242,9 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
-		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
+		const derefFlags = MOC_IS_FIELD;
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, derefFlags, idx, stmts, dctx);
+		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, derefFlags, idx, stmts, dctx, loc);
 	}
 
 	if (bd.left.kind != NodeKind.Identifier) return stmt;
