@@ -474,7 +474,7 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 	}
 }
 
-function boundElement(formals: Type[], i: int32, args: Node[]): Type | null {
+export function boundElement(formals: Type[], i: int32, args: Node[]): Type | null {
 	const formal = formals[i].typeReturn;
 	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
 	for (let j = 0; j < formals.length && j < args.length; j += 1) {
@@ -803,7 +803,7 @@ function isCursorSlot(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Cursor;
 }
 
-function isPtrField(objType: Type | null, fieldName: string): boolean {
+export function isPtrField(objType: Type | null, fieldName: string): boolean {
 	if (objType == null) return false;
 	let t = objType;
 	if (t.kind == TypeKind.Ref && t.typeReturn != null) {
