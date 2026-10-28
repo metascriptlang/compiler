@@ -9,7 +9,7 @@ import { nowSeconds } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, buildCpu } from "./options";
+import { CliOptions, CC_PREPARED, buildCpu, newCliOptions } from "./options";
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
@@ -213,13 +213,12 @@ function validateBundleTree(root: string, directory: string, names: HashSet<stri
 	return Result.ok(null);
 }
 
-function validateNativeToolchain(path: string, stampRoot: string): Result<NativeToolchain, string> {
+function readNativeToolchain(path: string): Result<NativeToolchain, string> {
 	const root = realpath(path).replaceAll("\\", "/");
 	if (root == "") return Result.err(`native toolchain: missing bundle ${path}`);
 	const hostText = try bundleText(root, "HOST");
 	const versionText = try bundleText(root, "VERSION");
 	const identityText = try bundleText(root, "IDENTITY");
-	const manifest = try bundleText(root, "FILES.sha256");
 	if (arch != "arm64" && arch != "amd64" && arch != "aarch64" && arch != "x86_64") {
 		return Result.err(`native toolchain: unsupported host architecture ${arch}`);
 	}
@@ -235,6 +234,16 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 	}
 	const identity = identityText.trim();
 	if (!isSha256(identity) || identityText != `${identity}\n`) return Result.err("native toolchain: invalid IDENTITY");
+	return Result.ok({ root, version, identity });
+}
+
+function validateNativeToolchain(path: string, stampRoot: string): Result<NativeToolchain, string> {
+	const bundle = try readNativeToolchain(path);
+	const root = bundle.root;
+	const identity = bundle.identity;
+	const version = bundle.version;
+	const components = version.split(".");
+	const manifest = try bundleText(root, "FILES.sha256");
 	if (!manifest.endsWith("\n")) return Result.err("native toolchain: unterminated FILES.sha256");
 	const names = new HashSet<string>();
 	const lines = manifest.split("\n");
@@ -425,14 +434,56 @@ function nativeRuntimeConfig(targetOs: string, cpu: string): string {
 	return "";
 }
 
+let pendingBundle: NativeToolchain | null = null;
+let pendingPath = "";
+let pendingStampRoot = "";
+
+function verifySelectedToolchain(): string {
+	const selected = pendingBundle;
+	if (selected == null) return "";
+	pendingBundle = null;
+	const verified = validateNativeToolchain(pendingPath, pendingStampRoot);
+	if (!verified.ok) return verified.error;
+	if (verified.value.root != selected.root || verified.value.identity != selected.identity) return `native toolchain: ${pendingPath} changed after the build selected it`;
+	return "";
+}
+
+export function requirePreparedToolchain(): void {
+	const error = verifySelectedToolchain();
+	if (error != "") {
+		eprintln(`error: ${error}`);
+		stopBuild();
+	}
+}
+
+function macosSdkPath(stampRoot: string): string {
+	const key = `${env.get("DEVELOPER_DIR")}\n${realpath("/var/db/xcode_select_link")}\n`;
+	const memo = stampRoot == "" ? "" : `${stampRoot}/macos-sdk`;
+	if (memo != "") {
+		const text = readFile(memo);
+		if (text.ok && text.value.startsWith(key)) {
+			const sdk = text.value.slice(key.length);
+			if (sdk != "" && isDir(sdk)) return sdk;
+		}
+	}
+	const found = execFileCapture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
+	if (!found.ok) return "";
+	const sdk = found.value.trim();
+	if (sdk != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, `${key}${sdk}`);
+	return sdk;
+}
+
 function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string): Result<void, string> {
-	const bundle = try validateNativeToolchain(path, stampRoot);
+	const bundle = try readNativeToolchain(path);
+	pendingBundle = bundle;
+	pendingPath = path;
+	pendingStampRoot = stampRoot;
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
 	if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
-		const sdk = execFileCapture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
-		if (!sdk.ok || sdk.value.trim() == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
-		opts.passC = `-isysroot ${quoteCcArg(sdk.value.trim())} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
+		const sdk = macosSdkPath(stampRoot);
+		if (sdk == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
+		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
 		opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
 		return Result.ok(null);
 	}
@@ -443,6 +494,64 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	if ((opts.isHcr || opts.appMode != "console") && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply ${opts.isHcr ? "HCR" : opts.appMode} startup`);
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	return Result.ok(null);
+}
+
+function selectionProbe(manifest: boolean): string {
+	const root = sealProbe();
+	if (root == "") return "";
+	const identity = SEAL_LINES[0].slice(0, 64);
+	if (!writeFile(join(root, "HOST"), `${hostKey()}\n`).ok) return "";
+	if (!writeFile(join(root, "VERSION"), "1.2.3\n").ok) return "";
+	if (!writeFile(join(root, "IDENTITY"), `${identity}\n`).ok) return "";
+	if (manifest && !writeFile(join(root, "FILES.sha256"), "not a manifest\n").ok) return "";
+	if (!ensureDir(join(root, "runtime")).ok || !writeFile(join(root, "runtime/x86_64-linux-gnu.2.31.cfg"), "").ok) return "";
+	return root;
+}
+
+function linuxOptions(): CliOptions {
+	const opts = newCliOptions();
+	opts.targetOs = "linux";
+	opts.cpuTarget = "x86_64";
+	return opts;
+}
+
+test "selecting a bundle reads its identity and leaves payload verification to the first compile" {
+	for (const manifest of [true, false]) {
+		const root = selectionProbe(manifest);
+		assert root != "";
+		const opts = linuxOptions();
+		assert selectNativeToolchain(opts, root, "").ok;
+		assert opts.passC.contains(`-DMSC_NATIVE_TOOLCHAIN_${SEAL_LINES[0].slice(0, 64)}=1`);
+		const error = verifySelectedToolchain();
+		assert error.contains(manifest ? "invalid manifest entry not a manifest" : "FILES.sha256");
+		assert verifySelectedToolchain() == "";
+		assert removeAll(root).ok;
+	}
+}
+
+test "a bundle with an unreadable identity is refused at selection" {
+	const root = selectionProbe(true);
+	assert root != "";
+	assert writeFile(join(root, "IDENTITY"), "short\n").ok;
+	const selected = selectNativeToolchain(linuxOptions(), root, "");
+	assert !selected.ok;
+	assert selected.error.contains("invalid IDENTITY");
+	assert removeAll(root).ok;
+}
+
+test "the macOS SDK memo answers only for the developer directory it was taken under" {
+	if (platform != "darwin") return;
+	const stamps = join(cwd(), `out/sdkMemoProbe-${performance.now()}`);
+	const sdk = join(stamps, "Fake.sdk");
+	assert ensureDir(sdk).ok;
+	const key = `${env.get("DEVELOPER_DIR")}\n${realpath("/var/db/xcode_select_link")}\n`;
+	assert writeFile(join(stamps, "macos-sdk"), `${key}${sdk}`).ok;
+	assert macosSdkPath(stamps) == sdk;
+	assert writeFile(join(stamps, "macos-sdk"), `other\n${key}${sdk}`).ok;
+	const real = macosSdkPath(stamps);
+	assert real != sdk && isDir(real);
+	assert (try readFile(join(stamps, "macos-sdk")) catch "") == `${key}${real}`;
+	assert removeAll(stamps).ok;
 }
 
 test "prepared runtimes are selected by both OS and CPU" {
