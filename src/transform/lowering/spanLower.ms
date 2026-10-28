@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, ThrowStmtData, SwitchStmtData, AssertStmtData, MemberExprData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
@@ -126,9 +126,15 @@ function splitsPure(node: Node): boolean {
 	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
 		if (d.index == null || d.index.kind != NodeKind.BinaryExpr) return true;
-		return cloneIfPure(d.array) != null && cloneIfPure((d.index.data as BinaryExprData).left) != null;
+		const bd = d.index.data as BinaryExprData;
+		return cloneIfPure(d.array) != null && cloneIfPure(bd.left) != null && (!slicesPointer(d) || cloneIfPure(bd.right) != null);
 	}
 	return true;
+}
+
+function slicesPointer(d: ArrayAccessData): boolean {
+	const source = skipModifier(d.array.nodeType);
+	return source != null && source.kind == TypeKind.Ptr;
 }
 
 export function secondRead(source: Node): Node {
@@ -220,6 +226,7 @@ function stabilizeSpanSources(stmt: Node, ctx: TransformContext): Node[] {
 						d.array = stabilize(d.array, ctx, hoisted);
 						// A bound is an int64 to msSliceLen whatever literal type it was read as.
 						if (bd.left != null && cloneIfPure(bd.left) == null) bd.left = bindSource(bd.left, createPrimitive(TypeKind.Int64), ctx, hoisted);
+						if (slicesPointer(d) && cloneIfPure(bd.right) == null) bd.right = bindSource(bd.right, createPrimitive(TypeKind.Int64), ctx, hoisted);
 					}
 				}
 			} else if (node.kind == NodeKind.CallExpr) {
@@ -384,6 +391,8 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataExpr = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(d.array, "p", loc), startExpr], loc);
 	} else if (arrType.kind == TypeKind.SizedArray || arrType.kind == TypeKind.Span) {
 		dataExpr = makeBinary(makeMember(d.array, "data", loc), "+", startExpr, loc);
+	} else if (slicesPointer(d)) {
+		dataExpr = makeBinary(d.array, "+", startExpr, loc);
 	} else {
 		return node;
 	}
@@ -393,12 +402,18 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);
 	}
 
-	const endExclusive = bd.operator == "..." ? makeBinary(endExpr, "+", makeNumber(1, loc), loc) : endExpr;
-	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc) : makeMember(secondRead(d.array), "len", loc);
+	const endExclusive = exclusiveEnd(bd.operator, endExpr, loc);
+	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc)
+		: slicesPointer(d) ? exclusiveEnd(bd.operator, secondRead(endExpr), loc)
+		: makeMember(secondRead(d.array), "len", loc);
 	const lenExpr = makeCall(runtimeRef("msSliceLen", loc), [secondRead(startExpr), endExclusive, sourceLen], loc);
 	lenExpr.nodeType = createPrimitive(TypeKind.Int64);
 
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);
+}
+
+function exclusiveEnd(operator: string, end: Node, loc: SourceLocation): Node {
+	return operator == "..." ? makeBinary(end, "+", makeNumber(1, loc), loc) : end;
 }
 
 function borrowedJS(src: Node, srcType: Type): Node {

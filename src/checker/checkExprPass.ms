@@ -3060,8 +3060,14 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") {
+			const pointer = skipModifier(arrType);
+			if (pointer != null && pointer.kind == TypeKind.Ptr && pointer.typeReturn != null && pointer.typeReturn.kind != TypeKind.Void) {
+				const view = createSpan(pointer.typeReturn);
+				node.nodeType = isReadonlyView(pointer) ? createReadonlyView(view) : view;
+				return;
+			}
 			if (!isSliceSource(arrType)) {
-				addError(ctx, "cannot slice '" + typeDisplayName(arrType) + "' with '" + bd.operator + "': only an array, a Span or a string has the length that bounds a slice", node.location.line, node.location.column);
+				addError(ctx, "cannot slice '" + typeDisplayName(arrType) + "' with '" + bd.operator + "': only an array, a Span, a string or a typed pointer can be sliced", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
 			accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
