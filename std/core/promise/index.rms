@@ -5,8 +5,6 @@
 
 @builtin("Promise")
 export class Promise<T> {
-	finished: boolean;
-	failed: boolean;
 
 	@builtin("PromiseThen")
 	extern then(callback: (value: T) => void): Promise<void> from "msFutureThen";

@@ -5,8 +5,6 @@
 
 @builtin("Promise")
 export class Promise<T> {
-	finished: boolean;
-	failed: boolean;
 
 	// Instance methods
 	@builtin("PromiseThen")
