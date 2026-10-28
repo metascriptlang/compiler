@@ -2,7 +2,8 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser } from "../cursor";
+import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser, addError } from "../cursor";
+import { lex } from "../../lexer/lexer";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign } from "../util";
@@ -192,6 +193,9 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			continue;
 		}
 
+		if (op.kind == TokenKind.StarStar && isPrefixOperand(left)) {
+			addError(state, `An unary expression with the '${prefixOperatorText(left)}' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses (line ${op.line})`);
+		}
 		advance(state);
 		// Right-associative operators (**, =, +=, etc.) use prec instead of prec+1
 		let nextPrec = prec + 1;
@@ -283,6 +287,15 @@ function prefixed(operand: Node, wrap: (inner: Node) => Node): Node {
 	const td = target.data as TypeAssertionData;
 	td.asExpr = wrap(td.asExpr);
 	return operand;
+}
+
+function isPrefixOperand(n: Node): boolean {
+	return (n.kind == NodeKind.UnaryExpr || n.kind == NodeKind.AwaitExpr) && !n.flags.has(NodeFlag.Parenthesized);
+}
+
+function prefixOperatorText(n: Node): string {
+	if (n.kind == NodeKind.AwaitExpr) return "await";
+	return (n.data as UnaryExprData).unaryOp;
 }
 
 function parsePrimary(state: ParserState): ExprResult {
@@ -901,6 +914,38 @@ test "optional chain" { assert parseOk("a?.b?.c"); }
 test "parens" { assert parseOk("(a + b) * c"); }
 // Right-associative
 test "** right assoc" { assert parseOk("a ** b ** c"); }
+
+function parseError(src: string): string {
+	const lr = lex(src);
+	if (!lr.ok) return lr.error;
+	const state = createState(lr.value);
+	const pr = parseExprWithPrec(state, 0);
+	if (state.errors.length > 0) return state.errors[0];
+	return pr.ok ? "" : pr.error;
+}
+
+function sourceOk(src: string): boolean { return parseError(src) == ""; }
+
+test "an unparenthesized prefix operand on the left of ** is refused with the operator named" {
+	for (const op of ["-", "!", "~", "typeof ", "void ", "delete "]) {
+		const err = parseError(`${op}x ** 2`);
+		assert err.startsWith(`An unary expression with the '${op.trim()}' operator is not allowed in the left-hand side of an exponentiation expression.`), op;
+	}
+	assert !sourceOk("1 + -x ** 2");
+	assert !sourceOk("-x.y ** 2");
+}
+
+test "a parenthesized prefix operand, a prefix operand on the right and an update on the left of ** stay accepted" {
+	assert sourceOk("(-x) ** 2");
+	assert sourceOk("-(x ** 2)");
+	assert sourceOk("2 ** -x");
+	assert sourceOk("(!x) ** 2");
+	assert sourceOk("(typeof x) ** 2");
+	assert sourceOk("x++ ** 2");
+	assert sourceOk("++x ** 2");
+	assert sourceOk("-x * 2");
+	assert sourceOk("-2");
+}
 
 test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
 
