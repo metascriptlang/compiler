@@ -2565,6 +2565,22 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 //   Pass 2: Full pipeline + codegen + per-module compile to .o
 //   Link all .o files into final binary
 
+export function targetBinarySuffix(targetOs: string, dynLib: boolean): string {
+	if (targetOs == "windows") return dynLib ? ".dll" : ".exe";
+	if (targetOs == "macos" || targetOs == "darwin" || targetOs == "ios") return dynLib ? ".dylib" : "";
+	if (targetOs == "linux" || targetOs == "freebsd" || targetOs == "android") return dynLib ? ".so" : "";
+	return dynLib ? soSuffix() : exeSuffix();
+}
+
+test "a cross build's output suffix comes from the target os, not the host" {
+	assert targetBinarySuffix("linux", true) == ".so";
+	assert targetBinarySuffix("linux", false) == "";
+	assert targetBinarySuffix("macos", true) == ".dylib";
+	assert targetBinarySuffix("ios", true) == ".dylib";
+	assert targetBinarySuffix("windows", true) == ".dll";
+	assert targetBinarySuffix("windows", false) == ".exe";
+}
+
 export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	const session = createBuildSession(false);
 	let status = BuildStatus.Built;
@@ -3131,9 +3147,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
 		const dynLib = opts.isHcr || opts.appMode == "lib";
-		let suffix = dynLib ? soSuffix() : exeSuffix();
-		// Use target OS suffix (works for both native + cross since targetOs always set).
-		if (opts.targetOs == "windows") suffix = dynLib ? ".dll" : ".exe";
+		let suffix = targetBinarySuffix(opts.targetOs, dynLib);
 		if (opts.appMode == "staticlib") suffix = ".a";
 		if (opts.targetOs == "solana") suffix = ".so";
 		if (opts.targetOs == "wasm" ||
