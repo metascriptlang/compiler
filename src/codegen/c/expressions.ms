@@ -14,11 +14,11 @@ import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
+	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, addCGenError, addUnloweredError,
 	isIndirectRef,
 } from "./context";
 import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn, openArrayDataName, openArrayLenName, isPromotedParam } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";

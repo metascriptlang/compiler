@@ -248,7 +248,7 @@ export function runtimeParamCount(t: Readonly<Type>): int32 {
 	return n;
 }
 
-export function isPromotedParam(g: CGen, t: Readonly<Type>, mut: boolean, hookAbi: boolean, borrowsFirst: boolean): boolean {
+function isPromotedParam(g: CGen, t: Readonly<Type>, mut: boolean, hookAbi: boolean, borrowsFirst: boolean): boolean {
 	const promote = hookAbi ? ccgIntroducedPtr(g.target, t) : shouldIndirectParam(g.target, t, mut, borrowsFirst);
 	if (!promote) return false;
 	const desc = getTypeDesc(g, t);
