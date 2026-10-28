@@ -25,7 +25,7 @@ import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExpor
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
-import { constantLiteralOf } from "./constFold";
+import { constantLiteralOf, constBindingInitializer } from "./constFold";
 import { lex } from "../lexer/lexer";
 import { parseExpressionFromState } from "../parser/expressions/core";
 
@@ -614,22 +614,25 @@ function isAllDigits(s: string): boolean {
 	return true;
 }
 
-function bindDimensionNames(expr: Node, ctx: CheckerContext): boolean {
+function bindDimensionNames(expr: Node, ctx: CheckerContext, depth: int32): boolean {
 	return match (expr.kind) {
 		NodeKind.NumberLiteral => true,
 		NodeKind.Identifier => {
+			if (expr.resolvedSym != null) return true;
 			const sym = lookupSymbol(ctx.table, (expr.data as IdentifierData).name);
 			if (sym == null) return false;
 			ensureShaped(sym, ctx);
 			markUsedIn(ctx, sym);
 			expr.resolvedSym = sym;
+			const initializer = constBindingInitializer(sym);
+			if (initializer != null && depth < 64) bindDimensionNames(initializer, ctx, depth + 1);
 			return true;
 		},
 		NodeKind.BinaryExpr => {
 			const d = expr.data as BinaryExprData;
-			return bindDimensionNames(d.left, ctx) && bindDimensionNames(d.right, ctx);
+			return bindDimensionNames(d.left, ctx, depth) && bindDimensionNames(d.right, ctx, depth);
 		},
-		NodeKind.UnaryExpr => bindDimensionNames((expr.data as UnaryExprData).operand, ctx),
+		NodeKind.UnaryExpr => bindDimensionNames((expr.data as UnaryExprData).operand, ctx, depth),
 		_ => false,
 	};
 }
@@ -639,7 +642,7 @@ function constArrayDimension(text: string, ctx: CheckerContext, line: int32, col
 	if (!tokens.ok) return -1;
 	const state = createState(tokens.value);
 	const parsed = parseExpressionFromState(state);
-	if (!parsed.ok || !isAtEnd(state) || !bindDimensionNames(parsed.value, ctx)) return -1;
+	if (!parsed.ok || !isAtEnd(state) || !bindDimensionNames(parsed.value, ctx, 0)) return -1;
 	const folded = constantLiteralOf(parsed.value, 0);
 	if (folded == null || folded.kind != NodeKind.NumberLiteral) return -1;
 	const fd = folded.data as NumberLiteralData;
