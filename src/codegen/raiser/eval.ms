@@ -560,8 +560,9 @@ export function engineRecheckCount(): int32 {
 // A method has no body of its own in the engine: its class compiles whole, in the class scope its `this` and fields live in.
 function compileMethodOwner(method: Symbol): int32 {
 	const fnType = method.symbolType;
-	const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
-	if (self == null || self.sym == null || ensureCompiledIntoEngine(self.sym) < 0) return -1;
+	const owner = method.staticOwner;
+	const self = owner != null ? owner : fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]).sym : null;
+	if (self == null || ensureCompiledIntoEngine(self) < 0) return -1;
 	const idx = _engine.funcMap.symbolIndices.get(method);
 	return idx != null ? idx : -1;
 }
