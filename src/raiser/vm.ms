@@ -7297,7 +7297,7 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	// main holds the closure it spawned plus the copy it read back.
 }
 
-test "a spawned strand writes to its own copy of the captured env" {
+test "a spawned strand reads its parent's captured env, not a copy" {
 	const mainConsts: RaiserValue[] = [raiserInt(1), raiserConstString("fn"), raiserConstString("env"), raiserConstString("n"), raiserInt(7)];
 	const mainCode: RaiserInstruction[] = [
 		raiserABC(RaiserOpcode.NewObject, 6, 0, 0),
@@ -7309,26 +7309,18 @@ test "a spawned strand writes to its own copy of the captured env" {
 		raiserABC(RaiserOpcode.StoreField, 1, 2, 6),
 		raiserABC(RaiserOpcode.Spawn, 3, 1, 0),
 		raiserABC(RaiserOpcode.Await, 4, 3, 0),
-		raiserABC(RaiserOpcode.LoadField, 5, 6, 3),
-		raiserABC(RaiserOpcode.Print, 5, 0, 0),
-		raiserABC(RaiserOpcode.Halt, 5, 0, 0),
+		raiserABC(RaiserOpcode.Print, 4, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 4, 0, 0),
 	];
 	const workerCode: RaiserInstruction[] = [
-		raiserABx(RaiserOpcode.LoadConst, 1, 1),
-		raiserABC(RaiserOpcode.StoreField, 0, 0, 1),
-		raiserABx(RaiserOpcode.LoadConst, 2, 2),
-		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+		raiserABC(RaiserOpcode.LoadField, 1, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
 	];
-	const workerConsts: RaiserValue[] = [raiserConstString("n"), raiserInt(99), raiserInt(0)];
 	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
-	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
-	const funcs: RaiserFunction[] = [fMain, fWorker];
-	const mod = createRaiserModule("t", funcs, 0);
-	const vm = execModule(mod);
+	const fWorker = createRaiserFunction("worker", workerCode, [raiserConstString("n")], 0, 0, 4);
+	const vm = execModule(createRaiserModule("t", [fMain, fWorker], 0));
 	assert vm.error == "", vm.error;
-	// C would let the child write straight through the borrow; here the child
-	// owns a copy, so the parent still reads what it stored (Amendment J).
-	assert vm.output == "7\n";
+	assert vm.output == "7\n", vm.output;
 }
 
 test "await parks the reader until the future completes" {
