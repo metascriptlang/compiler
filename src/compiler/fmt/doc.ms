@@ -11,18 +11,32 @@ export enum DocKind {
 	IfBreak,
 	LineSuffix,
 	BreakParent,
+	IndentIfGroupBreaks,
+	BestFitting,
+	Fill,
 }
 
 export type DocData =
 	| { text: string }
 	| { children: Doc[] }
 	| { isSoft: boolean }
-	| { broken: Doc, flat: Doc };
+	| { broken: Doc, flat: Doc }
+	| { variants: Doc[][] };
+
+export const noGroupId: int32 = 0;
+
+let lastGroupId: int32 = 0;
+
+export function newGroupId(): int32 {
+	lastGroupId += 1;
+	return lastGroupId;
+}
 
 export class Doc {
 	kind: DocKind;
 	data: DocData;
 	shouldBreak: boolean;
+	groupId: int32;
 }
 
 function createDoc(kind: DocKind, data: DocData): Doc {
@@ -30,6 +44,7 @@ function createDoc(kind: DocKind, data: DocData): Doc {
 	d.kind = kind;
 	d.data = data;
 	d.shouldBreak = false;
+	d.groupId = noGroupId;
 	return d;
 }
 
@@ -50,6 +65,12 @@ export function docGroup(children: Doc[]): Doc {
 	return createDoc(DocKind.Group, { children } as DocData);
 }
 
+export function docGroupWithId(children: Doc[], groupId: int32): Doc {
+	const d = createDoc(DocKind.Group, { children } as DocData);
+	d.groupId = groupId;
+	return d;
+}
+
 export function docIndent(children: Doc[]): Doc {
 	return createDoc(DocKind.Indent, { children } as DocData);
 }
@@ -68,6 +89,32 @@ export function docHardLine(): Doc {
 
 export function docIfBreak(broken: Doc, flat: Doc): Doc {
 	return createDoc(DocKind.IfBreak, { broken, flat } as DocData);
+}
+
+// The branch follows the mode of the group `groupId`, which must print before this doc.
+export function docIfGroupBreaks(broken: Doc, flat: Doc, groupId: int32): Doc {
+	const d = createDoc(DocKind.IfBreak, { broken, flat } as DocData);
+	d.groupId = groupId;
+	return d;
+}
+
+export function docIndentIfGroupBreaks(children: Doc[], groupId: int32): Doc {
+	const d = createDoc(DocKind.IndentIfGroupBreaks, { children } as DocData);
+	d.groupId = groupId;
+	return d;
+}
+
+// The first variant that fits flat prints flat; none fitting prints the last, most expanded one.
+export function docBestFitting(variants: Doc[][]): Doc {
+	if (variants.length < 2) throw new Error("internal: best fitting needs the least and the most expanded variant");
+	return createDoc(DocKind.BestFitting, { variants } as DocData);
+}
+
+// Items and separators alternate, starting and ending with an item. A separator breaks only when
+// the next item does not fit behind it on the line.
+export function docFill(parts: Doc[]): Doc {
+	if (parts.length % 2 == 0 && parts.length > 0) throw new Error("internal: a fill alternates items and separators and ends with an item");
+	return createDoc(DocKind.Fill, { children: parts } as DocData);
 }
 
 export function docLineSuffix(children: Doc[]): Doc {
