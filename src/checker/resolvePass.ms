@@ -6,6 +6,7 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
+import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
@@ -589,25 +590,6 @@ function bitSetElementAllowed(elem: Type): boolean {
 	return isOrdinalEnum(elem);
 }
 
-type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
-
-type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
-
-let genericTypeHookFn: GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void => {
-	throw new Error(`internal: no binder for the hook '${hook}' of a generic type is registered`);
-};
-
-export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
-	genericTypeHookFn = fn;
-}
-
-let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
-};
-
-export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
-	typeInstanceHooksFn = fn;
-}
-
 export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null {
 	if (lookupSymbol(ctx.table, name) != null) return null;
 	const t = resolveAnnotation(name, ctx, 0, 0);
@@ -711,7 +693,7 @@ function genericInstanceOf(ctx: CheckerContext, sym: Symbol, genericParams: stri
 	const gi = createGenericInstance(baseType, args);
 	gi.typeName = sym.name;
 	instantiateGenericBody(gi, genericParams);
-	typeInstanceHooksFn(gi, ctx, line, col);
+	callTypeInstanceHooks(gi, ctx, line, col);
 	return isRefBase ? createRef(gi) : gi;
 }
 
@@ -2298,7 +2280,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
-				if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+				if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 				return;
 			}
 		}
@@ -2310,7 +2292,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
-	if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+	if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 }
 
 function hookWritesItsReceiver(name: string): boolean {

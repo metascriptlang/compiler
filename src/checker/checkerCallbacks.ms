@@ -208,3 +208,30 @@ export function callUndefinedVariableMessage(ctx: CheckerContext, name: string):
 export function registerUndefinedVariableMessage(fn: UndefinedVariableMessageFn): void {
 	undefinedVariableMessageFn = fn;
 }
+
+type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
+
+type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
+
+let genericTypeHookFn: GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void => {
+	throw new Error(`internal: no binder for the hook '${hook}' of a generic type is registered`);
+};
+
+export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
+	genericTypeHookFn = fn;
+}
+
+export function callGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void {
+	genericTypeHookFn(ctx, hookSym, receiver, hook, at);
+}
+
+let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
+};
+
+export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
+	typeInstanceHooksFn = fn;
+}
+
+export function callTypeInstanceHooks(instType: Type, ctx: CheckerContext, line: int32, col: int32): void {
+	typeInstanceHooksFn(instType, ctx, line, col);
+}
