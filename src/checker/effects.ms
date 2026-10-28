@@ -295,6 +295,7 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 export function returnsView(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Borrow) return true;
+	if (t.kind == TypeKind.Cursor) return returnsView(t.typeReturn);
 	if (t.kind == TypeKind.Union && !isReadonlyView(t)) {
 		let views = 0;
 		for (const m of t.typeChildren) {
