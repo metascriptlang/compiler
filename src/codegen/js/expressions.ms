@@ -97,6 +97,10 @@ const JS_RESERVED: HashSet<string> = new HashSet<string>([
 	"void", "volatile", "while", "with", "yield", "globalThis",
 ]);
 
+function unknownOperatorChar(name: string, at: int32): string {
+	throw new Error(`internal: operator name '${name}' has no JS identifier spelling for '${name.charAt(at)}'`);
+}
+
 export function safeJsName(name: string): string {
 	if (JS_RESERVED.has(name)) return "$" + name;
 	// Operator names (==, <, !=, etc.) — mangle to valid JS identifier
@@ -119,7 +123,15 @@ export function safeJsName(name: string): string {
 				"%".code => "pct",
 				"[".code => "lbr",
 				"]".code => "rbr",
-				_ => "",
+				"&".code => "amp",
+				"|".code => "bar",
+				"^".code => "roof",
+				"~".code => "tilde",
+				"?".code => "qmark",
+				"@".code => "at",
+				".".code => "dot",
+				":".code => "colon",
+				_ => unknownOperatorChar(name, i),
 			};
 			i = i + 1;
 		}
