@@ -2713,6 +2713,12 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 	};
 }
 
+function namesRoutine(callee: Readonly<Node>, sym: Readonly<Symbol | null>): boolean {
+	if (sym == null) return callee.kind == NodeKind.Identifier;
+	return sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp
+		&& sym.symbolKind != SymbolKind.Parameter && sym.symbolKind != SymbolKind.Property;
+}
+
 function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const cd = node.data as CallExprData;
 	const cc = item.childCount;
@@ -2848,7 +2854,7 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 	// On-demand cross-module prototype (reference parity: genProcPrototype)
 	const protoSym = sym != null ? sym : (cd.callee.resolvedSym);
 	const protoType = protoSym != null && protoSym.symbolType != null ? protoSym.symbolType : calleeType;
-	if (magic == CallMagic.None) ensureCrossModuleProto(g, callee, protoType, protoSym);
+	if (magic == CallMagic.None && namesRoutine(cd.callee, protoSym)) ensureCrossModuleProto(g, callee, protoType, protoSym);
 	// DRC hooks — emit forward declaration on-demand
 	ensureDrcProto(g, callee, protoSym);
 

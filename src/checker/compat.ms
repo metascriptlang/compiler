@@ -927,6 +927,12 @@ export function returnReprRefusal(source: Type | null, target: Type | null, fnTe
 	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
 }
 
+export function closureIntoCPointerReason(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	if (source.callConv != CallingConvention.CcClosure || target.callConv == CallingConvention.CcClosure) return "";
+	return "a C function pointer, which holds no environment: a closure cannot fill it; pass a module-level function";
+}
+
 function callConvMismatch(source: Type, target: Type): boolean {
 	if (source.callConv == CallingConvention.CcInline) return target.callConv != CallingConvention.CcInline;
 	return source.callConv == CallingConvention.CcClosure && target.callConv != CallingConvention.CcClosure;

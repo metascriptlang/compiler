@@ -5,12 +5,12 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
-import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
+import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp, CallingConvention } from "../ast/node";
 import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
@@ -303,7 +303,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
 		},
-		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
+		TypeKind.Function => t.callConv != CallingConvention.CcClosure ? noRcInfo() : makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx, requireOps),
 		TypeKind.TypeReference => noRcInfo(),
 		TypeKind.Distinct => {
@@ -498,12 +498,18 @@ test "array of string → Named (standalone procs)" {
 	assert (info.destroyFn as Symbol).name == "msArrayStringDestroy";
 }
 
-test "function → Closure" {
+test "closure function type → Closure" {
 	const ctx = makeCtx();
-	const info = classifyType(createFunction([], [], voidType()), ctx);
+	const info = classifyType(createClosureType([], [], voidType()), ctx);
 	assert info.rcKind == RcKind.Closure;
 	assert info.needsCleanup;
 	assert (info.destroyFn as Symbol).name == "msClosureDestroy";
+}
+
+test "plain function pointer type holds no count" {
+	const info = classifyType(createFunction([], [], voidType()), makeCtx());
+	assert !info.needsCleanup;
+	assert info.rcKind != RcKind.Closure;
 }
 
 function declaredTestStruct(t: Type): Type {

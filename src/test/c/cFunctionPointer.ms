@@ -6,7 +6,9 @@ const HEADER = "test/cFunctionPointer/sort.h";
 const MAIN = "test/cFunctionPointer/main.ms";
 const SORT = "typedef int (*Compare)(const void *, const void *);\n"
 	+ "void sortAll(void *base, unsigned long count, Compare compare);\n"
-	+ "void eachIndex(int count, void (*visit)(int));\n";
+	+ "void eachIndex(int count, void (*visit)(int));\n"
+	+ "typedef int (*Unary)(int);\n"
+	+ "typedef struct Holder { Unary op; int k; } Holder;\n";
 
 function compileC(main: string): string {
 	const t = createDefineTable();
@@ -45,4 +47,27 @@ test "C: a function whose parameter width differs from the C pointer's is refuse
 	const c = compileC(IMPORT + "function show(i: int64): void { console.log(i); }\neachIndex(2, show);\n");
 	assert c.startsWith("ERROR"), c;
 	assert c.contains("eachIndex"), c;
+}
+
+const HOLDER = "import { Holder } from \"./sort.h\";\nfunction twice(n: int32): int32 { return n * 2; }\n";
+
+test "C: a header struct's function-pointer field is a plain pointer, called directly and given no closure hook" {
+	const c = compileC(HOLDER + "let h: Holder = { op: twice, k: 3 };\nh.op = twice;\nconsole.log(h.op(21));\n");
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains(".op(21)"), c;
+	assert !c.contains(".op(int32_t);"), c;
+	assert !c.contains("msClosureWasMoved"), c;
+	assert !c.contains("msClosure){ .fn = (void*)twice"), c;
+}
+
+test "C: a closure into a header struct's function-pointer field is refused" {
+	const c = compileC(HOLDER + "let k: int32 = 3;\nconst h: Holder = { op: (n: int32): int32 => n + k, k: 1 };\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("is not assignable to a C function pointer"), c;
+}
+
+test "C: a closure assigned to a header struct's function-pointer field is refused" {
+	const c = compileC(HOLDER + "let h: Holder = { op: twice, k: 1 };\nlet k: int32 = 3;\nh.op = (n: int32): int32 => n + k;\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("is not assignable to a C function pointer"), c;
 }

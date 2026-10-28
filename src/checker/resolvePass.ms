@@ -279,7 +279,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	const returnType = predicate != null ? predicate.returnType : (retStr != "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
 
 	// Standard reference parity: procedure type literals default to closure calling convention
-	if (paramsStr == "") return createClosureType([], [], returnType);
+	if (paramsStr == "") return headerFunctionPointer(ctx, createClosureType([], [], returnType));
 
 	const paramParts = splitTopLevel(paramsStr, ",");
 	const paramTypes: Type[] = [];
@@ -309,7 +309,11 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	const fnType = createClosureType(paramTypes, paramNames, returnType);
 	if (predicate != null) fnType.typeExtra = predicate.sentinel;
 	if (requiredCount < paramParts.length) setMinArity(fnType, requiredCount);
-	return fnType;
+	return headerFunctionPointer(ctx, fnType);
+}
+
+function headerFunctionPointer(ctx: CheckerContext, t: Type): Type {
+	return ctx.modulePath.endsWith(".h") ? plainFunctionPointerType(t) : t;
 }
 
 // Unwrap a Type to its underlying Struct (handles Ref<Struct> + GenericInstance).
@@ -2149,9 +2153,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
 	wrapModifierTypes(d.fnFlags, paramTypes);
-	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) && ctx.modulePath.endsWith(".h")) {
-		for (let pi = 0; pi < paramTypes.length; pi += 1) paramTypes[pi] = plainFunctionPointerType(paramTypes[pi]);
-	}
 
 	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
 		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
