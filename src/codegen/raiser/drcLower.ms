@@ -72,7 +72,10 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
 		return;
 	}
-	if (leavesEmptyArray && isPlainDataType(place.nodeType, declaresUserHook)) return;
+	if (leavesEmptyArray && isPlainDataType(place.nodeType, declaresUserHook)) {
+		if (needsValueCopy(place.nodeType)) emitKeptCopy(s, name, place);
+		return;
+	}
 	if (needsValueCopy(place.nodeType) && !(leavesEmptyArray && (isArrayType(place.nodeType) || nullIsZeroValue(place.nodeType)))) {
 		const cleared = allocReg(s, RaiserRegClass.Ref);
 		emitLoadConst(s, cleared, raiserNil());
@@ -80,6 +83,13 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 		return;
 	}
 	emitPlaceStore(s, name, place, emitZeroValue(s, place.nodeType));
+}
+
+function emitKeptCopy(s: RaiserCompState, name: string, place: Node): void {
+	const source = refRegister(s, name, place);
+	const copied = emitValueCopy(s, source, place.nodeType);
+	if (copied == source) emitInst(s, raiserABC(RaiserOpcode.RcInc, source, 0, 0));
+	else emitPlaceStore(s, name, place, copied);
 }
 
 function emitRebind(s: RaiserCompState, name: string, dest: Node, incoming: int32, oldSource: int32): void {
