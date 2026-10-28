@@ -2,8 +2,8 @@
 // @stdout: sendable call 6
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @serial
-// @ledger-slack(Store) 1
-// ledger-slack reason: its actor is never stopped, so it and what it owns are still live at exit
+import { stop, ExitReason } from "std/actor";
+
 class Item { n: int32 = 1; }
 
 class Cache {
@@ -45,6 +45,8 @@ async function main(): Promise<void> {
 	const w = new Worker();
 	const job = async (n: int32): Promise<int32> => await w.run(n);
 	console.log(`sendable call ${await runJob(job)}`);
+	stop(store.pid, ExitReason.Normal);
+	stop(w.pid, ExitReason.Normal);
 }
 
 await main();
