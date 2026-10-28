@@ -1948,6 +1948,8 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 	if (rootSym.symbolKind == SymbolKind.Parameter) return false;
 	const vi = findVarInfoInContext(dctx, rootSym);
 	if (vi != null && vi.isCursor) return false;
+	const rootBorrowsItsFields = !classifyRc(rootSym.symbolType, dctx).needsCleanup;
+	if (rootBorrowsItsFields) return false;
 	if (symListHas(dctx.finallyProtectedVars, rootSym)) return false;
 	// Field-level CFG query with alias-aware BFS
 	if (dctx.currentFuncBody != null) {
