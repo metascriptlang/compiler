@@ -29,7 +29,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
+import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -71,6 +71,47 @@ function instantiates(instance: Type, generic: Symbol | null, writtenName: strin
 	const base = instance.typeExtra != null ? unwrapRefBase(instance.typeExtra) : null;
 	if (generic != null && base != null && base.sym != null) return base.sym == generic;
 	return instance.typeName == (generic != null ? generic.name : writtenName);
+}
+
+// Source 4: a `new` resolves like a call to the constructor, so the arguments bind the class's
+// type parameters. Nothing binds one when no argument mentions it, and then `new` stays refused.
+function inferClassArgsFromConstructor(ctx: CheckerContext, newNode: Node, classSym: Symbol, paramNames: string[]): Type[] | null {
+	const args = (newNode.data as NewExprData).newArguments;
+	if (args.length == 0 || !hasFlag(classSym, SymbolFlag.HasConstructor)) return null;
+	const formals = ctorFormalTypes(ctorRoutineOf(classSym));
+	const own = ownTypeParams(classSym, paramNames.map((n: string): string => n.trim()));
+	if (formals == null || own.length != paramNames.length) return null;
+	const candParams: Type[] = [];
+	const candTypes: Type[] = [];
+	const candFrom: int32[] = [];
+	const candSkip: boolean[] = [];
+	const candLiteral: boolean[] = [];
+	const candMapped: boolean[] = [];
+	for (let i = 0; i < args.length && i < formals.length; i += 1) {
+		const formal = formals[i];
+		if (formal.kind == TypeKind.Varargs || !hasGenericParams(formal) || isContextSensitive(args[i])) continue;
+		const mark = ctx.errors.length;
+		clearCheckerState(args[i]);
+		callCheckExpr(ctx, args[i], args[i].kind == NodeKind.ArrayLiteral ? tupleContextOf(formal) : null);
+		const argType = args[i].nodeType;
+		const clean = ctx.errors.length == mark && argType != null && !isUnresolvedType(argType);
+		ctx.errors = ctx.errors.slice(0, mark);
+		clearCheckerState(args[i]);
+		if (!clean) return null;
+		const bound = createUnifyBindings();
+		unifyType(formal, argType!, bound);
+		collectArgCandidates(createUnifyBindings(), bound, i, args[i], candParams, candTypes, candFrom, candSkip, candLiteral, candMapped);
+	}
+	const fold = foldTypeParamCandidates(candParams, candTypes, candSkip, createUnifyBindings(), candLiteral, candMapped);
+	const bindings = createUnifyBindings();
+	for (let k = 0; k < fold.params.length; k += 1) bindParam(bindings, fold.params[k], literalBase(fold.types[k]));
+	const inferred: Type[] = [];
+	for (const param of own) {
+		const slot = boundSlot(bindings, param);
+		if (slot < 0 || hasGenericParams(bindings.types[slot]) || holdsInferred(bindings.types[slot])) return null;
+		inferred.push(bindings.types[slot]);
+	}
+	return inferred;
 }
 
 function newTypeArg(node: Node, index: int32, text: string, ctx: CheckerContext, line: int32, col: int32): Type {
@@ -120,15 +161,15 @@ function resolveGenericNewExpr(ctx: CheckerContext, newNode: Node, callee: Node,
 		// Map<string, Handler> = ...` annotation) and pull the concrete
 		// type args out of `typeChildren`.
 		const giCtx = peelToGenericInstance(expectedType);
-		if (giCtx == null
-				|| !instantiates(giCtx, calleeSym, calleeName)
-				|| giCtx.typeChildren == null
-				|| giCtx.typeChildren.length != paramNames.length) {
-			return { type: calleeType, instance: null };
-		}
+		const fromContext = giCtx != null
+			&& instantiates(giCtx, calleeSym, calleeName)
+			&& giCtx.typeChildren != null
+			&& giCtx.typeChildren.length == paramNames.length;
+		const fromArguments = fromContext || calleeSym == null ? null : inferClassArgsFromConstructor(ctx, newNode, calleeSym, paramNames);
+		if (!fromContext && fromArguments == null) return { type: calleeType, instance: null };
 		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			trimmedParamNames.push(paramNames[pi].trim());
-			concreteTypes.push(giCtx.typeChildren[pi]);
+			concreteTypes.push(fromArguments != null ? fromArguments[pi] : giCtx!.typeChildren[pi]);
 		}
 	}
 	const declared = calleeSym != null ? declaredTypeParams(calleeSym, trimmedParamNames.length) : [];
@@ -1136,7 +1177,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			// for genuinely under-specified `new`s.
 			const giCtx2 = peelToGenericInstance(expected);
 			const giCtxOk = giCtx2 != null && instantiates(giCtx2, d.newCallee.resolvedSym, calleeName2);
-			if (noExplicit && !giCtxOk) {
+			if (noExplicit && !giCtxOk && generic.type == calleeType) {
 				addError(ctx, `'new ${calleeName2}()' requires explicit type arguments: new ${calleeName2}<...>()`, node.location.line, node.location.column);
 			}
 			if (!noExplicit) checkExplicitTypeArgArity(ctx, node, extractGenericNames("gen:" + genericParams2), calleeName2);
@@ -2197,6 +2238,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	for (const arg of d.arguments) literalArgs.push(isLiteralTree(arg));
 	for (let oi = 0; oi < argOrder.length; oi += 1) {
 		const ai = argOrder[oi];
+		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 		let paramExpected: Type | null = null;
 		const _formal: Type | null = (calleeType != null
 			&& calleeType.kind == TypeKind.Function
@@ -2238,13 +2280,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// infer from, the unbound-T gate must stay loud.
 			if (_isGenericCall && hasGenericParams(paramExpected)) {
 				const nonEmptyArrayLit = d.arguments[ai].kind == NodeKind.ArrayLiteral
-		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 					&& (d.arguments[ai].data as ArrayLiteralData).elements.length > 0;
 				const nonEmptyObjectLit = d.arguments[ai].kind == NodeKind.ObjectLiteral
 					&& (d.arguments[ai].data as ObjectLiteralData).properties.length > 0;
-				if (nonEmptyArrayLit || nonEmptyObjectLit) {
-					paramExpected = null;
-				}
+				if (nonEmptyObjectLit) paramExpected = null;
+				else if (nonEmptyArrayLit) paramExpected = tupleContextOf(paramExpected);
 			}
 		}
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
@@ -3495,6 +3535,28 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	const t = arg.nodeType;
 	if (t == null) return true;
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
+}
+
+function holdsTuple(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 8) return false;
+	if (t.kind == TypeKind.Tuple) return true;
+	const element = t.kind == TypeKind.Ref || t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span;
+	return element && holdsTuple(t.typeReturn, depth + 1);
+}
+
+// A bracket literal under a formal written as a tuple is a tuple, whatever type parameters the
+// formal still holds: they read as not yet known, and the literal's own element types bind them.
+function tupleContextOf(formal: Type | null): Type | null {
+	if (formal == null || !holdsTuple(formal, 0)) return null;
+	const notYet = createUnifyBindings();
+	let erased: Type = formal;
+	for (let i = 0; i < 16 && hasGenericParams(erased); i += 1) {
+		const param = findFirstGenericParam(erased, new TypeVisitSet());
+		if (param == null) return null;
+		bindParam(notYet, param, inferredType());
+		erased = substituteBound(erased, notYet);
+	}
+	return hasGenericParams(erased) ? null : erased;
 }
 
 function literalParamsAwaitFormal(arg: Node): boolean {

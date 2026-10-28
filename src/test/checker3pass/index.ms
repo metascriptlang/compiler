@@ -21,6 +21,7 @@ import "./scenarios/inferredFromArgs";
 import "./scenarios/inferredFromReturn";
 import "./scenarios/genericMethod";
 import "./scenarios/genericConstructor";
+import "./scenarios/newInfersFromConstructor";
 import "./scenarios/nestedGeneric";
 import "./scenarios/recursive";
 import "./scenarios/overloadXGeneric";

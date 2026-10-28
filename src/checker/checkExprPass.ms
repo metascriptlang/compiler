@@ -2813,13 +2813,22 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 	// for a `[T, U]` return type errors "expected Tuple, got Array"). Sibling of the
 	// Array / SizedArray / Ref<Array> contextual cases below.
 	if (arrExpected != null && arrExpected.kind == TypeKind.Tuple && arrExpected.typeChildren != null) {
+		const slots: Type[] = [];
+		let takesElementTypes = false;
 		for (let ti = 0; ti < d.elements.length; ti += 1) {
 			const te = ti < arrExpected.typeChildren.length ? arrExpected.typeChildren[ti] : null;
 			checkExpr(ctx, d.elements[ti], te);
+			if (te != null && te.kind == TypeKind.Inferred) {
+				takesElementTypes = true;
+				slots.push(literalBase(d.elements[ti].nodeType!));
+				continue;
+			}
 			if (te != null) d.elements[ti] = fitNode(ctx, d.elements[ti], te, d.elements[ti].nodeType);
+			slots.push(te != null ? te : d.elements[ti].nodeType!);
 		}
 		fitTupleLength(ctx, node, d.elements, arrExpected);
-		node.nodeType = arrExpected;
+		while (slots.length < arrExpected.typeChildren.length) slots.push(arrExpected.typeChildren[slots.length]);
+		node.nodeType = takesElementTypes ? createTuple(slots) : arrExpected;
 		return;
 	}
 	const elemExpected = (arrExpected != null
@@ -2842,7 +2851,7 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			checkExpr(ctx, d.elements[i], elemExpected);
 			iterateSpreadSource(ctx, d.elements[i]);
 			if (elemExpected != null) {
-				d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
+				if (!holdsInferred(elemExpected)) d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
 			} else if (d.elements[i].nodeType != null) {
 				storedTypeOfNullRead(d.elements[i], d.elements[i].nodeType, d.elements[i].nodeType);
 			}
@@ -2945,12 +2954,12 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			}
 			refuseUnfilledSlots(ctx, node, arrExpected, d.elements.length);
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
-		} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected)) {
+		} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected) && !holdsInferred(arrExpected)) {
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
 		} else {
 			// No array context: a bare `[...]` literal is a reference array (T[] = Ref<Array>),
 			// so nativeLower boxes it and it matches T[] params/returns post-flip.
-			node.nodeType = refArrayWrap != null ? refArrayWrap : createRef(createArray(elemType)); return;
+			node.nodeType = refArrayWrap != null && !holdsInferred(refArrayWrap) ? refArrayWrap : createRef(createArray(elemType)); return;
 		}
 	}
 }
