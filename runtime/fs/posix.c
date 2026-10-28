@@ -26,24 +26,25 @@ msString msFsReadFile(msString path) {
 	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), "rb");
 	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
-	if (fseeko(f, 0, SEEK_END) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
-	off_t sz = ftello(f);
-	if (sz < 0 || fseeko(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
-	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
-	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
-	char* buf = (char*)malloc((size_t)sz + 1);
+	struct stat st;
+	size_t cap = fstat(fileno(f), &st) == 0 && st.st_size > 0 && st.st_size < MS_LEN_MAX ? (size_t)st.st_size + 1 : 4096;
+	char* buf = (char*)malloc(cap);
 	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
-	errno = 0;
-	size_t nread = fread(buf, 1, (size_t)sz, f);
-	if (nread != (size_t)sz && ferror(f)) {
-		_msFsLastErrno = errno != 0 ? errno : EIO;
-		free(buf);
-		fclose(f);
-		return MS_EMPTY_STRING;
+	size_t len = 0;
+	for (;;) {
+		errno = 0;
+		len += fread(buf + len, 1, cap - len, f);
+		if (ferror(f)) { _msFsLastErrno = errno != 0 ? errno : EIO; break; }
+		if (feof(f)) break;
+		if (cap > (size_t)MS_LEN_MAX) { _msFsLastErrno = EFBIG; break; }
+		char* grown = (char*)realloc(buf, cap * 2);
+		if (!grown) { _msFsLastErrno = ENOMEM; break; }
+		buf = grown;
+		cap = cap * 2;
 	}
 	fclose(f);
-	buf[nread] = '\0';
-	msString result = msStringNew(buf, (int64_t)nread);
+	if (_msFsLastErrno == 0 && len > (size_t)MS_LEN_MAX) _msFsLastErrno = EFBIG;
+	msString result = _msFsLastErrno != 0 || len == 0 ? MS_EMPTY_STRING : msStringNew(buf, (int64_t)len);
 	free(buf);
 	return result;
 }
