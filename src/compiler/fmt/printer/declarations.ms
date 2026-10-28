@@ -347,7 +347,7 @@ function printBodyMembers(members: Node[], options: FormatOptions): Doc[] {
 
 function printBodyMember(m: Node, options: FormatOptions): Doc {
 	if (m.kind == NodeKind.BlockStmt) {
-		return withComments(m, docGroup([docText("static "), printBlock(m, options)]));
+		return withComments(m, docGroup([docText("static "), printCollapsibleBody(m, options)]));
 	}
 	return callPrintNode(m, options);
 }

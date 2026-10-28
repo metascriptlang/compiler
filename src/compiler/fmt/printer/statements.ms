@@ -274,13 +274,14 @@ function commentsBeforeElse(d: IfStmtData, options: FormatOptions): SourceCommen
 	return out;
 }
 
-function isEmptyBlock(node: Node): boolean {
-	return node.kind == NodeKind.BlockStmt && (node.data as BlockStmtData).statements.length == 0;
+function isUnwrittenElse(alt: Node, options: FormatOptions): boolean {
+	if (alt.kind != NodeKind.BlockStmt || (alt.data as BlockStmtData).statements.length != 0) return false;
+	return sourceByteAt(options.source, alt.location.line, alt.location.column) != "{".code;
 }
 
 export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as IfStmtData;
-	const hasElse = d.alternate != null && !isEmptyBlock(d.alternate);
+	const hasElse = d.alternate != null && !isUnwrittenElse(d.alternate, options);
 	const beforeElse = hasElse ? commentsBeforeElse(d, options) : [];
 	const parts: Doc[] = [
 		docText("if ("),
