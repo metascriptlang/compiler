@@ -366,7 +366,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		if (localOfPlace(s, placeOf(d.arguments[0])) < 0) emitClear(s, name, d.arguments[0], false);
 	}
 	else if (row == ROW_DECREF_CYCLIC) emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 1, 0));
-	else if (row == ROW_CLEAR) emitClear(s, name, d.arguments[0]);
+	else if (row == ROW_CLEAR) emitClear(s, name, d.arguments[0], name != "msPtrWasMoved");
 	else if (row == ROW_SINK) emitSink(s, name, d.arguments[0], d.arguments[1]);
 	else if (row == ROW_KEPT) emitInst(s, raiserABC(RaiserOpcode.RcKeptCheck, refRegister(s, name, d.arguments[0]), compileExpr(s, d.arguments[1]), 0));
 	else if (row == ROW_COPY_VALUE) emitCopyValue(s, name, d.arguments[0], d.arguments[1]);
