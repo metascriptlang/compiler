@@ -567,6 +567,10 @@ function getCalleeNameForDefaults(callNode: Node): string {
 	if (cd.callee.kind == NodeKind.Identifier) {
 		return (cd.callee.data as IdentifierData).name;
 	}
+	if (cd.callee.kind == NodeKind.MemberExpr && cd.callee.resolvedSym != null) {
+		const me = cd.callee.data as MemberExprData;
+		if (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module) return me.property;
+	}
 	return "";
 }
 
