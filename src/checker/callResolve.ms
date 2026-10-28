@@ -2349,6 +2349,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				argType = converted.nodeType;
 			}
 		}
+		if (resultSlot != null && argType != null) {
+			const sendable = fitSendable(ctx, d.arguments[ai], resultSlot, argType);
+			if (sendable != null) argType = sendable;
+		}
 		argTypes[ai] = argType!;
 		// Source 3: forward inference. Single-walk — subsequent args see
 		// the updated bindings, prior args are never re-checked.
