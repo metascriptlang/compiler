@@ -61,7 +61,8 @@ every gate ahead of it has finished or died. It names the gate it waits behind
 about once a minute; the wait is not capped by GATE_WAIT_MAX and shows in the
 ledger wait column. Only the running gate counts when worker slots are split.
 --dry-run, a tools-only run and the --emit-one children of a running gate never
-queue. An empty registry file is a running gate whose gate.sh predates the queue;
+queue, nor does a run with GATE_QUEUE=0, whose caller admitted it on measured free CPU and RAM (a
+gate host running several gates in their own checkouts). An empty registry file is a running gate whose gate.sh predates the queue;
 it is waited for like any other. A registry file that does not parse stops the
 run and names the file.
 
@@ -2369,7 +2370,7 @@ need_cand() {
 if [ "$select_only" -eq 1 ]; then
   need_cand select
   trap queue_release EXIT
-  queue_acquire
+  [ "${GATE_QUEUE:-1}" = 0 ] || queue_acquire
   select=1 selected=0 select_label=corpus
   select_programs
   [ "$selected" -eq 0 ] || cat "$EMIT/only.corpus"
@@ -2499,7 +2500,7 @@ lane_body() {
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
-[ "$lanes" = tools ] || { queue_acquire; warn_slow_starts; }
+[ "$lanes" = tools ] || { [ "${GATE_QUEUE:-1}" = 0 ] || queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open
