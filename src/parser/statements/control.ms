@@ -557,7 +557,7 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 
-import { ProgramData, AssertStmtData, ReturnStmtData } from "../../ast/node";
+import { ProgramData, AssertStmtData, ReturnStmtData, FunctionDeclData, BlockStmtData } from "../../ast/node";
 import { parseSource } from "./validation";
 
 // If — distinct paths: simple, else, else-if chain
@@ -636,6 +636,24 @@ test "return needs no argument before a semicolon closing brace or end of input"
 	assert programOk("return");
 }
 // Do-while
+function bodyLen(src: string): int32 {
+	const fd = stmtAt(src, 0).data as FunctionDeclData;
+	return (fd.fnBody.data as BlockStmtData).statements.length;
+}
+
+test "a line break after return ends the statement before the next line" {
+	assert bodyLen("function f() { return\nside() }") == 2;
+	assert bodyLen("function f() { return\nx }") == 2;
+	assert bodyLen("function f() { if (x) return\nside() }") == 2;
+}
+
+test "return keeps a value that starts on its own line and a bare return before a semicolon or brace" {
+	assert bodyLen("function f() { return x\n }") == 1;
+	assert bodyLen("function f() { return (\nx) }") == 1;
+	assert bodyLen("function f() { return; side() }") == 2;
+	assert bodyLen("function f() { return }") == 1;
+}
+
 test "do-while" { assert programOk("do { x; } while (y);"); }
 
 test "do-while no semi" { assert programOk("do { x; } while (y)"); }
