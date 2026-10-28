@@ -1405,6 +1405,28 @@ function runUnionCodecCast(): void {
 	record("a match, the JSON codec and an anonymous union store into a declared union alias through its own struct", "true true 1 1\ntrue true", value(dir));
 }
 
+function runPromiseOwnedResultCast(): void {
+	const dir = `${root}/promise-owned-result-cast`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"interface Pt { x: int32; name: string; }",
+		"const s = new Promise<string>((resolve) => { resolve(\"x\"); });",
+		"const p = new Promise<Pt>((resolve) => { resolve({ x: 3, name: \"pt\" }); });",
+		"const n = new Promise<int64>((resolve) => { resolve(41 as int64); });",
+		"async function main(): Promise<void> {",
+		"\tconst a = await s;",
+		"\tconst b = await p;",
+		"\tconst c = await n;",
+		"\tconsole.log(`${a} ${b.x} ${b.name} ${c}`);",
+		"}",
+		"main();",
+		"",
+	].join("\n"));
+	need(build(dir, "promise-owned-result-cast", "probe", ["--passC=-Werror=incompatible-pointer-types"]) == 0, "promise-owned-result-cast build under -Werror=incompatible-pointer-types");
+	record("a string, a struct and an int64 promise complete through the owned-result helper without a pointer cast", "x 3 pt 41", value(dir));
+}
+
 function moduleNamesTree(parent: string): string {
 	const app = `${parent}/app`;
 	ensureDir(`${app}/sub`);
@@ -1874,6 +1896,7 @@ if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") {
 	runUpcastCast();
 	runUnionCodecCast();
+	runPromiseOwnedResultCast();
 }
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();

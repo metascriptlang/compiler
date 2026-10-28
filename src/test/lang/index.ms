@@ -15,6 +15,7 @@ import "./trycatch";
 import "./recursion";
 import "./advanced";
 import "./async";
+import "./promiseOwnedResult";
 import "./syntax";
 import "./testBlockScope";
 import "./whenStmt";
