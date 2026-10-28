@@ -5907,6 +5907,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				ensureShaped(ext.sym, ctx);
 				callDemandReturn(ctx, ext.sym, node);
 				node.resolvedSym = ext.sym;
+				if (ext.isStatic) node.flags = node.flags.incl(NodeFlag.ExtStatic);
 				markUsedIn(ctx, ext.sym);
 				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, extReceiverDisplay(ext), false);
 			}

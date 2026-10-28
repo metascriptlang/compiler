@@ -7,7 +7,7 @@
 
 import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation } from "../../ast/node";
 import { TransformContext } from "../context";
-import { walkNode } from "../walker";
+import { mapChildren } from "../walker";
 import { makeTypedIdentResolved, makeCall, makeMember } from "../util";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { inferredType, createFunction } from "../../checker/types";
@@ -88,7 +88,29 @@ function staticCallee(receiver: Node, sym: Symbol, loc: SourceLocation): Node {
 // ===== Entry Point =====
 
 export function lowerExtensionMethod(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, (n: Node): Node => lowerExtNode(n, ctx));
+	return lowerExtTree(program, ctx);
+}
+
+function lowerExtTree(node: Node, ctx: TransformContext): Node {
+	mapChildren(node, (child: Node): Node => {
+		if (child == null) return child;
+		const lowered = lowerExtTree(child, ctx);
+		return isCalleeOf(node, child) ? lowered : lowerStaticRead(lowered);
+	});
+	return lowerExtNode(node, ctx);
+}
+
+function isCalleeOf(parent: Node, child: Node): boolean {
+	return parent.kind == NodeKind.CallExpr && (parent.data as CallExprData).callee == child;
+}
+
+function lowerStaticRead(node: Node): Node {
+	if (node.kind != NodeKind.MemberExpr || !node.flags.has(NodeFlag.ExtStatic)) return node;
+	const member = node.data as MemberExprData;
+	if (node.resolvedSym == null) throw new Error(`internal: static extension read '.${member.property}' reached lowering without its resolved symbol`);
+	const read = staticCallee(member.object, node.resolvedSym, node.location);
+	read.nodeType = node.nodeType;
+	return read;
 }
 
 // ===== Test Helpers =====
