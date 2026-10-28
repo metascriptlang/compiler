@@ -1243,6 +1243,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			implNode.paramSyms = m.paramSyms;
 			const implSym = mintSym(ctx, SymbolKind.Function, implName, implType != null ? implType : noneType());
 			implNode.resolvedSym = implSym;
+			if (implType != null) markValueLayoutParamsAsMutated(implSym, implType.typeChildren);
 			recordActorImpl(ctx, m, implSym);
 			extracted.push(implNode);
 
