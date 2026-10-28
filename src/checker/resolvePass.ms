@@ -8,7 +8,7 @@
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow, plainFunctionPointerType } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -835,12 +835,45 @@ function distributiveOver(check: Type, extendsType: Type, keep: boolean): Type {
 	return substituteParams(cond, [param], [check]);
 }
 
+// `Awaited<T>`: `T extends Promise<infer U> ? U : T`, distributive. A promise of a promise is
+// refused by the language, so one level is every level.
+function awaitedOver(check: Type): Type {
+	const param = createGenericParam("$check");
+	const value = createGenericParam("$awaited");
+	const cond = createConditionalType(param, createPromise(value), value, param);
+	setInferParams(cond, [value]);
+	markDistributive(cond);
+	return substituteParams(cond, [param], [check]);
+}
+
+// `ReturnType<F>` and `Parameters<F>` over a function type written out or named by an alias.
+function functionPartOf(head: string, fn: Type, ctx: CheckerContext, line: int32, col: int32): Type {
+	const shown = typeDisplayName(fn);
+	const fnType = peelTransparentInstance(fn);
+	if (hasGenericParams(fnType)) {
+		if (line > 0) addError(ctx, `${head}<${shown}> over a type parameter is not supported: write the function type out`, line, col);
+		return errorType();
+	}
+	if (fnType.kind != TypeKind.Function) {
+		if (line > 0) addError(ctx, `type '${shown}' does not satisfy the constraint '(...args: any) => any' of ${head}`, line, col);
+		return errorType();
+	}
+	if (head == "ReturnType") return fnType.typeReturn != null ? fnType.typeReturn : voidType();
+	let plain = getMinArity(fnType) == fnType.typeChildren.length;
+	for (const p of fnType.typeChildren) plain = plain && p.kind != TypeKind.Varargs;
+	if (!plain) {
+		if (line > 0) addError(ctx, `Parameters<${shown}> is not supported for a function with a rest or optional parameter`, line, col);
+		return errorType();
+	}
+	return createTuple(fnType.typeChildren);
+}
+
 // TypeScript's lib utility types, as the lib declares them over mapped and conditional types:
 // `Partial<T> = { [P in keyof T]?: T[P] }` and the rest. Built here rather than declared in
 // the prelude, like `Readonly<T>`, so a builder that predates mapped types still reads std.
 function utilityType(head: string, args: string[], ctx: CheckerContext, line: int32, col: int32): Type | null {
 	const arity = match (head) {
-		"Partial" | "Required" | "NonNullable" => 1,
+		"Partial" | "Required" | "NonNullable" | "ReturnType" | "Parameters" | "Awaited" => 1,
 		"Pick" | "Omit" | "Record" | "Exclude" | "Extract" => 2,
 		_ => 0,
 	};
@@ -848,6 +881,8 @@ function utilityType(head: string, args: string[], ctx: CheckerContext, line: in
 	const first = resolveAnnotation(args[0], ctx, line, col);
 	if (first.kind == TypeKind.Error) return first;
 	if (head == "NonNullable") return distributiveOver(first, nullType(), false);
+	if (head == "Awaited") return awaitedOver(first);
+	if (head == "ReturnType" || head == "Parameters") return functionPartOf(head, first, ctx, line, col);
 	const second = arity == 2 ? resolveAnnotation(args[1], ctx, line, col) : null;
 	if (second != null && second.kind == TypeKind.Error) return second;
 	if (head == "Exclude" || head == "Extract") return distributiveOver(first, second!, head == "Extract");
