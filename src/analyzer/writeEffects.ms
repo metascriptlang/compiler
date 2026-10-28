@@ -719,7 +719,7 @@ function routinesOf(w: WriteEffects, value: Node, params: Symbol[] | null, assig
 function linkFunctionValue(w: WriteEffects, s: WriteSummary, value: Node, params: Symbol[] | null, assigned: HashSet<Symbol>, d: LocalDefs): void {
 	const out: WriteSummary[] = [];
 	if (!routinesOf(w, value, params, assigned, d, 0, out)) {
-		markUnknown(s);
+		if (!sendableWritesNothingHeld(value.nodeType)) markUnknown(s);
 		return;
 	}
 	for (const callee of out) {
@@ -1046,7 +1046,7 @@ function callWriteParts(w: WriteEffects, call: Node, defs: LocalDefs | null): Wr
 	if (call.kind == NodeKind.CallExpr) addressWrites(w, s, call, null, false);
 	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(w, call) : calleesOf(w, call, s, null, null, defs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
-		if (a != null && mayBeFunctionValue(a.nodeType) && !isLentCallback(w, a) && !routinesOf(w, a, null, null, null, 0, callees)) markUnknown(s);
+		if (a != null && mayBeFunctionValue(a.nodeType) && !isLentCallback(w, a) && !routinesOf(w, a, null, null, null, 0, callees) && !sendableWritesNothingHeld(a.nodeType)) markUnknown(s);
 	}
 	for (const c of callees) {
 		if (reloadsApart(w, s, c)) markUnknown(s);

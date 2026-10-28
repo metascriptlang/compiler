@@ -1029,7 +1029,7 @@ function actorPidMember(thisSym: Symbol, loc: SourceLocation): Node {
 	return member;
 }
 
-function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLocation, ctorParams: Symbol[]): Node[] {
+function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLocation, ctorParams: Symbol[], ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 	const actorName = actor.actorSym.name;
 	const dSym = actor.dispatch;
@@ -1071,7 +1071,10 @@ function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLo
 	const ctor = actor.ctor;
 	if (ctor != null) {
 		const ctorArgs: Node[] = [makeIdentResolved(thisSym, loc)];
-		for (let i = 1; i < ctorParams.length; i += 1) ctorArgs.push(makeIdentResolved(ctorParams[i], loc));
+		for (let i = 1; i < ctorParams.length; i += 1) {
+			ctorArgs.push(makeIdentResolved(ctorParams[i], loc));
+			if (mayHoldCycleRoot(ctorParams[i].symbolType, ctx)) result.push(disownStmt(makeIdentResolved(ctorParams[i], loc), ctorParams[i].symbolType, loc));
+		}
 		const ctorCall = makeCall(makeIdentResolved(ctor, loc), ctorArgs, loc);
 		ctorCall.resolvedSym = null;
 		result.push(makeExprStmt(makeCall(runtimeRef("msActorCtorEnter", loc), [actorPidMember(thisSym, loc)], loc), loc));
@@ -1106,7 +1109,7 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 		return;
 	}
 	const body = (ctor.data as ConstructorDeclData).ctorBody.data as BlockStmtData;
-	for (const stmt of generateActorWiring(params[0], actor, loc, params)) body.statements.push(stmt);
+	for (const stmt of generateActorWiring(params[0], actor, loc, params, ctx)) body.statements.push(stmt);
 }
 
 function injectActorPoll(program: Node): Node {
