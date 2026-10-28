@@ -397,6 +397,19 @@ function regIndex(vm: RaiserVM, address: int64): number {
 	return index as number;
 }
 
+function regAddrFile(vm: RaiserVM, address: int64): RaiserRegFile {
+	if (fileHoldsAddress(vm.regs, address)) return vm.regs;
+	for (const s of vm.sched.strands.items) {
+		if (s.status != RaiserStrandStatus.Done && fileHoldsAddress(s.regs, address)) return s.regs;
+	}
+	throw new Error(`internal: register address ${address} is in no live strand's register file`);
+}
+
+function fileHoldsAddress(regs: RaiserRegFile, address: int64): boolean {
+	const first = regs.slots as int64;
+	return address >= first && address < first + ((regs.cap as int64) << 3);
+}
+
 function readAbs(vm: RaiserVM, cls: int32, abs: number): RaiserValue {
 	if (cls == CLS_REF || cls == CLS_DYN) {
 		when (mode != "danger") { if (abs >= vm.regs.cap) throw slotOutside(cls, abs); }
@@ -1867,16 +1880,13 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
 	let spawnEnv: int64 = 0;
 	if (envField.kind == RaiserValueKind.Object) {
-		const copyMap = strandCopyMap(vm);
-		copyMap.destGlobals = vm.globals;
-		const envSlot = copyGraphWith(vm.arrayHeap, vm.objectHeap, vm.arrayHeap, vm.objectHeap, envField, copyMap);
-		rcIncref(vm.arrayHeap, vm.objectHeap, envSlot);
+		rcIncref(vm.arrayHeap, vm.objectHeap, envField);
 		if (callee.regOps.length == 0 || (callee.regOps[0] & 7) != CLS_REF) {
 			vmError(vm, `spawn: ${callee.name} does not take the closure environment in a ref register`);
 			return -1;
 		}
-		regs.slots[callee.regOps[0] >> 3] = envSlot.intVal;
-		spawnEnv = envSlot.intVal;
+		regs.slots[callee.regOps[0] >> 3] = envField.intVal;
+		spawnEnv = envField.intVal;
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -4571,7 +4581,10 @@ function vmHandleLoadDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	const ptr = getDyn(vm, ib);
 	let held = ptr;
 	if (ptr.kind == RaiserValueKind.RegAddr) {
+		const running = vm.regs;
+		vm.regs = regAddrFile(vm, ptr.intVal);
 		held = readAbs(vm, (ptr.intVal & 7) as int32, regIndex(vm, ptr.intVal));
+		vm.regs = running;
 	} else if (ptr.kind == RaiserValueKind.GlobalAddr) {
 		held = vm.globals[ptr.intVal];
 	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
@@ -4591,7 +4604,10 @@ function vmHandleStoreDeref(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	const val = ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr ? held : readDyn(vm.arrayHeap, held);
 	if (ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr) {
 		if (ptr.kind == RaiserValueKind.RegAddr) {
+			const running = vm.regs;
+			vm.regs = regAddrFile(vm, ptr.intVal);
 			writeAbs(vm, (ptr.intVal & 7) as int32, regIndex(vm, ptr.intVal), val);
+			vm.regs = running;
 		} else {
 			vmIncref(vm, val);
 			vmDecref(vm, vm.globals[ptr.intVal]);
