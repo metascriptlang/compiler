@@ -94,6 +94,7 @@ import "./typeInfoHookAdapters";
 import "./flowsRecorder";
 import "./awaitWaitPath";
 import "./acyclicDecorator";
+import "./ownedEdge";
 import "./openSlotCycleClassification";
 import "./spawnViewCursor";
 import "./spawnCaptureCursor";
