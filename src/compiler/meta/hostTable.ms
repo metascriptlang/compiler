@@ -50,7 +50,7 @@ import {
 import {
 	unboxString, unboxInt, unboxFloat,
 	boxString, boxInt, boxFloat, boxBool,
-	RaiserHostValue, hostValue, hostObject, hostArray, copyToVm, copyToHost,
+	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
@@ -109,7 +109,7 @@ function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
 // --- Std routines the VM runs through their host implementation ---
 
 function _vmIoError(e: IoError): RaiserHostValue {
-	return hostObject(["kind", "path", "message"], [hostValue(boxInt(e.kind as number)), hostValue(boxString(e.path)), hostValue(boxString(e.message))]);
+	return hostObject(["kind", "path", "message"], [hostValue(boxInt(e.kind as number)), hostString(e.path), hostString(e.message)]);
 }
 
 function _toVm(v: RaiserHostValue): RaiserValue {
@@ -128,7 +128,7 @@ function _vmSuccess(value: RaiserHostValue): RaiserHostValue {
 }
 
 function _vmStrings(items: string[]): RaiserHostValue {
-	return hostArray(items.map((item: string): RaiserHostValue => hostValue(boxString(item))));
+	return hostArray(items.map((item: string): RaiserHostValue => hostString(item)));
 }
 
 function _vmVoidResult(r: Result<void, IoError>): RaiserValue {
@@ -136,7 +136,7 @@ function _vmVoidResult(r: Result<void, IoError>): RaiserValue {
 }
 
 function _vmStringResult(r: Result<string, IoError>): RaiserValue {
-	return _toVm(r.ok ? _vmSuccess(hostValue(boxString(r.value))) : _vmFailure(r.error));
+	return _toVm(r.ok ? _vmSuccess(hostString(r.value)) : _vmFailure(r.error));
 }
 
 function _vmStringsResult(r: Result<string[], IoError>): RaiserValue {
