@@ -2146,6 +2146,9 @@ test "engine: an object rest binding that holds a string is released with its sc
 	const held = evalVM(decl + " function f(b: B): void { const { count, ...rest } = b; const all = [rest]; const again = rest; console.log(all[0].label + again.label); } f(bs);");
 	assert held.error == "", held.error;
 	assert held.output == "s1s1\n", held.output;
+	const alias = evalVM(decl + " function f(b: B): void { const { count, ...rest } = b; const same = rest; same.label = 'z'; console.log(`${rest.label} ${same.label} ${b.label}`); } f(bs);");
+	assert alias.error == "", alias.error;
+	assert alias.output == "z z s1\n", alias.output;
 	const returned = evalVM(decl + " function f(b: B): string { const { count, ...rest } = b; return rest.label; } console.log(f(bs));");
 	assert returned.error == "", returned.error;
 	assert returned.output == "s1\n", returned.output;
