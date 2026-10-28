@@ -895,6 +895,12 @@ function peelAnnotation(layers: AnnotationLayer[], wrap: AnnotationWrap, inner: 
 }
 
 function readonlyAnnotationOf(viewed: Type): Type {
+	if (isMaybeType(viewed) && viewed.typeReturn != null && !hasGenericParams(viewed)) {
+		return nullableUnionOf([readonlyAnnotationOf(viewed.typeReturn), nullType()]);
+	}
+	if (viewed.kind == TypeKind.Union && !hasGenericParams(viewed)) {
+		return nullableUnionOf(viewed.typeChildren.map((m) => readonlyAnnotationOf(m)));
+	}
 	if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
 	const source = createGenericParam("$source");
 	const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
@@ -928,6 +934,21 @@ function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext
 		AnnotationWrap.Readonly => readonlyAnnotationOf(inner),
 		AnnotationWrap.Var => createVar(inner),
 	};
+}
+
+// True when the `[` at index 0 is closed by the final character, so `[A, B]` is a
+// tuple and `[A, B][]` (closed earlier) is an array suffix on one.
+function bracketClosesAtEnd(text: string): boolean {
+	let depth = 0;
+	for (let i = 0; i < text.length; i += 1) {
+		const c = text.charAt(i);
+		if (c == "[") depth += 1;
+		if (c == "]") {
+			depth -= 1;
+			if (depth == 0) return i == text.length - 1;
+		}
+	}
+	return false;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
@@ -1221,7 +1242,7 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 
 	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
 	// This is checked BEFORE array suffixes because those forms have a base type before the `[`.
-	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]")) {
+	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]") && bracketClosesAtEnd(trimmed)) {
 		const tupleInner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (tupleInner == "" && line > 0) {
 			addError(ctx, "the empty tuple type '[]' has no value representation: drop the parameter or give the tuple an element", line, col);
