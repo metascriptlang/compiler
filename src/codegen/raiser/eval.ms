@@ -9,7 +9,7 @@ import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancell
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
-import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
+import { metaNodeModulePath, isMetaNodeSym } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
