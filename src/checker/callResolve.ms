@@ -20,7 +20,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, omittedFieldDefault, needsLiteralDefault } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
+import { literalDefaultType, bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isMetaNodeSym } from "../compiler/meta/nodeSym";
@@ -581,16 +581,7 @@ function getCalleeNameForDefaults(callNode: Node): string {
 function cloneDefaultNode(node: Node): Node {
 	const clone = cloneNodeForCheck(node);
 	// Prelude defaults are parsed but not semchecked — infer type from kind
-	if (clone.nodeType == null) {
-		match (clone.kind) {
-			NodeKind.NumberLiteral => { clone.nodeType = !isNodeIntLit(clone) ? float64Type() : (literalFitsInType(clone, int32Type(), false) ? int32Type() : createPrimitive(TypeKind.Int64)); },
-			NodeKind.BigIntLiteral => { clone.nodeType = createPrimitive(TypeKind.Int64); },
-			NodeKind.StringLiteral => { clone.nodeType = stringType(); },
-			NodeKind.BooleanLiteral => { clone.nodeType = booleanType(); },
-			NodeKind.NullLiteral => { clone.nodeType = nullType(); },
-			_ => {},
-		};
-	}
+	if (clone.nodeType == null) clone.nodeType = clone.kind == NodeKind.NullLiteral ? nullType() : literalDefaultType(clone);
 	return clone;
 }
 
