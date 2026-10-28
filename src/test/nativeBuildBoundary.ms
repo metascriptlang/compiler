@@ -1081,6 +1081,8 @@ function runRunCache(): void {
 	record("a rerun of an unchanged program reuses the build", "skipped 71", ranLoadedGraph(dir, "run-unchanged"));
 	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 73; }\n");
 	record("a run after editing an imported module rebuilds", "loaded 73", ranLoadedGraph(dir, "run-edited"));
+	waitForNextSecond();
+	ranLoadedGraph(dir, "run-settled");
 	record("a rerun after the rebuild reuses it", "skipped 73", ranLoadedGraph(dir, "run-edited-again"));
 }
 
