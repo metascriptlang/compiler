@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, setRepr } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, isIteratorResult, isStructType, isMaybeType, unwrapMaybeType, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, setRepr } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -289,6 +289,45 @@ function cellOpSym(name: string, op: AttachedOp): Symbol {
 
 // ===== Main Classification Entry Point =====
 
+export function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
+	if (gi == null || gi.kind != TypeKind.GenericInstance) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	if (isAwaitable(gi) || peelTransparentInstance(gi) != gi) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	// Lazy-instantiate body when encountering nested generics. Outer instantiation
+	// (instantiateGenericBody at checker types.ms:787) substitutes K/V → concrete types
+	// in the containing struct's fields, but doesn't recursively populate `typeReturn`
+	// on inner GIs. Codegen does the same lazy pattern at types.ms:601 via genericParamsOf.
+	if (gi.typeReturn == null) {
+		const decl = genericParamsOf(gi);
+		if (decl != "") instantiateGenericBody(gi, decl);
+	}
+	if (gi.typeReturn == null) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	const mangledName = monoInstanceName(gi);
+	const src = gi.typeReturn;
+	// Preserve src kind: Union bodies (match-type / TS-style DU) must NOT be
+	// wrapped as Struct — `generateHook` dispatches on `objType.kind` to route
+	// Unions through `generateUnionArms` (per-variant tag dispatch). Coercing
+	// to Struct here makes the hook walk `typeNames` (discriminator metadata)
+	// as if they were field names, emitting bogus `dest.ok = src.ok` accesses.
+	let body: Type;
+	if (src.kind == TypeKind.Union) {
+		body = createUnionInOrder(src.typeChildren);
+		body.typeName = mangledName;
+		body.typeNames = src.typeNames;
+		body.typeExtra = src.typeExtra;
+		body.typeFlags = src.typeFlags;
+		spelled(body);
+	} else {
+		body = spelled(createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src)));
+	}
+	return { mangledName, body };
+}
+
 export function classifyType(t: Type | null, ctx: TransformContext, requireOps: boolean = true): RcInfo {
 	if (t == null) return noRcInfo();
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
@@ -340,6 +379,10 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			if (t.typeName != "") {
 				const bodyHasAsgn = t.typeReturn != null && hasAsgnFlag(t.typeReturn);
 				if (hasAsgnFlag(t) || bodyHasAsgn) {
+					const canonical = unwrapGenericInstance(t);
+					if (canonical.mangledName != "" && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
+						return classifyType(canonical.body, ctx, requireOps);
+					}
 					const mangled = monoInstanceName(t);
 					return makeOpsInfo(RcKind.Named, mangled, t, false, requireOps);
 				}

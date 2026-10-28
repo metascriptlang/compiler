@@ -35,7 +35,7 @@ import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
-import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion } from "../../analyzer/classify";
+import { sizedArrayHookName, raiserBareUnion, raiserFlatCellUnion, unwrapGenericInstance } from "../../analyzer/classify";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
@@ -129,45 +129,6 @@ function namedTypeHasHooks(t: Type, lctx: LiftCtx): boolean {
 // hooks would reference a struct type codegen never produces → compile error.
 // Result was historically here too, but post-migration it flows through the
 // standard Union path (boolean-discriminated tagged union).
-function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
-	if (gi == null || gi.kind != TypeKind.GenericInstance) {
-		return { mangledName: "", body: null as unknown as Type };
-	}
-	if (isAwaitable(gi) || peelTransparentInstance(gi) != gi) {
-		return { mangledName: "", body: null as unknown as Type };
-	}
-	// Lazy-instantiate body when encountering nested generics. Outer instantiation
-	// (instantiateGenericBody at checker types.ms:787) substitutes K/V → concrete types
-	// in the containing struct's fields, but doesn't recursively populate `typeReturn`
-	// on inner GIs. Codegen does the same lazy pattern at types.ms:601 via genericParamsOf.
-	if (gi.typeReturn == null) {
-		const decl = genericParamsOf(gi);
-		if (decl != "") instantiateGenericBody(gi, decl);
-	}
-	if (gi.typeReturn == null) {
-		return { mangledName: "", body: null as unknown as Type };
-	}
-	const mangledName = monoInstanceName(gi);
-	const src = gi.typeReturn;
-	// Preserve src kind: Union bodies (match-type / TS-style DU) must NOT be
-	// wrapped as Struct — `generateHook` dispatches on `objType.kind` to route
-	// Unions through `generateUnionArms` (per-variant tag dispatch). Coercing
-	// to Struct here makes the hook walk `typeNames` (discriminator metadata)
-	// as if they were field names, emitting bogus `dest.ok = src.ok` accesses.
-	let body: Type;
-	if (src.kind == TypeKind.Union) {
-		body = createUnionInOrder(src.typeChildren);
-		body.typeName = mangledName;
-		body.typeNames = src.typeNames;
-		body.typeExtra = src.typeExtra;
-		body.typeFlags = src.typeFlags;
-		spelled(body);
-	} else {
-		body = spelled(createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src)));
-	}
-	return { mangledName, body };
-}
-
 // ===== Cycle Detection (reference cyclicType) =====
 // Determines if a type can form reference cycles (needed for =trace hook).
 
