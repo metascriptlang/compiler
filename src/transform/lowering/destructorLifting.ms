@@ -1453,7 +1453,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		} else if (objType.kind == TypeKind.Distinct) {
 			const body = objType.typeReturn!;
 			if (lctx.raiserBackend && !walksCells(hook) && body.kind == TypeKind.Struct && !isMaybeType(body)) {
-				valueCellOp(hook, x1, x2, false, lctx, buf, loc);
+				valueCellOp(hook, makeIdentResolved(s1, loc), makeIdentResolved(s2, loc), false, lctx, buf, loc);
 			} else {
 				fillBody(hook, x1, x2, "", body, lctx, buf, createNameSet(), loc);
 			}
