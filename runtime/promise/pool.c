@@ -480,6 +480,18 @@ bool msPoolQuiescentWith(bool (*mainIdle)(void)) {
 	return idle;
 }
 
+/* Wake one parked pool worker other than the scheduler that owns the queued actor, so its
+ * actor poll steals it. Spares run no actor poll and are not woken. */
+void msPoolWakeThief(int ownerSchedulerID) {
+	msThreadPool* pool = msPoolGet();
+	if (pool == NULL) return;
+	for (int idle = msPoolIdleFirst(pool, 0); idle >= 0 && idle < pool->workerCount; idle = idle + 1 < MS_POOL_MAX_WORKERS ? msPoolIdleFirst(pool, idle + 1) : -1) {
+		if (idle == ownerSchedulerID - 1) continue;
+		msPoolWakeWorker(idle + 1);
+		return;
+	}
+}
+
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void) {
 	msThreadPool* pool = msPoolGet();
