@@ -81,6 +81,7 @@ import "./nullableMemberRefusal";
 import "./arrowInGenericLiteral";
 import "./literalAwaitsBinding";
 import "./functionValueMisuse";
+import "./paramProperty";
 import "./fnFormalArgFit";
 import "./fnParamMode";
 import "./maybeRefPayloadKey";

@@ -45,6 +45,7 @@ import "./cases/classFieldComment";
 import "./cases/propertyVisibility";
 import "./cases/methodVisibility";
 import "./cases/abstractClass";
+import "./cases/paramProperty";
 import "./cases/conditionalTypeSpacing";
 import "./cases/trailingBlockComment";
 import "./cases/commentInCapturedType";
