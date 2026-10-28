@@ -7,7 +7,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { isScopeBoundary } from "../ast/shape";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage } from "./types";
+import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage, unwrapRefNullUnion } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { CheckerContext, addError } from "./context";
 import { writeRefusal, WriteSite } from "./assignable";
@@ -22,8 +22,11 @@ function pointee(target: Type | null): Type | null {
 }
 
 function bareSource(source: Type | null): Type | null {
-	const src = skipModifier(source);
-	return src != null ? peelTransparentInstance(src) : null;
+	let src = skipModifier(source);
+	if (src == null) return null;
+	const pointer = unwrapRefNullUnion(src);
+	if (pointer != null) src = pointer;
+	return peelTransparentInstance(src);
 }
 
 function storedInline(t: Type): boolean {
