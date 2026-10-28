@@ -74,6 +74,7 @@ import "./solanaVaultHost";
 import "./externPattern";
 import "./cFunctionPointer";
 import "./headerSizeof";
+import "./headerScalarRefusal";
 import "./notCallable";
 import "./callResultInPlace";
 import "./websocket";

@@ -2097,6 +2097,11 @@ export function createBrandDistinct(brandKey: string, inner: Type): Type {
 	return t;
 }
 
+export function importedScalarSym(t: Readonly<Type | null>): Readonly<Symbol> | null {
+	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.TypeAlias || !t.sym.symFlags.has(SymbolFlag.ImportC) || !isNumeric(t)) return null;
+	return t.sym;
+}
+
 export function isBrandDistinct(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
 	return t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden);
@@ -5368,6 +5373,8 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	if (t == null) return "<null>";
 	if (t.typeInst != null) return typeDisplayNameInner(t.typeInst, 0 as BitSet<TypeFlag>, open, shapes);
 	if (isBrandDistinct(t) && t.sym != null) return t.sym.name;
+	const imported = importedScalarSym(t);
+	if (imported != null) return imported.name;
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayNameInner(t.typeChildren[0], 0 as BitSet<TypeFlag>, open, shapes);
