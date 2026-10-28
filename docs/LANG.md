@@ -2799,6 +2799,8 @@ actor MyActor {
 
 Enable idle timeout: `setIdleTimeout(this.pid, 5000)` — fires `onIdle` after 5 seconds of inactivity.
 
+Program exit stops every actor still alive with `ExitReason.Shutdown`, so its `onTerminate` runs after the entry module's last line; a method suspended at that moment finishes first. When a suspended method waits on something nothing can settle, it never finishes: if its actor has an `onTerminate`, the program prints a warning naming the actor and exits 13, and if it has none, the program ends with its own exit code, as an unsettled promise does on Node. `process.exit()` skips these stops. `ExitReason` is `Normal`, `Shutdown`, `Killed` or `Abnormal` on every backend; `Killed` skips `onTerminate`. Measured on C, `--danger` and JS (corpus `actorExitStop*`); the Raiser VM has no actors.
+
 #### Name Registry
 
 ```typescript
