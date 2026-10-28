@@ -248,7 +248,9 @@ function isCopyIntoAggregate(call: CallExprData): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	if (type == null || getOpByKey(type, AttachedOp.AttachedAsgn) != sym) return false;
+	if (type == null) return false;
+	const body = valueCopyRepr(type);
+	if (getOpByKey(type, AttachedOp.AttachedAsgn) != sym && (body == null || getOpByKey(body, AttachedOp.AttachedAsgn) != sym)) return false;
 	return isCellType(type) || isArrayType(type);
 }
 
