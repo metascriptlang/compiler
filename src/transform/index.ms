@@ -67,6 +67,7 @@ import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
+import { lowerJsExternOmittedArgs } from "./lowering/jsExternOmittedArgs";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
@@ -273,6 +274,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); flowLap("pass.lowerStringOps"); }
 	if (jsBackend) { result = lowerJsPointers(result, ctx); flowLap("pass.lowerJsPointers"); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); flowLap("pass.lowerJsVarParam"); }
+	if (jsBackend) { result = lowerJsExternOmittedArgs(result, ctx); flowLap("pass.lowerJsExternOmittedArgs"); }
 	result = spanLower(result, ctx, false);
 	flowLap("pass.spanLower");
 	result = lowerConditionalExpr(result, ctx);
