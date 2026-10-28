@@ -1,4 +1,4 @@
-export { toString } from "./shared";
+export { toString, msFilledArray, msFilledSized } from "./shared";
 import { spliceStart, spliceCount } from "./shared";
 
 // MetaScript Array Prelude — Raiser Backend

@@ -1392,7 +1392,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			}
 			const refused = refuseLengthGrowth(ctx, d, md.object.nodeType);
 			if (!refused && d.operator == "=" && md.object.nodeType.kind == TypeKind.Array
-					&& evictionNeedsElementHook(md.object.nodeType.typeReturn) && lowerLengthAssignment(ctx, node, md.object, d.right)) {
+					&& (evictionNeedsElementHook(md.object.nodeType.typeReturn) || needsLiteralDefault(md.object.nodeType.typeReturn!, [])) && lowerLengthAssignment(ctx, node, md.object, d.right)) {
 				return;
 			}
 		}
@@ -4279,7 +4279,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
-import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook, needsLiteralDefault } from "./instantiate";
 import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
