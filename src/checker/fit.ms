@@ -431,10 +431,13 @@ export function replaceWithCall(node: Node, call: Node, negated: boolean): void 
 
 // A local narrowed to `null` that a closure may since have set is compared through the type it stores, the
 // way storedTypeOfNullRead reads it into a call, so `==` against a value reads what the slot holds.
+// A union payload keeps its null narrowing: a tag-carried union reads the narrowed slot through it.
 function storedTypeOfNullOperand(expr: Node, exprType: Type, other: Type): Type {
 	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || other.kind == TypeKind.Null) return exprType;
 	const stored = declaredTypeOfLocation(expr);
 	if (stored == null || stored.kind == TypeKind.Null) return exprType;
+	const payload = isMaybeType(stored) && stored.typeReturn != null ? peelTransparentInstance(stored.typeReturn) : stored;
+	if (payload.kind == TypeKind.Union) return exprType;
 	expr.nodeType = stored;
 	return stored;
 }
