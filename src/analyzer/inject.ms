@@ -2634,17 +2634,21 @@ function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 
 function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ExportDeclData;
-	if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.FunctionDecl) {
-		processFuncDecl(d.exportedDecl, dctx, loc);
-	}
-	if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.VariableDecl) {
-		const processed = processVarDecl(d.exportedDecl, idx, stmts, dctx, loc);
-		if (processed.kind != NodeKind.VariableDecl) {
-			dctx.ctx.errors.push(`DRC: exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`);
-			return stmt;
-		}
-		d.exportedDecl = processed;
-	}
+	match (d.exportedDecl.kind) {
+		NodeKind.FunctionDecl => { processFuncDecl(d.exportedDecl, dctx, loc); },
+		NodeKind.VariableDecl => {
+			const processed = processVarDecl(d.exportedDecl, idx, stmts, dctx, loc);
+			if (processed.kind != NodeKind.VariableDecl) {
+				dctx.ctx.errors.push(`DRC: exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`);
+				return stmt;
+			}
+			d.exportedDecl = processed;
+		},
+		NodeKind.ExprStmt => { d.exportedDecl = processExprStmt(d.exportedDecl, idx, stmts, dctx, loc); },
+		NodeKind.ImportDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.InterfaceDecl
+			| NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
+		_ => { throw new Error("internal: processExport has no arm for " + NodeKind[d.exportedDecl.kind]); },
+	};
 	return stmt;
 }
 
@@ -2852,6 +2856,26 @@ test "processStmt passes a declaration through and refuses a statement kind it h
 		refused = e.message;
 	}
 	assert refused == "internal: processStmt has no arm for DeferStmt";
+}
+
+test "processExport destroys the value of a default-exported call and refuses a kind it has no arm for" {
+	const dctx = testDrcContext("function make(): string { return \"\"; }");
+	const loc = testLoc();
+	pushScope(dctx, false, true);
+	const call = makeCall(testFnRef("make", loc), [], loc);
+	call.nodeType = createPrimitive(TypeKind.String);
+	const exported = createNodeAt(NodeKind.ExportDecl, { exportedDecl: makeExprStmt(call, loc) }, loc);
+	processExport(exported, 0, [exported], dctx, loc);
+	assert currentScope(dctx).preStmts.length == 1;
+	const unreachable = createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: "" }, loc);
+	const odd = createNodeAt(NodeKind.ExportDecl, { exportedDecl: unreachable }, loc);
+	let refused = "";
+	try {
+		processExport(odd, 0, [odd], dctx, loc);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: processExport has no arm for UnreachableStmt";
 }
 
 test "recordMoveInContext finds correct scope" {
