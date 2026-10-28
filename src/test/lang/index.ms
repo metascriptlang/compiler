@@ -119,3 +119,4 @@ import "./abortSignalListener";
 import "./restrictedLineTerminators";
 import "./emptyStatements";
 import "./horizontalTrivia";
+import "./typeAtomArraySuffix";

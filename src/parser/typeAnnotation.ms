@@ -522,11 +522,17 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	}
 	if (token.kind == TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		return;
 	}
 	if (isNegativeNumberAhead(state)) advance(state);
@@ -611,6 +617,9 @@ function skipTypeAtom(state: ParserState): void {
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
+			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
+		}
 		// Optional marker: [T, U]?
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 			advance(state);
@@ -710,6 +719,22 @@ test "fixed array multi-dimensional" { assert skipsType("number[4][2]"); }
 
 test "double array" { assert skipsType("number[][]"); }
 
+test "tuple atoms retain their array suffixes" {
+	assert skipsType("[string, number][]");
+	assert skipsType("[string, number][][]");
+	assert skipsType("[string, number][]?");
+}
+
+test "conditional extends retains tuple array suffixes" {
+	assert skipsType("V extends [string, number][] ? 1 : 2");
+	assert skipsType("V extends [string, number][][] ? 1 : 2");
+}
+
+test "conditional extends retains object array suffixes" {
+	assert skipsType("V extends { value: number }[] ? 1 : 2");
+	assert skipsType("V extends { value: number }[][] ? 1 : 2");
+}
+
 test "generic array" { assert skipsType("Array<string>[]"); }
 
 test "two types" { assert skipsType("string | number"); }
@@ -774,6 +799,10 @@ test "simple type text" { assert annotationText("number") == "number"; }
 test "generic type text" { assert annotationText("Result<Node, string>") != ""; }
 
 test "union type text" { assert annotationText("string | number") != ""; }
+
+test "tuple array annotation text retains every suffix" {
+	assert annotationText("[string, number][][]").endsWith("[][]");
+}
 
 test "a type operator keeps its space before a bracketed operand" {
 	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[] ?");
