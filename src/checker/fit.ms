@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isReadonlyView, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -68,6 +68,7 @@ export function joinBranchTypes(types: Type[]): Type {
 	}
 	if (prepared.length == 0) return inferredType();
 	dropSubclassMembers(prepared);
+	dropHeldVariants(prepared);
 	if (prepared.length == 1) return prepared[0];
 	const anonJoined = joinAnonLiteralStructs(prepared);
 	if (anonJoined != null) return anonJoined;
@@ -131,6 +132,28 @@ function joinNumericMembers(prepared: Type[]): Type | null {
 	for (const o of others) parts.push(o);
 	if (nullable) parts.push(nullType());
 	return canonicalizeBranchJoin(unionOfTypes(parts, null));
+}
+
+// A variant of a union that another arm already holds adds nothing to the join: the narrowed arm of
+// `c ? r : r_narrowed` joins back to the declared union, as TS's subtype reduction does.
+function dropHeldVariants(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let held = false;
+		for (let j = 0; j < members.length && !held; j++) {
+			if (j == i) continue;
+			const whole = instantiatedUnionBehind(members[j]);
+			if (whole.kind != TypeKind.Union || whole.typeChildren == null) continue;
+			for (const v of whole.typeChildren) {
+				if (v == members[i] || (isReadonlyView(v) == isReadonlyView(members[i]) && sameType(v, members[i]))) { held = true; break; }
+			}
+		}
+		if (!held) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.shrink(kept);
 }
 
 function dropSubclassMembers(members: Type[]): void {
@@ -2755,10 +2778,20 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 	return convNode;
 }
 
+// A `ref` or `out` argument names the slot, so a Maybe slot flow-narrowed to its payload is passed at its stored type.
+function storedTypeOfSlotArg(expr: Node, exprType: Type, formal: Type): Type {
+	if (formal.kind != TypeKind.Var || isMaybeType(exprType)) return exprType;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || !isMaybeType(stored)) return exprType;
+	expr.nodeType = stored;
+	return stored;
+}
+
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
 export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): Type {
+	if (formal.kind == TypeKind.Var) return storedTypeOfSlotArg(expr, exprType, formal);
 	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || !isNullableShape([formal])) return exprType;
 	const stored = declaredTypeOfLocation(expr);
 	if (stored == null || stored.kind == TypeKind.Null) return exprType;
