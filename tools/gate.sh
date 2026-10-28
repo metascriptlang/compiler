@@ -539,7 +539,7 @@ EMIT_VMEM_KB=${GATE_EMIT_VMEM_KB:-16777216}
 cap_emit_memory_on_linux() { ulimit -v "$EMIT_VMEM_KB" 2>/dev/null || [ "$(uname -s)" != Linux ]; }
 
 emit_many() {
-  local bin=$1 root=$GATE_EMIT_DIR work i n h p c_rc js_rc text
+  local bin=$1 root=$GATE_EMIT_DIR work real i n h p c_rc js_rc text
   local -a args dirs files
   local -A sum crc jrc count ctext
   shift; args=("$@")
@@ -559,6 +559,10 @@ emit_many() {
   cd "$root" || exit 1
   shopt -s globstar nullglob dotglob
   for ((i = 0; i < ${#args[@]}; i += 3)); do n=${args[i]}; files+=("$n"/out/**/*.c "$n/c.log" "$n/js.log" "$n/out.js"); done
+  if [ -n "${GATE_WORK_ROOT:-}" ]; then
+    real=$(cd "$GATE_WORK_ROOT" && pwd -P) || exit 1
+    GATE_WORK_REAL=$real perl -pi -e 's/\Q$ENV{GATE_WORK_REAL}\E/\@work/g; s/\Q$ENV{GATE_WORK_ROOT}\E/\@work/g' "${files[@]}" || exit 1
+  fi
   hash_files "${files[@]}" | LC_ALL=C sort -k2 >"$work/sums" || exit 1
   while read -r h p; do
     p=${p#\*}; sum[$p]=$h; n=${p%%/*}
@@ -603,7 +607,8 @@ esac
 EXE_SUFFIX=""
 case "$CAND" in *.exe) EXE_SUFFIX=.exe ;; esac
 CTL_CACHE="${HOME:-$USERPROFILE}/.metascript/cache/gate-ctl/v1"
-CTL_WORK="$OUT/ctl-work"
+ctl_work_of() { printf '%s/ctl-work' "$1"; }
+CTL_WORK=$(ctl_work_of "$OUT")
 CONTROL_SUPPORT=""
 EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
@@ -1204,7 +1209,7 @@ emit_side() {
   mapfile -t scrub < <(compgen -e | grep '^MSC' | while read -r v; do printf -- '-u\n%s\n' "$v"; done)
   mapfile -t rows < <(awk '{ print NR, $0 }')
   [ "${#rows[@]}" -gt 0 ] || return 0
-  printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 \
+  printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" GATE_WORK_ROOT="${CTL_WORK:-}" NO_COLOR=1 \
     xargs -r -P "$jobs" -n "$(($(emit_batch "${#rows[@]}" "$jobs") * 3))" "$GATE_SH" --emit-one "$1"
 }
 
@@ -1610,6 +1615,66 @@ publish_self_test() (
   return $bad
 )
 
+concurrent_gates_self_test() (
+  local d bad=0 g i pid EXE_SUFFIX="" CTL_CACHE
+  d=$(mktemp -d) || return 1
+  CTL_CACHE="$d/cache"
+  mkdir -p "$CTL_CACHE/entries"
+  gate_flow() {
+    local g=$1 o=$2 i n live_key TOP="$d/$1/repo" OUT="$d/$1/out" EMIT="$d/$1/emit" CAND="$d/$1/cand" CTL_WORK
+    CTL_WORK=$(ctl_work_of "$OUT") || return 1
+    mkdir -p "$EMIT"; : >"$EMIT/cand.sig"; : >"$EMIT/ctl.keys"; printf '#!/bin/sh\n' >"$CAND"; chmod +x "$CAND"
+    cand_proven() { true; }
+    control_key() { printf '%s' "$live_key"; }
+    cd "$TOP" || return 1
+    for i in 1 2 3; do
+      live_key=$g$i
+      prepare_emit_workspace || { printf 'FAIL concurrent gates: %s could not prepare its emit workspace\n' "$g"; return 1; }
+      : >"$d/ready.$g.$i"
+      for n in $(seq 50); do [ ! -e "$d/ready.$o.$i" ] || break; sleep 0.1; done
+      [ -z "$(grep -rLx "$g" "$CTL_WORK/src" "$CTL_WORK/std" "$CTL_WORK/runtime" "$CTL_WORK/vendor")" ] \
+        || { printf 'FAIL concurrent gates: %s read a tree that is not its own\n' "$g"; return 1; }
+      adopt_candidate || { printf 'FAIL concurrent gates: %s could not adopt its candidate\n' "$g"; return 1; }
+      grep -qx "$g" "$(control_dir "$live_key")/vendor/f" \
+        || { printf 'FAIL concurrent gates: %s published a snapshot that is not its own\n' "$g"; return 1; }
+    done
+  }
+  for g in a b; do
+    mkdir -p "$d/$g/repo/src" "$d/$g/repo/std/core/system" "$d/$g/repo/runtime" "$d/$g/repo/vendor"
+    for i in src/f std/core/system/index.ms runtime/f vendor/f; do printf '%s\n' "$g" >"$d/$g/repo/$i"; done
+    (cd "$d/$g/repo" && git init -q && git -c user.name=t -c user.email=t@t add . && git -c user.name=t -c user.email=t@t commit -qm base) >/dev/null 2>&1 \
+      || { rm -rf "$d"; return 1; }
+  done
+  gate_flow a b >"$d/a.log" 2>&1 & pid=$!
+  gate_flow b a >"$d/b.log" 2>&1 || bad=1
+  wait "$pid" || bad=1
+  [ "$bad" -eq 0 ] || cat "$d/a.log" "$d/b.log"
+  rm -rf "$d"
+  return $bad
+)
+
+emit_root_self_test() (
+  local d bad=0 r got1 got2
+  d=$(mktemp -d) || return 1
+  cat >"$d/fake" <<'FAKE'
+#!/usr/bin/env bash
+case " $* " in *" --emit=c "*) mkdir -p out/debug && { printf '#line 1 "%s"\n' "$2"; cat "$2"; } >out/debug/p.c ;; esac
+for a; do case $a in --output=*) { printf '%s\n' "$2"; cat "$2"; } >"${a#--output=}" ;; esac; done
+FAKE
+  chmod +x "$d/fake"
+  for r in r1 r2 r3; do
+    mkdir -p "$d/$r/work/src"
+    printf '%s\n' "$([ "$r" = r3 ] && echo b || echo a)" >"$d/$r/work/src/p.ms"
+  done
+  got1=$(printf 'p %s\n' "$d/r1/work/src/p.ms" | CTL_WORK="$d/r1/work" emit_side "$d/fake" "$d/r1/work/e")
+  got2=$(printf 'p %s\n' "$d/r2/work/src/p.ms" | CTL_WORK="$d/r2/work" emit_side "$d/fake" "$d/r2/work/e")
+  [ "$got1" = "$got2" ] || { printf 'FAIL emit root: the same program under two work roots signed differently\n'; bad=1; }
+  got2=$(printf 'p %s\n' "$d/r3/work/src/p.ms" | CTL_WORK="$d/r3/work" emit_side "$d/fake" "$d/r3/work/e")
+  [ "$got1" != "$got2" ] || { printf 'FAIL emit root: a changed program kept its signature\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 emit_env_self_test() (
   local d got bad=0
   d=$(mktemp -d) || return 1
@@ -1993,6 +2058,8 @@ CASES
   done
   [ "$phase_san" -ge 0 ] && [ "$phase_tsan" -gt "$phase_san" ] || { printf 'FAIL san phase %s must run before tsan phase %s\n' "$phase_san" "$phase_tsan"; bad=1; }
   shared_cache_self_test || bad=1
+  concurrent_gates_self_test || bad=1
+  emit_root_self_test || bad=1
   known_local_self_test || bad=1
   stale_known_self_test || bad=1
   support_cache_self_test || bad=1
