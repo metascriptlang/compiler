@@ -266,7 +266,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 		const leadingComments: Doc[] = prop != null && keyLoc != null ? commentLeadingBefore(prop, keyLoc) : [];
 		let entryDoc: Doc;
-		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
+		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column, options.singleQuote) : "";
 		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
