@@ -440,7 +440,7 @@ function stalenessWarning(): string {
 	if (path == "" || !exists(path)) { return ""; }
 	const mtime = IS_WIN
 		? shellOut(winPath(WINTIME) + " --mtime \"" + winPath(path) + "\"")
-		: shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
+		: shellOut("stat -c %Y '" + path + "' 2>/dev/null || stat -f %m '" + path + "' 2>/dev/null");
 	// The two git calls run on BOTH platforms, so every shell-ism in them has to
 	// be spelled portably — and each of these was measured failing on cmd.exe:
 	// `2>/dev/null` makes cmd reject the whole line ("cannot find the path"),
