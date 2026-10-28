@@ -214,7 +214,6 @@ static msTimerHeap gTimers = { NULL, 0, 0 };
 static inline void msTimerLock(void) { msTicketLockAcquire(&gTimerLock); }
 static inline void msTimerUnlock(void) { msTicketLockRelease(&gTimerLock); }
 
-#define MS_WORKER_ENGINE_POLL_MS 10
 
 static void msReleaseEnvOnLoop(void* env) {
 	if (env == NULL) return;
@@ -464,6 +463,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 		msg->error = NULL;
 		msg->kind = -2;
 		PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+		msWakeEngineIocps();
 	}
 }
 
@@ -483,6 +483,7 @@ void msCompletionQueuePushOrphanNote(void* fut) {
 	msg->error = NULL;
 	msg->kind = -4;
 	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+	msWakeEngineIocps();
 }
 
 static void msIocpDispatchMsg(msCompletionMsg* msg) {
@@ -530,7 +531,7 @@ bool msCompletionQueueDrainAll(void) {
 void* msLoopCompletionQueue(void) { return NULL; }
 bool msWorkerLoopPump(void) { bool didWork = msWorkerEnginePoll(); if (tlEnvInbox != NULL && msEnvInboxDrain(tlEnvInbox)) didWork = true; return didWork; }
 bool msWorkerLoopPending(void) { return tlEnvInbox != NULL && atomic_load_explicit(&tlEnvInbox->head, memory_order_acquire) != NULL; }
-int msWorkerTimerDelayMs(void) { return msWorkerEngineLive() ? MS_WORKER_ENGINE_POLL_MS : -1; }
+int msWorkerTimerDelayMs(void) { return -1; }
 static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
 #else
@@ -793,10 +794,8 @@ bool msWorkerLoopPump(void) {
 }
 
 int msWorkerTimerDelayMs(void) {
-    int timerMs = -1;
-    if (tlWorkerChannel != NULL && tlWorkerChannel->timers.len > 0) timerMs = msNextTimerDelayMs();
-    if (msWorkerEngineLive() && (timerMs < 0 || timerMs > MS_WORKER_ENGINE_POLL_MS)) return MS_WORKER_ENGINE_POLL_MS;
-    return timerMs;
+    if (tlWorkerChannel != NULL && tlWorkerChannel->timers.len > 0) return msNextTimerDelayMs();
+    return -1;
 }
 
 /* Pool shutdown, after every worker has joined: the main thread is the only
@@ -1044,8 +1043,11 @@ static bool msRunOnceIn(int timeoutMs) {
 
 	/* Step 2: Poll for cross-thread completions + I/O events */
 	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
-	if (engineLive) {
-		if (adj < 0 || adj > MS_WORKER_ENGINE_POLL_MS) adj = MS_WORKER_ENGINE_POLL_MS;
+	if (engineLive && !didWork) {
+		/* Park in the engine, where its completions arrive, and drain the dispatcher
+		 * without a wait: every wake source posts to the engine's port or selector too. */
+		if (msWorkerEnginePark(adj)) didWork = true;
+		adj = 0;
 	}
 #ifdef _WIN32
 	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
@@ -1262,6 +1264,7 @@ void msPostEnvRelease(void* env) {
 	msg->error = NULL;
 	msg->kind = -3;
 	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+	msWakeEngineIocps();
 }
 #else
 void msPostEnvRelease(void* env) {
