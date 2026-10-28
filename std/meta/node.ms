@@ -341,6 +341,7 @@ export enum NodeFlag {
 	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
+	OmittedArg,    // checker: this argument is the null an optional parameter takes when the call leaves it out
 }
 
 // ===== Node Kind Enum =====
