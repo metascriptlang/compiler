@@ -114,6 +114,7 @@ void msClearOrphanFailure(void* fut);
 /* Queued-or-running pool task count (pool.c; 0 on single-threaded targets) */
 int32_t msPoolPendingPeek(void);
 int32_t msPoolThreadPeek(void);
+bool msPoolSetWorkerCount(int32_t count);
 
 bool msRunOnce(int timeoutMs);
 int32_t msGetWakePipeFd(void);

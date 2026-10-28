@@ -3,7 +3,7 @@
 // @serial
 // @skip-raiser: the Raiser runs spawn inline
 // @skip-js: JS runs every task on the one thread, so no wait blocks a worker
-// note: more tasks than workers each await a promise that the main thread resolves once that task's child has run, through a callback; the promise has no edge to that child, so once every worker waits the children sit queued behind them. Such a wait starts a spare thread for the queue (counted under the 64-thread limit, retired when the wait ends). `queued` waits directly, `deep` at the bottom of a chain of 32 nested handle waits. The tasks borrow their promise, so each level spawns, recurses, then awaits its own task in its own scope.
+// note: more tasks than workers each await a promise that the main thread resolves once that task's child has run, through a callback; the promise has no edge to that child, so once every worker waits the children sit queued behind them. Such a wait starts a spare thread for the queue (counted under the 256-thread limit, retired when the wait ends). `queued` waits directly, `deep` at the bottom of a chain of 32 nested handle waits. The tasks borrow their promise, so each level spawns, recurses, then awaits its own task in its own scope.
 import { cpuCount } from "std/os";
 
 let resolvers: ((v: int32) => void)[] = [];

@@ -23,7 +23,8 @@
 /* Forward declaration — msSpawnCtx defined in thread.h */
 struct msSpawnCtx;
 
-#define MS_POOL_MAX_WORKERS 64
+#define MS_POOL_MAX_WORKERS 256
+#define MS_POOL_IDLE_WORDS (MS_POOL_MAX_WORKERS / 64)
 
 typedef struct {
 #ifdef _WIN32
@@ -45,7 +46,7 @@ typedef struct {
 	pthread_cond_t workerConds[MS_POOL_MAX_WORKERS]; /* per-worker: targeted wake (no broadcast) */
 	pthread_cond_t space;       /* signaled when task dequeued (backpressure) */
 #endif
-	_Atomic(uint64_t) idleMask; /* bitmask: bit i set = worker i is sleeping (up to 64 workers) */
+	_Atomic(uint64_t) idleMask[MS_POOL_IDLE_WORDS]; /* bit i set = pool thread i is sleeping */
 	int busyCount;              /* number of workers currently executing tasks */
 	bool shutdown;              /* set true to stop workers */
 } msThreadPool;
