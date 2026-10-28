@@ -730,9 +730,12 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
 			for (let t = 0; t < d.caseTests.length; t += 1) d.caseTests[t] = walkOrLift(d.caseTests[t], state);
-			for (const s of d.caseStmts) {
-				walkLift(s, state);
-			}
+			const savedStmts = state.currentStmts;
+			const savedIdx = state.currentStmtIdx;
+			state.currentStmts = d.caseStmts;
+			d.caseStmts = walkLiftStmtList(d.caseStmts, state, false);
+			state.currentStmts = savedStmts;
+			state.currentStmtIdx = savedIdx;
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
