@@ -514,6 +514,20 @@ test "every build mode lets one memory be read through another type" {
 	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-fno-strict-aliasing") >= 0;
 }
 
+function acceptsFilePrefixMap(cc: string): boolean {
+	const name = basename(cc);
+	return isZigCC(cc) || isGnuGcc(cc) || name == "clang" || name == "clang.exe" || name.endsWith("-clang");
+}
+
+export function trimPrefixMapFlags(cc: string, projectRoot: string, supportRoot: string, packagesRoot: string): string[] {
+	const flags: string[] = [];
+	if (!acceptsFilePrefixMap(cc)) return flags;
+	if (projectRoot != "") flags.push(quoteCcArg(`-ffile-prefix-map=${projectRoot}=.`));
+	if (supportRoot != "") flags.push(quoteCcArg(`-ffile-prefix-map=${supportRoot}=msc`));
+	if (packagesRoot != "") flags.push(quoteCcArg(`-ffile-prefix-map=${packagesRoot}=pkg`));
+	return flags;
+}
+
 // -- LTO capability + strategy --
 // One table, one place: which compiler/target pairs can link with LTO, and
 // which should reach for it by default. Both halves of the decision live with
@@ -1806,4 +1820,22 @@ test "a precompiled header zig serves from its cache after the header is rewritt
 	assert runCc(parts.value.command, args).ok;
 	for (const name of ["prefix.h", "use.c", "first.pch", "second.pch", "use.o"]) remove(`${dir}/${name}`);
 	remove(dir);
+}
+
+test "trim mode maps the project root before the support and package roots, which win where nested" {
+	for (const cc of ["clang", "zig cc", "gcc", "/opt/llvm/bin/clang", "x86_64-linux-gnu-gcc", "arm-none-eabi-clang"]) {
+		const flags = trimPrefixMapFlags(cc, "/work/app", "/opt/msc", "/cache/extracted");
+		assert flags.length == 3;
+		assert flags[0] == "-ffile-prefix-map=/work/app=.";
+		assert flags[1] == "-ffile-prefix-map=/opt/msc=msc";
+		assert flags[2] == "-ffile-prefix-map=/cache/extracted=pkg";
+	}
+	assert trimPrefixMapFlags("clang", "/work/my app", "", "")[0] == "\"-ffile-prefix-map=/work/my app=.\"";
+	assert trimPrefixMapFlags("clang", "", "/opt/msc", "").length == 1;
+}
+
+test "trim mode adds no flag for a compiler that may not take it" {
+	for (const cc of ["cc", "cl", "cl.exe", "clang-cl", "emcc", "tcc"]) {
+		assert trimPrefixMapFlags(cc, "/work/app", "/opt/msc", "/cache/extracted").length == 0;
+	}
 }
