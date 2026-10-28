@@ -2403,7 +2403,9 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
 					const slot = `${tmpName}${access}${mangleFieldName(d.keys[i])}`;
 					if (d.properties[i].kind != NodeKind.NullLiteral && val != slot) {
-						emitStmtsLine(p, `${slot} = ${wrapLitFieldValue(g, node, d.keys[i], d.properties[i].nodeType, val)};`);
+						const fieldType = owner != null && owner.kind == TypeKind.Struct && owner.sym != null && hasFlag(owner.sym, SymbolFlag.ImportC) ? fieldTypeView(owner, d.keys[i]) : null;
+						const lhs = fieldType != null && fieldType.kind == TypeKind.SizedArray ? `(*(${getTypeDesc(g, fieldType)}*)(${slot}))` : slot;
+						emitStmtsLine(p, `${lhs} = ${wrapLitFieldValue(g, node, d.keys[i], d.properties[i].nodeType, val)};`);
 					}
 					i += 1;
 				}
