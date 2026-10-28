@@ -145,9 +145,11 @@ export macro dumpFold(x: Node, color: Node): Node {
 		} else if (kind == TypeKind.Number || kind == TypeKind.Float32 || kind == TypeKind.Float64) {
 			steps.push(append(call("numberLeaf", [x, color])));
 		} else if (kind == TypeKind.Int8 || kind == TypeKind.Int16 || kind == TypeKind.Int32 || kind == TypeKind.Int64
-			|| kind == TypeKind.Uint8 || kind == TypeKind.Uint16 || kind == TypeKind.Uint32 || kind == TypeKind.Uint64
+			|| kind == TypeKind.Uint8 || kind == TypeKind.Uint16 || kind == TypeKind.Uint32
 			) {
 			steps.push(append(call("integerLeaf", [x, color])));
+		} else if (kind == TypeKind.Uint64) {
+			steps.push(append(call("unsignedLeaf", [x, color])));
 		} else if (kind == TypeKind.Enum || kind == TypeKind.EnumLiteral) {
 			steps.push(append(call("enumLeaf", [x, color])));
 		} else if (kind == TypeKind.BigInt) {

@@ -73,6 +73,11 @@ function integerLeaf(v: int64, color: boolean): string {
 	return stringify(jsonInt(v), color);
 }
 
+function unsignedLeaf(v: uint64, color: boolean): string {
+	const s = v.toString();
+	return color ? "\x1b[33m" + s + "\x1b[0m" : s;
+}
+
 function enumLeaf<T>(v: T, color: boolean): string {
 	return stringify(jsonInt(v as int32), color);
 }
