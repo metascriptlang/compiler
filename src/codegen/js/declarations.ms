@@ -6,7 +6,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
-import { useActorRuntime } from "./actorMailbox";
+import { ACTOR_EXIT_STOP, useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
@@ -199,15 +199,23 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 						// importing std/actor, so the registrar installs itself
 						// on first construction. std/actor's stop() reads the
 						// same globalThis registry.
-						emit(gen, "pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {\n");
+						emit(gen, "pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = (function () {\n");
+						for (const line of ACTOR_EXIT_STOP) {
+							emitIndent(gen);
+							emit(gen, `\t${line}\n`);
+						}
 						emitIndent(gen);
-						emit(gen, "\tvar g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new globalThis.Map() });\n");
+						emit(gen, "\treturn function (a) {\n");
 						emitIndent(gen);
-						emit(gen, "\tg.live.set(g.next, a);\n");
+						emit(gen, "\t\tvar g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new globalThis.Map() });\n");
 						emitIndent(gen);
-						emit(gen, "\treturn g.next++;\n");
+						emit(gen, "\t\tg.live.set(g.next, a);\n");
 						emitIndent(gen);
-						emit(gen, "}))(this);\n");
+						emit(gen, "\t\treturn g.next++;\n");
+						emitIndent(gen);
+						emit(gen, "\t};\n");
+						emitIndent(gen);
+						emit(gen, "})()))(this);\n");
 					} else if (pd.propInitializer != null) {
 						emit(gen, `${safeJsName(pd.propName)} = `);
 						emitNode(gen, pd.propInitializer);

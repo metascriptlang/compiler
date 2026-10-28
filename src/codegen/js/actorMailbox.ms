@@ -59,6 +59,25 @@ const RUNTIME = "function msActorRt() {\n"
 	+ "  })());\n"
 	+ "}\n";
 
+export const ACTOR_EXIT_STOP: string[] = [
+	"var proc = globalThis.process;",
+	"if (proc !== void 0 && typeof proc.on === \"function\") proc.on(\"beforeExit\", function () {",
+	"\tvar g = globalThis.__msActors, stopped = 0, parked = [];",
+	"\tfor (var e of g.live) {",
+	"\t\tif (e[1].__msBusy) { parked.push(e[1]); continue; }",
+	"\t\tg.live.delete(e[0]);",
+	"\t\tstopped++;",
+	"\t\tif (typeof e[1].onTerminate === \"function\") e[1].onTerminate(1);",
+	"\t}",
+	"\tif (stopped > 0) { globalThis.setImmediate(function () {}); return; }",
+	"\tfor (var a of parked) {",
+	"\t\tif (typeof a.onTerminate !== \"function\") continue;",
+	"\t\tproc.stderr.write(\"Warning: Detected unsettled await in actor \" + a.constructor[globalThis.Symbol.for(\"metascript.typeDisplayName\")] + \" at exit: its onTerminate cannot run\\n\");",
+	"\t\tproc.exitCode = 13;",
+	"\t}",
+	"});",
+];
+
 export function useActorRuntime(gen: JSGenerator): void {
 	if (!gen.helpers.actorRuntime) {
 		gen.helpers.actorRuntime = true;

@@ -233,7 +233,8 @@ test "E2E JS: actor decl emits a class with the synthetic pid field first" {
 	const js = compileToJS("actor Leaf {\n\tbuf: string = \"\";\n\tsize(): number { return this.buf.length; }\n}\nconst l = new Leaf();\nconst n = l.size();");
 	assert js.ok;
 	assert js.value.contains("class Leaf");
-	assert js.value.contains("pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {");
+	assert js.value.contains("pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = (function () {");
+	assert js.value.contains("proc.on(\"beforeExit\", function () {");
 	assert js.value.contains("buf = \"\";");
 }
 
