@@ -329,7 +329,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		// Both sides re-bound: the null side must be a bare null literal — a
 		// typed `null as Closure` codegens as `(msClosure){0}` and mismatches
 		// the function pointer field on the other side.
-		if (valueType != null && valueType.kind == TypeKind.Function) {
+		if (isClosureValue(valueType)) {
 			const nonNullSide = hasNullLeft ? d.right : d.left;
 			const fnMember = makeMember(nonNullSide, "fn", loc);
 			const bareNull = makeNull(loc);
