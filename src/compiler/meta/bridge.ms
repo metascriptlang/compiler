@@ -1698,7 +1698,7 @@ function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: R
 	const operand = valueToNode(val, objHeap, arrHeap, loc);
 	operand.flags = operand.flags.incl(NodeFlag.BoundSym);
 	if (operand.nodeType != null) return operand;
-	const names = wireGet(objHeap, val.intVal, "boundTypeNames");
+	const names = wireGet(arrHeap, objHeap, val.intVal, "boundTypeNames");
 	if (names.kind != RaiserValueKind.Array) throw new Error("internal: a quote's type operand reached the wire without its Type or its bound names");
 	const bindings: Node[] = [];
 	for (let i = 0; i < heapArrayLen(arrHeap, names.intVal); i += 1) {
@@ -1715,9 +1715,9 @@ function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectH
 		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr
 		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr;
 	if (!carriesTypeText) return;
-	const single = wireGet(objHeap, handle, "boundTypeExpr");
+	const single = wireGet(arrHeap, objHeap, handle, "boundTypeExpr");
 	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
-	const many = wireGet(objHeap, handle, "boundTypeExprs");
+	const many = wireGet(arrHeap, objHeap, handle, "boundTypeExprs");
 	if (many.kind != RaiserValueKind.Array) return;
 	const operands: Node[] = [];
 	for (let i = 0; i < heapArrayLen(arrHeap, many.intVal); i += 1) {
