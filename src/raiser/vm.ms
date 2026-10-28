@@ -3948,9 +3948,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	vm.wordFloor = outerWordFloor;
 	vm.refFloor = outerRefFloor;
-	if (prevObjHeap != null && prevArrHeap != null) {
-		setActiveHostHeaps(prevObjHeap, prevArrHeap);
-	}
+	setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	setActiveProgramArgv(prevArgv);
 
 	const fatal = hostRaiseIsFatal();
@@ -5157,6 +5155,33 @@ test "CallHost two-arg native" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 42;
+}
+
+test "a host call leaves the active host heaps as it found them, none included" {
+	_resetHostRegistryForTests();
+	let during: RaiserArrayHeap | null = null;
+	registerHostFn("peek", (args: RaiserValue[]): RaiserValue => {
+		during = activeHostArrayHeap();
+		return raiserInt(1);
+	});
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserConstString("peek")];
+	setActiveHostHeaps(null, null);
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error == "", vm.error;
+	assert during == vm.arrayHeap;
+	assert activeHostArrayHeap() == null;
+	assert activeHostObjectHeap() == null;
+	const outerArrays = createArrayHeap();
+	const outerObjects = createStructHeap();
+	setActiveHostHeaps(outerObjects, outerArrays);
+	const again = execModule(makeTestModule(code, consts));
+	assert during == again.arrayHeap;
+	assert activeHostArrayHeap() == outerArrays;
+	assert activeHostObjectHeap() == outerObjects;
 }
 
 test "CallHost zero-arg native" {
