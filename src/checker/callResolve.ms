@@ -874,6 +874,28 @@ export function adoptThenable(ctx: CheckerContext, operand: Node, site: string):
 	return adoption.call;
 }
 
+// `await e` of a non-awaitable e yields once with e itself, like `await Promise.resolve(e)`;
+// a void e runs first and the helper settles after it, since a void value cannot be passed on.
+export function adoptPlainAwaited(ctx: CheckerContext, d: AwaitExprData): void {
+	const t = d.awaitArg.nodeType;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return;
+	const loc = d.awaitArg.location;
+	const operand = d.awaitArg;
+	let call: Node;
+	if (t.kind == TypeKind.Void) {
+		const thunk = createNodeAt(NodeKind.ArrowFunction, {
+			arrowParams: [], arrowParamTypes: [], arrowBody: operand,
+			arrowFlags: "", arrowReturnType: "", arrowDefaults: [],
+		}, loc);
+		call = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseAfterVoid" }, loc), arguments: [thunk], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	} else {
+		const resolve = createNodeAt(NodeKind.MemberExpr, { object: createNodeAt(NodeKind.Identifier, { name: "Promise" }, loc), property: "resolve", isOptional: false }, loc);
+		call = createNodeAt(NodeKind.CallExpr, { callee: resolve, arguments: [operand], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	}
+	callCheckExpr(ctx, call, createPromise(t));
+	d.awaitArg = call;
+}
+
 export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): void {
 	d.awaitArg = adoptThenable(ctx, d.awaitArg, "Type of 'await' operand");
 }
