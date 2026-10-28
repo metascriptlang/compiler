@@ -1962,9 +1962,53 @@ function isSinkParameter(ctx: CheckerContext, sym: Symbol): boolean {
 	return at >= 0 && names.length == fn.symbolType.typeChildren.length && fn.symbolType.typeChildren[at].kind == TypeKind.Sink;
 }
 
+function assignsName(n: Node, name: string): boolean {
+	if (n.kind == NodeKind.BinaryExpr) {
+		const d = n.data as BinaryExprData;
+		if (d.operator.endsWith("=") && d.operator != "==" && d.operator != "===" && d.operator != "!=" && d.operator != "!==" && d.operator != "<=" && d.operator != ">=") {
+			const l = peelHidden(d.left);
+			if (l.kind == NodeKind.Identifier && (l.data as IdentifierData).name == name) return true;
+		}
+	}
+	const hit: boolean[] = [false];
+	forEachChild(n, (child: Node): void => { if (!hit[0] && assignsName(child, name)) hit[0] = true; });
+	return hit[0];
+}
+
+// A plain parameter of a function or method is borrowed from the caller; one the body reassigns is a local again,
+// and a constructor parameter or a closure parameter is left to the analyzer.
+function isBorrowedParameter(ctx: CheckerContext, sym: Symbol): boolean {
+	const fn = ctx.currentFunction;
+	if (sym.symbolKind != SymbolKind.Parameter || sym.name == "this" || fn == null || fn.declNode == null || isSinkParameter(ctx, sym)) return false;
+	const decl = fn.declNode.kind == NodeKind.DecoratedDecl ? (fn.declNode.data as DecoratedDeclData).decoratedNode : fn.declNode;
+	const names = decl.kind == NodeKind.FunctionDecl ? (decl.data as FunctionDeclData).params : decl.kind == NodeKind.MethodDecl ? (decl.data as MethodDeclData).methodParams : [];
+	const body = decl.kind == NodeKind.FunctionDecl ? (decl.data as FunctionDeclData).fnBody : decl.kind == NodeKind.MethodDecl ? (decl.data as MethodDeclData).methodBody : null;
+	return body != null && names.includes(sym.name) && sym.symbolType.kind != TypeKind.Var && !assignsName(body, sym.name);
+}
+
+function reportMoveOfBorrowedParam(ctx: CheckerContext, sym: Symbol, at: SourceLocation): void {
+	const message = "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it and a move would copy it — declare the parameter `sink` to take ownership, or bind a fresh value locally and move that";
+	for (const e of ctx.errors) {
+		if (e.message == message && e.line == at.line && e.column == at.column) return;
+	}
+	addError(ctx, message, at.line, at.column);
+}
+
+// `move p` of a plain parameter would copy the caller's value, which a move refuses; the analyzer finds it only at build.
+export function checkMoveOfBorrowedParam(ctx: CheckerContext, mv: Node): void {
+	const arg = peelHidden((mv.data as MoveExprData).moveArg);
+	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (sym == null || !typeCarriesRef(sym.symbolType) || isRefFree(sym.symbolType) || !isBorrowedParameter(ctx, sym)) return;
+	reportMoveOfBorrowedParam(ctx, sym, mv.location);
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
 	if (!typeCarriesRef(sym.symbolType) || isRefFree(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
+		if (isBorrowedParameter(ctx, sym)) {
+			reportMoveOfBorrowedParam(ctx, sym, at);
+			return;
+		}
 		const why = isSinkParameter(ctx, sym)
 			? "a sink parameter does not prove it is the only owner, because a call may pass a copy that still reaches the caller's value — take an Isolated<T> (std/isolation) and read its .value, or bind a fresh value locally and move that"
 			: "it is a parameter, so the caller still owns it — bind a fresh value locally and move that";
