@@ -9,7 +9,7 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { Token, TokenKind, isIdentLikeKind } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData, TypeArrayData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, finishNode, finishToken } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
@@ -141,7 +141,8 @@ function isNegativeNumberAhead(state: ParserState): boolean {
 function parseTypeAtom(state: ParserState): Node {
 	const token = current(state);
 
-	if (token.kind == TokenKind.Distinct || token.kind == TokenKind.Keyof) {
+	if (token.kind == TokenKind.Distinct || token.kind == TokenKind.Keyof ||
+		token.kind == TokenKind.Readonly) {
 		advance(state);
 		return parseTypeAtom(state);
 	}
@@ -494,7 +495,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipTypeAtomNoOptional(state);
 		return;
 	}
-	if (token.kind == TokenKind.Keyof) {
+	if (token.kind == TokenKind.Keyof || token.kind == TokenKind.Readonly) {
 		advance(state);
 		skipTypeAtomNoOptional(state);
 		return;
@@ -568,7 +569,7 @@ function skipTypeAtom(state: ParserState): void {
 		skipTypeAtom(state);
 		return;
 	}
-	if (token.kind == TokenKind.Keyof) {
+	if (token.kind == TokenKind.Keyof || token.kind == TokenKind.Readonly) {
 		advance(state);
 		skipTypeAtom(state);
 		return;
@@ -713,6 +714,15 @@ test "array in both generic args" { assert skipsType("HashMap<string[], number[]
 
 test "single array" { assert skipsType("number[]"); }
 
+test "readonly type operator retains array suffixes" {
+	assert skipsType("readonly string[]");
+	assert skipsType("readonly string[][]");
+}
+
+test "conditional extends consumes readonly without consuming its question mark" {
+	assert skipsType("V extends readonly string[] ? 1 : 2");
+}
+
 test "fixed array" { assert skipsType("number[4]"); }
 
 test "fixed array multi-dimensional" { assert skipsType("number[4][2]"); }
@@ -796,6 +806,12 @@ function annotationText(typeStr: string): string {
 
 test "simple type text" { assert annotationText("number") == "number"; }
 
+test "readonly annotation text preserves the operator and bracketed operand space" {
+	assert annotationText("readonly string[]") == "readonly string[]";
+	assert annotationText("readonly (string | null)[]") == "readonly (string | null)[]";
+	assert annotationText("readonly string[] | null") == "readonly string[] | null";
+}
+
 test "generic type text" { assert annotationText("Result<Node, string>") != ""; }
 
 test "union type text" { assert annotationText("string | number") != ""; }
@@ -846,6 +862,18 @@ test "typeExpr generic" {
 
 test "typeExpr array" {
 	assert typeExprKind("number[]") == NodeKind.TypeArray;
+}
+
+test "readonly type operator preserves the positioned array element" {
+	const lr = lex("readonly Item[]");
+	assert lr.ok;
+	if (!lr.ok) return;
+	const state = createState(lr.value);
+	const node = parseTypeExpr(state);
+	assert node.kind == NodeKind.TypeArray;
+	const element = (node.data as TypeArrayData).typExprElement;
+	assert element.location.column == 10;
+	assert (element.data as IdentifierData).name == "Item";
 }
 
 test "typeExpr parenthesized atoms retain array suffixes" {
