@@ -145,7 +145,25 @@ function emitStoreInto(s: RaiserCompState, name: string, dest: Node, incoming: i
 	patchJumpTo(s, toEnd, codeLen(s));
 }
 
+function holdsUnion(type: Type | null): boolean {
+	const shown = skipModifier(type);
+	const held = shown != null && isMaybeType(shown) && shown.typeReturn != null ? skipModifier(shown.typeReturn) : shown;
+	return held != null && held.kind == TypeKind.Union;
+}
+
 function emitSink(s: RaiserCompState, name: string, dest: Node, src: Node): void {
+	const place = placeOf(src);
+	if (holdsUnion(placeOf(dest).nodeType) && !holdsUnion(place.nodeType)) {
+		const reg = compileExpr(s, place);
+		if (inRefFile(classOfReg(s, reg))) {
+			emitStoreInto(s, name, dest, reg);
+			return;
+		}
+		const boxed = allocDyn(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, boxed, reg, 0));
+		emitStoreInto(s, name, dest, boxed);
+		return;
+	}
 	emitStoreInto(s, name, dest, refRegister(s, name, src));
 }
 
