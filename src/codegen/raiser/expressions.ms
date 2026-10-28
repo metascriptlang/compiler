@@ -22,7 +22,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
+import { classBodyOf, isReadonlyView, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -43,6 +43,13 @@ import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 // (transformForEngine), so resolve the bridge NOW and report a missing one
 // at the call site with a span — the procIsCallback-resolved-at-codegen
 // shape, one phase earlier than the reference needs it.
+// A value an inlined initializer cannot stand for: a second evaluation is a second object.
+function holdsIdentity(t: Type | null): boolean {
+	if (t == null || isReadonlyView(t)) return false;
+	const body = unwrapRef(t);
+	return classBodyOf(t) != null || (body != null && body.kind == TypeKind.Array);
+}
+
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
 	if (lookupHost(sym.nativeName) != null) return "";
 	const msg = `no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`;
@@ -612,6 +619,13 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 				const r = allocWord(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
 				return r;
+			}
+			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
+				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.VariableDecl
+				&& holdsIdentity(node.resolvedSym.symbolType)) {
+				const heldMsg = `cannot evaluate '${d.name}' at comptime: a module-level const of type ${typeDisplayName(node.resolvedSym.symbolType)} is a single object, and macro-time code would build a new one at every use; keep it in a local or pass it as a parameter`;
+				queueRaiserCompileError(heldMsg, node.location.line, node.location.column);
+				return emitTrapValue(s, heldMsg, node.nodeType);
 			}
 			// Module-level const — the reference inlines skConst through the
 			// symbol's defining AST: compile the initializer at the use site.
