@@ -58,7 +58,7 @@ export function metaTypeSeeds(graph: ModuleGraph | null, ctx: CheckerContext | n
 }
 
 // A compilation outside any module graph reaches std/meta through the prelude's module scopes.
-function fillFromPreludeModules(ctx: CheckerContext, tags: string[], found: (Symbol | null)[]): void {
+export function fillFromPreludeModules(ctx: CheckerContext, tags: string[], found: (Symbol | null)[]): void {
 	for (const scope of ctx.preludeModuleScopes.values()) {
 		for (const sym of scope) {
 			const at = sym.builtinKind == "" ? -1 : tags.indexOf(sym.builtinKind);

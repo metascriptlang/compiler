@@ -58,9 +58,9 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType, genericParamNamesOf } from "../../checker/types";
-import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
+import { lookupModuleCtx, declaringModuleCtx, preludeModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag, isTypeSymbol } from "../../checker/symbol";
-import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
+import { metaTagged, fillFromPreludeModules, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
@@ -476,9 +476,12 @@ function quotedSymbolOf(node: Node): Symbol | null {
 }
 
 function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
-	if (declCtx.moduleGraph == null) return null;
-	const bindSym = metaTagged(declCtx.moduleGraph, ["MetaBindSym"])[0];
-	const metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
+	const found: (Symbol | null)[] = declCtx.moduleGraph != null ? metaTagged(declCtx.moduleGraph, ["MetaBindSym"]) : [null];
+	if (found[0] == null) fillFromPreludeModules(declCtx, ["MetaBindSym"], found);
+	if (found[0] == null && declCtx.preludeCtx != null) fillFromPreludeModules(declCtx.preludeCtx, ["MetaBindSym"], found);
+	const bindSym = found[0];
+	let metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
+	if (metaCtx == null && bindSym != null) metaCtx = preludeModuleCtx(declCtx, bindSym.modulePath);
 	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
 }
 
