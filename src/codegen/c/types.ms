@@ -393,14 +393,14 @@ function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | nul
 		TypeKind.GenericInstance => "ginst:" + monoInstanceNameIn(roots, t),
 		TypeKind.Array => "arr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Function => {
-			let k = "fn(";
+			let k = "fn" + callConvKey(t) + "(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
 				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open) + callConvKey(t);
+			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKeyIn(roots, t.typeChildren[0], open) : "varargs:empty",
@@ -435,7 +435,7 @@ function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | nul
 			let k = "k" + (t.kind as number).toString() + ":" + t.typeName;
 			if (t.typeReturn != null) k = k + "<" + anonFieldKeyIn(roots, t.typeReturn, open) + ">";
 			for (const child of t.typeChildren) k = k + "," + anonFieldKeyIn(roots, child, open);
-			return k;
+			return k + ";";
 		},
 	};
 }
@@ -634,14 +634,14 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			return "set:" + elemKey;
 		},
 		TypeKind.Function => {
-			let key = "func(";
+			let key = "func" + callConvKey(t) + "(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) key = key + ",";
 				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
-			key = key + "):" + typeKeyIn(roots, t.typeReturn) + callConvKey(t);
+			key = key + "):" + typeKeyIn(roots, t.typeReturn);
 			return key;
 		},
 		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
@@ -674,14 +674,14 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			}
 		},
 		TypeKind.Tuple => {
-			let key = "tuple:";
+			let key = "tuple(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) key = key + ",";
 				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
-			return key;
+			return key + ")";
 		},
 		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKeyIn(roots, t.typeChildren[0]) : "varargs:empty",
 		// Total catch-all: the key feeds typeCache, so collapsing two types onto one
@@ -691,7 +691,7 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			let key = "k" + (t.kind as number).toString() + ":" + t.typeName;
 			if (t.typeReturn != null) key = key + "<" + typeKeyIn(roots, t.typeReturn) + ">";
 			for (const child of t.typeChildren) key = key + "," + typeKeyIn(roots, child);
-			return key;
+			return key + ";";
 		},
 	};
 }
@@ -2607,7 +2607,21 @@ test "anonymous type cache key distinguishes" {
 
 test "tuple type key" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
-	assert typeKey(t) == "tuple:float64,string";
+	assert typeKey(t) == "tuple(float64,string)";
+}
+
+test "tuple and function type keys keep nested members grouped" {
+	const i32 = createPrimitive(TypeKind.Int32);
+	const str = createPrimitive(TypeKind.String);
+	const inner = createTuple([str, i32]);
+	assert typeKey(createTuple([i32, inner])) != typeKey(createTuple([i32, createTuple([str]), i32]));
+	const num = createPrimitive(TypeKind.Number);
+	const plainInClosure = createFunction([], [], createFunction([], [], num));
+	plainInClosure.callConv = CallingConvention.CcClosure;
+	const closureReturn = createFunction([], [], num);
+	closureReturn.callConv = CallingConvention.CcClosure;
+	const closureInPlain = createFunction([], [], closureReturn);
+	assert typeKey(plainInClosure) != typeKey(closureInPlain);
 }
 
 test "tuple type desc emits struct" {
