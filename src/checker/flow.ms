@@ -2059,16 +2059,14 @@ function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
 	if (u.kind != TypeKind.Union) return u;
 	if (parent.typeExtra == null || parent.typeNames == null
 		|| parent.typeNames.length == 0 || parent.typeChildren == null) return u;
-	u.typeExtra = parent.typeExtra;
-	u.typeNames.push(parent.typeNames[0]);
-	for (const rv of remaining) {
-		for (let pi = 0; pi < parent.typeChildren.length; pi += 1) {
-			if (parent.typeChildren[pi] == rv) {
-				if (pi + 1 < parent.typeNames.length) u.typeNames.push(parent.typeNames[pi + 1]);
-				break;
-			}
-		}
+	const keys: string[] = [parent.typeNames[0]];
+	for (const rv of u.typeChildren) {
+		const pi = parent.typeChildren.indexOf(rv);
+		if (pi < 0 || pi + 1 >= parent.typeNames.length) return u;
+		keys.push(parent.typeNames[pi + 1]);
 	}
+	u.typeExtra = parent.typeExtra;
+	u.typeNames = keys;
 	return u;
 }
 
