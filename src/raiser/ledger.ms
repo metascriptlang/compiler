@@ -5,7 +5,7 @@
 
 import {
 	RaiserObjectData, RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
-	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
+	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapStringText, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
 	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldNameAt, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
 	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle
 } from "./value";
@@ -99,12 +99,16 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	let leakedBoxes = 0;
 	let firstBox = "";
 	let firstLeak = "";
+	let firstString = "";
 	for (const handle of heapStringHandles(arr)) {
 		const held = tally.strings.get(handle);
 		const holders = held != null ? held : 0;
 		const counted = stringHandleRc(handle);
-		if (counted < holders) return `internal: string ${handle} counts ${counted} holders but ${holders} hold it at ${where} end`;
-		if (counted > holders) leakedStrings += 1;
+		if (counted < holders) return `internal: string ${handle} counts ${counted} holders but ${holders} hold it at ${where} end: ${tally.holders.get(handle)}`;
+		if (counted > holders) {
+			leakedStrings += 1;
+			if (leakedStrings <= 4) firstString += `${firstString == "" ? "" : "; "}"${heapStringText(arr, { kind: RaiserValueKind.String, intVal: handle, floatVal: 0.0 }).slice(0, 40)}" counts ${counted} holders ${holders}`;
+		}
 	}
 	for (const handle of seqHandles) {
 		if (heapArrayIsView(arr, handle)) continue;
@@ -142,7 +146,7 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 			if (firstBox == "") firstBox = `Box#${handle} counts ${counted} holders ${holders} holding kind ${heapBoxValue(arr, handle).kind}`;
 		}
 	}
-	if (leakedStrings > 0) return `internal: ${leakedStrings} string items live after ${where} end`;
+	if (leakedStrings > 0) return `internal: ${leakedStrings} string items live after ${where} end (leaked: ${firstString})`;
 	if (leakedArrays > 0) return `internal: ${leakedArrays} array items live after ${where} end`;
 	if (leakedObjects > 0) return `internal: ${leakedObjects} object items live after ${where} end${firstLeak == "" ? "" : " (leaked: " + firstLeak + ")"}`;
 	if (leakedBoxes > 0) return `internal: ${leakedBoxes} box items live after ${where} end (first: ${firstBox})`;
@@ -168,7 +172,7 @@ test "the audit names a heap whose item outlives its roots" {
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "leaked");
 	const o = heapAllocObject(obj);
-	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "internal: 1 string items live after strand end";
+	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "internal: 1 string items live after strand end (leaked: \"leaked\" counts 1 holders 0)";
 	rcDecref(arr, obj, s);
 	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "";
 	assert ledgerAudit(arr, obj, [], "strand").startsWith("internal: 1 object items live after strand end (leaked: [");
@@ -178,7 +182,7 @@ test "the audit names an item held more often than it is counted" {
 	const arr = createArrayHeap();
 	const obj = createStructHeap();
 	const s = heapAllocString(arr, "twice");
-	assert ledgerAudit(arr, obj, [s, s], "program").endsWith("counts 1 holders but 2 hold it at program end");
+	assert ledgerAudit(arr, obj, [s, s], "program").includes("counts 1 holders but 2 hold it at program end");
 }
 
 test "the audit counts the references an object cell holds and names a cell that outlives its roots" {
