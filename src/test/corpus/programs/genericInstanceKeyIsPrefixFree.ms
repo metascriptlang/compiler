@@ -1,7 +1,9 @@
 // @stdout: 1 object|2 number|2|2
 // @stdout: f1 1 x
 // @stdout: f2 2 y
-// note: generic instances whose type arguments differ only in how nested tuples, unions or function parameters group their members are distinct instances with distinct bodies; they once shared one mangled name (one body on C, a duplicate declaration on JS).
+// @stdout: 1 x 2 | 1 y 3
+// @stdout: int32 true | 7 false
+// note: generic instances whose type arguments differ only in how nested tuples, unions or function parameters group their members are distinct instances with distinct bodies; they once shared one mangled name (one body on C, a duplicate declaration on JS). Tuples whose members group differently, or whose member is a string literal spelled like a type, once shared one C struct name.
 type Pair = [string, int32];
 type Nested = [int32, [string]];
 type Fn1 = (a: [int32], b: string) => void;
@@ -27,5 +29,12 @@ function main(): void {
 	const f2: Fn2 = (p) => { console.log(`f2 ${p[0]} ${p[1]}`); };
 	keep(f1)([1], "x");
 	keep(f2)([2, "y"]);
+
+	const g: [int32, [string, int32]] = [1, ["x", 2]];
+	const h: [int32, [string], int32] = [1, ["y"], 3];
+	console.log(`${g[0]} ${g[1][0]} ${g[1][1]} | ${h[0]} ${h[1][0]} ${h[2]}`);
+	const l: ["int32", boolean] = ["int32", true];
+	const n: [int32, boolean] = [7, false];
+	console.log(`${l[0]} ${l[1]} | ${n[0]} ${n[1]}`);
 }
 main();
