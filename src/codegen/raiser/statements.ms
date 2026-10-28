@@ -25,6 +25,7 @@ import {
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
+import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 
 // --- Statement compilation ---
 
@@ -150,7 +151,8 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
 	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && isScalarClass(regClassOf(s, node.nodeType));
 	if (d.initializer != null && !placeholderNull) {
-		if (d.initializer.kind == NodeKind.Identifier) {
+		const declared = skipModifier(node.nodeType);
+		if (d.initializer.kind == NodeKind.Identifier && (declared == null || !isPlainFunctionPointer(declared))) {
 			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);
 			if (fIdx >= 0) {
 				const pairReg = emitClosurePair(s, fIdx, -1);
