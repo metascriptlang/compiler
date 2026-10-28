@@ -477,7 +477,7 @@ function absentOrError(err: int32, path: string): Result<Removal, IoError> {
 function writeAndClose(file: Ptr<FILE>, content: Readonly<Span<uint8>>): int32 {
 	const length = content.length as uint64;
 	let err: int32 = 0;
-	if (cFwrite(content as Readonly<Ptr<uint8>>, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
+	if (length > 0 && cFwrite(content as Readonly<Ptr<uint8>>, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
 	if (cFclose(file) != 0 && err == 0) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
 	return err;
 }

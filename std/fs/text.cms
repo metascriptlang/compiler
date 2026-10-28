@@ -7,6 +7,7 @@ extern function msStringMarkAscii(s: string): void;
 export function validText(raw: string): string {
 	const bytes = raw.asBytes();
 	const length = bytes.length as int64;
+	if (length == 0) return raw;
 	let i = asciiWords(bytes as Readonly<Ptr<uint8>>, length >> 3) << 3;
 	while (i < length && bytes[i] < 0x80) i += 1;
 	if (i < length) return utf8String(bytes, false);

@@ -11,6 +11,7 @@
 // @stdout: bytes length=10 61,ff,62,c3,e2,82,ed,a0,80,7a
 // @stdout: all256 length=256 exact=true
 // @stdout: copy exact=true
+// @stdout: empty written=true text=0 bytes=0
 // @stdout: proc ok=true
 // @stdout: missing ok=false
 // @skip-raiser: the byte reads take Buffer, which the Raiser tier has no type for
@@ -75,6 +76,12 @@ const copyPath = `${dir}/all256.copy`;
 const copied = copyFile(allPath, copyPath);
 const again = readFileBytes(copyPath);
 console.log(`copy exact=${copied.ok && again.ok && sameBytes(again.value, everyByte)}`);
+
+const emptyPath = `${dir}/empty.bin`;
+const emptyWritten = writeFileBytes(emptyPath, Buffer.alloc(0));
+const emptyText = readFile(emptyPath);
+const emptyBytes = readFileBytes(emptyPath);
+console.log(`empty written=${emptyWritten.ok} text=${emptyText.ok ? emptyText.value.length : -1} bytes=${emptyBytes.ok ? emptyBytes.value.length : -1}`);
 
 const procFile = "/proc/self/status";
 const proc = readFileBytes(procFile);
