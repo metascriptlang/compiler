@@ -22,9 +22,10 @@ import {
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
 	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
-import { lspFmtPublishDiagnostics } from "../format";
+import { lspFmtPublishDiagnostics, lspFmtDiagnostic } from "../format";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
 import { lspByteColumnIn } from "../position";
+import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
@@ -96,8 +97,8 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 			const fileId = getFileId(db.fileInput, path);
 			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
-			const emptyParams = recordPublishedDiagnostics(path, lspFmtPublishDiagnostics(uri, "[]"));
-			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", emptyParams));
+			const failedParams = recordPublishedDiagnostics(path, checkFailureDiagnostics(uri, e.message));
+			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", failedParams));
 		}
 	}
 	for (let i = 0; i < stale.length; i++) {
@@ -112,6 +113,10 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 		}
 	}
 	return result;
+}
+
+export function checkFailureDiagnostics(uri: string, message: string): string {
+	return lspFmtPublishDiagnostics(uri, `[${lspFmtDiagnostic(0, 0, 1, 1, `internal: type check failed: ${message}`, "metascript", 0, 0)}]`);
 }
 
 function requeueDiagnostics(changed: ChangedFile[], fromChanged: int32, stale: string[], fromStale: int32): void {
@@ -353,6 +358,18 @@ test "clean source has no diagnostics" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
 	assert lspGetField(diags, "uri") == "file:///test.ms";
+}
+
+test "a type check that throws publishes one error naming it, not a clean file" {
+	const params = checkFailureDiagnostics("file:///crash.ms", "boom");
+	assert lspGetField(params, "uri") == "file:///crash.ms";
+	assert params.includes("\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0}"), params;
+	assert params.includes("\"severity\":1,\"source\":\"metascript\",\"message\":\"internal: type check failed: boom\"}]"), params;
+}
+
+test "a type check failure keeps quotes and newlines of its message as JSON escapes" {
+	const params = checkFailureDiagnostics("file:///crash.ms", "slot \"x\"\nbroke");
+	assert params.includes("\"message\":\"internal: type check failed: slot \\\"x\\\"\\nbroke\"}]"), params;
 }
 
 test "actor static without readonly is reported" {
