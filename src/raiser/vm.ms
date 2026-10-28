@@ -14,7 +14,7 @@ import {
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
+	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown,
 } from "./value";
 import {
@@ -934,7 +934,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
 	// value graph moves into storage the future owns.
-	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value, strandCopyMap(vm));
+	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.value = owned;
 	futureSettled(vm, handle);
@@ -1269,7 +1269,7 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 	if (ib == RaiserCombine.Any as int32) {
 		const rejection = getDyn(vm, func.blocks[ic + 4] as int32);
 		f.errorMsg = vmExceptionText(vm, rejection);
-		const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection, strandCopyMap(vm));
+		const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection);
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 		f.error = owned;
 	}
@@ -1375,7 +1375,7 @@ function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: Raiser
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = message;
-	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown, strandCopyMap(vm));
+	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.error = owned;
 	futureSettled(vm, handle);
@@ -1834,12 +1834,6 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 		return;
 	}
 	vm.halted = true;
-}
-
-function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
-	const map = createCopyMap();
-	map.sourceGlobals = vm.globals;
-	return map;
 }
 
 export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
@@ -3630,7 +3624,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.CopyValue => {
 			const source = getDyn(vm, ib);
 			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source, func.copyPlans, ic as int32);
-			if (copied.kind >= RaiserValueKind.String && copied.intVal == source.intVal) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, copied.intVal);
+			if (holdsCount(copied.kind) && copied.intVal == source.intVal) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, copied.intVal);
 			setRegConform(vm, ia, copied);
 				},
 		RaiserOpcode.Box => {
@@ -4213,7 +4207,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 			}
 			for (let i = 0; i < data.values.length; i += 1) {
 				const held = data.values[i];
-				if (held.kind >= RaiserValueKind.String) {
+				if (holdsCount(held.kind)) {
 					data.values[i] = raiserNil();
 					vmReleaseChild(vm, held.intVal, dynSlotCyclic(data, i));
 				}
@@ -4227,7 +4221,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 				for (let i = 0; i < t.kinds.length; i += 1) {
 					if (t.kinds[i] == RaiserRegClass.Dyn) {
 						const held = objectCellFieldValue(vm.arrayHeap, handle, i);
-						if (held.kind >= RaiserValueKind.String) {
+						if (holdsCount(held.kind)) {
 							objectCellStoreField(vm.arrayHeap, handle, i, raiserNil());
 							vmReleaseChild(vm, held.intVal, t.cyclic[i]);
 						}
@@ -4249,7 +4243,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 				const cyclic = seqCyclic(c);
 				for (let i = 0; i < seqLen(c); i += 1) {
 					const held = arrayHeldAt(vm.arrayHeap, handle, i);
-					if (held.kind < RaiserValueKind.String) continue;
+					if (!holdsCount(held.kind)) continue;
 					arrayHeldStore(vm.arrayHeap, handle, i, raiserNil());
 					vmReleaseChild(vm, held.intVal, cyclic);
 				}
@@ -4257,7 +4251,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 		},
 		RaiserHeapKind.Box => {
 			const held = heapBoxValue(vm.arrayHeap, handle);
-			if (held.kind >= RaiserValueKind.String) vmReleaseChild(vm, held.intVal, false);
+			if (holdsCount(held.kind)) vmReleaseChild(vm, held.intVal, false);
 		},
 		RaiserHeapKind.String => {},
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => { throw new Error(`internal: handle ${handle} names no cell to destroy`); },
@@ -4373,7 +4367,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 			const cyclic = seqCyclic(c);
 			for (let i = 0; i < seqLen(c); i += 1) {
 				const held = arrayHeldAt(vm.arrayHeap, handle, i);
-				if (held.kind < RaiserValueKind.String) continue;
+				if (!holdsCount(held.kind)) continue;
 				arrayHeldStore(vm.arrayHeap, handle, i, raiserNil());
 				vmReleasePlanned(vm, held.intVal, plans, plan.children[0], cyclic);
 			}
@@ -4384,7 +4378,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 		const count = heapObjectFieldCount(vm.objectHeap, handle);
 		for (let f = 0; f < count; f += 1) {
 			const held = heapObjectFieldValueAt(vm.arrayHeap, vm.objectHeap, handle, f);
-			if (held.kind < RaiserValueKind.String) continue;
+			if (!holdsCount(held.kind)) continue;
 			if (f < laid && classType.uncounted[f]) continue;
 			const name = heapObjectFieldNameAt(vm.objectHeap, handle, f);
 			let child: int32 = -1;
@@ -4711,12 +4705,12 @@ function vmPlainArray(vm: RaiserVM, t: int32, verb: string): int64 {
 }
 
 function vmShareHold(vm: RaiserVM, val: RaiserValue): void {
-	if (val.kind < RaiserValueKind.String) return;
+	if (!holdsCount(val.kind)) return;
 	rcIncrefHandle(vm.arrayHeap, vm.objectHeap, val.intVal);
 }
 
 function vmEvict(vm: RaiserVM, val: RaiserValue, cyclic: boolean): void {
-	if (val.kind < RaiserValueKind.String) return;
+	if (!holdsCount(val.kind)) return;
 	vmReleaseChild(vm, val.intVal, cyclic);
 }
 
