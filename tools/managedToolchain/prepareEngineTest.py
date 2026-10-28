@@ -1,6 +1,9 @@
+import ast
 import hashlib
+import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -130,6 +133,230 @@ class ContractTest(TempCase):
         write(os.path.join(root, "bad\nname"), "x")
         with self.assertRaisesRegex(pe.EngineError, "unsupported character"):
             pe.listFiles(root)
+
+
+def reparse(*paths):
+    """os.lstat as NTFS reports a junction: the reparse-point attribute on the named paths, whatever islink says."""
+    real = os.lstat
+
+    class Reparsed:
+        st_file_attributes = stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def lstat(path, *args, **kwargs):
+        found = real(path, *args, **kwargs)
+        return Reparsed(found) if os.fspath(path) in paths else found
+
+    return mock.patch.object(os, "lstat", side_effect=lstat)
+
+
+class LinkLikeTest(TempCase):
+    def test_a_plain_file_and_directory_are_not_link_like(self):
+        write(self.path("d", "f"), "x")
+        self.assertEqual((pe.isLinkLike(self.path("d")), pe.isLinkLike(self.path("d", "f"))), (False, False))
+
+    def test_a_symlink_to_a_file_or_a_directory_is_link_like(self):
+        write(self.path("d", "f"), "x")
+        os.symlink(self.path("d"), self.path("dir link"))
+        os.symlink(self.path("d", "f"), self.path("file link"))
+        self.assertEqual((pe.isLinkLike(self.path("dir link")), pe.isLinkLike(self.path("file link"))), (True, True))
+
+    def test_a_reparse_point_is_link_like_even_when_islink_is_false(self):
+        os.makedirs(self.path("junction"))
+        with reparse(self.path("junction")), mock.patch.object(os.path, "islink", return_value=False):
+            self.assertTrue(pe.isLinkLike(self.path("junction")))
+
+    def test_directory_attributes_without_the_reparse_bit_are_not_link_like(self):
+        os.makedirs(self.path("d"))
+        attributes = stat.FILE_ATTRIBUTE_DIRECTORY | stat.FILE_ATTRIBUTE_ARCHIVE
+        real = os.lstat
+
+        class Plain:
+            st_file_attributes = attributes
+
+            def __init__(self, inner):
+                self.inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+        with mock.patch.object(os, "lstat", side_effect=lambda p, *a, **k: Plain(real(p, *a, **k))):
+            self.assertFalse(pe.isLinkLike(self.path("d")))
+
+    def test_list_files_refuses_a_directory_that_is_a_reparse_point_and_reads_no_data_behind_it(self):
+        write(self.path("outside", "data"), "secret")
+        write(self.path("bundle", "bin", "tool"), "tool")
+        os.symlink(self.path("outside"), self.path("bundle", "dir"))
+        with reparse(self.path("bundle", "dir")), mock.patch.object(os.path, "islink", return_value=False):
+            with self.assertRaisesRegex(pe.EngineError, "directory symlink .*dir"):
+                pe.listFiles(self.path("bundle"))
+
+    def test_list_files_refuses_a_real_directory_carrying_the_reparse_attribute(self):
+        write(self.path("bundle", "junction", "data"), "x")
+        with reparse(self.path("bundle", "junction")):
+            with self.assertRaisesRegex(pe.EngineError, "directory symlink .*junction"):
+                pe.listFiles(self.path("bundle"))
+
+    def test_list_files_still_refuses_a_symlinked_directory_and_still_accepts_an_inside_file_alias(self):
+        write(self.path("bundle", "bin", "tool"), "tool")
+        os.symlink("tool", self.path("bundle", "bin", "alias"))
+        self.assertEqual(pe.listFiles(self.path("bundle")), ["bin/alias", "bin/tool"])
+        os.symlink(self.path("bundle", "bin"), self.path("bundle", "linked"))
+        with self.assertRaisesRegex(pe.EngineError, "directory symlink"):
+            pe.listFiles(self.path("bundle"))
+
+
+class WindowsHostContractTest(TempCase):
+    def bundle(self, host="x86_64-windows"):
+        root = self.path("bundle")
+        write(os.path.join(root, "bin", "clang.exe"), "exe\n")
+        write(os.path.join(root, "lib", "clang", "22", "include", "stddef.h"), "h\n")
+        pe.writeContract(root, host, "22.1.1")
+        return root
+
+    def windowsSeparator(self):
+        """Patches that make listFiles see the paths a native Windows os.path.relpath returns: backslash separated."""
+        relpath = os.path.relpath
+        return (mock.patch.object(pe.os, "sep", "\\"),
+                mock.patch.object(pe.os.path, "relpath", side_effect=lambda p, s: relpath(p, s).replace("/", "\\")))
+
+    def test_a_windows_x64_host_is_a_contract_host_and_the_other_hosts_still_are(self):
+        self.assertEqual(pe.WINDOWS_X64, "x86_64-windows")
+        self.assertEqual(pe.verifyContract(self.bundle()), ("x86_64-windows", "22.1.1"))
+        self.assertEqual(pe.KNOWN_HOSTS, ("aarch64-macos", "x86_64-macos", "x86_64-linux", "x86_64-windows"))
+
+    def test_native_windows_separators_become_slashes_before_the_contract_validates_and_sorts(self):
+        root = self.bundle()
+        expected = pe.listFiles(root)
+        with open(os.path.join(root, "FILES.sha256"), "rb") as f:
+            manifest = f.read()
+        first, second = self.windowsSeparator()
+        with first, second:
+            self.assertEqual(pe.listFiles(root), expected)
+            pe.writeContract(root, "x86_64-windows", "22.1.1")
+            self.assertEqual(pe.verifyContract(root), ("x86_64-windows", "22.1.1"))
+        with open(os.path.join(root, "FILES.sha256"), "rb") as f:
+            self.assertEqual(f.read(), manifest)
+        self.assertIn("bin/clang.exe", expected)
+        self.assertIn("lib/clang/22/include/stddef.h", expected)
+
+    def test_list_files_reads_native_windows_paths_as_the_slash_paths_the_manifest_holds(self):
+        root = self.bundle("x86_64-linux")
+        expected = pe.listFiles(root)
+        first, second = self.windowsSeparator()
+        with first, second:
+            self.assertEqual(pe.listFiles(root), expected)
+        self.assertEqual(expected, ["HOST", "VERSION", "bin/clang.exe", "lib/clang/22/include/stddef.h"])
+
+    def test_a_backslash_that_is_part_of_a_posix_file_name_is_still_refused(self):
+        root = self.path("bundle")
+        write(os.path.join(root, "bin", "a\\b.exe"), "x\n")
+        with self.assertRaisesRegex(pe.EngineError, "unsupported character in path"):
+            pe.listFiles(root)
+
+    def test_a_backslash_in_a_manifest_path_is_still_refused_on_every_host(self):
+        root = self.bundle()
+        with open(os.path.join(root, "FILES.sha256"), "a", encoding="utf-8") as f:
+            f.write("%s  bin\\clang.exe\n" % ("0" * 64))
+        first, second = self.windowsSeparator()
+        with first, second:
+            with self.assertRaisesRegex(pe.EngineError, "unsafe path"):
+                pe.verifyContract(root)
+
+    def test_verify_engine_hands_a_windows_bundle_to_the_windows_module_and_never_reads_mach_o_or_elf(self):
+        root = self.bundle()
+        module, other = mock.Mock(**{"verifyEngine.return_value": 12}), mock.Mock()
+        with mock.patch.dict(sys.modules, {"prepareWindowsEngine": module, "prepareLinuxEngine": other}), \
+                mock.patch.object(pe, "verifyLayout", side_effect=AssertionError("mac layout")), \
+                mock.patch.object(pe, "auditLoadCommands", side_effect=AssertionError("mach-o audit")):
+            self.assertEqual(pe.verifyEngine(root), ("x86_64-windows", "22.1.1", 12))
+            self.assertEqual(pe.verifyEngine(root, "/x/llvm-readobj.exe"), ("x86_64-windows", "22.1.1", 12))
+        self.assertEqual([c.args for c in module.verifyEngine.call_args_list], [
+            (root, "x86_64-windows", "22.1.1", None), (root, "x86_64-windows", "22.1.1", "/x/llvm-readobj.exe")])
+        other.verifyEngine.assert_not_called()
+
+    def test_the_verify_command_names_the_binary_kind_of_a_windows_bundle(self):
+        with mock.patch.object(pe, "verifyEngine", return_value=("x86_64-windows", "22.1.1", 13)) as verify, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(pe.main(["--verify", self.bundle(), "--inspector", "/x/llvm-readobj"]), 0)
+        self.assertEqual(out.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=13\n")
+
+
+class LinuxHostContractTest(TempCase):
+    def linuxBundle(self, host="x86_64-linux"):
+        root = self.path("bundle")
+        write(os.path.join(root, "bin", "tool"), "tool\n")
+        pe.writeContract(root, host, "21.1.8")
+        return root
+
+    def test_a_linux_x64_host_is_a_contract_host_and_the_mac_hosts_still_are(self):
+        self.assertEqual(pe.LINUX_X64, "x86_64-linux")
+        self.assertEqual(pe.verifyContract(self.linuxBundle()), ("x86_64-linux", "21.1.8"))
+        for host in ("aarch64-macos", "x86_64-macos"):
+            root = self.path(host)
+            write(os.path.join(root, "bin", "tool"), "tool\n")
+            pe.writeContract(root, host, "22.1.1")
+            self.assertEqual(pe.verifyContract(root), (host, "22.1.1"))
+
+    def test_other_hosts_are_still_refused(self):
+        for host in ("aarch64-linux", "aarch64-windows", "x86_64-windows-gnu", "x86_64-linux-gnu", "windows", "linux"):
+            shutil.rmtree(self.path("bundle"), ignore_errors=True)
+            with self.assertRaisesRegex(pe.EngineError, "HOST is not one line matching"):
+                pe.verifyContract(self.linuxBundle(host))
+
+    def test_verify_engine_hands_a_linux_bundle_to_the_linux_module_and_never_reads_mach_o(self):
+        root = self.linuxBundle()
+        module = mock.Mock(**{"verifyEngine.return_value": 7})
+        with mock.patch.dict(sys.modules, {"prepareLinuxEngine": module}), \
+                mock.patch.object(pe, "verifyLayout", side_effect=AssertionError("mac layout")), \
+                mock.patch.object(pe, "auditLoadCommands", side_effect=AssertionError("mach-o audit")):
+            self.assertEqual(pe.verifyEngine(root, "/x/llvm-readobj"), ("x86_64-linux", "21.1.8", 7))
+        module.verifyEngine.assert_called_once_with(root, "x86_64-linux", "21.1.8", "/x/llvm-readobj")
+
+    def test_verify_engine_keeps_the_mac_layout_and_load_command_audit_for_mac_hosts(self):
+        root = self.path("mac")
+        write(os.path.join(root, "bin", "tool"), "tool\n")
+        pe.writeContract(root, "aarch64-macos", "22.1.1")
+        module = mock.Mock()
+        with mock.patch.dict(sys.modules, {"prepareLinuxEngine": module}), \
+                mock.patch.object(pe, "verifyLayout") as layout, mock.patch.object(pe, "auditLoadCommands", return_value=3):
+            self.assertEqual(pe.verifyEngine(root), ("aarch64-macos", "22.1.1", 3))
+            self.assertEqual(pe.verifyEngine(root, "/ignored/llvm-readobj"), ("aarch64-macos", "22.1.1", 3))
+        layout.assert_called_with(root, "22.1.1")
+        module.verifyEngine.assert_not_called()
+
+    def test_the_verify_command_names_the_binary_kind_of_the_host(self):
+        root = self.linuxBundle()
+        for host, count, label in (("x86_64-linux", 4, "elf=4"), ("aarch64-macos", 5, "macho=5")):
+            with mock.patch.object(pe, "verifyEngine", return_value=(host, "1.2.3", count)) as verify, \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                self.assertEqual(pe.main(["--verify", root, "--inspector", "/x/llvm-readobj"]), 0)
+            self.assertEqual(out.getvalue(), "verified host=%s version=1.2.3 %s\n" % (host, label))
+            verify.assert_called_with(root, "/x/llvm-readobj")
+
+    def test_every_producer_and_prover_calls_verify_engine_with_the_engine_root_alone(self):
+        directory = os.path.dirname(os.path.abspath(__file__))
+        calls = {}
+        for name in ("prepareRuntime", "prepareCppRuntime", "prepareWindowsRuntime", "prepareBundle", "proveCompiler"):
+            with open(os.path.join(directory, name + ".py"), encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            calls[name] = [(len(n.args), len(n.keywords)) for n in ast.walk(tree) if isinstance(n, ast.Call)
+                           and isinstance(n.func, ast.Attribute) and n.func.attr == "verifyEngine"]
+        self.assertEqual({k: len(v) for k, v in calls.items()}, {"prepareRuntime": 2, "prepareCppRuntime": 1, "prepareWindowsRuntime": 1,
+                                                                  "prepareBundle": 4, "proveCompiler": 1})
+        self.assertEqual({pair for v in calls.values() for pair in v}, {(1, 0)})
+
+    def test_the_source_path_scan_takes_the_binary_test_of_the_host(self):
+        root = self.path("scan")
+        write(os.path.join(root, "a"), "xx/src/yy")
+        write(os.path.join(root, "b"), "/src/")
+        self.assertEqual(pe.sourcePathLiterals(root, ["/src/"], lambda path: os.path.basename(path) == "a"), {"a": 1})
+        self.assertEqual(pe.sourcePathLiterals(root, ["/src/"]), {})
 
 
 class ContainsPathTest(TempCase):

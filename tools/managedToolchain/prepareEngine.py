@@ -4,6 +4,10 @@
     prepareEngine.py --llvm-root DIR --lld-root DIR --output NEW_DIR
     prepareEngine.py --verify BUNDLE_DIR
 
+On Linux x86_64 prepareLinuxEngine.py makes the bundle and on Windows x86_64 prepareWindowsEngine.py; --verify here checks a
+bundle of any host. A Linux or Windows bundle is read by its own bin/llvm-readobj on a native host of its kind and by an
+explicit --inspector elsewhere.
+
 The bundle is a local proof built from installed packages, not an upstream-controlled
 build; its provenance receipt says so and never certifies redistribution.
 """
@@ -14,11 +18,15 @@ import os
 import platform
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import sys
 
 HOSTS = {"arm64": ("aarch64-macos", 0x0100000C), "x86_64": ("x86_64-macos", 0x01000007)}
+LINUX_X64 = "x86_64-linux"
+WINDOWS_X64 = "x86_64-windows"
+KNOWN_HOSTS = tuple(h[0] for h in HOSTS.values()) + (LINUX_X64, WINDOWS_X64)
 LLVM_TOOLS = ("llvm-ar", "llvm-ranlib", "llvm-strip", "llvm-objcopy", "llvm-nm", "dsymutil")
 CLANG_ALIASES = ("clang", "clang++")
 LLD_ALIASES = ("ld64.lld", "ld.lld", "lld-link", "wasm-ld")
@@ -296,6 +304,10 @@ def sha256File(path):
     return digest.hexdigest()
 
 
+def isLinkLike(path):
+    return os.path.islink(path) or bool(getattr(os.lstat(path), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def listFiles(root):
     """Relative paths of every file and symlink in root, sorted by UTF-8 bytes, contract files
     excluded. A symlink must resolve to a regular file inside root."""
@@ -303,11 +315,11 @@ def listFiles(root):
     found = []
     for directory, dirnames, filenames in os.walk(root):
         for name in dirnames:
-            if os.path.islink(os.path.join(directory, name)):
+            if isLinkLike(os.path.join(directory, name)):
                 raise EngineError("directory symlink %s" % os.path.join(directory, name))
         for name in filenames:
             path = os.path.join(directory, name)
-            rel = os.path.relpath(path, root)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
             if "\n" in rel or "\\" in rel:
                 raise EngineError("unsupported character in path %r" % rel)
             try:
@@ -347,7 +359,7 @@ def readLine(root, name, pattern):
 
 
 def verifyContract(root):
-    host = readLine(root, "HOST", "|".join(re.escape(h[0]) for h in HOSTS.values()))
+    host = readLine(root, "HOST", "|".join(re.escape(h) for h in KNOWN_HOSTS))
     version = readLine(root, "VERSION", r"\d+\.\d+\.\d+")
     with open(os.path.join(root, "FILES.sha256"), "rb") as f:
         raw = f.read()
@@ -425,8 +437,14 @@ def auditLoadCommands(root):
     return count
 
 
-def verifyEngine(root):
+def verifyEngine(root, inspector=None):
     host, version = verifyContract(root)
+    if host == LINUX_X64:
+        import prepareLinuxEngine
+        return host, version, prepareLinuxEngine.verifyEngine(root, host, version, inspector)
+    if host == WINDOWS_X64:
+        import prepareWindowsEngine
+        return host, version, prepareWindowsEngine.verifyEngine(root, host, version, inspector)
     verifyLayout(root, version)
     return host, version, auditLoadCommands(root)
 
@@ -506,13 +524,13 @@ def prepareEngine(llvmRoot, lldRoot, output):
     return output, verified, plan, records
 
 
-def sourcePathLiterals(root, sources):
-    """Count source-root path strings left as data in Mach-O files (not load commands)."""
+def sourcePathLiterals(root, sources, isBinary=machoSlices):
+    """Count source-root path strings left as data in the binaries of root (not load commands)."""
     needles = [s.encode("utf-8") for s in sources]
     counts = {}
     for rel in listFiles(root):
         path = os.path.join(root, rel)
-        if os.path.islink(path) or not machoSlices(path):
+        if os.path.islink(path) or not isBinary(path):
             continue
         with open(path, "rb") as f:
             data = f.read()
@@ -528,11 +546,12 @@ def main(argv):
     parser.add_argument("--lld-root")
     parser.add_argument("--output")
     parser.add_argument("--verify", metavar="BUNDLE_DIR")
+    parser.add_argument("--inspector")
     args = parser.parse_args(argv)
     try:
         if args.verify:
-            host, version, macho = verifyEngine(args.verify)
-            print("verified host=%s version=%s macho=%d" % (host, version, macho))
+            host, version, count = verifyEngine(args.verify, args.inspector)
+            print("verified host=%s version=%s %s=%d" % (host, version, {LINUX_X64: "elf", WINDOWS_X64: "pe"}.get(host, "macho"), count))
             return 0
         if not (args.llvm_root and args.lld_root and args.output):
             parser.error("--llvm-root, --lld-root and --output are required")
