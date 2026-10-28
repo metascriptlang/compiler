@@ -211,6 +211,12 @@ export function decodeURIComponent(s: string): string {
 	}
 }
 
+export function fromCodePoint(this typeof String, ...codePoints: number[]): string {
+	let text = "";
+	for (const cp of codePoints) text += fromCodePoint(checkedScalar(cp));
+	return text;
+}
+
 export function fromCodePoint(cp: number): string {
 	@emit(`return (${cp} < 0 || ${cp} > 1114111) ? "" : String.fromCodePoint(${cp});`);
 	unreachable;
@@ -301,5 +307,5 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-import { clampIndex } from "./shared";
+import { clampIndex, checkedScalar } from "./shared";
 export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
