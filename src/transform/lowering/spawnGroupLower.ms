@@ -168,7 +168,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		si = si + 1;
 	}
 
-	// 3. Results, read once the wait returns (skipped when every slot returns void)
+	// 3. Results, read once the wait returns (a void slot has no value: its result is a count-only array)
 	let allVoid = true;
 	for (const slot of slots) {
 		const it = slot.innerType;
@@ -176,7 +176,11 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	}
 	const reads: Node[] = [];
 	let resultExpr: Node | null = null;
-	if (!allVoid) {
+	if (allVoid) {
+		const values: Node[] = [];
+		for (let ri = 0; ri < n; ri += 1) values.push(makeNumber(0, loc));
+		resultExpr = createNodeAt(NodeKind.ArrayLiteral, { elements: values }, loc);
+	} else {
 		const values: Node[] = [];
 		for (let ri = 0; ri < n; ri += 1) {
 			const read = readGroupSlot(ctx, cloneIdent(ag.ident, loc), ri, slots[ri].innerType, loc);
