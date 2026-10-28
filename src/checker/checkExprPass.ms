@@ -16,7 +16,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable, checkMoveOfBorrowedParam } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
+import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook, unionHasMemberOfKind } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -2498,7 +2498,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 	}
-	if (srcType != null && isMaybeType(srcType) && srcType.typeReturn != null && isSlotUnion(srcType.typeReturn) && !isMaybeType(targetType)
+	if (srcType != null && isMaybeType(srcType) && srcType.typeReturn != null && isSlotUnion(srcType.typeReturn) && !isMaybeType(targetType) && !unionHasMemberOfKind(targetType, TypeKind.Null)
 		&& !isUnresolvedType(targetType) && narrowsToMember(srcType.typeReturn, targetType) && !reportedErrorSince(ctx, operandMark)) {
 		const unwrapped = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: "!" } as TypeAssertionData, d.asExpr.location);
 		unwrapped.nodeType = srcType.typeReturn;
