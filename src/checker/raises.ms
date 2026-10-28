@@ -11,12 +11,15 @@ interface RoutineInfo {
 	id: int32;
 	sym: Symbol;
 	raises: boolean;
+	readsErrorFlag: boolean;
 	callers: int32[];
+	destroyCallers: int32[];
 }
 
 interface RaiseTables {
 	dispatchRegistry: DispatchRegistry;
 	raisesNothing: HashSet<Symbol>;
+	leavesErrorFlagUnread: HashSet<Symbol>;
 	closureTargets: HashMap<Symbol, Cursor<Readonly<Symbol>>>;
 	tempWrites: HashMap<Symbol, int32>;
 	bodies: HashSet<Symbol>;
@@ -28,6 +31,7 @@ function freshRaiseTables(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, 
 	return {
 		dispatchRegistry,
 		raisesNothing: new HashSet<Symbol>(),
+		leavesErrorFlagUnread: new HashSet<Symbol>(),
 		closureTargets: new HashMap<Symbol, Cursor<Readonly<Symbol>>>(),
 		tempWrites: new HashMap<Symbol, int32>(),
 		bodies: new HashSet<Symbol>(),
@@ -137,8 +141,6 @@ function isDispatched(sym: Readonly<Symbol>): boolean {
 	return !entry.overloaded && dispatchOverridesFor(_tables.dispatchRegistry, entry.classSym, entry.methodName).length > 0;
 }
 
-// A destroy raises as the routine it runs: a lifted or user destroy by its own body, a runtime
-// release by the destroy lifted for the released type. One with no body to read never raises.
 function destroyRoutine(tables: Readonly<RaiseTables>, sym: Readonly<Symbol>, args: Readonly<Node[]>): Readonly<Symbol | null> {
 	if (tables.bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
 	if (args.length == 0 || args[0].nodeType == null) return null;
@@ -173,8 +175,7 @@ function classifyNew(node: Readonly<Node>): CallRaise {
 function classifyTarget(sym: Readonly<Symbol | null>, args: Readonly<Node[]>): CallRaise {
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
-	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(_tables, sym, args) != null ? CallRaise.AsBody : CallRaise.Never;
-	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
+	if (hasFlag(sym, SymbolFlag.DestroyOp) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(args) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.NeverRaises)) return CallRaise.Never;
 	if (sym.symbolKind != SymbolKind.Function) return CallRaise.Can;
@@ -222,7 +223,7 @@ function routineOf(node: Node): RoutineInfo | null {
 		seen.raises = true;
 		return null;
 	}
-	const info: RoutineInfo = { id: _order.length, sym: sym, raises: false, callers: [] };
+	const info: RoutineInfo = { id: _order.length, sym: sym, raises: false, readsErrorFlag: false, callers: [], destroyCallers: [] };
 	_routines.set(sym, info);
 	_order.push(info);
 	return info;
@@ -311,7 +312,42 @@ function classifyWalkedCalls(): void {
 		_callVerdicts.push(verdict);
 		_callTargets.push(target != null ? target.id : -1);
 		if (_callOwners[i] >= 0) noteVerdict(verdict, _callTargets[i], _callOwners[i]);
+		if (_callOwners[i] >= 0 && !isNew && isDestroyCall(call)) noteDestroyCaller(callee, _callOwners[i]);
 	}
+}
+
+function isDestroyCall(call: Readonly<Node>): boolean {
+	const sym = (call.data as CallExprData).callee.resolvedSym;
+	return sym != null && hasFlag(sym, SymbolFlag.DestroyOp);
+}
+
+function noteDestroyCaller(reached: Readonly<Symbol | null>, owner: int32): void {
+	const info = reached != null ? _routines.get(reached!) : null;
+	if (info != null) info.destroyCallers.push(owner);
+}
+
+function spreadErrorFlagReads(): void {
+	const pending: RoutineInfo[] = [];
+	for (const info of _order) {
+		if (info.raises) {
+			info.readsErrorFlag = true;
+			pending.push(info);
+		}
+	}
+	while (pending.length > 0) {
+		const done = pending.pop()!;
+		for (const callerId of done.callers) markReadsErrorFlag(_order[callerId], pending);
+		for (const callerId of done.destroyCallers) markReadsErrorFlag(_order[callerId], pending);
+	}
+	for (const info of _order) {
+		if (!info.readsErrorFlag) _tables.leavesErrorFlagUnread.add(info.sym);
+	}
+}
+
+function markReadsErrorFlag(info: RoutineInfo, pending: RoutineInfo[]): void {
+	if (info.readsErrorFlag) return;
+	info.readsErrorFlag = true;
+	pending.push(info);
 }
 
 function raiseValue(index: int32): void {
@@ -379,6 +415,7 @@ export function inferRaises(programs: Node[], dispatchRegistry: DispatchRegistry
 	for (const info of _order) {
 		if (!info.raises) _tables.raisesNothing.add(info.sym);
 	}
+	spreadErrorFlagReads();
 	markWalkedCalls();
 	resetWalk();
 }
@@ -458,15 +495,17 @@ function blindStep(node: Node | null): void {
 		NodeKind.ThrowStmt | NodeKind.NewExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr
 			| NodeKind.TryCatchStmt | NodeKind.MacroInvocation
 			| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt => { _blindBroken = true; return; },
-		NodeKind.CallExpr => { if (classifyCall(node) != CallRaise.Never && !destroyRaisesNothing(node)) { _blindBroken = true; return; } },
+		NodeKind.CallExpr => { if (classifyCall(node) != CallRaise.Never || destroyReadsErrorFlag(node)) { _blindBroken = true; return; } },
 		_ => {},
 	};
 	forEachChild(node, blindStep);
 }
 
-function destroyRaisesNothing(call: Readonly<Node>): boolean {
-	const sym = (call.data as CallExprData).callee.resolvedSym;
-	return sym != null && hasFlag(sym, SymbolFlag.DestroyOp) && _tables.raisesNothing.has(calleeTarget(_tables, call)!);
+function destroyReadsErrorFlag(call: Readonly<Node>): boolean {
+	if (!isDestroyCall(call)) return false;
+	const d = call.data as CallExprData;
+	const routine = destroyRoutine(_tables, d.callee.resolvedSym!, d.arguments);
+	return routine != null && !_tables.leavesErrorFlagUnread.has(routine);
 }
 
 // Marks each finally block that runs without touching the error flag, so codegen reads the verdict

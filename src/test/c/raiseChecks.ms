@@ -376,3 +376,57 @@ test "raiseChecks: a local written once with a closure takes its routine's verdi
 	assert checksIn(result.value, "raisingHeld") == 1, functionBody(result.value, "raisingHeld");
 	assert checksIn(result.value, "rebound") == 1, functionBody(result.value, "rebound");
 }
+
+const HOOKED_RELEASE_SRC = `
+class Shape { area(): int32 { return 1; } }
+class Square extends Shape { area(): int32 { return 4; } }
+class Hooked { s: Shape = new Square(); }
+function onDestroy(this h: Hooked): void { console.log(String(h.s.area())); }
+struct Plate { s: Shape; }
+function onDestroy(this p: Plate): void { console.log(String(p.s.area())); }
+function dropHooked(n: int32, sink h: Hooked): int32 {
+	return n + 1;
+}
+function dropPlate(n: int32, sink p: Plate): int32 {
+	return n + 2;
+}
+function dropHookedArray(n: int32, sink xs: Hooked[]): int32 {
+	return n + 3;
+}
+function dropNullable(n: int32, sink h: Hooked | null): int32 {
+	return n + 4;
+}
+class Silent { v: int32 = 1; }
+function onDestroy(this s: Silent): void { s.v = 0; }
+function mayThrow(n: int32): int32 {
+	if (n > 9) throw new Error("big");
+	return n;
+}
+function holdsHookedAcrossRaise(n: int32): int32 {
+	const h = new Hooked();
+	return mayThrow(n);
+}
+function holdsSilentAcrossRaise(n: int32): int32 {
+	const s = new Silent();
+	return mayThrow(n);
+}
+console.log(String(dropHooked(1, new Hooked()) + dropPlate(1, { s: new Square() }) + dropHookedArray(1, [new Hooked()]) + dropNullable(1, new Hooked()) + holdsHookedAcrossRaise(1) + holdsSilentAcrossRaise(1)));
+`;
+
+test "raiseChecks: the release of a type whose destroy hook calls a dispatched method carries no check" {
+	const result = compileToC(HOOKED_RELEASE_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "dropHooked") == 0, functionBody(result.value, "dropHooked");
+	assert checksIn(result.value, "dropPlate") == 0, functionBody(result.value, "dropPlate");
+	assert checksIn(result.value, "dropHookedArray") == 0, functionBody(result.value, "dropHookedArray");
+	assert checksIn(result.value, "dropNullable") == 0, functionBody(result.value, "dropNullable");
+}
+
+test "raiseChecks: unwinding clears the error flag around a release only when the hook it runs reads the flag" {
+	const result = compileToC(HOOKED_RELEASE_SRC);
+	assert result.ok, result.error;
+	const hooked = functionBody(result.value, "holdsHookedAcrossRaise");
+	const silent = functionBody(result.value, "holdsSilentAcrossRaise");
+	assert hooked.contains("msErr = MS_FALSE;"), hooked;
+	assert !silent.contains("msErr = MS_FALSE;"), silent;
+}
