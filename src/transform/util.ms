@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
-import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
+import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -49,17 +49,25 @@ export function isCSwitchableType(t: Type | null): boolean {
 // branch on layout anywhere else. A closure is a two-word value, so it is boxed,
 // and so is a union C holds as a tagged struct: neither a nullable reference nor
 // a union of literals, which C holds as their base type.
-export function inlineInFuture(t: Type | null): boolean {
+function futureRepr(t: Type | null): Type | null {
+	const body = distinctBody(t);
+	return body != null ? futureRepr(body) : t;
+}
+
+export function inlineInFuture(raw: Type | null): boolean {
+	const t = futureRepr(raw);
 	return t != null && literalBase(t).kind == TypeKind.String;
 }
 
-export function boxedInFuture(t: Type | null): boolean {
+export function boxedInFuture(raw: Type | null): boolean {
+	const t = futureRepr(raw);
 	if (t == null) return false;
 	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String)
 		|| (t.kind == TypeKind.Union && unwrapRefNullUnion(t) == null && literalUnionBase(t) == null);
 }
 
-export function refInFuture(t: Type | null): boolean {
+export function refInFuture(raw: Type | null): boolean {
+	const t = futureRepr(raw);
 	return t != null && t.kind == TypeKind.Ref;
 }
 
@@ -231,7 +239,8 @@ export function isValueLayoutType(t: Type | null): boolean {
 // msAwaitGroupResult / msAwaitSlotResult / msFutureRead). Returns "" when
 // the type isn't a boxed primitive — caller dispatches to msUnboxStruct or
 // passthrough based on storage shape.
-export function unboxFnNameForType(t: Type | null): string {
+export function unboxFnNameForType(raw: Type | null): string {
+	const t = futureRepr(raw);
 	if (t == null) return "";
 	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
@@ -248,7 +257,8 @@ export function unboxFnNameForType(t: Type | null): string {
 // Typed future readers — msFutureReadT reads the typed inline value from
 // the future struct (msFuture_T.value). All futures use typed inline
 // storage; no boxed path exists.
-export function typedFutureReadFn(t: Type | null): string {
+export function typedFutureReadFn(raw: Type | null): string {
+	const t = futureRepr(raw);
 	if (t == null) return "";
 	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
@@ -499,6 +509,8 @@ export function makeAbsent(t: Type | null, loc: SourceLocation): Node {
 // Used by async/generator transforms to initialize state vars correctly.
 export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	if (t == null) return makeNull(loc);
+	const body = distinctBody(t);
+	if (body != null) return makeDefaultValue(body, loc);
 	const k = t.kind;
 	if (k == TypeKind.Set) {
 		const repr = setRepr(t);
