@@ -150,11 +150,12 @@ static void msPoolDropClaimed(msThreadPool* pool) {
 	pool->tail = w;
 }
 
-static inline bool msPoolHasUnclaimed(msThreadPool* pool) {
+static inline int msPoolUnclaimed(msThreadPool* pool) {
+	int n = 0;
 	for (int i = pool->head; i != pool->tail; i = (i + 1) % pool->cap) {
-		if (!pool->queue[i].claimed) return true;
+		if (!pool->queue[i].claimed) n++;
 	}
-	return false;
+	return n;
 }
 
 /* Threads past workerCount are spares: started by a waiter that would park while
@@ -169,6 +170,9 @@ int32_t msPoolThreadPeek(void) {
 }
 static int msPoolSparesActive = 0;  /* under the pool lock */
 static int msPoolSparesWanted = 0;  /* under the pool lock */
+/* Spares started or woken that have not reached the queue yet: each will take one task. */
+static bool msPoolSpareEnRoute[MS_POOL_MAX_WORKERS];  /* under the pool lock */
+static int msPoolSparesEnRoute = 0;  /* under the pool lock */
 static msThreadPool* gPool = NULL;
 
 /* ===== Actor polling from worker threads (Phase 5: Parallel Actors) =====
@@ -329,6 +333,10 @@ static void* msPoolWorkerLoop(void* arg) {
 		atomic_store_explicit(&msPoolActorWake[myWorkerIdx], false, memory_order_relaxed);
 		retired = spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_RETIRED;
 		msPoolSkipClaimed(pool);
+		if (msPoolSpareEnRoute[myWorkerIdx]) {
+			msPoolSpareEnRoute[myWorkerIdx] = false;
+			msPoolSparesEnRoute--;
+		}
 		/* Check shutdown with empty queue — exit cleanly */
 		if (pool->shutdown && (retired || pool->head == pool->tail)) {
 			MS_UNLOCK(pool);
@@ -742,7 +750,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	if (!msEdgeLessLeaf(awaited)) return false;
 	msThreadPool* pool = msPoolGet();
 	MS_LOCK(pool);
-	if (!msPoolHasUnclaimed(pool)) {
+	if (msPoolUnclaimed(pool) <= msPoolSparesEnRoute) {
 		MS_UNLOCK(pool);
 		return false;
 	}
@@ -756,6 +764,8 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	for (int i = pool->workerCount; i < count; i++) {
 		if (msPoolThreadState[i] != MS_THREAD_RETIRED) continue;
 		msPoolThreadState[i] = MS_THREAD_SPARE;
+		msPoolSpareEnRoute[i] = true;
+		msPoolSparesEnRoute++;
 		msPoolSparesActive++;
 		msPoolSparesWanted++;
 		msPoolSpares++;
@@ -768,6 +778,8 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 		msPoolThreadState[count] = MS_THREAD_SPARE;
 		if (msPoolStartThread(pool, count, true)) {
 			atomic_store_explicit(&msPoolThreadCount, count + 1, memory_order_release);
+			msPoolSpareEnRoute[count] = true;
+			msPoolSparesEnRoute++;
 			msPoolSparesActive++;
 			msPoolSparesWanted++;
 			msPoolSpares++;
@@ -775,6 +787,12 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 			return true;
 		}
 		msPoolThreadState[count] = MS_THREAD_WORKER;
+	}
+	/* At the limit a thread still running a task, or a spare on its way, reaches the queue
+	 * again: wait for it. Only a pool where every thread waits can never run the queue. */
+	if (count >= MS_POOL_MAX_WORKERS && (atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed) > 0 || msPoolSparesEnRoute > 0)) {
+		MS_UNLOCK(pool);
+		return false;
 	}
 	MS_UNLOCK(pool);
 	/* One report: a second waiter reaching the limit waits for the first to exit. */
