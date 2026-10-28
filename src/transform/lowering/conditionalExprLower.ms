@@ -605,8 +605,16 @@ function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): bool
 	return found;
 }
 
+function isStringAppendOverCall(stmt: Node): boolean {
+	if (stmt.kind != NodeKind.ExprStmt) return false;
+	const expr = (stmt.data as ExprStmtData).expr;
+	if (expr.kind != NodeKind.BinaryExpr) return false;
+	const bd = expr.data as BinaryExprData;
+	return bd.operator == "+=" && isStringLike(bd.left.nodeType) && holdsCall(bd.right);
+}
+
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
-	if (ctx.raiserBackend && !ownExpressionsNeedPass(stmt)) return [stmt];
+	if (ctx.raiserBackend && !ownExpressionsNeedPass(stmt) && !isStringAppendOverCall(stmt)) return [stmt];
 // On JS, ternaries and short-circuits are native and need no statement
 	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
 	// expression after newExprLower refused it, a guarded impure array op
