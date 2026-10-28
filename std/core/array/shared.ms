@@ -1,4 +1,11 @@
 @compilerFunc
+export function msFilledSized<A, T>(zero: A, value: T): A {
+	let out = zero;
+	for (let i = 0; i < out.length; i += 1) out[i] = value;
+	return out;
+}
+
+@compilerFunc
 export function msFilledArray<T>(count: int32, value: T): T[] {
 	const out: T[] = [];
 	for (let i = 0; i < count; i += 1) out.push(value);
