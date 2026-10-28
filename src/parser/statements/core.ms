@@ -27,6 +27,11 @@ type NodesResult = Result<Node[], string>;
 //              | enumDecl | interfaceDecl | classDecl | throwStmt | tryCatch
 //              | doWhile | switchStmt | deferStmt | unreachableStmt | matchStmt | exprStmt
 
+function parseEmptyStmt(state: ParserState): NodeResult {
+	const token = advance(state);
+	return Result.ok(createNode(NodeKind.BlockStmt, { statements: [] }, token));
+}
+
 export function parseStatement(state: ParserState): NodeResult {
 	const token = current(state);
 
@@ -99,6 +104,7 @@ export function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Continue => parseContinueStmt(state),
 		TokenKind.Function => parseFunctionDecl(state),
 		TokenKind.LBrace => parseBlockStmt(state),
+		TokenKind.Semicolon => parseEmptyStmt(state),
 		TokenKind.Import when peek(state, 1).kind != TokenKind.LParen => parseImportDecl(state),
 		TokenKind.Export => parseExportDecl(state),
 		TokenKind.Type when isIdentLike(peek(state, 1)) && peek(state, 1).line == token.line => parseTypeAliasDecl(state),
@@ -470,6 +476,27 @@ function firstStmtEnd(src: string): string {
 test "statement end covers a closing string's quotes and raw escapes" {
 	assert firstStmtEnd("let s = \"a\\tb\"") == "1:15";
 	assert firstStmtEnd("let s = 'ab'") == "1:13";
+}
+
+test "empty statements normalize to empty blocks without consuming their neighbours" {
+	const pr = parseSource(";; { next(); }");
+	assert pr.ok;
+	const statements = (pr.value.data as ProgramData).programStmts;
+	assert statements.length == 3;
+	for (let index = 0; index < 2; index += 1) {
+		assert statements[index].kind == NodeKind.BlockStmt;
+		assert (statements[index].data as BlockStmtData).statements.length == 0;
+	}
+	assert firstStmtEnd(";") == "1:2";
+}
+
+test "an empty loop body does not absorb the following block" {
+	const pr = parseSource("while (ready); { next(); }");
+	assert pr.ok;
+	const statements = (pr.value.data as ProgramData).programStmts;
+	assert statements.length == 2;
+	assert statements[0].kind == NodeKind.WhileStmt;
+	assert statements[1].kind == NodeKind.BlockStmt;
 }
 
 test "statement end after a semicolon is the semicolon's column plus one" {

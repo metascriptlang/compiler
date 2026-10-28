@@ -43,6 +43,9 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
+	if (current(state).kind == TokenKind.Semicolon) {
+		return Result.err(`The body of an 'if' cannot be an empty statement at line ${ifToken.line}`);
+	}
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
@@ -322,7 +325,7 @@ export function parseReturnStmt(state: ParserState): NodeResult {
 export function parseDoWhileStmt(state: ParserState): NodeResult {
 	const doToken = current(state);
 	advance(state); // consume 'do'
-	const body = try parseBlockStmt(state);
+	const body = try parseBodyOrStmt(state);
 
 	if (isAtEnd(state) || current(state).kind != TokenKind.While) {
 		return Result.err(`Expected 'while' after 'do' body at line ${doToken.line}`);
@@ -569,6 +572,32 @@ test "if braceless" { assert programOk("if (x) y;"); }
 test "if-else braceless" { assert programOk("if (x) a; else b;"); }
 
 test "while braceless" { assert programOk("while (x) y;"); }
+
+test "while accepts an empty statement body" {
+	assert programOk("while (x);");
+}
+
+test "for accepts an empty statement body" {
+	assert programOk("for (let i = 0; i < 3; i += 1);");
+}
+
+test "do accepts an empty statement body" {
+	assert programOk("do; while (x);");
+}
+
+test "else accepts an empty statement body" {
+	assert programOk("if (x) {} else;");
+}
+
+test "do wraps a nonempty unbraced statement body" {
+	assert programOk("do value += 1; while (value < 3);");
+}
+
+test "an if consequent needs a statement other than a bare semicolon" {
+	assert !programOk("if (x);");
+	assert !programOk("if (x) /* comment */ ;");
+	assert programOk("if (x) {}");
+}
 // While
 test "while" { assert programOk("while (x) { y; }"); }
 test "return expr" { assert programOk("function f(x) { return x + 1; }"); }
