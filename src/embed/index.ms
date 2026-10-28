@@ -8,7 +8,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, copyToHost, copyToVm } from "../raiser/marshal";
-import { registerHostFn, activeHostArrayHeap, activeHostObjectHeap } from "../raiser/hostRegistry";
+import { registerHostFn, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { vmCallFunction, vmDumpStack } from "../raiser/vm";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -494,6 +494,22 @@ test "callRoutine passes a struct the host built and the struct it returns outli
 	}
 	assert vm.objectHeap.objects.length == objects;
 	assert vm.arrayHeap.arrays.length == arrays;
+	removeAll(dir);
+}
+
+test "with no host routine active a host passes a string it built, and boxString is refused" {
+	setActiveHostHeaps(null, null);
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `console.log(JSON.stringify({ ran: [1] }));\n` + HARO_SCRIPT);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	assert interp.output[0] == `{"ran":[1]}`;
+	assert activeHostArrayHeap() == null;
+	let refused = "";
+	try { boxString("KeyA"); } catch (e) { refused = e.message; }
+	assert refused == "boxString and unboxString work inside a host routine; outside one, build a string argument with hostString";
+	const got = routineValue(interp, "onKey", [keyEvent("KeyA", 2)]);
+	assert got.field("send").text() == "KeyA:2";
+	assert activeHostArrayHeap() == null;
 	removeAll(dir);
 }
 
