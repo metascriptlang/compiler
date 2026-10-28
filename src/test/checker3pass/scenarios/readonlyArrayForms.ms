@@ -67,6 +67,31 @@ test "utility-type: NonNullable<T> of a non-nullable type is that type" {
 	assert ok.errors.length == 0, ok.errors.join("; ");
 }
 
+test "void-arm: a conditional used as a value refuses a void arm beside a value arm" {
+	const prelude = "function log(s: string): void { console.log(s); }\n";
+	const message = "cannot have a 'void' arm";
+	for (const body of [
+		"function f(c: boolean): boolean { return c ? log(\"x\") : true; }\n",
+		"const r = true ? log(\"y\") : 5;\n",
+		"function g(c: boolean): void { const r = c ? \"s\" : log(\"z\"); }\n",
+	]) {
+		const text = checkOnly(prelude + body).errors.join("\n");
+		assert text.contains(message), body + " -> " + text;
+	}
+}
+
+test "void-arm: a conditional used as a statement or of two void arms is accepted" {
+	const prelude = "function log(s: string): void { console.log(s); }\n";
+	for (const body of [
+		"function f(c: boolean): void { c ? log(\"x\") : 5; }\n",
+		"function g(c: boolean): void { c ? log(\"a\") : log(\"b\"); }\n",
+		"const h = (c: boolean): void => c ? log(\"a\") : 5;\n",
+	]) {
+		const errors = checkOnly(prelude + body).errors;
+		assert errors.length == 0, body + " -> " + errors.join("; ");
+	}
+}
+
 test "tuple-annotation: [A, B][] is an array of tuples and [A, B[]] stays a tuple" {
 	const arrayOfTuple = typeDisplayName(annotated("[string, int32][]"));
 	const tuple = typeDisplayName(annotated("[string, int32]"));

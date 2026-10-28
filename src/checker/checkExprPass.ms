@@ -1197,7 +1197,21 @@ function checkConditionalExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	checkExpr(ctx, d.ternaryConsequent, expectedType);
 	checkExpr(ctx, d.ternaryAlternate, expectedType);
 	ctx.condEvalDepth = ctx.condEvalDepth - 1;
+	if (node != ctx.stmtPosExpr && (expectedType == null || expectedType.kind != TypeKind.Void)) refuseVoidArmAsValue(ctx, d);
 	node.nodeType = fitConditionalArms(ctx, d, expectedType, node == ctx.conversionOperand); return;
+}
+
+function refuseVoidArmAsValue(ctx: CheckerContext, d: ConditionalExprData) {
+	const consequent = d.ternaryConsequent.nodeType;
+	const alternate = d.ternaryAlternate.nodeType;
+	const consequentVoid = consequent != null && consequent.kind == TypeKind.Void;
+	const alternateVoid = alternate != null && alternate.kind == TypeKind.Void;
+	if (consequentVoid == alternateVoid) return;
+	const voidArm = consequentVoid ? d.ternaryConsequent : d.ternaryAlternate;
+	const valueType = consequentVoid ? alternate : consequent;
+	if (!branchContributesToJoin(valueType)) return;
+	addError(ctx, "a conditional used as a value cannot have a 'void' arm beside '" + typeDisplayName(valueType!)
+		+ "' — a void call produces no value; use the conditional as a statement", voidArm.location.line, voidArm.location.column);
 }
 
 function isSpawnCall(n: Node): boolean {
@@ -4036,7 +4050,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		let bodyExpected = explicitReturnType;
 		if (isAsync && bodyExpected != null) bodyExpected = asyncBodyType(bodyExpected);
 		const hoistMark = ctx.pendingHoisted.length;
+		const prevStmtPos = ctx.stmtPosExpr;
+		if (returnTypeAnnotation == "void" && body.kind == NodeKind.ConditionalExpr) ctx.stmtPosExpr = body;
 		checkExpr(ctx, body, bodyExpected);
+		ctx.stmtPosExpr = prevStmtPos;
 		let result = body;
 		if (fnNode.kind == NodeKind.ArrowFunction && returnsFromAsyncBody(ctx)) {
 			result = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, body, bodyExpected));
