@@ -75,11 +75,12 @@ function futureCatchFnForInner(t: Type | null): string {
 }
 
 // Per-type Promise.all variant name — picks msPromiseAllFor_msFuture_<suffix>
-// for primitive/string/ptr/struct inner types. Returns "" only for void/array
-// (those fall through to legacy generic msPromiseAll). Struct types use their
+// for primitive/string/ptr/struct inner types. Returns "" only for array
+// (that falls through to legacy generic msPromiseAll). Struct types use their
 // declared typeName which matches codegen's mangle(getTypeDesc(t)) for simple
 // names — genFutureType emits the matching MS_PROMISE_ALL_FOR instance.
 function promiseAllFnForInner(t: Type | null): string {
+	if (t != null && t.kind == TypeKind.Void) return "msPromiseAllFor_msFutureVoidCell";
 	const suffix = futureTypedSuffix(t);
 	if (suffix != "") return "msPromiseAllFor_msFuture_" + suffix;
 	if (t != null && t.kind == TypeKind.Struct && t.typeName != "") {
@@ -224,8 +225,7 @@ function dropUnreadResult(spawnCall: Node, ctx: TransformContext, loc: SourceLoc
 // as void* which truncates any struct value (msString, tuples, user structs).
 // msPromiseAllFor_msFuture_<T> uses the typed struct cast + per-T copy and
 // builds the proper T[] result (msNumberArray / msStringArray / T##Array…).
-// Only void-returning promises fall through to the generic path (no value to
-// copy). Unknown inner types also fall through but will read garbage — caller's
+// Unknown inner types fall through to the generic path but will read garbage — caller's
 // responsibility to type the argument correctly.
 function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
@@ -236,7 +236,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext)
 	const elementPromise = argArrType.typeReturn;
 	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
-	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
+	if (typedFn == "") return node;  // unknown inner type: falls through to generic msPromiseAll
 	const typedCallee = makeTypedIdentResolved(generatedProcSym(typedFn), null, loc);
 	const typedSym = typedCallee.resolvedSym;
 	if (typedSym.builtinKind != "" && typedSym.builtinKind != "PromiseAllFor") {
