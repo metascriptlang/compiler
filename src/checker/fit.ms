@@ -357,7 +357,7 @@ export function widenEqualityOperand(ctx: CheckerContext, d: BinaryExprData): vo
 // A narrowed read is held in the layout of its declared union, so a comparison reads it as that union
 // and the value on the other side is widened into the same layout.
 export function readInStoredLayout(read: Node, narrowed: Type): Type {
-	const declared = declaredTagUnionOf(read);
+	const declared = declaredTagUnionOf(read) ?? declaredPayloadUnionOf(read);
 	if (declared == null || sameType(declared, narrowed) || !convertsBetweenUnions(declared, narrowed)) return narrowed;
 	read.nodeType = declared;
 	return declared;
@@ -2859,6 +2859,14 @@ function declaredInstanceOf(expr: Node): Type | null {
 function keepInstance(expr: Node, body: Type): Type {
 	const held = declaredInstanceOf(expr);
 	return held != null && instantiatedUnionBehind(held) == body ? held : body;
+}
+
+// A nullable union is stored as a carrier around its payload union; a read narrowed past null is that payload.
+function declaredPayloadUnionOf(expr: Node): Type | null {
+	const t = declaredInstanceOf(expr);
+	if (t == null || !isMaybeType(t)) return null;
+	const body = instantiatedUnionBehind(unwrapMaybeType(t));
+	return isSlotUnion(body) ? body : null;
 }
 
 export function declaredTagUnionOf(expr: Node): Type | null {
