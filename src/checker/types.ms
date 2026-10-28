@@ -1574,14 +1574,12 @@ const _maybeCacheNames: string[] = [];
 // Maybe<int32> ≠ Maybe<float64> ≠ Maybe<string> etc.
 function identSafeKey(s: string): string {
 	let out = "";
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.byteLength; i += 1) {
 		const b = s.byteAt(i);
-		const alnum = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
-		if (alnum) out = out + s.charAt(i);
-		i += 1;
+		const passes = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code && b != "X".code) || (b >= "0".code && b <= "9".code);
+		out = passes ? out + s.byteSlice(i, i + 1) : out + "X" + b.toString(16).toUpperCase().padStart(2, "0");
 	}
-	return out + s.length.toString();
+	return out;
 }
 
 function hasNominalIdentity(inner: Type): boolean {
@@ -6649,6 +6647,19 @@ test "isMaybeType false for Ptr" {
 
 test "isMaybeType false for plain interface" {
 	assert !isMaybeType(createStruct("Token", [], [], true));
+}
+
+test "a Maybe keeps payloads apart that differ only in punctuation" {
+	const i32 = int32Type();
+	const str = stringType();
+	const pair = createMaybeType(createTuple([i32, createTuple([str, i32])]));
+	const triple = createMaybeType(createTuple([i32, createTuple([str]), i32]));
+	assert pair != triple && pair.typeName != triple.typeName;
+	assert createMaybeType(createStringLiteral("a-b")) != createMaybeType(createStringLiteral("a.b"));
+	const dashed = createMaybeType(createUnion([createStringLiteral("a-b"), createStringLiteral("c")]));
+	const dotted = createMaybeType(createUnion([createStringLiteral("a.b"), createStringLiteral("c")]));
+	assert dashed != dotted;
+	assert identSafeKey("a_b") != identSafeKey("aX5Fb") && identSafeKey("a_b").indexOf("_") < 0;
 }
 
 test "createMaybeType caches by name" {
