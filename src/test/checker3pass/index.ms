@@ -86,3 +86,4 @@ import "./scenarios/literalLocalKeepsType";
 import "./scenarios/overrideModifier";
 import "./scenarios/utilityFunctionTypes";
 import "./scenarios/genericRestInference";
+import "./scenarios/inKeywordNarrows";

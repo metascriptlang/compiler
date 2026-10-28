@@ -30,7 +30,7 @@ import {
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance, isReadonlyView,
+	classAncestorInstance, isReadonlyView, unionVariantHasProperty, peelToStruct, hasNullMember,
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
@@ -1018,6 +1018,9 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		if (d.operator == "instanceof") {
 			return narrowTypeByInstanceof(t, d.left, d.right, refNode, assumeTrue);
 		}
+		if (d.operator == "in") {
+			return narrowTypeByInKeyword(t, d.left, d.right, refNode, assumeTrue);
+		}
 		// Logical && / || narrowing — full DeMorgan coverage:
 		//
 		// `if (a && b)`:
@@ -1206,6 +1209,28 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 		return createUnion(remaining);
 	}
 	return t;
+}
+
+// Narrow a union by `"name" in x`: a member that declares `name` as a required
+// field survives the true branch only, a member without it the false branch only,
+// and a member with it optional both. A name no member declares, or a member that is
+// not a struct, leaves the type as it is.
+function narrowTypeByInKeyword(t: Type | null, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type | null {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	if (!isMatchingReference(right, refNode)) return t;
+	const name = stringLiteralValueOf(left);
+	if (name == null || !unionVariantHasProperty(t, name)) return t;
+	const kept: Type[] = [];
+	for (const m of t.typeChildren) {
+		const peeled = peelToStruct(m);
+		if (peeled == null || peeled.kind != TypeKind.Struct) { kept.push(m); continue; }
+		const field = findFieldInVariant(m, name);
+		const possible = field == null ? !assumeTrue : assumeTrue || hasNullMember(field) || isMaybeType(field);
+		if (possible) kept.push(m);
+	}
+	if (kept.length == 0) return neverType();
+	if (kept.length == t.typeChildren.length) return t;
+	return kept.length == 1 ? kept[0] : createUnion(kept);
 }
 
 // ===== instanceof narrowing =====
