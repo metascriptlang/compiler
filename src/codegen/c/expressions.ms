@@ -1910,7 +1910,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		if (walkObj != null && walkObj.resolvedSym != null
 				&& (walkObj.kind == NodeKind.Identifier || walkObj.kind == NodeKind.MemberExpr)) {
 			let declTy: Readonly<Type | null> = walkObj.resolvedSym.symbolType;
-			while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
+			while (declTy != null && (declTy.kind == TypeKind.Ref || declTy.kind == TypeKind.Borrow) && declTy.typeReturn != null) {
 				declTy = declTy.typeReturn;
 			}
 			declTy = peelToStructOrUnion(declTy);
