@@ -158,7 +158,11 @@ function need(tag: string, ok: boolean, why: string): void {
 	if (!ok) failWith(tag, why);
 }
 
+// the dirs the running case made; shards run cases side by side in one TMP, so a case drops only its own
+const caseDirs: string[] = [];
+
 function freshDir(path: string): string {
+	caseDirs.push(path);
 	removeAll(path);
 	ensureDir(path);
 	return path;
@@ -2623,12 +2627,10 @@ for (let i = 0; i < CASES.length; i++) {
 		continue;
 	}
 	const t0 = performance.now();
-	const before = readDir(TMP);
+	caseDirs.length = 0;
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);
 	// A failing case exits above and keeps its dirs; a passing one drops what it wrote (about 45 GB per gate
 	// across the cases, 2026-10-28), so its images die in the page cache instead of on the disk.
-	for (const e of readDir(TMP)) {
-		if (!before.includes(e)) removeAll(`${TMP}/${e}`);
-	}
+	for (const d of caseDirs) removeAll(d);
 }
