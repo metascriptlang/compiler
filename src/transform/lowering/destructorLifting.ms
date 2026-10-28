@@ -899,8 +899,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
-			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
-				if (!walksCells(hook)) {
+			if (fieldType.kind == TypeKind.Distinct && distinctTakesOp(fieldType, hook, lctx)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 				}
@@ -1096,6 +1096,10 @@ function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(t, "wasMoved", lctx)
 		|| hasUserDefinedHook(t, "dup", lctx)
 		|| hasUserDefinedHook(t, "trace", lctx);
+}
+
+function distinctTakesOp(t: Type, hook: string, lctx: LiftCtx): boolean {
+	return walksCells(hook) ? hasUserDefinedHook(t, "trace", lctx) : hasAnyUserHook(t, lctx);
 }
 
 function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
