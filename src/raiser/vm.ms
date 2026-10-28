@@ -4049,6 +4049,7 @@ function vmRetSpecial(vm: RaiserVM, ia: int32): boolean {
 	}
 	if (vm.callStack.depth > 0) return false;
 	if (vm.current == vm.sched.modules.strand) {
+		releaseEntryRefs(vm);
 		const at = vm.sched.modules.execBody;
 		vm.sched.modules.execBody = -1;
 		if (at >= 0) moduleExecBodyFulfilled(vm, at);
@@ -4057,6 +4058,7 @@ function vmRetSpecial(vm: RaiserVM, ia: int32): boolean {
 	}
 	const body = moduleBodyOf(vm, vm.current);
 	if (body >= 0) {
+		releaseEntryRefs(vm);
 		moduleBodyFinish(vm, body, RaiserModuleJobKind.Fulfilled, raiserNil());
 		return true;
 	}
