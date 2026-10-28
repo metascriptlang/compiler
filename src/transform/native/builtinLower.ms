@@ -198,7 +198,22 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// `x !== null` and `x` (native/maybeUnwrap.ms), so one shape serves both.
 	if (isMaybeType(objType)) {
 		const payload = unwrapMaybeType(objType);
-if (cloneIfPure(obj) == null) {			const m = mintSym(ctx, SymbolKind.Parameter, "m", objType);			const held = makeMember(makeTypedIdentResolved(m, objType, loc), "present", loc);			held.nodeType = booleanType();			const text = makeMember(makeTypedIdentResolved(m, objType, loc), "value", loc);			text.nodeType = payload;			const none = makeString("null", loc);			none.nodeType = stringType();			const body = makeBlock([				makeIf(held, makeBlock([makeReturn(lowerToString(callNode, text, payload, loc, ctx), loc)], loc), null, loc),				makeReturn(none, loc),			], loc);			const once = makeCall(textFn(m, objType, body, loc, ctx), [obj], loc);			once.nodeType = stringType();			return once;		}
+		if (cloneIfPure(obj) == null) {
+			const m = mintSym(ctx, SymbolKind.Parameter, "m", objType);
+			const held = makeMember(makeTypedIdentResolved(m, objType, loc), "present", loc);
+			held.nodeType = booleanType();
+			const text = makeMember(makeTypedIdentResolved(m, objType, loc), "value", loc);
+			text.nodeType = payload;
+			const none = makeString("null", loc);
+			none.nodeType = stringType();
+			const body = makeBlock([
+				makeIf(held, makeBlock([makeReturn(lowerToString(callNode, text, payload, loc, ctx), loc)], loc), null, loc),
+				makeReturn(none, loc),
+			], loc);
+			const once = makeCall(textFn(m, objType, body, loc, ctx), [obj], loc);
+			once.nodeType = stringType();
+			return once;
+		}
 		const val = makeMember(obj, "value", loc);
 		val.nodeType = payload;
 		const present = makeMember(obj, "present", loc);
