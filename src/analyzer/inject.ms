@@ -2571,14 +2571,14 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Covers: return d.className (string field from union variant extraction),
 		//         return state.tokens[pos] (struct with string field),
 		//         return _globalArray (module-level variable), etc.
-		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr) {
+		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr || isRuntimeProcCall(d.argument, "msMaybeGet")) {
 			const retRc = sinkClassify(d.argument.nodeType, dctx);
 			if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
 		}
 		const convCore = skipConversionWrappers(d.argument);
-		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess)) {
+		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess || isRuntimeProcCall(convCore, "msMaybeGet"))) {
 			const convRc = sinkClassify(d.argument.nodeType, dctx);
 			if (convRc.needsCleanup && convRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
