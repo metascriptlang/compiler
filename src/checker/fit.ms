@@ -1078,6 +1078,14 @@ export function shortCircuitLeftShare(op: string, left: Type): Type | null {
 	return kept.length == 1 ? kept[0] : unionOfTypes(kept, null);
 }
 
+function neverOperandPeer(op: string, leftType: Type, rightType: Type): Type | null {
+	if (op != "+" && op != "-" && op != "*" && op != "/" && op != "%" && op != "**") return null;
+	if (leftType == null || rightType == null) return null;
+	if (leftType.kind == TypeKind.Never && isNumeric(rightType)) return rightType;
+	if (rightType.kind == TypeKind.Never && isNumeric(leftType)) return leftType;
+	return null;
+}
+
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	const bitSetResult = inferBitSetOp(op, leftType, rightType);
 	if (bitSetResult != null) return bitSetResult;
@@ -1087,6 +1095,8 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			|| op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>")) {
 		return leftType;
 	}
+	const otherOfNever = neverOperandPeer(op, leftType, rightType);
+	if (otherOfNever != null) return otherOfNever;
 	return match (op) {
 		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "instanceof" | "in" => booleanType(),
 		"&&" | "||" => leftType,
@@ -1608,6 +1618,7 @@ export function relationalOperandsFail(ctx: CheckerContext, op: string, leftType
 	const a = operandShape(leftType);
 	const b = operandShape(rightType);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.Never || b.kind == TypeKind.Never) return false;
 	const holdsResult = isResult(leftType) || isResult(rightType);
 	if (!holdsResult && (relationalSkip(a) || relationalSkip(b))) return false;
 	if (!holdsResult && relationalOperandsOk(a, b)) return false;
@@ -1844,6 +1855,7 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 	const a = operandShape(leftType);
 	const b = operandShape(rightType);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.Never || b.kind == TypeKind.Never) return false;
 	const sa = binaryOperandSkip(a);
 	const sb = binaryOperandSkip(b);
 	if (!sa && !sb && handleAgainstValue(a, b)) {
