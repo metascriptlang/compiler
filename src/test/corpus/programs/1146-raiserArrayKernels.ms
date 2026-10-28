@@ -1,5 +1,4 @@
 // @stdout: kernels all-ok
-// @xfail(raiser): error: Property 'reverse' does not exist on type 'Vec<string>'
 // @skip-js
 
 class Cell { n: number; constructor(n: number) { this.n = n; } }
