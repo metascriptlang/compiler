@@ -327,6 +327,13 @@ function _bridgeMsFsWriteFileMode(args: RaiserValue[]): RaiserValue {
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
+function _bridgeMsFsCopyFile(args: RaiserValue[]): RaiserValue {
+	const src = unboxString(args[0]);
+	const r = copyFile(src, unboxString(args[1]));
+	registerCompileTimeRead(resolve(src, cwd()));
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
 function _bridgeMsFsMkdir(args: RaiserValue[]): RaiserValue {
 	const r = mkdir(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
@@ -1347,6 +1354,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.rename",      _stdFsRename);
 	registerHostFn("std/fs.symlink",     _stdFsSymlink);
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
+	registerHostFn("msFsCopyFile",       _bridgeMsFsCopyFile);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);

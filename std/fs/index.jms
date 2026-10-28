@@ -9,13 +9,16 @@
 // classifies on both backends - no second error taxonomy on js.
 
 @import("node:fs", {
-	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, accessSync,
+	readFileSync, writeFileSync, appendFileSync, copyFileSync, existsSync, statSync, lstatSync, accessSync,
 	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
 });
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 extern function readFileSync(path: string, encoding: string): string;
+extern function readBytesSync(path: string): Buffer from "new Uint8Array(readFileSync(#))";
+extern function copyFileSync(src: string, dst: string): void;
+extern function writeBytesSync(path: string, data: Buffer): void from "writeFileSync(#, #)";
 extern function writeFileSync(path: string, data: string): void;
 extern function appendFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
@@ -77,6 +80,25 @@ export function readFile(path: string): Result<string, IoError> {
 		return Result.ok(readFileSync(path, "utf-8"));
 	} catch (e) {
 		return Result.err(ioErrorFromErrno(errnoOf(e), path));
+	}
+}
+
+export function readFileBytes(path: string): Result<Buffer, IoError> {
+	try {
+		return Result.ok(readBytesSync(path));
+	} catch (e) {
+		return Result.err(ioErrorFromErrno(errnoOf(e), path));
+	}
+}
+
+export function writeFileBytes(path: string, content: Buffer): Result<void, IoError> {
+	try {
+		writeBytesSync(path, content);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
 	}
 }
 
@@ -266,8 +288,14 @@ export function writeLines(path: string, lines: string[]): Result<void, IoError>
 }
 
 export function copyFile(src: string, dst: string): Result<void, IoError> {
-	const content = try readFile(src);
-	return writeFile(dst, content);
+	try {
+		copyFileSync(src, dst);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, src));
+		return Result.err(writeFailed(src, "copy failed"));
+	}
 }
 
 export function ensureDir(path: string): Result<void, IoError> {

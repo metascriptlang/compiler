@@ -3,6 +3,8 @@
 @include("runtime/fs/header.h");
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { utf8String } from "../core/string/bytes";
+import { utf8String } from "../core/string/bytes";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
@@ -21,7 +23,7 @@ extern let errno: int32;
 extern const EEXIST: int32;
 extern const ENOENT: int32;
 extern struct FILE;
-extern function cFwrite(data: cstring, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fwrite";
+extern function cFwrite(data: Readonly<Ptr<uint8>>, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fwrite";
 extern function cFclose(file: Ptr<FILE>): int32 from "fclose";
 extern function cFree(p: Ptr<uint8>): void from "free";
 extern function msStringFromCStr(s: cstring): string;
@@ -150,7 +152,7 @@ when (windows) {
 		freeWide(wide);
 		return err;
 	}
-	function writeFileErrno(path: string, content: string, mode: string): int32 {
+	function writeFileErrno(path: string, content: Readonly<Span<uint8>>, mode: string): int32 {
 		const widePathName = widePath(path);
 		const wideMode = widePath(mode);
 		if (widePathName == null || wideMode == null) {
@@ -411,7 +413,7 @@ when (windows) {
 	function removeErrno(path: string): int32 {
 		return cUnlink(path as cstring) == 0 ? 0 : errno;
 	}
-	function writeFileErrno(path: string, content: string, mode: string): int32 {
+	function writeFileErrno(path: string, content: Readonly<Span<uint8>>, mode: string): int32 {
 		const file = cFopen(path as cstring, mode as cstring);
 		if (file == null) return errno;
 		return writeAndClose(file, content);
@@ -472,10 +474,10 @@ function absentOrError(err: int32, path: string): Result<Removal, IoError> {
 	return Result.err(ioErrorFromErrno(err, path));
 }
 
-function writeAndClose(file: Ptr<FILE>, content: string): int32 {
-	const length = content.asBytes().length as uint64;
+function writeAndClose(file: Ptr<FILE>, content: Readonly<Span<uint8>>): int32 {
+	const length = content.length as uint64;
 	let err: int32 = 0;
-	if (cFwrite(content as cstring, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
+	if (cFwrite(content as Readonly<Ptr<uint8>>, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
 	if (cFclose(file) != 0 && err == 0) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
 	return err;
 }
@@ -532,19 +534,35 @@ export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from
 
 // ===== Result-returning API (primary) =====
 
-export function readFile(path: string): Result<string, IoError> {
+// The file's bytes in a string that may hold ill-formed UTF-8; never leaves this module.
+function readRaw(path: string): Result<string, IoError> {
 	const raw = msFsReadFile(path);
 	const err = msFsLastErrno();
 	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
 }
 
+// Each ill-formed UTF-8 sequence reads as U+FFFD; `readFileBytes` returns the bytes untouched.
+export function readFile(path: string): Result<string, IoError> {
+	const raw = try readRaw(path);
+	return Result.ok(utf8String(raw.asBytes(), false));
+}
+
+export function readFileBytes(path: string): Result<Buffer, IoError> {
+	const raw = try readRaw(path);
+	return Result.ok(Buffer.fromString(raw, "utf8"));
+}
+
 export function writeFile(path: string, content: string): Result<void, IoError> {
+	return errnoResult(writeFileErrno(path, content.asBytes(), "wb"), path, "write failed");
+}
+
+export function writeFileBytes(path: string, content: Buffer): Result<void, IoError> {
 	return errnoResult(writeFileErrno(path, content, "wb"), path, "write failed");
 }
 
 export function appendFile(path: string, content: string): Result<void, IoError> {
-	return errnoResult(writeFileErrno(path, content, "ab"), path, "append failed");
+	return errnoResult(writeFileErrno(path, content.asBytes(), "ab"), path, "append failed");
 }
 
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
@@ -585,7 +603,8 @@ export function removeAll(path: string): Result<void, IoError> {
 }
 
 function removeTree(path: string): Result<void, IoError> {
-	for (const entry of readDir(path)) {
+	// Raw names, so an entry that is not valid UTF-8 can still be addressed and removed.
+	for (const entry of entriesOf(msFsReadDirEntries(path))) {
 		// readDir marks directories with a trailing "/" — strip for the child path.
 		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
 		try removeAll(path + "/" + name);
@@ -604,7 +623,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 // ===== Predicates (stay as boolean — not fallible) =====
 
 export function exists(path: string): boolean { return existsKernel(path); }
-export function realpath(path: string): string { return realpathKernel(path); }
+export function realpath(path: string): string { return utf8String(realpathKernel(path).asBytes(), false); }
 export function isFile(path: string): boolean { return isFileKernel(path); }
 export function isDir(path: string): boolean { return isDirKernel(path); }
 export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
@@ -618,8 +637,12 @@ export function changeStamp(path: string): string { return changeStampKernel(pat
 // when the directory is empty — callers that need to distinguish should
 // check `exists(path) && isDir(path)` first.
 export function readDir(path: string): string[] {
+	return entriesOf(utf8String(msFsReadDirEntries(path).asBytes(), false));
+}
+
+function entriesOf(listing: string): string[] {
 	const result: string[] = [];
-	for (const line of msFsReadDirEntries(path).split("\n")) {
+	for (const line of listing.split("\n")) {
 		if (line != "") result.push(line);
 	}
 	return result;
@@ -638,8 +661,8 @@ export function writeLines(path: string, lines: string[]): Result<void, IoError>
 }
 
 export function copyFile(src: string, dst: string): Result<void, IoError> {
-	const content = try readFile(src);
-	return writeFile(dst, content);
+	const raw = try readRaw(src);
+	return writeFile(dst, raw);
 }
 
 export function ensureDir(path: string): Result<void, IoError> {
