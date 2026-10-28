@@ -29,7 +29,6 @@ extern function msSelectorWait(sel: int64, timeoutMs: int32): int32;
 extern function msSelectorEventFd(index: int32): int32;
 extern function msSelectorEventFlags(index: int32): int32;
 extern function msSelectorClose(sel: int64): void;
-extern function msRunOnce(timeoutMs: int32): boolean;
 
 // io_uring native event loop (Linux only — falls back to selector on macOS)
 extern function msHasUringEventLoop(): int32;
@@ -1207,7 +1206,7 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 			}
 			i = i + 1;
 		}
-		msRunOnce(0);
+		msIoRunOnce(0);
 	}
 }
 
