@@ -34,7 +34,12 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
 			if (d.argument != null) {
-				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
+				let reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
+				if (s.tries.length > 0) {
+					const held = allocReg(s, classOfReg(s, reg));
+					emitInst(s, raiserABC(RaiserOpcode.Move, held, reg, 0));
+					reg = held;
+				}
 				emitRet(s, reg);
 			} else {
 				emitReturnNothing(s);

@@ -2802,6 +2802,17 @@ test "arena: a throw in a finally replaces the raise, and a catch inside it keep
 	assert vm.output == finallyInFlightOut, vm.output;
 }
 
+test "orc: a return inside try carries the value read at the return through the finally bodies" {
+	const vm = evalOrcVM("class Boom { n: number; constructor(n: number) { this.n = n; } }"
+		+ " function str(): string { let s = ''; try { return s; } finally { s += 'x'; } }"
+		+ " function num(): int32 { let n: int32 = 1; try { return n; } finally { n = 5; } }"
+		+ " function nest(): string { let s = ''; try { try { return s; } finally { s += 'a'; } } finally { s += 'b'; } }"
+		+ " function viaCatch(): int32 { let n: int32 = 2; try { throw new Boom(1); } catch (e) { return n; } finally { n = 9; } }"
+		+ " console.log(`[${str()}] ${num()} [${nest()}] ${viaCatch()}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "[] 1 [] 2\n", vm.output;
+}
+
 test "engine: == and != on a union compare the held member with EqVal and NeVal, never the payload word" {
 	const eq = compiledFunc("function f(a: string | number, b: string | number): boolean { return a == b; } console.log(`${f('a', 1)}`);", "f");
 	assert countNamed(eq, "EqVal") == 1 && countNamed(eq, "BeqI64") == 0 && countNamed(eq, "BrNeI64") == 0, disasmFunc(eq);
