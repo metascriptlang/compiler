@@ -2,7 +2,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, finishNode, finishAfter, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, hasPrecedingLineBreak, finishNode, finishAfter, takeTrailingDecls } from "../cursor";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { parseBlockStmt, parseStatement } from "./core";
 import { parseExpressionFromState } from "../expressions/core";
@@ -306,11 +306,9 @@ export function parseContinueStmt(state: ParserState): NodeResult {
 export function parseReturnStmt(state: ParserState): NodeResult {
 	const retToken = current(state);
 	advance(state);
-	// Bare return (no expression): return; or return at end of block
-	if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.RBrace)) {
-		if (current(state).kind == TokenKind.Semicolon) {
-			consumeSemicolon(state);
-		}
+	if (isAtEnd(state) || current(state).kind == TokenKind.Semicolon ||
+		current(state).kind == TokenKind.RBrace || hasPrecedingLineBreak(state)) {
+		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.ReturnStmt, { argument: null as unknown as Node }, retToken));
 	}
 	const value = try parseExpressionFromState(state);
@@ -556,7 +554,7 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 
-import { ProgramData, AssertStmtData } from "../../ast/node";
+import { ProgramData, AssertStmtData, ReturnStmtData } from "../../ast/node";
 import { parseSource } from "./validation";
 
 // If — distinct paths: simple, else, else-if chain
@@ -574,6 +572,33 @@ test "while braceless" { assert programOk("while (x) y;"); }
 // While
 test "while" { assert programOk("while (x) { y; }"); }
 test "return expr" { assert programOk("function f(x) { return x + 1; }"); }
+
+test "a line terminator after return leaves its argument empty" {
+	for (const separator of ["\n", "\r\n", "\r", "// comment\n", "/* comment\n */"]) {
+		const pr = parseSource(`return ${separator}next();`);
+		assert pr.ok;
+		const statements = (pr.value.data as ProgramData).programStmts;
+		assert statements.length == 2;
+		assert statements[0].kind == NodeKind.ReturnStmt;
+		assert (statements[0].data as ReturnStmtData).argument == null;
+	}
+}
+
+test "return keeps a same-line expression or opening parenthesis" {
+	for (const source of ["return value;", "return /* comment */ value;", "return (\nvalue\n);"]) {
+		const pr = parseSource(source);
+		assert pr.ok;
+		const statement = (pr.value.data as ProgramData).programStmts[0];
+		assert statement.kind == NodeKind.ReturnStmt;
+		assert (statement.data as ReturnStmtData).argument != null;
+	}
+}
+
+test "return needs no argument before a semicolon closing brace or end of input" {
+	assert programOk("return;");
+	assert programOk("{ return }");
+	assert programOk("return");
+}
 // Do-while
 test "do-while" { assert programOk("do { x; } while (y);"); }
 

@@ -116,3 +116,4 @@ import "./nonNullAssertionOwns";
 import "./logicalAssignment";
 import "./compoundAssignmentEvaluation";
 import "./abortSignalListener";
+import "./restrictedLineTerminators";

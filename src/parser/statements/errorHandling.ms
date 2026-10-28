@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../cursor";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, hasPrecedingLineBreak } from "../cursor";
 import { skipOptionalType, isIdentLike } from "../util";
 import { parseBlockStmt } from "./core";
 import { parseExpressionFromState } from "../expressions/core";
@@ -18,6 +18,9 @@ type NodeResult = Result<Node, string>;
 export function parseThrowStmt(state: ParserState): NodeResult {
 	const throwToken = current(state);
 	advance(state);
+	if (hasPrecedingLineBreak(state)) {
+		return Result.err(`Line break is not permitted after 'throw' at line ${throwToken.line}`);
+	}
 	const expr = try parseExpressionFromState(state);
 	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ThrowStmt, { throwArg: expr }, throwToken));
@@ -95,6 +98,18 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 test "throw string" { assert programOk("throw \"error\";"); }
 
 test "throw expr" { assert programOk("throw error;"); }
+
+test "throw refuses a line terminator before its expression" {
+	for (const separator of ["\n", "\r\n", "\r", "// comment\n", "/* comment\n */"]) {
+		assert !programOk(`throw ${separator}error;`);
+	}
+}
+
+test "throw allows a same-line expression and a multiline parenthesized operand" {
+	assert programOk("throw /* comment */ error;");
+	assert programOk("throw (\nerror\n);");
+}
+
 // Try — distinct paths: catch, finally, both, no-param catch
 test "try-catch" { assert programOk("try { x; } catch (e) { y; }"); }
 
