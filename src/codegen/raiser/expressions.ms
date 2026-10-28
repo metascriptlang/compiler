@@ -2282,6 +2282,11 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	}
 	const arrReg = compileExpr(s, d.array);
 	const idxReg = compileIndex(s, d.index);
+	if (exprIsString(s, d.array)) {
+		const char = allocRef(s);
+		emitInst(s, raiserABC(RaiserOpcode.StrCharAt, char, arrReg, idxReg));
+		return char;
+	}
 	const dest = allocFor(s, node.nodeType);
 	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
 	return dest;
