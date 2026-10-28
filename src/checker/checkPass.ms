@@ -3404,6 +3404,13 @@ function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	markNamesUsed(ctx, d.macroDeclBody);
+	markWrittenTypesUsed(ctx, d.macroDeclBody);
+}
+
+function markWrittenTypesUsed(ctx: CheckerContext, node: Node | null): void {
+	if (node == null) return;
+	for (const text of writtenTypes(node)) markTypeNamesUsed(ctx, text);
+	forEachChild(node, (child: Node): void => { markWrittenTypesUsed(ctx, child); });
 }
 
 function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
