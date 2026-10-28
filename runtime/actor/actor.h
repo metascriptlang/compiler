@@ -579,6 +579,7 @@ extern _Atomic(int) msActorsStopPending;
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
 extern void msEnsureWakePipe(void);      /* dispatch.c — init wake pipe early for actor sends */
 extern void msPoolWakeWorker(int schedulerID);  /* pool.c — targeted, no spurious wakeups */
+extern void msPoolWakeThief(int ownerSchedulerID);  /* pool.c — wakes one idle worker other than the owner */
 extern void msSetActorIdleCap(int ms);  /* dispatch.c — caps event loop sleep for idle timeouts */
 
 /* Forward declarations */
@@ -749,16 +750,23 @@ static inline void msNameRegistryGrow(void) {
 extern void msSetActorDestroyHook(void (*hook)(void*));
 extern void msCallActorDestroyHook(void* actor);
 
+/* An actor queued behind work its owner must finish first gets a thief: one idle
+ * worker is woken and the existing steal in msActorPollLocal takes it. The owner
+ * is behind work when its run queue already holds an actor, or when the sender is
+ * a visit running on that very scheduler. */
 static inline void msActorScheduleEdge(msActor* a) {
     if (atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst)) return;
     int sid = a->schedulerID;
     if (sid >= 0 && sid < msSchedulerCount) {
+        bool ownerBehind = atomic_load_explicit(&msSchedulers[sid].runHead, memory_order_acquire) != NULL
+            || (msCurrentActor != NULL && msCurrentActor->schedulerID == sid && msMySchedulerID == sid);
         msSchedRunPush(&msSchedulers[sid], a);
         if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
                 memory_order_acq_rel)) {
             if (sid == 0) msActorWakeEventLoop();
             else msPoolWakeWorker(sid);
         }
+        if (ownerBehind) msPoolWakeThief(sid);
     }
 }
 
