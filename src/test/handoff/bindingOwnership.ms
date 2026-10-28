@@ -72,6 +72,22 @@ test "bindingOwnership: an explicit move of a variable a closure captures is ref
 	}
 }
 
+test "bindingOwnership: a move of a captured variable in a generic body instantiated from another module is refused" {
+	const libs = [
+		{ name: "a generic function, closure before the move", lib: "export function f<T>(x: T): T { const read = (): T => x; const y = move x; read(); return y; }", use: "f(new Box());" },
+		{ name: "a generic function, closure after the move", lib: "export function f<T>(x: T): T { const y = move x; const read = (): T => x; read(); return y; }", use: "f(new Box());" },
+		{ name: "a generic method", lib: "export class H<T> { run(x: T): T { const read = (): T => x; const y = move x; read(); return y; } }", use: "new H<Box>().run(new Box());" },
+	];
+	for (const item of libs) {
+		const main = "import { " + (item.use.startsWith("f(") ? "f" : "H") + " } from \"./lib\";\nclass Box { n: string = \"\"; }\n" + item.use;
+		let hits = 0;
+		for (const m of checkProjectDiagnostics([{ entryPath: "src/lib.ms", entrySource: item.lib }, { entryPath: "src/main.ms", entrySource: main }], "src/main.ms")) {
+			if (m.indexOf("cannot move 'x': a closure captures it") >= 0) hits += 1;
+		}
+		assert hits == 1, item.name + ": " + String(hits) + " refusals";
+	}
+}
+
 test "binding ownership: imports and implicit prelude visibility do not become exports" {
 	const consumers = [
 		{ module: "std/core/array", name: "push", source: "import { k, push } from \"./library\"; const a: number[] = []; push(a, k); a.push(k);" },

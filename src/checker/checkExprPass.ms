@@ -1276,14 +1276,20 @@ function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	node.nodeType = inferredType(); return;
 }
 
-export function refuseCapturedMoves(ctx: CheckerContext): void {
+function refuseCapturedMove(ctx: CheckerContext, node: Node): void {
+	const arg = (node.data as MoveExprData).moveArg;
+	addError(ctx, `cannot move '${(arg.data as IdentifierData).name}': a closure captures it, and a captured variable lives in the closure's environment, so moving it would leave the closure reading an empty slot; copy it instead, or stop capturing it`, node.location.line, node.location.column);
+}
+
+function recordCapture(ctx: CheckerContext, sym: Symbol): void {
+	if (ctx.capturedSyms.has(sym)) return;
+	ctx.capturedSyms.add(sym);
+	const pending: Node[] = [];
 	for (const node of ctx.identifierMoves) {
-		const arg = (node.data as MoveExprData).moveArg;
-		if (ctx.capturedSyms.has(arg.resolvedSym!)) {
-			addError(ctx, `cannot move '${(arg.data as IdentifierData).name}': a closure captures it, and a captured variable lives in the closure's environment, so moving it would leave the closure reading an empty slot; copy it instead, or stop capturing it`, node.location.line, node.location.column);
-		}
+		if ((node.data as MoveExprData).moveArg.resolvedSym == sym) refuseCapturedMove(ctx, node);
+		else pending.push(node);
 	}
-	ctx.identifierMoves = [];
+	ctx.identifierMoves = pending;
 }
 
 function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -1304,7 +1310,10 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		if (refusal != null) addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
 	}
-	if (d.moveArg.kind == NodeKind.Identifier && d.moveArg.resolvedSym != null && isFrameValue(d.moveArg.resolvedSym)) ctx.identifierMoves.push(node);
+	if (d.moveArg.kind == NodeKind.Identifier && d.moveArg.resolvedSym != null && isFrameValue(d.moveArg.resolvedSym)) {
+		if (ctx.capturedSyms.has(d.moveArg.resolvedSym)) refuseCapturedMove(ctx, node);
+		else ctx.identifierMoves.push(node);
+	}
 	// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
 	// Ownership transfers out of the current scope, so the binding must
 	// not be awaited again — same consumption semantics as `await h`.
@@ -3351,7 +3360,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		node.nodeType = errorType(); return;
 	}
 	const crossed = isFrameValue(sym) ? crossesFunction(ctx, d.name, sym) : null;
-	if (crossed != null && crossed) ctx.capturedSyms.add(sym);
+	if (crossed != null && crossed) recordCapture(ctx, sym);
 	if (crossed != null && capturesView(ctx, sym, crossed)) {
 		const useAt = node.location;
 		addError(ctx, viewCaptureRefusal(ctx, d.name, sym), useAt.line, useAt.column);
