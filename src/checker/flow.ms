@@ -926,20 +926,37 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	}
 	// A merge of a nullable's narrowed halves (`T` on the true edge, `null` on
 	// the false edge) rebuilds the DECLARED type, not a fresh spelling of it.
-	const declared = declaredSumBesideNull(members);
-	if (declared != null) return nullableUnionOf([declared, nullType()]);
-	return canonicalizeBranchJoin(createUnion(members));
+	const joined = canonicalizeBranchJoin(createUnion(members));
+	return parent != null && sameConstituents(joined, parent) ? parent : joined;
 }
 
-function declaredSumBesideNull(members: Type[]): Type | null {
-	let sum: Type | null = null;
-	let sawNull = false;
-	for (const m of members) {
-		if (m.kind == TypeKind.Null) sawNull = true;
-		else if (sum == null && m.kind == TypeKind.Union && m.typeNames != null && m.typeNames.length >= 2) sum = m;
-		else return null;
+function constituentsOf(t: Type, out: Type[]): void {
+	const peeled = peelTransparentInstance(t);
+	if (isMaybeType(peeled) && peeled.typeReturn != null) {
+		constituentsOf(peeled.typeReturn, out);
+		out.push(nullType());
+	} else if (peeled.kind == TypeKind.Union && peeled.typeChildren != null) {
+		for (const c of peeled.typeChildren) if (c != null) constituentsOf(c, out);
+	} else {
+		out.push(peeled);
 	}
-	return sawNull ? sum : null;
+}
+
+function containsConstituent(set: Type[], t: Type): boolean {
+	for (const m of set) if (m == t || (m.kind == t.kind && sameType(m, t))) return true;
+	return false;
+}
+
+// The join of a reference's flow branches is the declared type itself when both name the same
+// constituents, whatever order a rebuilt union would sort them into.
+function sameConstituents(a: Type, b: Type): boolean {
+	const left: Type[] = [];
+	const right: Type[] = [];
+	constituentsOf(a, left);
+	constituentsOf(b, right);
+	for (const m of left) if (!containsConstituent(right, m)) return false;
+	for (const m of right) if (!containsConstituent(left, m)) return false;
+	return true;
 }
 
 export function unionOfTypes(types: Type[], parent: Type | null): Type {
