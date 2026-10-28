@@ -72,6 +72,7 @@ import "./moduleFacts";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
+import "./cFunctionPointer";
 import "./headerSizeof";
 import "./notCallable";
 import "./callResultInPlace";
