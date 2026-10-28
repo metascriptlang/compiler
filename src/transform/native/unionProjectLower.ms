@@ -16,6 +16,7 @@ function projectNode(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr) return projectNarrowedRead(node);
 	if (node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) return unnestProjection(node);
+	if (node.kind == NodeKind.HiddenAddr) return restoreAddressedUnion(node);
 	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") return lowerUnionInstanceof(node);
 	return node;
 }
@@ -25,6 +26,15 @@ function projectNarrowedRead(node: Node): Node {
 	const projected = narrowUnionToVariant(node, node.nodeType);
 	if (projected != null as unknown as Node) return projected;
 	return node;
+}
+
+function restoreAddressedUnion(addr: Node): Node {
+	const d = addr.data as HiddenDerefData;
+	const held = addr.nodeType == null || addr.nodeType.typeReturn == null ? null : instantiatedUnionBehind(addr.nodeType.typeReturn);
+	if (held == null || held.kind != TypeKind.Union || d.expr.kind != NodeKind.HiddenSubConv || d.expr.variantSlot <= 0) return addr;
+	const source = (d.expr.data as HiddenStdConvData).convExpr;
+	if (isLocation(source)) d.expr = source;
+	return addr;
 }
 
 function unnestProjection(outer: Node): Node {
