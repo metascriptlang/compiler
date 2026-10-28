@@ -545,7 +545,7 @@ test "E2E C: generic protocol conflict — defining + caller extension with same
 	assert cCode.contains("Ambiguous");
 }
 
-test "E2E C: generic protocol private extension — check-time error with instantiation note" {
+test "E2E C: generic protocol private extension — the instance calls the instantiating module's extension" {
 	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: `
 			export function describeAll<T>(x: T): string {
@@ -563,8 +563,7 @@ test "E2E C: generic protocol private extension — check-time error with instan
 		` },
 	];
 	const cCode = compileProjectToC(entries, "src/main.ms");
-	assert cCode.contains("ERROR:");
-	assert cCode.contains("in instantiation of");
+	assert !cCode.contains("ERROR:");
 }
 
 // ===== valueOf: a value read chosen by a failed resolution — docs/PROTOCOLS.md Part IV =====

@@ -752,28 +752,14 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 	}
 }
 
-// Nim `mixin` semantics for convention protocols (docs/PROTOCOLS.md Part II):
-// the instantiating module's extensions are visible while the generic body is
-// re-checked in the defining module's ctx, then removed. Exported only — the
-// instance is emitted in the defining module's TU, so a private extension
-// would resolve here but fail at link; skipping it surfaces a check-time
-// "no member" error with the instantiation note instead.
+// `mixin` semantics for convention protocols (docs/PROTOCOLS.md Part II): every
+// extension the instantiating module sees, exported or not, is visible while the
+// generic body is re-checked in the defining module's ctx, then removed.
 function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): int32 {
 	if (bodyCtx == ctx) return -1;
 	if (bodyCtx.extensionRegistry == null || ctx.extensionRegistry == null) return -1;
 	const preCount = bodyCtx.extensionRegistry.methods.length;
-	for (const m of ctx.extensionRegistry.methods) {
-		// Drop only KNOWN-private extensions of the instantiating module itself.
-		// Import-derived entries are exported by construction but their local
-		// sym view does NOT carry the Exported flag — discriminate by the sym's
-		// defining modulePath instead of the flag alone.
-		if (m.sym != null
-				&& (m.sym.modulePath == "" || m.sym.modulePath == ctx.modulePath)
-				&& !hasFlag(m.sym, SymbolFlag.Exported)) {
-			continue;
-		}
-		registerExtension(bodyCtx.extensionRegistry, m);
-	}
+	for (const m of ctx.extensionRegistry.methods) registerExtension(bodyCtx.extensionRegistry, m);
 	return preCount;
 }
 

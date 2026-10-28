@@ -1259,9 +1259,9 @@ export function refuseUnhashableKey(ctx: CheckerContext, collection: Type, at: N
 	}
 	if (base == null || hashesAsItsBase(base) || ctx.extensionRegistry == null) return false;
 	const declared = declaredKeyHash(ctx.extensionRegistry, key);
-	if (declared != null && hasFlag(declared, SymbolFlag.Exported)) return false;
+	if (declared != null) return false;
 	const name = typeDisplayName(key);
-	addError(ctx, `'${name}' cannot be a ${owner.typeName} key: a distinct type hashes as its base only over an integer, char, boolean or enum, and '${name}' is over '${typeDisplayName(base)}' — declare 'export function hash(this k: ${name}): int64'`, at.location.line, at.location.column);
+	addError(ctx, `'${name}' cannot be a ${owner.typeName} key: a distinct type hashes as its base only over an integer, char, boolean or enum, and '${name}' is over '${typeDisplayName(base)}' — declare 'function hash(this k: ${name}): int64'`, at.location.line, at.location.column);
 	return true;
 }
 
