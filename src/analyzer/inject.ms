@@ -173,6 +173,7 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
 		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx),
 		NodeKind.OutExpr => processOutArg(node, dctx),
+		NodeKind.UpdateExpr => processUpdate(node, dctx),
 		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
 			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.SizeofExpr | NodeKind.MacroInvocation => node,
 		_ => { throw new Error("internal: processNode: unhandled kind " + NodeKind[node.kind]); },
@@ -205,6 +206,12 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 		return node;
 	}
 	hd.expr = processNode(hd.expr, dctx, DrcMode.Normal);
+	return node;
+}
+
+function processUpdate(node: Node, dctx: DrcContext): Node {
+	const ud = node.data as UpdateExprData;
+	ud.updateArg = processNode(ud.updateArg, dctx, DrcMode.Normal);
 	return node;
 }
 
