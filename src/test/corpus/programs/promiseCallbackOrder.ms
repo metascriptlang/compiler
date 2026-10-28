@@ -1,5 +1,4 @@
 // @stdout: b y sync a x g1 h1 t1 t2 g2 h2 t3
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: A callback runs after the synchronous code that registered it (even the first
 // callback of the program, before any async function has run), and an await of an
 // already finished promise resumes after it too, in the order the callbacks were queued.

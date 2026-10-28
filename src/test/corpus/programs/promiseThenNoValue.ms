@@ -1,6 +1,5 @@
 // @stdout: void 1 | int 11 | text 111 | chain 1111 | after done
 // @stdout: async void 1 | resolved void 11
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a then callback written with no parameter ignores the value whatever the promise holds:
 // a Promise<void> has none, a number or a string has one the callback does not name. The
 // callbacks capture a local, so they run with their environment.

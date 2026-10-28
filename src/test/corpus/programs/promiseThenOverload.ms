@@ -1,5 +1,4 @@
 // @stdout: s s 3 | n 4 | str 3x | flat 6 6 | pair 5 p5 | after done
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: then picks its overload from what the callback returns, whatever the destination: a
 // plain value gives Promise<U> (annotated as Promise<string> or not), a Promise gives the
 // promise it returns (annotated as Promise<number> or not), and an unannotated arrow with an
