@@ -2,6 +2,7 @@
 1	_msPoolInit
 1	_msThreadChannel
 1	_msWorkerLoopPump
+10	_msPoolWorkerLoop
 13	_msPoolRunQueued
 16	_msProcessTimers
 2	_msActorJobAbandon
@@ -15,6 +16,5 @@
 4	_msChannelDrain
 6	_msRunOnce
 7	_msAwaitGroupCompleteSlot
-7	_msPoolWorkerLoop
 8	_msAwaitGroupFailSlot
 8	_msTimerDelayFrom
