@@ -66,6 +66,7 @@ import {
 } from "std/fs";
 import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
+import { rawString } from "std/core/buffer/bytes";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
@@ -656,7 +657,7 @@ function _bridgeMsReadLine(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsReadBytes(args: RaiserValue[]): RaiserValue {
-	return boxString(readBytes(unboxFloat(args[0])));
+	return boxString(rawString(readBytes(unboxFloat(args[0]))));
 }
 
 function _bridgeMsStdinHasData(args: RaiserValue[]): RaiserValue {

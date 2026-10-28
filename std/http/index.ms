@@ -37,7 +37,7 @@ export {
 	HttpServer, createServer, createServerAsync, listen, serve, serveConcurrent, serveConcurrentAsync, serveN, stop,
 	sendText, sendJson, sendHtml, sendError, sendRaw, getClientFd,
 	// Phase 4 — Node-style extension methods on ServerResponse
-	setHeader, getHeader, removeHeader, hasHeader, writeHead, end, json,
+	setHeader, getHeader, removeHeader, hasHeader, writeHead, end, json, bodyBytes, bodyText,
 } from "./server";
 
 // Plain HTTP client (matches Node's `http` module). Importing these does

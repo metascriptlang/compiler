@@ -1,6 +1,8 @@
 // std/io — Standard Streams (Node.js Backend)
 // Mirrors the C backend API (std/io/index.cms) using Node.js built-ins.
 
+import { Buffer } from "std/core/buffer";
+
 @import("node:process", { stdout, stderr });
 
 extern const stdout: { write: (s: string) => void };
@@ -18,8 +20,8 @@ export function readLine(): string {
 	return "";
 }
 
-export function readBytes(n: number): string {
-	return "";
+export function readBytes(n: number): Buffer {
+	return Buffer.alloc(0);
 }
 
 export function stdinDisableBuffering(): void {}

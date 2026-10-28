@@ -54,7 +54,7 @@ function uringTask(): int32 {
 			if (msUringWait(-1) > 0) got = msUringRecvData(fds[2], msUringEventRes(0));
 		}
 	} else {
-		got = recv(fds[2], 4096);
+		got = recv(fds[2], 4096).asString();
 	}
 	closeAll(fds);
 	console.log(`worker uring recv: ${got}`);
@@ -62,7 +62,7 @@ function uringTask(): int32 {
 }
 
 async function readOnce(fd: int32, out: string[]): Promise<void> {
-	out.push(await recvAsync(fd, 4096));
+	out.push((await recvAsync(fd, 4096)).asString());
 }
 
 function engineTask(): int32 {

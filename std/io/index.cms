@@ -8,6 +8,9 @@
 
 @include("runtime/io/streams.h");
 
+import { Buffer } from "std/core/buffer";
+import { rawBuffer } from "std/core/buffer/bytes";
+
 extern function msStdinDisableBuffering(): void;
 extern function msReadBytes(n: number): string;
 extern function msStdinHasData(): number;
@@ -169,8 +172,8 @@ export function readLine(): string {
 	return readLineFrom(stdin);
 }
 
-export function readBytes(n: number): string {
-	return msReadBytes(n);
+export function readBytes(n: number): Buffer {
+	return rawBuffer(msReadBytes(n));
 }
 
 export function writeStdout(s: string): void {

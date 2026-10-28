@@ -2,6 +2,9 @@
 // kernels are host bridges (hostTable.ms) over the same static-inline C
 // shims the C tier links from runtime/io/streams.h. File I/O: std/fs.
 
+import { Buffer } from "std/core/buffer";
+import { rawBuffer } from "std/core/buffer/bytes";
+
 extern function msStdinDisableBuffering(): void from "msStdinDisableBuffering";
 extern function msReadLine(): string from "msReadLine";
 extern function msReadBytes(n: number): string from "msReadBytes";
@@ -13,8 +16,8 @@ export function readLine(): string {
 	return msReadLine();
 }
 
-export function readBytes(n: number): string {
-	return msReadBytes(n);
+export function readBytes(n: number): Buffer {
+	return rawBuffer(msReadBytes(n));
 }
 
 export function writeStdout(s: string): void {

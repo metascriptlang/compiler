@@ -1,5 +1,6 @@
 import { lspParseContentLength } from "./protocol";
 import { readLine, readBytes, writeStdout, stdinHasData } from "std/io";
+import { rawString } from "std/core/buffer/bytes";
 
 export interface LspTransport {
 	readLine: () => string;
@@ -11,7 +12,7 @@ export interface LspTransport {
 export function stdioTransport(): LspTransport {
 	return {
 		readLine: () => readLine(),
-		readBytes: (count: int32) => readBytes(count as number),
+		readBytes: (count: int32) => rawString(readBytes(count as number)),
 		hasBufferedData: () => stdinHasData(),
 		write: (frames: string) => writeStdout(frames),
 	};

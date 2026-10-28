@@ -98,9 +98,9 @@ export interface ConnectOptions {
 
 // ===== Bytes ↔ string boundary =====
 //
-// Frame layer works on `uint8[]`; std/net carries socket bytes in a `string`. Conversions are
-// localised here: bytes→string copies the bytes unchanged, because `asString` decodes text and
-// would replace frame bytes that are not UTF-8; string→bytes reads them back with byteAt.
+// Frame layer and std/net both carry bytes as `uint8[]`. These two convert to and from a raw
+// byte string, which copies the bytes unchanged, because `asString` decodes text and would
+// replace bytes that are not UTF-8.
 
 export function stringToBytes(s: string): uint8[] {
 	// Use byteAt + byteLength — charCodeAt/length use UTF-16 indexing (with
@@ -156,14 +156,14 @@ function compactRxBuf(ws: WsClient): void {
 // back to a fixed key — that would defeat the masking entirely. Instead we
 // surface InternalError so the caller can decide.
 
-function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Result<string, WsError> {
+function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Result<uint8[], WsError> {
 	const raw = msCryptoRandomBytesRaw(4);
 	const maskBytes = stringToBytes(raw);
 	if (maskBytes.length != 4) {
 		return Result.err(wsInternalError("mask key generation failed (RNG returned " + maskBytes.length.toString() + " bytes)"));
 	}
 	const frame = buildFrame(opcode, fin, payload, maskBytes);
-	return Result.ok(bytesToString(frame));
+	return Result.ok(frame);
 }
 
 async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Promise<Result<void, WsError>> {
@@ -240,7 +240,7 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 				ws.state = WsState.Closed;
 				return Result.err(wsClosed("connection closed by peer"));
 			}
-			appendBytes(ws._rxBuf, stringToBytes(chunk));
+			appendBytes(ws._rxBuf, chunk);
 			continue;
 		}
 
@@ -292,7 +292,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 				ws.state = WsState.Closed;
 				return Result.err(wsClosed("connection closed by peer"));
 			}
-			appendBytes(ws._rxBuf, stringToBytes(chunk));
+			appendBytes(ws._rxBuf, chunk);
 			continue;
 		}
 
@@ -386,10 +386,10 @@ async function readUntilHeaderEndAsync(fd: int32): Promise<Result<HandshakeRead,
 	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = await recvAsync(fd, HANDSHAKE_RECV_BUF);
-		if (chunk.byteLength == 0) {
+		if (chunk.length == 0) {
 			return Result.err(wsHandshakeFailed("connection closed during handshake"));
 		}
-		appendBytes(bytes, stringToBytes(chunk));
+		appendBytes(bytes, chunk);
 		const sep = findCRLFCRLF(bytes);
 		if (sep >= 0) {
 			const headerBytes = sliceBytes(bytes, 0, sep + 4);
@@ -408,10 +408,10 @@ function readUntilHeaderEndSync(fd: int32): Result<HandshakeRead, WsError> {
 	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = netRecv(fd, HANDSHAKE_RECV_BUF);
-		if (chunk.byteLength == 0) {
+		if (chunk.length == 0) {
 			return Result.err(wsHandshakeFailed("connection closed during handshake"));
 		}
-		appendBytes(bytes, stringToBytes(chunk));
+		appendBytes(bytes, chunk);
 		const sep = findCRLFCRLF(bytes);
 		if (sep >= 0) {
 			const headerBytes = sliceBytes(bytes, 0, sep + 4);

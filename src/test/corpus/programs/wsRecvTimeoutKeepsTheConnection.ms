@@ -29,7 +29,7 @@ function quietThenSend(listenFd: int32): int32 {
 	while (!raw.includes("\r\n\r\n")) {
 		const chunk = recv(fd, 4096);
 		if (chunk.length == 0) return -1;
-		raw += chunk;
+		raw += chunk.asString();
 	}
 	const req = parseUpgradeRequest(raw);
 	if (!req.ok) return -2;

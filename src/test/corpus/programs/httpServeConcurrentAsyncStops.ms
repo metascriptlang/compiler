@@ -40,7 +40,7 @@ function request(port: int32, path: string): string {
 			while (true) {
 				const chunk = recv(fd, 4096);
 				if (chunk.length == 0) break;
-				got += chunk;
+				got += chunk.asString();
 				if (got.includes("\r\n\r\n") && got.endsWith(path)) break;
 			}
 			close(fd);
@@ -69,7 +69,7 @@ function idleConnection(port: int32): int32 {
 	while (!got.endsWith("/idle")) {
 		const chunk = recv(fd, 4096);
 		if (chunk.length == 0) break;
-		got += chunk;
+		got += chunk.asString();
 	}
 	console.log(`${got.split("\r\n")[0]} keep-alive=${headerValue(got, "keep-alive")}`);
 	return fd;

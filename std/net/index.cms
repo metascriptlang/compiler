@@ -6,6 +6,9 @@
  */
 
 @include("runtime/net/socket.h");
+
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 @compile("runtime/io/engineSelect.c");
 
 // ===== C primitives (blocking) =====
@@ -48,12 +51,12 @@ export function connect(fd: int32, host: string, port: int32): int32 {
 	return msNetConnect(fd, host, port);
 }
 
-export function send(fd: int32, data: string): int32 {
-	return msNetSend(fd, data);
+export function send(fd: int32, data: Bytes): int32 {
+	return msNetSend(fd, rawString(data));
 }
 
-export function recv(fd: int32, maxBytes: int32): string {
-	return msNetRecv(fd, maxBytes);
+export function recv(fd: int32, maxBytes: int32): Buffer {
+	return rawBuffer(msNetRecv(fd, maxBytes));
 }
 
 // True also when a non-blocking socket had no data, so an empty recv is end of stream only when this is false.
@@ -86,12 +89,12 @@ export function acceptNonBlock(fd: int32): int32 {
 	return msNetAcceptNonBlock(fd);
 }
 
-export function recvNonBlock(fd: int32, maxBytes: int32): string {
-	return msNetRecvNonBlock(fd, maxBytes);
+export function recvNonBlock(fd: int32, maxBytes: int32): Buffer {
+	return rawBuffer(msNetRecvNonBlock(fd, maxBytes));
 }
 
-export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
-	return msNetSendNonBlock(fd, data, offset);
+export function sendNonBlock(fd: int32, data: Bytes, offset: int32): int32 {
+	return msNetSendNonBlock(fd, rawString(data), offset);
 }
 
 // ===== Async I/O API (Completion-based engine, for await) =====
@@ -107,13 +110,13 @@ export extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoRecv_ms(fd: int32, maxBytes: int32): Promise<string>;
 extern function msIoSend_ms(fd: int32, data: string): Promise<int32>;
 
-export async function recvAsync(fd: int32, maxBytes: int32): Promise<string> {
+export async function recvAsync(fd: int32, maxBytes: int32): Promise<Buffer> {
 	const result = await msIoRecv_ms(fd, maxBytes);
-	return result;
+	return rawBuffer(result);
 }
 
-export async function sendAsync(fd: int32, data: string): Promise<int32> {
-	const result = await msIoSend_ms(fd, data);
+export async function sendAsync(fd: int32, data: Bytes): Promise<int32> {
+	const result = await msIoSend_ms(fd, rawString(data));
 	return result;
 }
 

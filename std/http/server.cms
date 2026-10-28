@@ -9,6 +9,14 @@
 @include("runtime/net/eventLoopUring.h");
 @include("runtime/io/engine.h");
 
+extern function msIoRecv_ms(fd: int32, maxBytes: int32): Promise<string>;
+
+// The request framer reads the connection's bytes as one string, so the server keeps them raw here.
+async function recvRaw(fd: int32, maxBytes: int32): Promise<string> {
+	const result = await msIoRecv_ms(fd, maxBytes);
+	return result;
+}
+
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
 extern function msNetListen(fd: int32, backlog: int32): int32;
@@ -72,7 +80,10 @@ import {
 import { HttpError, socketError } from "./errors";
 import * as hdrs from "./headers";
 import { frameRequest, FrameResult } from "./parser";
-import { acceptAsync, recvAsync, sendAsync } from "std/net";
+import { acceptAsync, sendAsync } from "std/net";
+import { Buffer } from "std/core/buffer";
+import { rawBuffer } from "std/core/buffer/bytes";
+import { asBytes, utf8String } from "std/core/string/bytes";
 import { lockedUpdate, lockedRead } from "std/core/promise";
 extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoEngineCancelFd_ms(fd: int32): void;
@@ -457,6 +468,16 @@ export function writeHead(this res: ServerResponse, status: int32, headers: Http
 	}
 }
 
+// The request body's bytes as received, whatever their encoding.
+export function bodyBytes(this req: HttpRequest): Buffer {
+	return rawBuffer(req.body);
+}
+
+// The request body decoded as UTF-8 text; an ill-formed sequence becomes U+FFFD.
+export function bodyText(this req: HttpRequest): string {
+	return utf8String(req.body.asBytes(), false);
+}
+
 // End the response with optional body. Honors all res.headers set so far.
 export function end(this res: ServerResponse, data: string = ""): void {
 	endResponse(res, data);
@@ -830,7 +851,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 				msNetSend(fd, buildErrorResponse(431));
 				alive = false;
 			} else {
-				const chunk = await recvAsync(fd, cfg.maxHeaderSize);
+				const chunk = await recvRaw(fd, cfg.maxHeaderSize);
 				if (chunk.length == 0) {
 					alive = false;
 				} else {
@@ -859,7 +880,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
-				const more = await recvAsync(fd, cfg.maxHeaderSize);
+				const more = await recvRaw(fd, cfg.maxHeaderSize);
 				if (more.length == 0) {
 					alive = false;
 				} else {
@@ -1273,7 +1294,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 				msNetSend(fd, buildErrorResponse(431));
 				alive = false;
 			} else {
-				const chunk = await recvAsync(fd, cfg.maxHeaderSize);
+				const chunk = await recvRaw(fd, cfg.maxHeaderSize);
 				if (chunk.length == 0) {
 					alive = false;
 				} else {
@@ -1302,7 +1323,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
-				const more = await recvAsync(fd, cfg.maxHeaderSize);
+				const more = await recvRaw(fd, cfg.maxHeaderSize);
 				if (more.length == 0) {
 					alive = false;
 				} else {

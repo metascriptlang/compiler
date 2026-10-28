@@ -37,7 +37,7 @@ function request(port: int32, path: string): string {
 			while (true) {
 				const chunk = recv(fd, 4096);
 				if (chunk.length == 0) break;
-				got += chunk;
+				got += chunk.asString();
 				if (got.includes("\r\n\r\n") && got.endsWith(path)) break;
 			}
 			close(fd);
