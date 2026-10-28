@@ -304,6 +304,22 @@ check "S22 rv landed" '[ "$rr" = 0 ] && onmain rv.txt'
 check "S22 no local gate ran" '! grep -q "^wt/rv " "$T/ctl/gates.log" 2>/dev/null'
 check "S22 the land names the remote gate" 'grep -q "reusing the green remote gate of test-host" "$MSC_LAND_QUEUE/rv.land.log"'
 
+echo "== S22b a remote GREEN that needs macOS lands only beside a macOS check of the same patch"
+setup; mkwt pv red
+remotegreen pv; echo needs=macos >>"$MSC_REMOTE_VERDICTS/pv"
+enqueue pv
+rr=$(waitfor pv 60)
+check "S22b without the macOS check the land is red and names it" '[ "$rr" = 1 ] && ! onmain pv.txt && grep -q "platform-check.sh pv macos" "$MSC_LAND_QUEUE/pv.red"'
+check "S22b no local gate ran in its place" '! grep -q "^wt/pv " "$T/ctl/gates.log" 2>/dev/null'
+printf 'patch_verbatim=0000\nresult=GREEN\n' >"$MSC_REMOTE_VERDICTS/pv.macos"
+enqueue pv
+rr=$(waitfor pv 60)
+check "S22b a macOS check of another patch does not count" '[ "$rr" = 1 ] && ! onmain pv.txt'
+sed -n 's/^patch_verbatim=/&/p; s/^result=.*/result=GREEN/p' "$MSC_REMOTE_VERDICTS/pv" >"$MSC_REMOTE_VERDICTS/pv.macos"
+enqueue pv
+rr=$(waitfor pv 60)
+check "S22b with the macOS check of the same patch it lands" '[ "$rr" = 0 ] && onmain pv.txt'
+
 echo "== S23 main moved after the remote gate by files the slice leaves alone: still no local gate"
 setup; mkwt rm red
 remotegreen rm
