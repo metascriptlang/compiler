@@ -50,7 +50,7 @@ function buildDispatcher(ctx: TransformContext, base: Symbol, overrides: DispMet
 	const stmts: Node[] = [];
 	for (const o of overrides) {
 		const ovType = o.sym.symbolType;
-		if (ovType == null || ovType.typeChildren.length == 0) continue;
+		if (ovType == null || ovType.typeChildren.length == 0) throw new Error(`internal: the override '${o.sym.name}' of '${base.name}' has no signature to forward to`);
 		const receiver = makeBinary(makeTypedIdentResolved(params[0], null, loc), "instanceof", makeIdentResolved(o.classSym, loc), loc);
 		stmts.push(makeIf(receiver, makeBlock(forward(ctx, o.sym, ovType, baseType, params, returns, loc), loc), null, loc));
 	}
