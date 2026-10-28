@@ -1608,7 +1608,11 @@ function wrapThrownString(vm: RaiserVM, text: RaiserValue): RaiserValue {
 // Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
 function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
-	if (f.record >= 0) setException(vm, moduleErrorForReader(vm, f.record));
+	if (f.record >= 0) {
+		const error = vm.sched.modules.states[f.record].error;
+		rcIncref(vm.arrayHeap, vm.objectHeap, error);
+		setException(vm, error);
+	}
 	else if (f.error.kind == RaiserValueKind.Nil) setException(vm, heapAllocString(vm.arrayHeap, f.errorMsg));
 	else {
 		const copied = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error);
@@ -2093,7 +2097,7 @@ function moduleFail(vm: RaiserVM, error: RaiserValue): void {
 		st.status = RaiserModuleStatus.Evaluated;
 		st.failed = true;
 		st.error = error;
-		vmIncref(vm, error);
+		rcIncref(vm.arrayHeap, vm.objectHeap, error);
 	}
 	ev.stack.length = 0;
 	ev.frames.length = 0;
@@ -2140,9 +2144,8 @@ function moduleBodyFinish(vm: RaiserVM, at: int32, kind: RaiserModuleJobKind, er
 	ev.states[at].bodyStrand = -1;
 	vm.sched.strands.items[vm.current].status = RaiserStrandStatus.Done;
 	vm.yielded = true;
-	const held = error;
-	vmIncref(vm, held);
-	ev.pending.push({ kind, record: at, future: -1, error: held });
+	rcIncref(vm.arrayHeap, vm.objectHeap, error);
+	ev.pending.push({ kind, record: at, future: -1, error });
 	if (ev.strand < 0) moduleArmTask(vm);
 }
 
@@ -2230,7 +2233,7 @@ function moduleAsyncRejected(vm: RaiserVM, at: int32, error: RaiserValue): void 
 	if (st.failed) return;
 	st.failed = true;
 	st.error = error;
-	vmIncref(vm, error);
+	rcIncref(vm.arrayHeap, vm.objectHeap, error);
 	st.status = RaiserModuleStatus.Evaluated;
 	st.asyncEvaluation = false;
 	for (const p of st.asyncParents) moduleAsyncRejected(vm, p, error);
@@ -2353,7 +2356,7 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 			RaiserModuleJobKind.Fulfilled => moduleAsyncFulfilled(vm, at),
 			RaiserModuleJobKind.Rejected => {
 				moduleAsyncRejected(vm, at, job.error);
-				vmDecref(vm, job.error);
+				rcDecref(vm.arrayHeap, vm.objectHeap, job.error);
 			},
 		}
 	}
@@ -2362,15 +2365,6 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 
 // The error object lives in the main strand's heap, where the body threw it: a reader
 // there gets that same object, a spawned strand a copy in its own heap.
-function moduleErrorForReader(vm: RaiserVM, at: int32): RaiserValue {
-	const error = vm.sched.modules.states[at].error;
-	if (vm.current == 0 || vm.current == vm.sched.modules.strand || moduleBodyOf(vm, vm.current) >= 0) return error;
-	const main = vm.sched.strands.items[0];
-	const copied = copyGraph(main.arrayHeap, main.objectHeap, vm.arrayHeap, vm.objectHeap, error);
-	rcIncref(vm.arrayHeap, vm.objectHeap, copied);
-	return copied;
-}
-
 export function execLoop(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
