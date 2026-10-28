@@ -40,13 +40,15 @@ function main(): void {
 	const t = flag ? tri : dbl;
 	let f = dbl;
 	f = tri;
+	let reassigned: ((x: number) => number) | string = "none";
+	reassigned = dbl;
 	const got: number[] = [
 		callMaybe(nullable), viaUnion, callMaybe(m.children), o.f(1), arr[0](1), arr[1](1),
-		g(1), t(1), f(1), pickRet(true)(1), pickRet(false)(1), callMaybe(maybeFn(true)), callMaybe(maybeFn(false)),
+		g(1), t(1), f(1), pickRet(true)(1), pickRet(false)(1), callMaybe(maybeFn(true)), callMaybe(maybeFn(false)), reassigned(1),
 	];
 	let line = "";
 	for (const v of got) line = line + v.toString() + " ";
-	if (line == "2 3 2 3 2 3 2 3 3 2 3 3 -1 ") {
+	if (line == "2 3 2 3 2 3 2 3 3 2 3 3 -1 2 ") {
 		console.log("named-fn storage ok");
 	} else {
 		console.log("named-fn storage BAD: " + line);
