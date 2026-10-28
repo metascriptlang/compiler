@@ -10,7 +10,7 @@ import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charT
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
-import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
+import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement, collectOneStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
@@ -4236,15 +4236,20 @@ function appendDirectiveLines(lines: string, more: string): string {
 
 let _pendingSeedSymbols: NamedSymbol[] = [];
 let _pendingSeedExtensions: ExtensionMethod[] = [];
+let _pendingSeedDecls: Node[] = [];
 
-export function registerSeedSymbols(syms: NamedSymbol[], exts: ExtensionMethod[]): void {
+// `decls` are module-level declarations the seeding ctx declares again, in its own std: a seed symbol
+// keeps the types its declaring module resolved against its own std, whose classes are not this ctx's.
+export function registerSeedSymbols(syms: NamedSymbol[], exts: ExtensionMethod[], decls: Node[] = []): void {
 	_pendingSeedSymbols = syms;
 	_pendingSeedExtensions = exts;
+	_pendingSeedDecls = decls;
 }
 
 export function clearSeedSymbols(): void {
 	_pendingSeedSymbols = [];
 	_pendingSeedExtensions = [];
+	_pendingSeedDecls = [];
 }
 
 function drainSeedSymbols(ctx: CheckerContext): void {
@@ -4258,8 +4263,10 @@ function drainSeedSymbols(ctx: CheckerContext): void {
 	for (const ext of _pendingSeedExtensions) {
 		registerExtension(ctx.extensionRegistry, reexportExt(ext, ext.methodName, ext.sourcePath, ext.sym!, 0));
 	}
+	for (const decl of _pendingSeedDecls) collectOneStatement(ctx, decl);
 	_pendingSeedSymbols = [];
 	_pendingSeedExtensions = [];
+	_pendingSeedDecls = [];
 }
 
 // Single internal entry point for all checkProgram variants.
