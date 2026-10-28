@@ -68,6 +68,7 @@ import "./noinlinePragma";
 import "./trimLineDirective";
 import "./forOfCounterEmit";
 import "./finallyScaffoldEmit";
+import "./loweredCatchStdError";
 import "./computedGoto";
 import "./dispatcherMain";
 import "./moduleBindingTdz";

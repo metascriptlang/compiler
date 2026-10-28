@@ -2,7 +2,8 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
-import { makeSymbol, setFlag, hasFlag, SymbolFlag, lookupSymbol } from "../checker/symbol";
+import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
+import { stdSymbol } from "../checker/context";
 import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
@@ -595,7 +596,7 @@ export function makeCatchSym(ctx: TransformContext, name: string): Symbol {
 }
 
 export function makeOwningTryCatch(ctx: TransformContext, tryBody: Node, catchBody: Node, loc: SourceLocation): Node {
-	const errSym = ctx.checkerCtx != null ? lookupSymbol(ctx.checkerCtx.table, "Error") : null;
+	const errSym = ctx.checkerCtx != null ? stdSymbol(ctx.checkerCtx, "Error") : null;
 	if (errSym == null || errSym.symbolType == null) throw new Error("internal: a lowered catch found no Error type for the exception it owns");
 	const catchSym = makeCatchSym(ctx, "$e");
 	catchSym.symbolType = errSym.symbolType;
