@@ -138,12 +138,14 @@ struct msIoEngine {
 	struct msUring ring;
 	msIoRequest* freeList;
 	int freeCount;
+	int live;                 /* requests allocated and not yet freed: operations and watches outstanding */
 	int wakeFd;   /* eventfd for targeted cross-thread actor wake (Amendment B / I16); -1 = none */
 };
 
 /* ===== Request Pool ===== */
 
 static msIoRequest* allocRequest(msIoEngine* e) {
+	e->live++;
 	if (e->freeList != NULL) {
 		msIoRequest* r = e->freeList;
 		e->freeList = r->next;
@@ -155,10 +157,13 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
+	e->live--;
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
 }
+
+int msIoEngineLive(msIoEngine* e) { return e->live; }
 
 /* Arm a oneshot POLL_ADD on the wake eventfd so a write() to it from any thread breaks this
  * engine's io_uring_enter (Amendment B / I16). Re-armed by msIoEnginePoll after each wake. */
