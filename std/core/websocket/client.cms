@@ -52,7 +52,7 @@ extern function msCryptoRandomBytesRaw(size: number): string from "msCryptoRando
 
 import {
 	connect as netConnect, close as netClose, createSocket, setTimeout as netSetTimeout,
-	send as netSend, recv as netRecv, recvAsync, sendAsync,
+	send as netSend, recv as netRecv, recvTimedOut, recvAsync, sendAsync,
 } from "std/net";
 
 import {
@@ -67,7 +67,7 @@ import {
 
 import {
 	WsError, wsConnectionFailed, wsHandshakeFailed, wsProtocolError,
-	wsPayloadTooLarge, wsClosed, wsSocketError, wsInternalError,
+	wsPayloadTooLarge, wsClosed, wsTimeout, wsSocketError, wsInternalError,
 } from "./errors";
 
 import {
@@ -284,6 +284,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 
 		if (r.value.needMore) {
 			const chunk = netRecv(ws.fd, 16384);
+			if (chunk.length == 0 && recvTimedOut()) return Result.err(wsTimeout("receive timed out"));
 			if (chunk.length == 0) {
 				netClose(ws.fd);
 				ws.state = WsState.Closed;
