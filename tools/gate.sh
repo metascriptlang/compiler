@@ -753,6 +753,10 @@ stale_known_self_test() (
   out=$(run $'LOSSY b.ms: x\nLOSSY e.ms: x'); rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"new: e.ms"* ]] || { printf 'FAIL stale known: a new red beside a known-now-green exited %s\n' "$rc"; bad=1; }
   [ ! -e "$w/out/gate/known-red.pruned.json" ] || { printf 'FAIL stale known: a RED run left a pruned set for the land to commit\n'; bad=1; }
+  for f in red.all red new; do : >"$w/out/gate/fmt.$f"; chmod 444 "$w/out/gate/fmt.$f"; done
+  out=$(run ''); rc=$?
+  [ "$rc" -eq 1 ] || { printf 'FAIL lost write: a lane that exited 1 naming nothing, whose red files could not be written, exited %s:\n%s\n' "$rc" "$out"; bad=1; }
+  for f in red.all red new; do chmod 644 "$w/out/gate/fmt.$f"; done
   rm -rf "$d"
   return $bad
 )
@@ -2579,6 +2583,10 @@ for phase in "${PHASES[@]}"; do
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
   n_new=$(grep -c . "$OUT/$lane.new" | tr -d ' ')
+  if [ "$rc" -ne 0 ] && [ "$n_red" -eq 0 ] && [ ! -s "$OUT/$lane.flaky" ]; then
+    n_red=1; n_new=1
+    say "  new: $lane: exit $rc with no named failure, and its red file could not be written"
+  fi
   n_fixed=$(grep -c . "$OUT/$lane.fixed" | tr -d ' ')
   n_flaky=$(grep -c . "$OUT/$lane.flaky" | tr -d ' ')
   [ -z "$only_csv" ] || reused="$reused on $(printf '%s' "$only_csv" | tr ',' '\n' | grep -c . | tr -d ' ') program(s)${lanes_csv:+, lanes $lanes_csv}"
