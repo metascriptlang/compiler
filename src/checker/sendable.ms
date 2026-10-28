@@ -1952,10 +1952,23 @@ function isRefFree(t: Type | null): boolean {
 	return isDeepSendable(t == null ? null : peelSink(t), (SendLeaf.String | SendLeaf.Array | SendLeaf.Isolated) as int32, declaresNoHook);
 }
 
+// The parameter symbol holds the peeled type, so the `sink` mode is read from the enclosing function's signature.
+function isSinkParameter(ctx: CheckerContext, sym: Symbol): boolean {
+	const fn = ctx.currentFunction;
+	if (fn == null || fn.declNode == null || fn.symbolType == null) return false;
+	const decl = fn.declNode.kind == NodeKind.DecoratedDecl ? (fn.declNode.data as DecoratedDeclData).decoratedNode : fn.declNode;
+	const names = decl.kind == NodeKind.FunctionDecl ? (decl.data as FunctionDeclData).params : decl.kind == NodeKind.MethodDecl ? (decl.data as MethodDeclData).methodParams : [];
+	const at = names.indexOf(sym.name);
+	return at >= 0 && names.length == fn.symbolType.typeChildren.length && fn.symbolType.typeChildren[at].kind == TypeKind.Sink;
+}
+
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
 	if (!typeCarriesRef(sym.symbolType) || isRefFree(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	if (sym.symbolKind == SymbolKind.Parameter) {
-		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
+		const why = isSinkParameter(ctx, sym)
+			? "a sink parameter does not prove it is the only owner, because a call may pass a copy that still reaches the caller's value — take an Isolated<T> (std/isolation) and read its .value, or bind a fresh value locally and move that"
+			: "it is a parameter, so the caller still owns it — bind a fresh value locally and move that";
+		addError(ctx, "cannot move '" + sym.name + "': " + why + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
 	if (hasFlag(sym, SymbolFlag.Global)) {
