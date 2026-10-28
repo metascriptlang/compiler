@@ -23,7 +23,7 @@ import {
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	SwitchStmtData, SwitchCaseData, BreakStmtData, ContinueStmtData,
 	ExprStmtData, TryCatchStmtData, YieldExprData, BinaryExprData,
-	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
+	MethodDeclData, Type, TypeKind,
 	IdentifierData, NumberLiteralData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
@@ -1407,14 +1407,6 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 function walkGenerators(node: Node, ctx: TransformContext): void {
 	match (node.kind) {
-		NodeKind.Program => {
-			const d = node.data as ProgramData;
-			for (const s of d.programStmts) { walkGenerators(s, ctx); }
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { walkGenerators(s, ctx); }
-		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			if (isGenericFn(d.fnFlags)) return;
@@ -1435,14 +1427,6 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 				}
 			}
 		},
-		NodeKind.ExportDecl => {
-			const d = node.data as ExportDeclData;
-			walkGenerators(d.exportedDecl, ctx);
-		},
-		NodeKind.ClassDecl => {
-			const d = node.data as ClassDeclData;
-			for (const member of d.classBody) { walkGenerators(member, ctx); }
-		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			if (isGenericFn(d.methodFlags)) return;
@@ -1456,31 +1440,19 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 				d.methodFlags = "";
 			}
 		},
-		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			walkGenerators(d.decoratedNode, ctx);
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			walkGenerators(d.funcExprBody, ctx);
+			if (routineFlagSet(d.funcExprFlags).has(RoutineFlag.Generator)) {
+				d.funcExprBody = transformGeneratorFn(
+					d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
+					d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,
+				);
+				d.funcExprFlags = "";
+			}
 		},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			if (d.initializer != null) walkCheckFuncExpr(d.initializer, ctx);
-		},
-		_ => {},
+		_ => { forEachChild(node, (child: Node): void => { walkGenerators(child, ctx); }); },
 	};
-}
-
-// Check FunctionExpr for generator flag
-function walkCheckFuncExpr(node: Node, ctx: TransformContext): void {
-	if (node.kind == NodeKind.FunctionExpr) {
-		const d = node.data as FunctionExprData;
-		walkGenerators(d.funcExprBody, ctx);
-		if (routineFlagSet(d.funcExprFlags).has(RoutineFlag.Generator)) {
-			d.funcExprBody = transformGeneratorFn(
-				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
-				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,
-			);
-			d.funcExprFlags = "";
-		}
-	}
 }
 
 // ===== Main Entry Point =====
