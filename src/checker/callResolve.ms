@@ -2238,6 +2238,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// infer from, the unbound-T gate must stay loud.
 			if (_isGenericCall && hasGenericParams(paramExpected)) {
 				const nonEmptyArrayLit = d.arguments[ai].kind == NodeKind.ArrayLiteral
+		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 					&& (d.arguments[ai].data as ArrayLiteralData).elements.length > 0;
 				const nonEmptyObjectLit = d.arguments[ai].kind == NodeKind.ObjectLiteral
 					&& (d.arguments[ai].data as ObjectLiteralData).properties.length > 0;
@@ -2246,7 +2247,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 			}
 		}
-		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
@@ -4931,7 +4931,10 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	let idx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 	const contextFormals: Type[] = [];
-	for (const c of candidates) contextFormals.push(boundByExpectedReturn(c, expectedType));
+	for (let ci = 0; ci < candidates.length; ci += 1) {
+		const extSym = exts[ci].sym;
+		contextFormals.push(extSym != null ? winnerFormals(ctx, callNode, extSym, candidates[ci], args, argTypes, skipMask, expectedType).checked : candidates[ci]);
+	}
 	let settled = false;
 	if (idx != -1 && skipMask.includes(true)) {
 		const typedPer: Type[][] = [];
@@ -5084,12 +5087,6 @@ function withBodyReturn(arg: Node, typed: Type): Type {
 
 function allScored(skipMask: boolean[]): boolean[] {
 	return skipMask.map((s) => false);
-}
-
-function boundByExpectedReturn(candidate: Type, expectedType: Type | null): Type {
-	if (candidate.kind != TypeKind.Function || !hasGenericParams(candidate)) return candidate;
-	const bindings = bindFromExpectedReturn(candidate, expectedType);
-	return bindings.names.length > 0 ? substituteBound(candidate, bindings) : candidate;
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
