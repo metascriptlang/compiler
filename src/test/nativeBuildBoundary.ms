@@ -1386,13 +1386,23 @@ function runUnionCodecCast(): void {
 		"\t};",
 		"\treturn v;",
 		"}",
+		"function anon(n: int32): Click | Key {",
+		"\tif (n > 0) return { kind: Kind.Click, x: n };",
+		"\treturn { kind: Kind.Key, code: n };",
+		"}",
+		"function viaReturn(n: int32): Event { return anon(n); }",
+		"function viaParam(e: Event): int32 { return e.kind == Kind.Key ? 1 : 0; }",
+		"const fromCall: Event = anon(-1);",
+		"const pushed: Event[] = [];",
+		"pushed.push(anon(1));",
+		"console.log(`${fromCall.kind == Kind.Key} ${viaReturn(1).kind == Kind.Click} ${viaParam(anon(-1))} ${pushed.length}`);",
 		"const e = JSON.parse<Event>(JSON.stringify(pick(2)));",
 		"const s = JSON.parse<Shape>(`{\"shape\":\"square\",\"side\":3}`);",
 		"console.log(`${e.ok && e.value.kind == Kind.Key} ${s.ok && s.value.shape == \"square\"}`);",
 		"",
 	].join("\n"));
 	need(build(dir, "union-codec-cast", "probe", ["--passC=-Werror=incompatible-pointer-types"]) == 0, "union-codec-cast build under -Werror=incompatible-pointer-types");
-	record("a match and the JSON codec store into a declared union alias through its own struct", "true true", value(dir));
+	record("a match, the JSON codec and an anonymous union store into a declared union alias through its own struct", "true true 1 1\ntrue true", value(dir));
 }
 
 function moduleNamesTree(parent: string): string {

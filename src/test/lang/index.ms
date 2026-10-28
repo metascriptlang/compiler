@@ -54,6 +54,7 @@ import "./macroSourceForms";
 import "./matchDispatch";
 import "./nominalInstantiation";
 import "./matchIntoNamedUnion";
+import "./unionAliasCarrier";
 import "./nullable";
 import "./nullableInstantiation";
 import "./numericLiteralTypes";
