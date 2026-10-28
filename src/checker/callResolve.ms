@@ -18,7 +18,7 @@ import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, omittedFieldDefault } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, omittedFieldDefault, needsLiteralDefault } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -1761,7 +1761,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	refuseHiddenMethodCall(ctx, node);
 	refuseHookCall(ctx, node);
 	refuseSuspendingLockCallback(ctx, node);
-	return evalCompileTimeCall(ctx, node, foldTypeTrait(ctx, node, r));
+	return evalCompileTimeCall(ctx, node, foldDefaultOf(ctx, node, foldTypeTrait(ctx, node, r)));
 }
 
 function settleUnassignedArgs(ctx: CheckerContext, from: int32): void {
@@ -1787,7 +1787,34 @@ export function typeTraitOf(node: Node): Symbol | null {
 	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
 	if (sym == null) return null;
 	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray"
-		|| sym.builtinKind == "IsObject" || sym.builtinKind == "IsPlainObject" ? sym : null;
+		|| sym.builtinKind == "IsObject" || sym.builtinKind == "IsPlainObject" || sym.builtinKind == "HasLiteralDefault" ? sym : null;
+}
+
+function foldDefaultOf(ctx: CheckerContext, node: Node, callType: Type): Type {
+	if (node.kind != NodeKind.CallExpr) return callType;
+	const d = node.data as CallExprData;
+	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
+	if (sym == null || sym.builtinKind != "DefaultOf") return callType;
+	const typeArg = findCallTypeArg(node);
+	if (typeArg == "" || d.arguments.length > 0) {
+		addError(ctx, "'defaultOf' asks a type and takes no value: write defaultOf<T>()", node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	const asked = resolveAnnotation(typeArg, ctx, node.location.line, node.location.column);
+	if (asked.kind == TypeKind.GenericParam || hasGenericParams(asked)) return callType;
+	const value = omittedFieldDefault(ctx, asked, node.location);
+	if (value == null) {
+		addError(ctx, `'defaultOf<${typeArg}>' is refused: the default of '${typeArg}' is its zero, which hasLiteralDefault<${typeArg}>() reports`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	node.kind = value.kind;
+	node.data = value.data;
+	node.flags = value.flags;
+	node.resolvedSym = value.resolvedSym;
+	node.nodeType = value.nodeType;
+	return node.nodeType!;
 }
 
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
@@ -1809,6 +1836,7 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		: trait.builtinKind == "IsArray" ? isArrayType(asked)
 		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
 		: trait.builtinKind == "IsPlainObject" ? isPlainObjectType(asked)
+		: trait.builtinKind == "HasLiteralDefault" ? needsLiteralDefault(asked, [])
 		: needsValueCopy(asked);
 	node.kind = NodeKind.BooleanLiteral;
 	node.data = { boolValue: answer } as BooleanLiteralData;

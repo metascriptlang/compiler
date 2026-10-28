@@ -1,4 +1,4 @@
-export { toString, msFilledArray } from "./shared";
+export { toString, msFilledArray, msFilledSized } from "./shared";
 import { spliceStart, spliceCount } from "./shared";
 import { isArray as isArrayType } from "std/typetraits";
 

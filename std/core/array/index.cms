@@ -20,8 +20,8 @@ export class Array<T> {
 	length: number;
 }
 
-export { toString, msFilledArray } from "./shared";
-import { isArray as isArrayType } from "std/typetraits";
+export { toString, msFilledArray, msFilledSized } from "./shared";
+import { isArray as isArrayType, hasLiteralDefault, defaultOf } from "std/typetraits";
 import { spliceStart, spliceCount } from "./shared";
 import { utf8String } from "../string/bytes";
 
@@ -270,7 +270,11 @@ export function setLength<T>(this arr: T[], newLen: number): void {
 		arr.shrink(n as int64);
 	} else {
 		if (n > 2147483647) raiseRange(n as int64, 0, 2147483647);
+		const from = arr.length;
 		arr.length = n as int32;
+		when (hasLiteralDefault<T>()) {
+			for (let i = from; i < n; i += 1) arr[i as int32] = defaultOf<T>();
+		}
 	}
 }
 
