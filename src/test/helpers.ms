@@ -463,14 +463,14 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const ctx = units[ui].ctx;
 		const monoed = monoed_programs[ui];
 		validateTypedAST(ctx, monoed);
-		if (hasErrors(ctx)) {
-			ctx.errors = [];
-		}
+		if (hasErrors(ctx)) return stageErrorMessage("validate", modPath, ctx);
 
 		const transformed = transformProgram(monoed, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
+		if (hasErrors(ctx)) return stageErrorMessage("transform", modPath, ctx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
+		if (hasErrors(ctx)) return stageErrorMessage("analyze", modPath, ctx);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
@@ -502,8 +502,12 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 }
 
 function checkErrorMessage(unit: CheckedUnit): string {
-	let msg = `ERROR: check [${unit.path}]:`;
-	for (const err of unit.ctx.errors) {
+	return stageErrorMessage("check", unit.path, unit.ctx);
+}
+
+function stageErrorMessage(stage: string, path: string, ctx: CheckerContext): string {
+	let msg = `ERROR: ${stage} [${path}]:`;
+	for (const err of ctx.errors) {
 		msg = `${msg} ${err.message}`;
 	}
 	return msg;
@@ -621,14 +625,14 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		const ctx = units[ui].ctx;
 		const macroExpanded = monoed_programs[ui];
 		validateTypedAST(ctx, macroExpanded);
-		if (hasErrors(ctx)) {
-			ctx.errors = [];
-		}
+		if (hasErrors(ctx)) return stageErrorMessage("validate", modPath, ctx);
 
 		const transformed = transformProgram(macroExpanded, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
+		if (hasErrors(ctx)) return stageErrorMessage("transform", modPath, ctx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
+		if (hasErrors(ctx)) return stageErrorMessage("analyze", modPath, ctx);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
