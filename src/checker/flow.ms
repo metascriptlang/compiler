@@ -1516,7 +1516,7 @@ function constrainToDeclared(rhs: Type, declared: Type): Type {
 	for (const v of union.typeChildren) {
 		if (v == rhs) return rhs;
 		const rel = typeRelation(v, rhs);
-		if (rel != TypeRelation.None) return isReadonlyView(v) && !isReadonlyView(rhs) ? v : rhs;
+		if (rel != TypeRelation.None) return (isReadonlyView(v) && !isReadonlyView(rhs)) || rhs.kind == TypeKind.Function ? v : rhs;
 	}
 	return declared;
 }
