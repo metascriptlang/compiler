@@ -3557,6 +3557,7 @@ resetLiftedOps();
 
 	// Phase C: Codegen + compile each module
 	const emissionFacts = new CEmissionFacts();
+	emissionFacts.trimPaths = opts.trimpath;
 	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
 	const hcrStorage = createHcrStorageTable();
 	if (opts.isHcr) {
@@ -4178,6 +4179,7 @@ resetLiftedOps();
 	const fC = flowStart();
 	// Phase C: Codegen + compile each module (per-module .c cache)
 	const emissionFacts = new CEmissionFacts();
+	emissionFacts.trimPaths = opts.trimpath;
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;

@@ -25,6 +25,7 @@ import { writeStderr } from "std/io";
 import { CliOptions, CC_PREPARED, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
+import { cacheRoot } from "./package/cache";
 import { managedZigCompiler } from "./toolchain";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 
@@ -718,6 +719,10 @@ export function cliCompileFlags(opts: CliOptions): string {
 	flags = appendFlag(flags, ltoFlags(opts.lto, getCompilerName(opts.ccCompiler, opts.ccBinary)));
 	if (opts.isHcr || opts.appMode == "lib" || opts.appMode == "staticlib") flags = appendFlag(flags, "-fPIC");
 	if (opts.isHcr && !isGnuGcc(getCompilerName(opts.ccCompiler, opts.ccBinary))) flags = appendFlag(flags, "-fdebug-compilation-dir=.");
+	if (opts.trimpath) {
+		const packages = cacheRoot();
+		for (const f of trimPrefixMapFlags(getCompilerName(opts.ccCompiler, opts.ccBinary), opts.projectRoot, resolveRuntimeDir(), packages != "" ? `${packages}/extracted` : "")) flags = appendFlag(flags, f);
+	}
 	flags = appendFlag(flags, opts.passC);
 	return flags;
 }
@@ -1191,7 +1196,13 @@ export function objectCompileKey(ccOption: number, ccBinary: string, isCpp: bool
 export function objectCompileArgsKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
 	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
 	if (!parts.ok) return `unresolved ${parts.error.message} ${extraFlags}`;
-	return `${withoutIncludeDirs(parts.value.lead).join(" ")} | ${withoutIncludeDirs(parts.value.trail).join(" ")}`;
+	return `${keyedArgs(parts.value.lead).join(" ")} | ${keyedArgs(parts.value.trail).join(" ")}`;
+}
+
+const PREFIX_MAP = "-ffile-prefix-map=";
+
+function keyedArgs(args: string[]): string[] {
+	return withoutIncludeDirs(args).map((arg: string): string => arg.startsWith(PREFIX_MAP) ? `${PREFIX_MAP}${arg.slice(arg.lastIndexOf("=") + 1, arg.length)}` : arg);
 }
 
 const INCLUDE_DIR_KINDS: string[] = ["-iquote", "-isystem", "-idirafter", "-I"];
@@ -1832,6 +1843,14 @@ test "trim mode maps the project root before the support and package roots, whic
 	}
 	assert trimPrefixMapFlags("clang", "/work/my app", "", "")[0] == "\"-ffile-prefix-map=/work/my app=.\"";
 	assert trimPrefixMapFlags("clang", "", "/opt/msc", "").length == 1;
+}
+
+test "an object key names a trimmed root by its token, so two checkouts of one tree share it" {
+	const a = keyedArgs(["-O2", "-I/work/a/runtime", "-ffile-prefix-map=/work/a=.", "-ffile-prefix-map=/opt/msc-1=msc"]);
+	const b = keyedArgs(["-O2", "-I/work/b/runtime", "-ffile-prefix-map=/work/b=.", "-ffile-prefix-map=/opt/msc-2=msc"]);
+	assert a.join(" ") == "-O2 -ffile-prefix-map=. -ffile-prefix-map=msc";
+	assert a.join(" ") == b.join(" ");
+	assert keyedArgs(["-ffile-prefix-map=/work/a=pkg"]).join(" ") != keyedArgs(["-ffile-prefix-map=/work/a=."]).join(" ");
 }
 
 test "trim mode adds no flag for a compiler that may not take it" {
