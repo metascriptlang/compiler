@@ -241,7 +241,11 @@ function isReprCast(node: Node, dctx: DrcContext): boolean {
 }
 
 function readsCheckedLocation(node: Node, dctx: DrcContext): boolean {
-	return node.nodeType != null && isRuntimeProcCall(skipConversionWrappers(node), "msMaybeGet") && sinkClassify(node.nodeType, dctx).needsCleanup;
+	return node.nodeType != null && readsMemberInPlace(skipConversionWrappers(node)) && sinkClassify(node.nodeType, dctx).needsCleanup;
+}
+
+function readsMemberInPlace(node: Node): boolean {
+	return isRuntimeProcCall(node, "msMaybeGet") || isRuntimeProcCall(node, "msUnionRead") || isRuntimeProcCall(node, "msUnionReadMaybe");
 }
 
 function rhsMode(rhs: Node): DrcMode {
@@ -318,7 +322,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
 	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
-	if (isViewCall(node) || node.flags.has(NodeFlag.Closure) || isRuntimeProcCall(node, "msMaybeGet")) return node;
+	if (isViewCall(node) || node.flags.has(NodeFlag.Closure) || readsMemberInPlace(node)) return node;
 	const exprType = node.nodeType;
 	if (exprType == null) return node;
 	// Inside a non-RC binding/condition walk (skipAwaitableCapture), never capture a future:
@@ -2575,14 +2579,14 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Covers: return d.className (string field from union variant extraction),
 		//         return state.tokens[pos] (struct with string field),
 		//         return _globalArray (module-level variable), etc.
-		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr || isRuntimeProcCall(d.argument, "msMaybeGet")) {
+		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr || readsMemberInPlace(d.argument)) {
 			const retRc = sinkClassify(d.argument.nodeType, dctx);
 			if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
 		}
 		const convCore = skipConversionWrappers(d.argument);
-		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess || isRuntimeProcCall(convCore, "msMaybeGet"))) {
+		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess || readsMemberInPlace(convCore))) {
 			const convRc = sinkClassify(d.argument.nodeType, dctx);
 			if (convRc.needsCleanup && convRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
