@@ -1,14 +1,16 @@
 // @stdout: reads: 4 completed
 // @stdout: stolen: yes
+// @stdout: polls while idle after the reads: 0
 // @exit: 0
 // @serial
 // @skip-js: the io engine is C backend only
 // @skip-raiser
-// note: an actor visit a pool worker stole registers its recvAsync on that worker's io engine, so the worker polls the engine between tasks and while parked (old runtime with the steal wake: one of four reads never completed, 20 of 20 runs timed out)
+// note: an actor visit a pool worker stole registers its recvAsync on that worker's io engine, so the worker polls the engine between tasks and while parked; once its reads are done the engine holds nothing and the worker parks without waking (old runtime with the steal wake: one of four reads never completed, 20 of 20 runs timed out)
 
 import { createSocket, bind, listen, accept, connect, send, close, recvAsync, msIoRunOnce } from "std/net";
 @include("runtime/actor/actor.h");
 extern function msActorStolenVisits(): int64;
+extern function msWorkerEnginePolls(): int64;
 
 actor Reader {
 	read(fd: int32): string { return await recvAsync(fd, 4096); }
@@ -59,3 +61,10 @@ const start = Date.now();
 while (done < N && Date.now() - start < 10000) msIoRunOnce(5);
 console.log(`reads: ${done} completed`);
 console.log(`stolen: ${msActorStolenVisits() > 0 ? "yes" : "no"}`);
+function pause(ms: number): Promise<void> {
+	return new Promise<void>((res) => setTimeout(() => res(), ms));
+}
+await pause(100);
+const polls = msWorkerEnginePolls();
+await pause(400);
+console.log(`polls while idle after the reads: ${msWorkerEnginePolls() - polls}`);
