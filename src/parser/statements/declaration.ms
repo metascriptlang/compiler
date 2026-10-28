@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
@@ -1286,6 +1286,13 @@ function parseClassMember(state: ParserState): NodeResult {
 	const memberIsAbstract = current(state).kind == TokenKind.Abstract;
 	if (memberIsAbstract) advance(state);
 
+	const modifier = current(state);
+	const afterModifier = peek(state, 1);
+	const memberIsOverride = modifier.kind == TokenKind.Ident && modifier.value == "override"
+		&& afterModifier.line == modifier.line
+		&& (isPropertyName(afterModifier) || afterModifier.kind == TokenKind.Star);
+	if (memberIsOverride) advance(state);
+
 	const accessorToken = current(state);
 	const autoAccessor = accessorToken.kind == TokenKind.Ident && accessorToken.value == "accessor"
 		&& isPropertyName(peek(state, 1)) && peek(state, 1).line == accessorToken.line;
@@ -1317,8 +1324,15 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
+	if (memberIsOverride) memberFlags = memberFlags == "" ? "override" : memberFlags + "|override";
+
 	// Constructor — early return, own scope for try
 	if (current(state).kind == TokenKind.Constructor) {
+		if (memberIsOverride) {
+			return Result.err(
+				`A constructor cannot have an 'override' modifier at line ${modifier.line}`,
+			);
+		}
 		return parseClassConstructor(state, memberVisibility);
 	}
 
@@ -1356,6 +1370,13 @@ function parseClassMember(state: ParserState): NodeResult {
 		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
 		if (memberIsAbstract) method.flags = method.flags.incl(NodeFlag.Abstract);
 		return Result.ok(method);
+	}
+
+	if (memberIsOverride) {
+		return Result.err(
+			`Property '${nameToken.value}' at line ${nameToken.line}: ` +
+			"'override' is only supported on methods",
+		);
 	}
 
 	// Property — capture type and optional initializer
@@ -2561,6 +2582,48 @@ test "arrow destr param" { assert programOk("const f = ({x}) => x;"); }
 test "property" { assert programOk("class Foo { name: string; }"); }
 
 test "method" { assert programOk("class Foo { greet() { return 1; } }"); }
+
+function parsedMethod(source: string, index: int32 = 0): MethodDeclData {
+	if (!programOk(source)) throw new Error("Invalid method fixture: " + source);
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	return cls.classBody[index].data as MethodDeclData;
+}
+
+test "override modifier reaches the existing method flags on instance and static methods" {
+	assert parsedMethod("class C { override m(): void {} }").methodFlags == "override";
+	const method = parsedMethod("class C { static override m(): void {} }");
+	assert method.methodFlags == "override" && method.methodIsStatic;
+}
+
+test "override modifier preserves async and generator flag segments" {
+	assert parsedMethod("class C { override async m() {} }").methodFlags == "async|override";
+	assert parsedMethod("class C { override *m() {} }").methodFlags == "generator|override";
+	assert parsedMethod("class C { override async *m() {} }").methodFlags ==
+		"async_generator|override";
+}
+
+test "override remains a contextual method and property name" {
+	const method = parsedMethod("class C { override(): void {} }");
+	assert method.methodName == "override" && method.methodFlags == "";
+	const generic = parsedMethod("class C { override<T>(x: T): T { return x; } }");
+	assert generic.methodName == "override" && !generic.methodFlags.contains("override");
+	const cls = stmtAt("class C { override: string = \"field\"; }", 0).data as ClassDeclData;
+	assert (cls.classBody[0].data as PropertyDeclData).propName == "override";
+}
+
+test "override does not become a modifier across a line break" {
+	const source = "class C { override\nm(): void {} }";
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	assert cls.classBody[0].kind == NodeKind.PropertyDecl;
+	assert parsedMethod(source, 1).methodFlags == "";
+}
+
+test "override is refused where its assertion cannot be represented" {
+	assert !programOk("class C { override p: string = \"field\"; }");
+	assert !programOk("class C { override get p(): string { return \"field\"; } }");
+	assert !programOk("class C { override set p(value: string) {} }");
+	assert !programOk("class C { override constructor() {} }");
+}
 
 test "constructor" { assert programOk("class Foo { constructor(x: number) { this.x = x; } }"); }
 // Modifiers — each tests a distinct parser path
