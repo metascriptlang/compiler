@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, HiddenStdConvData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams, closureIntoCPointerReason } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym } from "./context";
+import { CheckerContext, isEngineCheckMode, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, isLiteralSet, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind, isOwnedRef, withoutOwned, createOwned } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -3081,10 +3081,6 @@ function objectMemberConversion(read: Node, declared: Type, target: Type, holder
 	return conv;
 }
 
-export function isLiteralSet(t: Type | null): boolean {
-	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral || literalUnionBase(t) != null);
-}
-
 function assertionPayload(t: Type): Type {
 	if (isMaybeType(t) && t.typeReturn != null) return t.typeReturn;
 	const held = unwrapRefNullUnion(t);
@@ -3224,6 +3220,70 @@ function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null 
 	return classUpcast(expr, source == exprType ? target : formal);
 }
 
+function owningEdge(t: Type): Type | null {
+	const held = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	return held != null && held.kind == TypeKind.Ref ? held : null;
+}
+
+export function isFreshOwnable(n: Node): boolean {
+	return match (n.kind) {
+		NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.NullLiteral => true,
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => isFreshOwnable((n.data as HiddenStdConvData).convExpr),
+		NodeKind.ConditionalExpr => isFreshOwnable((n.data as ConditionalExprData).ternaryConsequent) && isFreshOwnable((n.data as ConditionalExprData).ternaryAlternate),
+		_ => false,
+	};
+}
+
+function isFreshConst(n: Node, t: Type): boolean {
+	return n.kind == NodeKind.Identifier && t.kind == TypeKind.Ref && n.resolvedSym != null && hasFlag(n.resolvedSym, SymbolFlag.FreshInit);
+}
+
+function refusesUnownedIntoOwned(expr: Node, formal: Type, exprType: Type): boolean {
+	const slot = owningEdge(formal);
+	const held = owningEdge(exprType);
+	return !isEngineCheckMode() && slot != null && isOwnedRef(slot) && held != null && !isOwnedRef(held) && !isFreshOwnable(expr) && !isFreshConst(expr, exprType);
+}
+
+export function refuseOwnedCast(ctx: CheckerContext, expr: Node, target: Type, exprType: Type, line: int32, column: int32): boolean {
+	const slot = owningEdge(target);
+	if (isEngineCheckMode() || slot == null || !isOwnedRef(slot) || isOwnedRef(owningEdge(exprType)) || isFreshOwnable(expr) || isFreshConst(expr, exprType)) return false;
+	addError(ctx, "cannot cast " + typeDisplayName(exprType) + " to " + typeDisplayName(target) + " — an owned slot takes the unique owning edge, so a cast makes one only from a fresh value (new, an object literal, null) or an Owned value", line, column);
+	return true;
+}
+
+export function fitOwnership(ctx: CheckerContext, expr: Node, formal: Type, exprType: Type): Type | null {
+	if (refusesUnownedIntoOwned(expr, formal, exprType)) {
+		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — an owned slot takes the unique owning edge, so it accepts a fresh value (new, an object literal, null) or an Owned value", expr.location.line, expr.location.column);
+		return null;
+	}
+	if (isFreshConst(expr, exprType) && isOwnedRef(owningEdge(formal)) && !isOwnedRef(exprType)) {
+		expr.nodeType = createOwned(exprType);
+		return expr.nodeType;
+	}
+	const released = releasedOwnedEdge(formal, exprType);
+	if (released != exprType) releaseOwned(expr);
+	return released;
+}
+
+function releaseOwned(expr: Node): void {
+	if (expr.nodeType != null) expr.nodeType = withoutOwned(expr.nodeType);
+	match (expr.kind) {
+		NodeKind.TypeAssertion => { releaseOwned((expr.data as TypeAssertionData).asExpr); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { releaseOwned((expr.data as HiddenStdConvData).convExpr); },
+		NodeKind.ConditionalExpr => {
+			releaseOwned((expr.data as ConditionalExprData).ternaryConsequent);
+			releaseOwned((expr.data as ConditionalExprData).ternaryAlternate);
+		},
+		_ => {},
+	};
+}
+
+function releasedOwnedEdge(formal: Type, exprType: Type): Type {
+	const slot = owningEdge(formal);
+	const held = owningEdge(exprType);
+	return slot != null && !isOwnedRef(slot) && held != null && isOwnedRef(held) ? withoutOwned(exprType) : exprType;
+}
+
 export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, target: Type | null, line: int32, column: int32): void {
 	addError(ctx, "Type '" + typeDisplayName(source) + "' is not assignable to type '" + typeDisplayName(target) + "' — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
 }
@@ -3291,6 +3351,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledFormal = peelTransparentInstance(formal);
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
+	if (isEngineCheckMode() && isOwnedElementArray(formal)) return fitSlot(ctx, expr, createArray(withoutOwned(formal.typeReturn!)), exprType);
+	if (isEngineCheckMode() && formal.kind == TypeKind.Array && exprType.kind == TypeKind.Ref && exprType.typeReturn != null && exprType.typeReturn.kind == TypeKind.Array) return fitSlot(ctx, expr, formal, exprType.typeReturn);
+	if (isEngineCheckMode() && isOwnedElementArray(exprType)) return fitSlot(ctx, expr, formal, createArray(withoutOwned(exprType.typeReturn!)));
+	if (isEngineCheckMode() && exprType.kind == TypeKind.Array && formal.kind == TypeKind.Ref && formal.typeReturn != null && formal.typeReturn.kind == TypeKind.Array) return fitSlot(ctx, expr, formal.typeReturn, exprType);
 	const stored = storedTypeOfNullRead(expr, exprType, formal);
 	if (stored != exprType) return fitSlot(ctx, expr, formal, stored);
 	if (!holdsNumberLiteral(formal) && widenNumberLiteralType(exprType) != exprType) {
@@ -3298,6 +3362,9 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		return fitSlot(ctx, read, formal, read.nodeType);
 	}
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
+	const owned = fitOwnership(ctx, expr, formal, exprType);
+	if (owned == null) return expr;
+	if (owned != exprType) return fitSlot(ctx, expr, formal, owned);
 	const sendable = fitSendable(ctx, expr, formal, exprType);
 	if (sendable == null) return expr;
 	if (sendable != exprType) return fitSlot(ctx, expr, formal, sendable);
@@ -3462,7 +3529,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — a struct value is never copied into a new Ref implicitly; build one from a literal: '{ ...value }'", expr.location.line, expr.location.column);
 		return expr;
 	}
-	if (isReinterpretUnsafe(exprType, formal)) {
+	if (!isEngineCheckMode() && isReinterpretUnsafe(exprType, formal)) {
 		const order = unionOrderHint(exprType, formal);
 		if (order != "") {
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + order, expr.location.line, expr.location.column);
@@ -3858,4 +3925,8 @@ test "an as into a literal union is checked only when the source can hold a valu
 	assert !assertionNarrows(createNumberLiteral("2", int32Type()), narrowN);
 	assert !assertionNarrows(createMaybeType(narrow), createMaybeType(wide));
 	assert assertionNarrows(createMaybeType(wide), createMaybeType(narrow));
+}
+
+function isOwnedElementArray(t: Type): boolean {
+	return t.kind == TypeKind.Array && isOwnedRef(t.typeReturn);
 }

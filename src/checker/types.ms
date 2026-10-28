@@ -87,6 +87,10 @@ export function literalUnionBase(t: Readonly<Type | null>): Readonly<Type | null
 	return literalMemberBase(t.typeChildren[t.typeChildren.length - 1]);
 }
 
+export function isLiteralSet(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral || literalUnionBase(t) != null);
+}
+
 function literalMemberBase(child: Readonly<Type | null>): Readonly<Type | null> {
 	if (child == null) return null;
 	if (child.kind == TypeKind.StringLiteral) return STRING_TYPE_VIEW;
@@ -1677,6 +1681,62 @@ export function createArc(inner: Type | null): Type {
 	return t;
 }
 
+export function createOwned(ref: Type): Type {
+	if (isOwnedRef(ref)) return ref;
+	if (ref.ownedType != null) return ref.ownedType;
+	const c = copyTypeShallow(ref);
+	c.typeFlags = c.typeFlags.incl(TypeFlag.IsOwned);
+	c.plainType = ref;
+	ref.ownedType = c;
+	return c;
+}
+
+export function isOwnedRef(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsOwned);
+}
+
+export function isSinkTypeForParam(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	return t.kind == TypeKind.Sink || isOwnedRef(t) || (t.kind == TypeKind.Union && isOwnedRef(unwrapRefNullUnion(t)));
+}
+
+export function withoutOwned(t: Type): Type {
+	if (t.plainType != null) return t.plainType;
+	if (t.kind == TypeKind.Ref && isOwnedRef(t)) {
+		const c = copyTypeShallow(t);
+		c.typeFlags = c.typeFlags.excl(TypeFlag.IsOwned);
+		c.ownedType = t;
+		t.plainType = c;
+		return c;
+	}
+	if (t.kind == TypeKind.Union && unwrapRefNullUnion(t) != null && t.typeChildren.some((m) => isOwnedRef(m))) {
+		const c = copyTypeShallow(t);
+		c.typeChildren = t.typeChildren.map((m) => withoutOwned(m));
+		t.plainType = c;
+		return c;
+	}
+	return t;
+}
+
+export function ownedEdgeOf(t: Type | null, depth: int32 = 0): Type | null {
+	if (t == null || depth > 8) return null;
+	if (isOwnedRef(t)) return t;
+	return match (t.kind) {
+		TypeKind.Union => ownedEdgeOf(unwrapRefNullUnion(t), depth + 1),
+		TypeKind.Array | TypeKind.SizedArray => ownedEdgeOf(t.typeReturn, depth + 1),
+		TypeKind.Struct | TypeKind.Tuple => firstOwnedEdge(t.typeChildren, depth),
+		_ => null,
+	};
+}
+
+function firstOwnedEdge(parts: Type[], depth: int32): Type | null {
+	for (const part of parts) {
+		const edge = ownedEdgeOf(part, depth + 1);
+		if (edge != null) return edge;
+	}
+	return null;
+}
+
 export function isAtomicRef(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsAtomic);
 }
@@ -1898,7 +1958,8 @@ export function refSubstInner(t: Readonly<Type>): Readonly<Type | null> {
 export function rebuildRefLike(t: Type, inner: Type | null): Type {
 	if (isLockedRef(t)) return createLocked(inner);
 	if (isAtomicRef(t)) return createArc(inner);
-	return createRef(inner);
+	const plain = createRef(inner);
+	return isOwnedRef(t) ? createOwned(plain) : plain;
 }
 
 // The annotation spelling that re-resolves to this Ref class, or "" for a plain
@@ -1908,6 +1969,7 @@ export function rebuildRefLike(t: Type, inner: Type | null): Type {
 export function refWrapperName(t: Readonly<Type>): string {
 	if (isLockedRef(t)) return "Locked";
 	if (isAtomicRef(t)) return "Arc";
+	if (isOwnedRef(t)) return "Owned";
 	return "";
 }
 
@@ -5390,6 +5452,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// Locked<T> is a Ref onto the generated cell struct, so typeNameOf would
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayNameInner(lockedPayloadType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
+	if (!shown.has(TypeFlag.IsOwned) && isOwnedRef(t)) return "Owned<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsOwned), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsReadonly) && isReadonlyView(t)) return "Readonly<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsReadonly), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsSendable) && isSendableFunction(t)) return "Sendable<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsSendable), open, shapes) + ">";
 	if (isIterator(t)) return "Iterator<" + typeDisplayNameInner(getIteratorYieldType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";

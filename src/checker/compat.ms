@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -947,7 +947,13 @@ export function runtimeParams(fn: Type): Type[] {
 }
 
 export function sinkModeDiffers(a: Type, b: Type): boolean {
-	return (a.kind == TypeKind.Sink) != (b.kind == TypeKind.Sink);
+	return takesOwnership(a) != takesOwnership(b);
+}
+
+function takesOwnership(t: Type): boolean {
+	if (t.kind == TypeKind.Sink) return true;
+	const held = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	return held != null && isOwnedRef(held);
 }
 
 // Function assignability: contravariant params, covariant return

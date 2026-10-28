@@ -92,6 +92,7 @@ export enum TypeFlag {
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
+	IsOwned,              // Owned<T> on a class Ref: the unique owning edge, so a cycle needs a non-owned edge and a copy of it is refused
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -158,6 +159,8 @@ export class Type {
 	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
+	ownedType: Type | null;
+	plainType: Type | null;
 	optionalFields: string[] | null; // Struct: the fields written `name?`, own and inherited
 }
 
@@ -246,6 +249,7 @@ export enum SymbolFlag {
 	CompilerProc, // a routine a synthesized call names: a @compilerFunc declaration or a generated runtime proc (reference: sfCompilerProc)
 	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
+	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 }
 
 // ===== Symbol =====
