@@ -22,6 +22,25 @@ run();
 	}
 }
 
+test "a const typed by an alias of a value struct is const to its last field" {
+	const head = "struct P { x: int32; }\nstruct Outer { inner: P; }\nstruct Box<T> { v: T; }\ntype PKey = P;\ntype Q = PKey;\ntype OKey = Outer;\ntype PI = Box<int32>;\n";
+	const refused = [
+		"const a: PKey = { x: 1 }; a.x = 2;",
+		"const a: Q = { x: 1 }; a.x = 2;",
+		"const a: OKey = { inner: { x: 1 } }; a.inner.x = 2;",
+		"const a: PI = { v: 1 }; a.v = 2;",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/aliasConst.ms", entrySource: source }], "test/aliasConst.ms");
+		assert !c.ok && c.error.contains("is const (use 'let')"), body;
+		assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+	}
+	const legal = head + "function run(): void { let a: PKey = { x: 1 }; a.x = 2; let o: OKey = { inner: { x: 1 } }; o.inner.x = 3; } run();";
+	assert compileToCWithStd(legal).ok, "a let of an alias stays writable";
+}
+
 test "a mutating array method writes the value storage of its receiver" {
 	const head = "struct Bag { items: Vec<int32>; shared: int32[]; }\nclass Box { items: Vec<int32> = []; }\ntype Loose = { items: Vec<int32> };\n";
 	const refused = [

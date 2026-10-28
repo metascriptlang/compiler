@@ -10,7 +10,7 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isStringLike } from "./types";
+import { isReadonlyView, isAtomicRef, isStringLike, peelThrough, PEEL_ALIAS } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -98,6 +98,10 @@ function peelAddressableConv(n: Node | null): Node | null {
 	return n;
 }
 
+function aliasless(t: Type | null): Type | null {
+	return t == null ? null : peelThrough(t, PEEL_ALIAS);
+}
+
 export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	const borrowed = borrowRoot(target);
 	if (borrowed != null) return { verdict: WriteVerdict.BorrowView, root: borrowed };
@@ -115,9 +119,9 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) base = sliceSource((cur.data as ArrayAccessData).array);
 		base = peelAddressableConv(base);
-		if (base == null || !isValueAggregateParam(base.nodeType)) return { verdict: WriteVerdict.Writable, root: null };
+		if (base == null || !isValueAggregateParam(aliasless(base.nodeType))) return { verdict: WriteVerdict.Writable, root: null };
 		interior = true;
-		if (!isDeclaredValueStorage(base.nodeType)) deep = false;
+		if (!isDeclaredValueStorage(aliasless(base.nodeType))) deep = false;
 		cur = base;
 	}
 	const sym = cur.resolvedSym;
