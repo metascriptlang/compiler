@@ -2,12 +2,13 @@
 
 @include("runtime/fs/header.h");
 
-import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { IoError, ioErrorFromErrno, readFailed, writeFailed } from "../io/errors";
 import { utf8Text } from "../core/string/bytes";
 import { utf8Text } from "../core/string/bytes";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
+extern function msFsReadRange(path: string, offset: int64, length: int64): string;
 // Parked: readdir returns NULL at the end, and `Ptr<Dirent> | null` does not build yet
 // (inbox 2026-10-22-nullable-ptr-to-extern-tag-struct-emits-a-field-copy-hook.md).
 extern function msFsReadDirEntries(path: string): string;
@@ -550,6 +551,14 @@ export function readFile(path: string): Result<string, IoError> {
 
 export function readFileBytes(path: string): Result<Buffer, IoError> {
 	const raw = try readRaw(path);
+	return Result.ok(Buffer.fromString(raw, "utf8"));
+}
+
+export function readFileRange(path: string, offset: number, length: number): Result<Buffer, IoError> {
+	if (offset < 0 || length < 0) return Result.err(readFailed(path, "negative offset or length"));
+	const raw = msFsReadRange(path, offset as int64, length as int64);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(Buffer.fromString(raw, "utf8"));
 }
 
