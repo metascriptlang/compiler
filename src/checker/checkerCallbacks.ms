@@ -2,7 +2,7 @@
 // Same pattern as parser/statements/callbacks.ms.
 
 import { Node, Type, Symbol } from "../ast/node";
-import { CheckerContext } from "./context";
+import { CheckerContext, isEngineCheckMode } from "./context";
 import { SourceLocation } from "../ast/node";
 
 type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null) => void;
@@ -245,4 +245,16 @@ export function callGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiv
 
 export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
 	genericTypeHookFn = fn;
+}
+
+let _boundModuleFn: (modulePath: string) => CheckerContext | null = (modulePath: string): CheckerContext | null => null;
+
+export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext | null): void {
+	_boundModuleFn = fn;
+}
+
+export function boundModuleCtx(modulePath: string): CheckerContext | null {
+	if (isEngineCheckMode()) return null;
+	const bound = _boundModuleFn(modulePath);
+	return bound != null && bound.modulePath == modulePath ? bound : null;
 }
