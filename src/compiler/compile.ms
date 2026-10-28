@@ -4993,6 +4993,9 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	}
 	const writeTables = createWriteSummaries(createRoutineDecls(), []);
+	const liftTables = createWriteSummaries(createRoutineDecls(), []);
+	liftTables.unloweredWritesAnything = true;
+	const lowered: Node[] = [];
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
@@ -5002,9 +5005,15 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const transformed = transformForRaiser(comptimeResolved, modCtx, true);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, true, true, liftTables);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
-		const analyzed = analyzeForRaiser(transformed, modCtx, writeTables);
+		noteUnitDecls(liftTables, unitPaths[i], transformed);
+		lowered.push(transformed);
+	}
+	for (let i = 0; i < unitPrograms.length; i += 1) {
+		const modCtx = unitCtxs[i];
+		const mod = findModule(graph, unitPaths[i]);
+		const analyzed = analyzeForRaiser(lowered[i], modCtx, writeTables);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: analyzed };

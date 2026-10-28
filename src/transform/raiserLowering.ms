@@ -6,6 +6,7 @@
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node, NodeKind, CallExprData } from "../ast/node";
 import { walkNode } from "./walker";
+import { WriteSummaries } from "../analyzer/writeEffects";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerStaticInit } from "./lowering/staticLower";
@@ -59,11 +60,12 @@ import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, liftTables: WriteSummaries | null = null): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
+		ctx.liftTables = liftTables;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
