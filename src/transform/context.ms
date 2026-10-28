@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
 import { CheckerContext, addError, newSym, stampItem, createContext } from "../checker/context";
-import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
+import { Node, Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { noneType } from "../checker/types";
 import { WriteSummaries } from "../analyzer/writeEffects";
@@ -45,8 +45,14 @@ export class TransformContext {
 	jsEnumToStrings: EnumToStringCopy[];
 	tdzFlags: HashMap<Symbol, Symbol>;  // module binding → its initialized flag (moduleTdz); every read and write inside a function is guarded by it
 	liftTables: WriteSummaries | null;
+	frameReach: FrameReach | null;  // frame values only their own routine names (operandOrder); null where no pass computed it
 	facts: BitSet<ModuleFact>;
 	factsCollected: boolean;
+}
+
+export interface FrameReach {
+	home: HashMap<Symbol, Node>;
+	reached: HashSet<Symbol>;
 }
 
 export interface EnumToStringCopy {
@@ -55,7 +61,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

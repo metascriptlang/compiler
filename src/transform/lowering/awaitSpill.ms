@@ -16,7 +16,7 @@ import {
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { isNamespaceTyped, isNamespaceRef } from "./namespaceValueLower";
-import { Spiller, bindTemp, tempRef, isVoidType, isNeverType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
+import { Spiller, bindTemp, tempRef, isVoidType, isNeverType, isAssignOp, lowerOperandList, lowerAssign, frameReach } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
@@ -424,7 +424,10 @@ export function lowerAwaitSpill(program: Node, ctx: TransformContext): Node {
 	useCtx(ctx);
 	_deferredPatterns = new HashMap<Symbol, boolean>();
 	blockifyAwaitingArrows(program);
+	const outer = ctx.frameReach;
+	ctx.frameReach = frameReach(program, NodeKind.AwaitExpr);
 	walkExpandBlocks(program, spillAwaitStmt, ctx);
+	ctx.frameReach = outer;
 	return program;
 }
 

@@ -17,6 +17,7 @@ import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, Matc
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkExpandBlocksHooked, containsExprKind } from "../walker";
 import { hoistGuarded, expandConditionStmt } from "./guardedLower";
+import { frameReach } from "./operandOrder";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
@@ -61,7 +62,10 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 // ===== Main Entry Point =====
 
 export function lowerMatch(program: Node, ctx: TransformContext): Node {
+	const outer = ctx.frameReach;
+	ctx.frameReach = frameReach(program, NodeKind.MatchExpr);
 	walkExpandBlocksHooked(program, expandMatchStmt, ctx, returnArrowBodyMatch, null);
+	ctx.frameReach = outer;
 	return program;
 }
 

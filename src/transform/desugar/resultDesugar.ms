@@ -27,6 +27,7 @@ import { TransformContext, freshTempSym, mintingChecker } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind } from "../walker";
 import { hoistStmtValue } from "../blockExpand";
 import { hoistGuarded, lowerGuardedTernary, expandConditionStmt, KindHoister } from "../lowering/guardedLower";
+import { frameReach } from "../lowering/operandOrder";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
@@ -77,6 +78,8 @@ function onFnExit(node: Node, run: TryRun): void {
 export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
 	const run: TryRun = { enclosingFnRetType: null, fnRetTypeStack: [] };
 	const hoistOne: KindHoister = (n: Node, h: Node[], c: TransformContext): Node => hoistOneTry(n, h, c, run);
+	const outer = ctx.frameReach;
+	ctx.frameReach = frameReach(program, NodeKind.TryExpr);
 	walkExpandBlocksHooked(
 		program,
 		(stmt: Node, c: TransformContext): Node[] => expandStmt(stmt, c, run, hoistOne),
@@ -84,6 +87,7 @@ export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
 		(node: Node): void => onFnEntry(node, run),
 		(node: Node): void => onFnExit(node, run),
 	);
+	ctx.frameReach = outer;
 	lowerResultConstructors(program);
 	return program;
 }
