@@ -72,11 +72,12 @@ function typeMsgKind(t: Type | null): string {
 	return result;
 }
 
-// A message that holds an Isolated<T> is boxed by move, and the box is the only owner, so the
-// proxy takes that parameter `sink`: its last read then moves instead of asking for a copy
-// the type does not have.
-function ownedIsolatedParams(paramTypes: Type[]): Type[] {
-	return paramTypes.map((t: Type): Type => t != null && holdsIsolated(t) ? createSink(t) : t);
+// A message that holds an Isolated<T>, or a value-layout argument that may hold a cycle root, is boxed by
+// move and the box is the only owner, so the proxy takes that parameter `sink`: its last read then moves
+// instead of asking for a copy, which would put the shared cells back into the sender's roots after V3's
+// disown.
+function ownedMessageParams(paramTypes: Type[], ctx: TransformContext): Type[] {
+	return paramTypes.map((t: Type): Type => t != null && (holdsIsolated(t) || (typeMsgKind(t) == "struct" && mayHoldCycleRoot(t, ctx))) ? createSink(t) : t);
 }
 
 function paramMsgKind(paramTypes: Type[], idx: number): string {
@@ -219,7 +220,7 @@ function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], drop
 	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [msgDecl];
 	for (let ai = 1; ai < params.length; ai += 1) {
-		if (paramMsgKind(paramTypes, ai) == "ptr" && mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), paramTypes[ai], loc));
+		if (mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), paramTypes[ai], loc));
 	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
@@ -261,6 +262,9 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [futDecl, msgDecl];
+	for (let ai = 1; ai < params.length; ai += 1) {
+		if (mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), paramTypes[ai], loc));
+	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr2 = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
 	const sendCall = makeCall(runtimeRef("msActorSendOrDrop", loc), [actorPtr2, makeIdentResolved(msgSym, loc), makeIdentResolved(dropSym, loc)], loc);
@@ -651,7 +655,7 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			//      count mismatch at the call site.
 			const proxyRetType = isVoid ? voidType()
 				: methodRetType != null ? createPromise(methodRetType) : noneType();
-			const proxyFnType = createFunction(ownedIsolatedParams(proxyParamTypes), md.methodParams, proxyRetType);
+			const proxyFnType = createFunction(ownedMessageParams(proxyParamTypes, ctx), md.methodParams, proxyRetType);
 			const proxyNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_" + md.methodName,
 				params: md.methodParams,
