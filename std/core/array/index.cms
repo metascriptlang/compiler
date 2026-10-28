@@ -54,18 +54,21 @@ export extern function shift(this arr: number[]): number from "&msNumberArrayShi
 
 /** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
 export extern function at(this arr: Vec<number>, idx: number): number from "&msNumberArrayAt";
+export extern function at(this arr: Readonly<Vec<number>>, idx: number): number from "&msNumberArrayAt";
 
 /**
  * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
  * @param value The value to locate in the array.
  */
 export extern function indexOf(this arr: Vec<number>, value: number): number from "&msNumberArrayIndexOf";
+export extern function indexOf(this arr: Readonly<Vec<number>>, value: number): number from "&msNumberArrayIndexOf";
 
 /**
  * Determines whether an array includes a certain element, returning true or false as appropriate.
  * @param value The element to search for.
  */
 export extern function includes(this arr: Vec<number>, value: number): boolean from "&msNumberArrayIncludes";
+export extern function includes(this arr: Readonly<Vec<number>>, value: number): boolean from "&msNumberArrayIncludes";
 
 /**
  * Returns a copy of a section of an array.
@@ -73,12 +76,14 @@ export extern function includes(this arr: Vec<number>, value: number): boolean f
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
 export extern function slice(this arr: Vec<number>, start: number = 0, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
+export extern function slice(this arr: Readonly<Vec<number>>, start: number = 0, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
 
 /**
  * Combines two or more arrays.
  * This method returns a new array without modifying any existing arrays.
  */
 export extern function concat(this arr: Vec<number>, other: number[]): number[] from "&msNumberArrayConcat";
+export extern function concat(this arr: Readonly<Vec<number>>, other: number[]): number[] from "&msNumberArrayConcat";
 
 /**
  * Reverses the elements in an array in place.
@@ -107,18 +112,21 @@ export extern function fill(this arr: number[], value: number): void from "&msNu
 
 /** Returns the number of occurrences of a value in an array. */
 export extern function count(this arr: Vec<number>, value: number): number from "&msNumberArrayCount";
+export extern function count(this arr: Readonly<Vec<number>>, value: number): number from "&msNumberArrayCount";
 
 /**
  * Adds all the elements of an array into a string, separated by the specified separator string.
  * @param sep A string used to separate one element of the array from the next in the resulting string.
  */
 export extern function join(this arr: Vec<number>, sep: string): string from "&msNumberArrayJoin";
+export extern function join(this arr: Readonly<Vec<number>>, sep: string): string from "&msNumberArrayJoin";
 
 /** Sets the length of the array. */
 export extern function setLength(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity(this arr: Vec<number>): number from "&msNumberArrayCapacity";
+export extern function capacity(this arr: Readonly<Vec<number>>): number from "&msNumberArrayCapacity";
 
 /** Removes deleteCount elements starting at index start. */
 export extern function splice(this arr: number[], start: number, deleteCount: number): void from "&msNumberArraySplice";
@@ -151,14 +159,17 @@ export extern function shift(this arr: string[]): string from "&msStringArrayShi
  * @param value The value to locate in the array.
  */
 export extern function indexOf(this arr: Vec<string>, value: string): number from "&msStringArrayIndexOf";
+export extern function indexOf(this arr: Readonly<Vec<string>>, value: string): number from "&msStringArrayIndexOf";
 
 /**
  * Determines whether an array includes a certain element, returning true or false as appropriate.
  * @param value The element to search for.
  */
 export extern function includes(this arr: Vec<string>, value: string): boolean from "&msStringArrayIncludes";
+export extern function includes(this arr: Readonly<Vec<string>>, value: string): boolean from "&msStringArrayIncludes";
 
 export extern function lastIndexOf(this arr: Vec<string>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
+export extern function lastIndexOf(this arr: Readonly<Vec<string>>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
 
 /**
  * Returns a copy of a section of an array.
@@ -166,12 +177,14 @@ export extern function lastIndexOf(this arr: Vec<string>, value: string, fromInd
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
 export extern function slice(this arr: Vec<string>, start: number = 0, end: number = 9007199254740991): string[] from "&msStringArraySlice";
+export extern function slice(this arr: Readonly<Vec<string>>, start: number = 0, end: number = 9007199254740991): string[] from "&msStringArraySlice";
 
 /**
  * Combines two or more arrays.
  * This method returns a new array without modifying any existing arrays.
  */
 export extern function concat(this arr: Vec<string>, other: string[]): string[] from "&msStringArrayConcat";
+export extern function concat(this arr: Readonly<Vec<string>>, other: string[]): string[] from "&msStringArrayConcat";
 
 /**
  * Reverses the elements in an array in place.
@@ -200,18 +213,21 @@ export extern function fill(this arr: string[], value: string): void from "&msSt
 
 /** Returns the number of occurrences of a value in an array. */
 export extern function count(this arr: Vec<string>, value: string): number from "&msStringArrayCount";
+export extern function count(this arr: Readonly<Vec<string>>, value: string): number from "&msStringArrayCount";
 
 /**
  * Adds all the elements of an array into a string, separated by the specified separator string.
  * @param sep A string used to separate one element of the array from the next in the resulting string.
  */
 export extern function join(this arr: Vec<string>, sep: string): string from "&msStringArrayJoin";
+export extern function join(this arr: Readonly<Vec<string>>, sep: string): string from "&msStringArrayJoin";
 
 /** Sets the length of the array. */
 export extern function setLength(this arr: string[], newLen: number): void from "&msStringArraySetLen";
 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity(this arr: Vec<string>): number from "&msStringArrayCapacity";
+export extern function capacity(this arr: Readonly<Vec<string>>): number from "&msStringArrayCapacity";
 
 /** Removes deleteCount elements starting at index start. */
 export extern function splice(this arr: string[], start: number, deleteCount: number): void from "&msStringArraySplice";
