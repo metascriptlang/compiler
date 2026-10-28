@@ -40,6 +40,7 @@ _Atomic(bool) msActorSystemLive = false;
 
 /* Round-robin counter for actor → scheduler assignment. */
 _Atomic(int) msNextActorRR = 0;
+_Atomic(int64_t) msActorStealCount = 0;
 
 /* Idle-timeout fast path — when 0, msActorPollLocal skips the timeout scan. */
 _Atomic(int) msActorsWithTimeout = 0;
