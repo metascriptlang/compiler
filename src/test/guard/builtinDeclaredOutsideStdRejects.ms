@@ -1,11 +1,12 @@
-// guard: @builtin is refused in a module outside the std tree the compiler resolved, on a
-// function, an extern and a method, and in a user file whose path spells std/core/struct.ms, so
-// every reader of a builtin kind can trust that std declared it.
+// guard: @builtin and @iteratorHelper are refused in a module outside the std tree the compiler
+// resolved, on a function, an extern, a method and a generator, and in a user file whose path spells
+// a std module, so every reader of a builtin kind or the helper flag can trust that std declared it.
 //
 // WHY A SUBPROCESS: the fake std file needs a directory tree beside the entry module.
 //
-// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) and borrow
-//   the checker's trust in the std declaration, or std membership is read from a path spelling.
+// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) or the
+//   iterator-helper close and borrow the checker's trust in the std declaration, or std membership
+//   is read from a path spelling.
 
 import { execFileResult, cwd, exit, env } from "std/process";
 import { ensureDir, isFile, writeFile } from "std/fs";
@@ -28,39 +29,56 @@ if (!isFile(msc)) {
 
 interface Case {
 	name: string;
-	kind: string;
+	refusal: string;
 	declaredIn: string;
 	files: { path: string, text: string }[];
 }
+
+const FAKE_HELPER = "@iteratorHelper\nexport function* fakeMap(this it: Iterator<int32>): Iterator<int32> {\n\tfor (const x of it) yield x;\n}\n";
 
 const FAKE_STRUCT = "@builtin(\"PtrBits\")\nexport extern function fakeBits(p: Ptr<void>): uint64;\n";
 
 const cases: Case[] = [
 	{
 		name: "a user function claiming PromiseSpawn",
-		kind: "PromiseSpawn",
+		refusal: "@builtin(\"PromiseSpawn\") is reserved for the standard library",
 		declaredIn: "/main.ms'",
 		files: [{ path: "main.ms", text: "@builtin(\"PromiseSpawn\")\nfunction mySpawn(f: () => int32): int32 { return f(); }\nconsole.log(mySpawn(() => 1));\n" }],
 	},
 	{
 		name: "a user extern claiming PtrBits",
-		kind: "PtrBits",
+		refusal: "@builtin(\"PtrBits\") is reserved for the standard library",
 		declaredIn: "/main.ms'",
 		files: [{ path: "main.ms", text: "@builtin(\"PtrBits\")\nextern function myBits(p: Ptr<void>): uint64;\nconsole.log(1);\n" }],
 	},
 	{
 		name: "a user method claiming ToString",
-		kind: "ToString",
+		refusal: "@builtin(\"ToString\") is reserved for the standard library",
 		declaredIn: "/main.ms'",
 		files: [{ path: "main.ms", text: "class C {\n\t@builtin(\"ToString\")\n\tshow(): string { return \"c\"; }\n}\nconsole.log(new C().show());\n" }],
 	},
 	{
 		name: "a user file at std/core/struct.ms claiming PtrBits",
-		kind: "PtrBits",
+		refusal: "@builtin(\"PtrBits\") is reserved for the standard library",
 		declaredIn: "/std/core/struct.ms'",
 		files: [
 			{ path: "std/core/struct.ms", text: FAKE_STRUCT },
 			{ path: "main.ms", text: "import { fakeBits } from \"./std/core/struct\";\nconsole.log(1);\n" },
+		],
+	},
+	{
+		name: "a user generator claiming @iteratorHelper",
+		refusal: "@iteratorHelper is reserved for the standard library",
+		declaredIn: "/main.ms'",
+		files: [{ path: "main.ms", text: `${FAKE_HELPER}console.log(1);\n` }],
+	},
+	{
+		name: "a user file at std/core/array/iterator.ms claiming @iteratorHelper",
+		refusal: "@iteratorHelper is reserved for the standard library",
+		declaredIn: "/std/core/array/iterator.ms'",
+		files: [
+			{ path: "std/core/array/iterator.ms", text: FAKE_HELPER },
+			{ path: "main.ms", text: "import { fakeMap } from \"./std/core/array/iterator\";\nconsole.log(1);\n" },
 		],
 	},
 ];
@@ -77,8 +95,7 @@ for (const c of cases) {
 	for (const target of ["c", "js"]) {
 		const r = execFileResult(msc, ["check", `--target=${target}`, `${dir}/main.ms`]);
 		const out = `${r.output}${r.errorOutput}`;
-		const refusal = `@builtin("${c.kind}") is reserved for the standard library`;
-		if (r.exitCode == 0 || !out.includes(refusal) || !out.includes(c.declaredIn)) report(`${c.name} [${target}]: not refused at its declaration: ${out}`);
+		if (r.exitCode == 0 || !out.includes(c.refusal) || !out.includes(c.declaredIn)) report(`${c.name} [${target}]: not refused at its declaration: ${out}`);
 	}
 }
 

@@ -1063,6 +1063,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
 	if (hasFlag(sym, SymbolFlag.Borrow)) setFlag(instSym, SymbolFlag.Borrow);
+	if (hasFlag(sym, SymbolFlag.IteratorHelper)) setFlag(instSym, SymbolFlag.IteratorHelper);
 	if (isAsyncFunctionNode(cloned)) setFlag(instSym, SymbolFlag.Async);
 	cacheInstance(host.procInstCache, sym, instSym, dedup.params, dedup.types);
 	cloned.resolvedSym = instSym;

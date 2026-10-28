@@ -6,7 +6,7 @@ import { inferredType, noneType, createModuleNamespace, emptyType, createStruct,
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
 import { isGlobalImport } from "./prelude";
 import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
@@ -312,6 +312,21 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@acyclic applies to a class, not to '${declName}'`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.Acyclic);
 	}
+	if (info.iteratorHelper) {
+		const problem = iteratorHelperMisuse(ctx, dd);
+		if (problem != "") addError(ctx, problem, node.location.line, node.location.column);
+		else setFlag(sym, SymbolFlag.IteratorHelper);
+	}
+}
+
+function iteratorHelperMisuse(ctx: CheckerContext, dd: DecoratedDeclData): string {
+	if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) return `@iteratorHelper is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`;
+	const fn = exportedFunctionOf(dd.decoratedNode);
+	if (fn == null) return "@iteratorHelper applies to a module-level generator function";
+	const fd = fn.data as FunctionDeclData;
+	if (routineKindFlag(fd.fnFlags) != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
+	if (fd.params.length == 0) return "@iteratorHelper needs the source iterator as the generator's first parameter";
+	return "";
 }
 
 function stdBuiltinKind(ctx: CheckerContext, kind: string, decl: Node): string {
