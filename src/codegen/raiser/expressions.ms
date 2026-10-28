@@ -2030,6 +2030,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
+		if (isFreshValue(d.arguments[0]) || d.arguments[0].kind == NodeKind.NewExpr) emitInst(s, raiserABC(RaiserOpcode.RcDec, errorReg, 0, 0));
 		return dest;
 	}
 	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
@@ -2041,7 +2042,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			valueReg = allocRef(s);
 			emitLoadConst(s, valueReg, raiserNil());
 		}
-		const consumes = asyncKind == "PromiseFail" || settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
+		const consumes = failTakesTheReason(d.callee.resolvedSym, asyncKind) || settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
 		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, consumes));
 		return futReg;
 	}
@@ -2886,6 +2887,10 @@ function combineOf(builtinKind: string): int32 {
 	if (builtinKind == "PromiseAny") return RaiserCombine.Any as int32;
 	if (builtinKind == "PromiseAllSettled") return RaiserCombine.AllSettled as int32;
 	return -1;
+}
+
+function failTakesTheReason(callee: Symbol | null, asyncKind: string): boolean {
+	return asyncKind == "PromiseFail" && (callee == null || callee.builtinKind != "PromiseFail");
 }
 
 function settleValueIsSunk(callee: Symbol | null): boolean {
