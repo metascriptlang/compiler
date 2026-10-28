@@ -2359,14 +2359,17 @@ function memberCallSym(call: Node): Symbol | null {
 	return call.resolvedSym != null ? call.resolvedSym : callee.resolvedSym;
 }
 
+const ARRAY_PUSH_NATIVES = ["&msGenericArrayPush", "&msNumberArrayPush", "&msStringArrayPush", "&msUint8ArrayPush"];
+const ARRAY_SET_LENGTH_NATIVES = ["&msGenericArraySetLen", "&msNumberArraySetLen", "&msStringArraySetLen"];
+
 function isArrayPush(call: Node): boolean {
 	const sym = memberCallSym(call);
-	return sym != null && sym.nativeName == "&msGenericArrayPush";
+	return sym != null && ARRAY_PUSH_NATIVES.includes(sym.nativeName);
 }
 
 function isArraySetLengthCall(call: Node): boolean {
 	const sym = memberCallSym(call);
-	return sym != null && sym.nativeName == "&msGenericArraySetLen";
+	return sym != null && ARRAY_SET_LENGTH_NATIVES.includes(sym.nativeName);
 }
 
 // A lowering that turns a value into text writes `.toString()` with no symbol; a checked call
