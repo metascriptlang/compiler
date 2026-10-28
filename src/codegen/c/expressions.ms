@@ -2714,6 +2714,7 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 }
 
 function namesRoutine(callee: Readonly<Node>, sym: Readonly<Symbol | null>): boolean {
+	if (callee.kind != NodeKind.Identifier && callee.kind != NodeKind.MemberExpr) return false;
 	if (sym == null) return callee.kind == NodeKind.Identifier;
 	return sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp
 		&& sym.symbolKind != SymbolKind.Parameter && sym.symbolKind != SymbolKind.Property;

@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
+import { callConvKey, createFunction, createClosureType, numberType, nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -148,7 +148,7 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKey(child);
 			}
-			return key + "_r_" + monoTypeKey(t.typeReturn);
+			return key + "_r_" + monoTypeKey(t.typeReturn) + callConvKey(t);
 		},
 		TypeKind.Union => {
 			if (t.typeName != "") {
@@ -317,4 +317,11 @@ test "monoTypeKey keys named unions by owner" {
 	ub.sym = symB;
 	assert monoTypeKey(ua) != monoTypeKey(ub);
 	assert mangleMonoName("id", [ua]) != mangleMonoName("id", [ub]);
+}
+
+test "a plain function type and a closure type of one signature have distinct keys" {
+	const plain = createFunction([numberType()], ["n"], numberType());
+	const closure = createClosureType([numberType()], ["n"], numberType());
+	assert monoTypeKey(plain) != monoTypeKey(closure);
+	assert monoTypeKey(closure) == "fn_float64_r_float64";
 }

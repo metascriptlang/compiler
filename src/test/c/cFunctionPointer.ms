@@ -8,7 +8,9 @@ const SORT = "typedef int (*Compare)(const void *, const void *);\n"
 	+ "void sortAll(void *base, unsigned long count, Compare compare);\n"
 	+ "void eachIndex(int count, void (*visit)(int));\n"
 	+ "typedef int (*Unary)(int);\n"
-	+ "typedef struct Holder { Unary op; int k; } Holder;\n";
+	+ "typedef struct Holder { Unary op; int k; } Holder;\n"
+	+ "typedef struct Table { Unary fs[2]; int k; } Table;\n"
+	+ "Table makeTable(void);\n";
 
 function compileC(main: string): string {
 	const t = createDefineTable();
@@ -68,6 +70,22 @@ test "C: a closure into a header struct's function-pointer field is refused" {
 
 test "C: a closure assigned to a header struct's function-pointer field is refused" {
 	const c = compileC(HOLDER + "let h: Holder = { op: twice, k: 1 };\nlet k: int32 = 3;\nh.op = (n: int32): int32 => n + k;\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("is not assignable to a C function pointer"), c;
+}
+
+const TABLE = "import { Table, makeTable } from \"./sort.h\";\nfunction twice(n: int32): int32 { return n * 2; }\n";
+
+test "C: a header struct's array of function pointers is a plain pointer typedef, called directly" {
+	const c = compileC(TABLE + "let t = makeTable();\nt.fs[0] = twice;\nconsole.log(t.fs[0](5));\n");
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("typedef int32_t(*msFnPtr_"), c;
+	assert !c.contains("msSizedArray_msClosure"), c;
+	assert !c.contains("msClosureDestroy"), c;
+}
+
+test "C: a closure assigned to an element of a header struct's function-pointer array is refused" {
+	const c = compileC(TABLE + "let t = makeTable();\nlet k: int32 = 3;\nt.fs[1] = (n: int32): int32 => n + k;\n");
 	assert c.startsWith("ERROR"), c;
 	assert c.contains("is not assignable to a C function pointer"), c;
 }

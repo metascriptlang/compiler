@@ -280,6 +280,10 @@ export function closureStorageType(t: Type): Type {
 	return c;
 }
 
+export function callConvKey(t: Readonly<Type>): string {
+	return t.callConv == CallingConvention.CcClosure ? "" : "@" + (t.callConv as number).toString();
+}
+
 export function plainFunctionPointerType(t: Type): Type {
 	if (t.kind != TypeKind.Function || t.callConv != CallingConvention.CcClosure) return t;
 	const p = copyTypeShallow(t);
@@ -3601,7 +3605,7 @@ function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): stri
 				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void");
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void") + callConvKey(t);
 		},
 		TypeKind.Union => {
 			let k = "union(";

@@ -4,8 +4,8 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement } from "../../checker/types";
-import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement } from "../../checker/types";
+import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
@@ -381,7 +381,7 @@ function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | nul
 				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open);
+			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open) + callConvKey(t);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKeyIn(roots, t.typeChildren[0], open) : "varargs:empty",
@@ -622,7 +622,7 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
-			key = key + "):" + typeKeyIn(roots, t.typeReturn);
+			key = key + "):" + typeKeyIn(roots, t.typeReturn) + callConvKey(t);
 			return key;
 		},
 		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
@@ -1879,7 +1879,7 @@ function elemArrayCNameIn(roots: Readonly<ModuleNameRoots>, elem: Readonly<Type>
 	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeNameIn(roots, elem);
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCNameIn(roots, elem.typeReturn) + "*";
-	if (elem.kind == TypeKind.Function) return "msClosure";
+	if (elem.kind == TypeKind.Function) return elem.callConv == CallingConvention.CcClosure ? "msClosure" : functionPointerTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCNameIn(roots, rm);
@@ -2017,12 +2017,23 @@ function genSpanType(g: CGen, t: Readonly<Type>): string {
 // ===== Function Type Generation =====
 // Closure: msClosure { .fn, .env }. Raw function pointer for non-capturing.
 
+function functionPointerTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
+	return "msFnPtr_" + hashToBase36(typeKeyIn(roots, t));
+}
+
 function genFunctionType(g: CGen, t: Readonly<Type>): string {
 	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
-	// Default to closure type
-	const cType = "msClosure";
-	typeCacheSet(g.typeCache, key, cType);
-	return cType;
+	if (t.callConv == CallingConvention.CcClosure) {
+		typeCacheSet(g.typeCache, key, "msClosure");
+		return "msClosure";
+	}
+	const name = functionPointerTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
+	typeCacheSet(g.typeCache, key, name);
+	const declKey = "fnptr:" + name;
+	if (typeCacheHas(g.typeCache, declKey)) return name;
+	typeCacheSet(g.typeCache, declKey, name);
+	addLine(sec(g, CSection.Types), "typedef " + genClHalfCast(g, t).replace("(*)", "(*" + name + ")") + ";");
+	return name;
 }
 
 // ===== Closure Cast Helpers (Standard reference pattern) =====
