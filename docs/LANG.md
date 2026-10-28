@@ -3281,7 +3281,15 @@ live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Rais
 | `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
 | `view as Span<U>`, `U ≠ T` | refused, as the reference refuses `cast[openArray[U]]` | refused | refused |
 | `p + n`, `q - p`, `p < q`, `p[i]` with `i ≠ 0`, `p += n` | pointer arithmetic | refused: no address arithmetic | refused, traps |
+| `p[a..b]`, `p[a...b]` for `Ptr<T>`, `T` not `void`; bounds of any integer type | a `Span<T>` of the `b - a` elements at `p + a`, no copy (`Readonly<Span<T>>` from a `Readonly<Ptr<T>>`). The end is trusted as the length; `a < 0`, `b < a` or a `uint64` end past `int64` raises `slice a..b out of bounds (length b)` | refused: `cannot slice a pointer` | refused, traps |
 | `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | location identity and access |
+
+A pointer slice is how a C `(const uint8_t* bytes, size_t n)` pair becomes a view: `bytes[0..n]`. It borrows
+like any Span (§Spans): it must not outlive the memory behind the pointer. Measured 2026-10-28 on Linux
+(oci-u), C and `--danger`: corpus `pointerSliceViewsLibcBytes` (libc `malloc`/`memset`/`strlen`; `size_t`,
+`int32`, inclusive and computed ends, a write C reads back, a read-only view) prints `6 hhXhh 5|hX|Xhh|504`;
+`pointerSliceLengthNegative` and `pointerSliceLengthOutOfRange` stop with `slice 0..-2 out of bounds (length -2)`
+and `slice 0..-1 out of bounds (length -1)` on C. Not run: `--os=emcc`, macOS, Windows.
 
 A `ref` / `out` argument of any type reaches the caller's location on the Raiser VM too (`RegAddr`,
 `ElemAddr`, `FieldAddr`, `GlobalAddr`; `src/codegen/raiser/CLAUDE.md`).
