@@ -39,6 +39,7 @@ function promoteNumeric(a: Type, b: Type): Type {
 function widenBranchLiteral(t: Type): Type {
 	if (t.kind == TypeKind.StringLiteral) return stringType();
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
+	if (t.kind == TypeKind.EnumLiteral && t.typeReturn != null) return t.typeReturn;
 	return closureStorageType(widenNumberLiteralType(t));
 }
 
