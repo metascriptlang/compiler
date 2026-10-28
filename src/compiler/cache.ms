@@ -228,6 +228,7 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_dirFolds = new HashMap<string, HashMap<string, string[]>>();
 	_dirUnfoldable = new HashMap<string, string[]>();
 	_dirStamps = new HashMap<string, string>();
+	_cacheListing = null;
 	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
 }
@@ -1335,7 +1336,7 @@ export function restoreNativeObject(srcPath: string, compileCmd: string, key: st
 	return oFile;
 }
 
-export function restoreModuleObject(modPath: string, baseFp: string, key: string, search: HeaderSearch): string {
+export function restoreModuleObject(modPath: string, baseFp: string, cFile: string, key: string, search: HeaderSearch): string {
 	const hit = storeHit(key, search, []);
 	if (hit == null) return "";
 	writeDependencyFile(moduleDepFile(modPath, baseFp), hit.deps);
@@ -1344,6 +1345,7 @@ export function restoreModuleObject(modPath: string, baseFp: string, key: string
 	const oFile = stableOFileFp(modPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
 	writeCompileFingerprintFp(modPath, fp);
+	settleModuleVersion(modPath, baseFp, cFile, [oFile]);
 	return oFile;
 }
 
@@ -1826,6 +1828,12 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 }
 
 export function publishModuleObject(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
+	const published = publishObjectVersion(modPath, baseFp, cFile, oFile, fp, search);
+	settleModuleVersion(modPath, baseFp, cFile, [oFile, published]);
+	return published;
+}
+
+function publishObjectVersion(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
 	const headers = moduleHeaderPaths(modPath, baseFp);
 	if (!recordQueries(moduleDepFile(modPath, baseFp), [cFile], headers, search, [], _buildStartedSeconds)) return oFile;
 	for (const path of headers) {
@@ -1844,6 +1852,90 @@ export function publishModuleObject(modPath: string, baseFp: string, cFile: stri
 	}
 	writeCompileFingerprintFp(modPath, resolvedFp);
 	return resolved;
+}
+
+function moduleVersionRecord(stem: string): string {
+	return `${getCacheDir()}/${stem}.versions`;
+}
+
+function moduleConfigKey(baseFp: string): string {
+	const stamp = `:${objectStamp()}`;
+	const end = baseFp.endsWith(stamp) ? baseFp.length - stamp.length : baseFp.length;
+	return fpKey(baseFp.slice(baseFp.indexOf(":", 0) + 1, end));
+}
+
+function versionFileNames(depFile: string, cFile: string, objects: string[]): string[] {
+	const names: string[] = [];
+	if (cFile != "") names.push(basename(cFile));
+	const dep = basename(depFile);
+	for (const name of [dep, `${dep}.q`, `presence/${dep}.qs`]) names.push(name);
+	for (const object of objects) {
+		const name = basename(object);
+		if (names.includes(name)) continue;
+		names.push(name);
+		names.push(`${name}.cfp`);
+	}
+	return names;
+}
+
+function isFpKey(text: string): boolean {
+	const underscore = text.indexOf("_", 0);
+	if (underscore < 1 || underscore + 1 >= text.length) return false;
+	for (let i = 0; i < text.length; i++) {
+		if (i == underscore) continue;
+		const b = text.byteAt(i);
+		const digit = b >= "0".code && b <= "9".code;
+		const hex = i < underscore && b >= "a".code && b <= "f".code;
+		if (!digit && !hex) return false;
+	}
+	return true;
+}
+
+function isVersionFileOf(stem: string, entry: string): boolean {
+	if (!entry.startsWith(`${stem}.`)) return false;
+	const parts = entry.slice(stem.length + 1, entry.length).split(".");
+	if (!isFpKey(parts[0])) return false;
+	if (parts.length == 2) return parts[1] == "c" || parts[1] == "d" || parts[1] == "o";
+	return parts.length == 3 && ((parts[1] == "d" && parts[2] == "q") || (parts[1] == "o" && parts[2] == "cfp"));
+}
+
+let _cacheListing: string[] | null = null;
+
+function unrecordedVersionNames(stem: string): string[] {
+	if (_cacheListing == null) _cacheListing = readDir(getCacheDir());
+	const names: string[] = [];
+	for (const entry of _cacheListing!) {
+		if (!isVersionFileOf(stem, entry)) continue;
+		names.push(entry);
+		if (entry.endsWith(".d")) names.push(`presence/${entry}.qs`);
+	}
+	return names;
+}
+
+export function settleModuleVersion(modPath: string, baseFp: string, cFile: string, objects: string[]): void {
+	if (modPath == "") return;
+	const stem = cacheStem(modPath);
+	const record = moduleVersionRecord(stem);
+	const config = moduleConfigKey(baseFp);
+	const keep = versionFileNames(moduleDepFile(modPath, baseFp), cFile, objects);
+	const others: string[] = [];
+	let superseded: string[] = [];
+	if (exists(record)) {
+		for (const line of (try readFile(record) catch "").split("\n")) {
+			if (line == "") continue;
+			const names = line.split("\t");
+			if (names[0] == config) superseded = names.slice(1, names.length);
+			else others.push(line);
+		}
+	} else {
+		superseded = unrecordedVersionNames(stem);
+	}
+	others.push([config, ...keep].join("\t"));
+	if (!atomicWriteFile(record, `${others.join("\n")}\n`)) return;
+	for (const name of superseded) {
+		if (keep.includes(name) || !(name.startsWith(`${stem}.`) || name.startsWith(`presence/${stem}.`))) continue;
+		tryRemoveFile(`${getCacheDir()}/${name}`);
+	}
 }
 
 // Check if generated C code matches cached version. If match, .o is up to date.
@@ -2767,4 +2859,78 @@ test "a source or dependency that cannot be read leaves the header query record 
 	assert queryRecord([`${dir}/entry.c`], [], search, []).bounded;
 	assert !queryRecord([`${dir}/gone.c`], [], search, []).bounded;
 	assert !queryRecord([`${dir}/entry.c`], [`${dir}/dep.h`], search, []).bounded;
+}
+
+function versionFixture(modPath: string, baseFp: string, objectFp: string, cCode: string): string[] {
+	const c = stableCFileFp(modPath, moduleStoreSource(cCode));
+	const o = stableOFileFp(modPath, objectFp);
+	const d = moduleDepFile(modPath, baseFp);
+	ensureDir(`${dirname(d)}/presence`);
+	const files = [c, d, `${d}.q`, `${dirname(d)}/presence/${basename(d)}.qs`, o, `${o}.cfp`];
+	for (const file of files) writeFile(file, "x");
+	return files;
+}
+
+function removeFixture(files: string[]): void {
+	for (const file of files) tryRemoveFile(file);
+}
+
+test "a new module version removes the previous version of the same compile command and nothing else" {
+	const modPath = `test/settle/probe${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const first = moduleCompileFp("int a;", "cc -O0");
+	const second = moduleCompileFp("int b;", "cc -O0");
+	const other = moduleCompileFp("int c;", "cc -O2");
+	const v1 = versionFixture(modPath, first, `${first}:objects`, "int a;");
+	const bystander = `${getCacheDir()}/${stem}.notakey.o`;
+	const sibling = `${getCacheDir()}/${stem}2.${fpKey(first)}.o`;
+	writeFile(bystander, "x");
+	writeFile(sibling, "x");
+	settleModuleVersion(modPath, first, v1[0], [v1[4]]);
+	const v3 = versionFixture(modPath, other, `${other}:objects`, "int c;");
+	settleModuleVersion(modPath, other, v3[0], [v3[4]]);
+	for (const file of v1) assert exists(file);
+	const v2 = versionFixture(modPath, second, `${second}:objects`, "int b;");
+	settleModuleVersion(modPath, second, v2[0], [v2[4]]);
+	for (const file of v2) assert exists(file);
+	for (const file of v3) assert exists(file);
+	for (const file of v1) assert !exists(file);
+	assert exists(bystander);
+	assert exists(sibling);
+	removeFixture(v2);
+	removeFixture(v3);
+	removeFixture([bystander, sibling, moduleVersionRecord(stem)]);
+}
+
+test "the first version recorded for a module also removes the versions an older compiler left" {
+	const modPath = `test/settle/legacy${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const old = moduleCompileFp("int a;", "cc -O0");
+	const current = moduleCompileFp("int b;", "cc -O0");
+	const legacy = versionFixture(modPath, old, `${old}:objects`, "int a;");
+	const live = versionFixture(modPath, current, `${current}:objects`, "int b;");
+	const bystander = `${getCacheDir()}/${stem}.link.cache`;
+	writeFile(bystander, "x");
+	_cacheListing = null;
+	settleModuleVersion(modPath, current, live[0], [live[4]]);
+	for (const file of legacy) assert !exists(file);
+	for (const file of live) assert exists(file);
+	assert exists(bystander);
+	removeFixture(live);
+	removeFixture([bystander, moduleVersionRecord(stem)]);
+}
+
+test "a version file name is recognised only in the shapes the compiler writes" {
+	const key = fpKey("x");
+	const stem = "a_d_b_x_ms";
+	assert isVersionFileOf(stem, `${stem}.${key}.c`);
+	assert isVersionFileOf(stem, `${stem}.${key}.d.q`);
+	assert isVersionFileOf(stem, `${stem}.${key}.o`);
+	assert isVersionFileOf(stem, `${stem}.${key}.o.cfp`);
+	assert !isVersionFileOf(stem, `${stem}.${key}.o.tmp.1`);
+	assert !isVersionFileOf(stem, `${stem}.${key}.${key}.c`);
+	assert !isVersionFileOf(stem, `${stem}.${key}.${key}.o.cfp`);
+	assert !isVersionFileOf(stem, `${stem}.versions`);
+	assert !isVersionFileOf(stem, `${stem}.${key}.o.fp`);
+	assert !isVersionFileOf("a_d_b", `${stem}.${key}.c`);
 }
