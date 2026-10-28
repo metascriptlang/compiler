@@ -1,7 +1,7 @@
 // Cache lane: after every input change, a warm build must print what a build from an empty cache prints.
 // Each scenario runs once per cache layer; nativeBuildBoundary.ms keeps the per-feature cache contracts.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { ensureDir, exists, readFile, remove, removeAll, rename, symlink, writeFile } from "std/fs";
+import { ensureDir, exists, readDir, readFile, remove, removeAll, rename, symlink, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 const macos = platform == "darwin";
@@ -298,6 +298,96 @@ for (const c of cases) {
 	env.delete("MSC_NO_GLOBAL_CACHE");
 	const truth = printed(c, "truth", truthCode);
 	results.push({ name: `${c.layer}: ${c.scenario.name}`, expected: truth, actual: warm });
+}
+
+interface EditLoop {
+	name: string;
+	mode: string;
+	flags: string[];
+	modules: string[];
+	edited: string[];
+}
+
+const EDIT_STEPS = 4;
+
+function editLoops(): EditLoop[] {
+	return [
+		{ name: "edited module keeps one local version", mode: "debug", flags: [], modules: ["editedA"], edited: ["editedA"] },
+		{ name: "edited module keeps one local version in release", mode: "release", flags: ["--release"], modules: ["editedA"], edited: ["editedA"] },
+		{ name: "each edited module keeps one local version, an untouched one keeps its own", mode: "debug", flags: [], modules: ["editedA", "editedB", "steadyC"], edited: ["editedA", "editedB"] },
+	];
+}
+
+function moduleSource(module: string, value: number): string {
+	return `export function ${module}Value(): int32 { return ${value}; }\n`;
+}
+
+function moduleMain(modules: string[]): string {
+	let text = "";
+	const parts: string[] = [];
+	for (const m of modules) {
+		text = `${text}import { ${m}Value } from "./${m}";\n`;
+		parts.push("${" + m + "Value()}");
+	}
+	return text + "console.log(`" + parts.join(",") + "`);\n";
+}
+
+function localVersions(dir: string, mode: string, module: string): string {
+	const cacheDir = `${dir}/out/${mode}/.cache`;
+	let c = 0;
+	let d = 0;
+	let cfp = 0;
+	for (const entry of readDir(cacheDir)) {
+		if (entry.indexOf(`${module}_x_ms.`, 0) < 0) continue;
+		if (entry.endsWith(".c")) c = c + 1;
+		if (entry.endsWith(".d")) d = d + 1;
+		if (entry.endsWith(".o.cfp")) cfp = cfp + 1;
+	}
+	return `c=${c} d=${d} cfp=${cfp}`;
+}
+
+function runEditLoop(loop: EditLoop, index: number): void {
+	const dir = `${root}/loop-${index}`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, moduleMain(loop.modules));
+	for (const m of loop.modules) put(`${dir}/${m}.ms`, moduleSource(m, 0));
+	const buildArgs = (output: string): string[] => {
+		const args = ["build", "main.ms", `--output=${output}`];
+		if (!windows) args.push("--cc=clang");
+		for (const flag of loop.flags) args.push(flag);
+		return args;
+	};
+	const args = buildArgs("probe");
+	need(execFileCapture(compiler, args, dir).ok, `${loop.name} baseline`);
+	const warm: string[] = [];
+	const expected: string[] = [];
+	for (let step = 1; step <= EDIT_STEPS; step++) {
+		for (const m of loop.edited) put(`${dir}/${m}.ms`, moduleSource(m, step));
+		need(execFileCapture(compiler, args, dir).ok, `${loop.name} step ${step}`);
+		const r = execFileCapture(`${dir}/probe`, []);
+		warm.push(r.ok ? r.value.trim() : "run failed");
+		expected.push(loop.modules.map((m) => loop.edited.includes(m) ? `${step}` : "0").join(","));
+	}
+	results.push({ name: `local: ${loop.name}: output after each edit`, expected: expected.join(" "), actual: warm.join(" ") });
+	const size = execFileCapture("du", ["-sk", `${dir}/out/${loop.mode}/.cache`]);
+	console.log(`${loop.name}: local cache ${size.ok ? size.value.split("\t")[0] : "unmeasured"} KB after ${EDIT_STEPS} edits`);
+	const versions = loop.modules.map((m) => `${m} ${localVersions(dir, loop.mode, m)}`);
+	results.push({ name: `local: ${loop.name}: versions kept`, expected: loop.modules.map((m) => `${m} c=1 d=1 cfp=1`).join(", "), actual: versions.join(", ") });
+	env.set("MSC_CACHE_DIR", `${dir}/truth-cache`);
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const truth = execFileCapture(compiler, buildArgs("truth"), dir);
+	env.delete("MSC_CACHE_DIR");
+	env.delete("MSC_NO_GLOBAL_CACHE");
+	const cold = execFileCapture(`${dir}/truth`, []);
+	const coldText = truth.ok && cold.ok ? cold.value.trim() : "truth build failed";
+	results.push({ name: `local: ${loop.name}: last warm build equals a cold build`, expected: coldText, actual: warm[warm.length - 1] });
+}
+
+let loopIndex = 0;
+for (const loop of editLoops()) {
+	if (only.length == 0 || only.some((name) => loop.name.includes(name))) runEditLoop(loop, loopIndex);
+	loopIndex = loopIndex + 1;
 }
 
 let failures = 0;
