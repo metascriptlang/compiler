@@ -1,6 +1,7 @@
 // @stdout: {"id":1,"n":null,"i":null,"f":null,"b":null,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
 // @stdout: {"id":2,"s":"q\"","n":"x","i":7,"f":1.5,"b":true,"c":"Green","o":{"x":3},"arr":["x",null],"ai":[null,4],"ao":[null,{"x":5}],"sa":["k"],"du":{"kind":"b","s":"z"},"dus":[{"kind":"a","v":1},{"kind":"b","s":"t"}]}
 // @stdout: ["x",null] [null,2.5] null "a"
+// @stdout: [{"n":"x","m":{"a":1,"ps":[{"c":"y"}]}},{"n":"z","m":null}] {"a":2,"ps":[]}
 // @stdout: parsed {"id":3,"n":"y","i":null,"f":null,"b":false,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
 // note: JSON.stringify writes a null `T | null` value as null, field, array element or top level alike; an optional field `s?: string` holding null is left out, as TypeScript leaves out an absent property. Same output on every lane.
 enum Color { Red, Green }
@@ -23,6 +24,9 @@ interface Rec {
 	du: ShapeA | ShapeB | null;
 	dus: (ShapeA | ShapeB)[];
 }
+struct Part { c: string; }
+struct Mid { a: int32; ps: Part[]; }
+struct Holder { n: string; m: Mid | null; }
 interface Flat { id: int32; s?: string; n: string | null; i: int32 | null; f: number | null; b: boolean | null; c: Color | null; }
 
 function main(): void {
@@ -39,6 +43,9 @@ function main(): void {
 	const none: string | null = null;
 	const some: string | null = "a";
 	console.log(`${JSON.stringify(xs)} ${JSON.stringify(ns)} ${JSON.stringify(none)} ${JSON.stringify(some)}`);
+	const held: Holder[] = [{ n: "x", m: { a: 1, ps: [{ c: "y" }] } }, { n: "z", m: null }];
+	const mid: Mid | null = { a: 2, ps: [] };
+	console.log(`${JSON.stringify(held)} ${JSON.stringify(mid)}`);
 	const r = JSON.parse<Flat>("{\"id\":3,\"n\":\"y\",\"i\":null,\"f\":null,\"b\":false,\"c\":null}");
 	if (r.ok) {
 		const back: Rec = { id: r.value.id, s: r.value.s, n: r.value.n, i: r.value.i, f: r.value.f, b: r.value.b, c: r.value.c, o: null, arr: [], ai: [], ao: [], sa: null, du: null, dus: [] };
