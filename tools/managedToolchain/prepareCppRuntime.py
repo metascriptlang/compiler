@@ -157,7 +157,7 @@ def produceVariant(zig, target, variant, work, cache):
     realCache = os.path.realpath(cache)
     if target == LINUX:
         compileLine, linkLine = pr.selectLines(stderr, fixture, output)
-        linker, items = pr.parseLinkArgv(linkLine, output, stem + ".o", realCache)
+        linker, items = pr.parseLinkArgv(linkLine, output, stem + ".o", realCache, private)
         if linker != "ld.lld":
             raise pe.EngineError("%s linked with %s, expected ld.lld" % (target, linker))
         inputs = [value for kind, value in items if kind == "input"]

@@ -185,8 +185,9 @@ def parseCompileArgv(line):
     return found
 
 
-def parseLinkArgv(line, output, objectName, cacheRoot):
-    """Split a linker line into (linker, items). An item is ("arg", text), ("input", path) for a
+def parseLinkArgv(line, output, objectName, cacheRoot, directory):
+    """Split a linker line into (linker, items). Zig prints an input under its working directory relative to it, so
+    a relative input is read from `directory`, where zig ran. An item is ("arg", text), ("input", path) for a
     runtime file under cacheRoot, or ("user", None) for the fixture object. `-o OUTPUT` is
     dropped: the clang driver spells it."""
     tokens = line.split()
@@ -209,9 +210,10 @@ def parseLinkArgv(line, output, objectName, cacheRoot):
             items.append(("user", None))
             i += 1
         else:
-            real = os.path.realpath(token)
-            if not os.path.isabs(token) or not os.path.isfile(real) or os.path.islink(token):
-                raise pe.EngineError("link input %s is not an absolute regular file" % token)
+            path = os.path.join(directory, token)
+            real = os.path.realpath(path)
+            if not os.path.isfile(real) or os.path.islink(path):
+                raise pe.EngineError("link input %s is not a regular file" % token)
             if os.path.commonpath([cacheRoot, real]) != cacheRoot:
                 raise pe.EngineError("link input %s is not from this run's private cache" % token)
             items.append(("input", real))
@@ -567,7 +569,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
     compileLine, linkLine = selectLines(stderr, fixture, out)
     compile_ = parseCompileArgv(compileLine)
     objectName = os.path.splitext(spec["fixture"])[0] + ".o"
-    linker, items = parseLinkArgv(linkLine, out, objectName, cacheRoot)
+    linker, items = parseLinkArgv(linkLine, out, objectName, cacheRoot, os.path.dirname(out))
     if linker != spec["linker"]:
         raise pe.EngineError("%s linked with %s, expected %s" % (target, linker, spec["linker"]))
     zigLib = os.path.dirname(compile_["isystem"][0])
@@ -730,7 +732,7 @@ def produceSharedTarget(zig, zigVersion, engine, runtime, target, work, output, 
     compileLine, linkLine = selectLines(stderr, fixture, out)
     checkSharedLink(linkLine)
     compile_ = parseCompileArgv(compileLine)
-    linker, items = parseLinkArgv(linkLine, out, os.path.splitext(spec["fixture"])[0] + ".o", cacheRoot)
+    linker, items = parseLinkArgv(linkLine, out, os.path.splitext(spec["fixture"])[0] + ".o", cacheRoot, os.path.dirname(out))
     if linker != spec["linker"]:
         raise pe.EngineError("%s linked with %s, expected %s" % (directory, linker, spec["linker"]))
     zigLib = os.path.dirname(compile_["isystem"][0])

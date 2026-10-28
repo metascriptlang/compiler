@@ -70,18 +70,27 @@ class CaptureParsingTest(TempCase):
         cache = self.cacheWith("crt1.o", "libc.a", "fixture.o")
         line = "ld.lld -z stack-size=1 -o /out/a %s/crt1.o --dynamic-linker /lib64/ld.so %s/fixture.o %s/libc.a" % (
             cache, cache, cache)
-        linker, items = pr.parseLinkArgv(line, "/out/a", "fixture.o", cache)
+        linker, items = pr.parseLinkArgv(line, "/out/a", "fixture.o", cache, self.dir)
         self.assertEqual(linker, "ld.lld")
         self.assertEqual(items, [("arg", "-z"), ("arg", "stack-size=1"), ("input", cache + "/crt1.o"),
                                  ("arg", "--dynamic-linker"), ("arg", "/lib64/ld.so"), ("user", None),
                                  ("input", cache + "/libc.a")])
+
+    def test_link_input_printed_relative_to_the_zig_directory_resolves_there(self):
+        cache = self.cacheWith("crt1.o", "fixture.o")
+        relative = os.path.relpath(cache, self.dir)
+        line = "ld.lld -o /out/a %s/crt1.o %s/fixture.o" % (relative, relative)
+        _, items = pr.parseLinkArgv(line, "/out/a", "fixture.o", cache, self.dir)
+        self.assertEqual(items, [("input", cache + "/crt1.o"), ("user", None)])
+        with self.assertRaises(pe.EngineError):
+            pr.parseLinkArgv(line, "/out/a", "fixture.o", cache, self.path("elsewhere"))
 
     def test_link_input_outside_the_private_cache_is_refused(self):
         cache = self.cacheWith("fixture.o")
         outside = self.path("elsewhere", "libc.a")
         write(outside)
         with self.assertRaises(pe.EngineError):
-            pr.parseLinkArgv("ld.lld -o /o %s %s/fixture.o" % (outside, cache), "/o", "fixture.o", cache)
+            pr.parseLinkArgv("ld.lld -o /o %s %s/fixture.o" % (outside, cache), "/o", "fixture.o", cache, self.dir)
 
     def test_missing_relative_or_duplicate_fixture_inputs_are_refused(self):
         cache = self.cacheWith("fixture.o")
@@ -91,7 +100,7 @@ class CaptureParsingTest(TempCase):
                      "ld.lld -o /o %s/fixture.o %s/fixture.o" % (cache, cache),
                      "ld.lld -o /other %s/fixture.o" % cache):
             with self.assertRaises(pe.EngineError, msg=line):
-                pr.parseLinkArgv(line, "/o", "fixture.o", cache)
+                pr.parseLinkArgv(line, "/o", "fixture.o", cache, self.dir)
 
     def test_select_lines_ignores_library_builds(self):
         stderr = "\n".join(["ar rcs /c/libc.a /c/a.o", "zig clang /other.c -c -o /t/o.o",
