@@ -646,7 +646,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.initializer != null && d.initializer.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInVar(stmt, ctx);
 			}
-			if (functionDepth > 0 && d.initializer != null && stmt.resolvedSym != null
+			if (functionDepth > 0 && !ctx.raiserBackend && d.initializer != null && stmt.resolvedSym != null
 				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null
 				&& !(d.declKind == DeclKind.Const && readonlyDataConstBinding(stmt))) {
 				return expandAggregateDecl(stmt, ctx);
