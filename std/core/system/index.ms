@@ -33,6 +33,8 @@ export class process {
  * enters one (a purely synchronous `main`) exits before its timers fire.
  */
 export extern function setTimeout(fn: () => void, ms: number): number from "msSetTimeout";
+/** Runs `fn` on the queue promise reactions use: after the current script or callback, before timers. */
+export extern function queueMicrotask(fn: () => void): void from "msQueueMicrotask";
 /** Cancels a pending `setTimeout`. Unknown handles are ignored. */
 export extern function clearTimeout(id: number): void from "msClearTimeout";
 /** Schedules `fn` to run every `ms` milliseconds until `clearInterval`. */
@@ -69,6 +71,12 @@ export class RangeError extends Error {
 }
 
 export class SyntaxError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
+export class URIError extends Error {
 	constructor(message: string) {
 		super(message);
 	}
