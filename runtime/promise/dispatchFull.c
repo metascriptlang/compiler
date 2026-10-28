@@ -323,7 +323,12 @@ void msActorWakeEventLoop(void) {
 static HANDLE volatile gLoopEngineIocp = NULL;
 
 void msWakeIocpRegister(void* port) {
-	if (!msIsPoolWorker) gLoopEngineIocp = port;
+	if (msIsPoolWorker) return;
+	void* held = InterlockedCompareExchangePointer((PVOID volatile*)&gLoopEngineIocp, port, NULL);
+	if (held != NULL && held != port) {
+		fprintf(stderr, "internal: a second non-worker thread registered an io engine port; the main loop's wakes would be lost\n");
+		abort();
+	}
 }
 
 void msWakeIocpUnregister(void* port) {
@@ -1015,6 +1020,14 @@ static bool msRunOnceIn(int timeoutMs) {
 	msDispatcher* d = msGetDispatcher();
 	bool didWork = false;
 
+	/* The main loop is also the engine's loop (ULTRALOCK A1): while the engine holds an operation or a
+	 * watch, a top-level await on its future resumes only if this pump polls the engine, and the
+	 * wait below is bounded because the engine's completions do not arrive on this selector or port.
+	 * The poll comes first: a wake packet it consumes was posted after the work it announces, and
+	 * every step after it looks for that work. */
+	bool engineLive = !msIsPoolWorker && msWorkerEngineLive();
+	if (engineLive && msWorkerEnginePoll()) didWork = true;
+
 	/* Step 1: Process expired timers unless callbacks are pending (Step 2's
 	 * timeout is then 0 and Step 3 runs them ahead of the timers) */
 	int nextTimer = msDequeLen(&d->callbacks) == 0 ? msProcessTimers(d, &didWork) : -1;
@@ -1031,6 +1044,9 @@ static bool msRunOnceIn(int timeoutMs) {
 
 	/* Step 2: Poll for cross-thread completions + I/O events */
 	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
+	if (engineLive) {
+		if (adj < 0 || adj > MS_WORKER_ENGINE_POLL_MS) adj = MS_WORKER_ENGINE_POLL_MS;
+	}
 #ifdef _WIN32
 	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
 	 * Worker already set value + finished (Step 1, see thread.h:99-103); main thread
