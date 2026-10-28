@@ -57,6 +57,7 @@ export {
 	unboxString,
 	unboxBool,
 	hostValue,
+	hostString,
 	hostObject,
 	hostArray,
 	field,
@@ -350,7 +351,7 @@ test "callRoutine passes floats and strings and returns them" {
 	const step = callRoutine(interp, routineOf(interp, "step"), [hostValue(boxFloat(1.0)), hostValue(boxFloat(0.5))]);
 	assert step.ok;
 	if (step.ok) assert unboxFloat(step.value.root) == 2.25;
-	const greet = callRoutine(interp, routineOf(interp, "greet"), [hostValue(boxString("haro"))]);
+	const greet = callRoutine(interp, routineOf(interp, "greet"), [hostString("haro")]);
 	assert greet.ok;
 	if (greet.ok) assert greet.value.text() == "hi haro";
 	removeAll(dir);
@@ -444,7 +445,7 @@ function routineValue(interp: Interpreter, name: string, args: RaiserHostValue[]
 }
 
 function keyEvent(code: string, mods: number): RaiserHostValue {
-	return hostObject(["code", "mods"], [hostValue(boxString(code)), hostValue(boxInt(mods))]);
+	return hostObject(["code", "mods"], [hostString(code), hostValue(boxInt(mods))]);
 }
 
 const HARO_SCRIPT = `export interface Bind { keys: string; text: string; }\n`
@@ -502,7 +503,7 @@ test "a host routine receives a nested struct with a nullable field and returns 
 		const color = d.field("style").field("color");
 		const shown = color.root.kind == RaiserValueKind.Nil ? "none" : color.text();
 		const echo = `${unboxInt(d.field("row").root)} ${unboxBool(d.field("style").field("bold").root)} ${shown}`;
-		return boxValue(hostObject(["accepted", "echo"], [hostValue(boxBool(true)), hostValue(boxString(echo))]));
+		return boxValue(hostObject(["accepted", "echo"], [hostValue(boxBool(true)), hostString(echo)]));
 	});
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `extern function decorate(d: { row: int32; style: { bold: boolean; color: string | null } }): `
@@ -510,7 +511,7 @@ test "a host routine receives a nested struct with a nullable field and returns 
 		+ `export function paint(row: int32, color: string | null): string {\n`
 		+ `\tconst r = decorate({ row, style: { bold: row > 1, color } });\n\treturn \`\${r.accepted} \${r.echo}\`;\n}\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
-	const teal = routineValue(interp, "paint", [hostValue(boxInt(3)), hostValue(boxString("teal"))]);
+	const teal = routineValue(interp, "paint", [hostValue(boxInt(3)), hostString("teal")]);
 	assert teal.text() == "true 3 true teal";
 	const plain = routineValue(interp, "paint", [hostValue(boxInt(1)), hostValue(boxVoid())]);
 	assert plain.text() == "true 1 false none";
