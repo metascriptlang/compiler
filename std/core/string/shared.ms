@@ -9,6 +9,12 @@
 
 import { asBytes, byteSlice } from "./bytes";
 
+export function checkedScalar(cp: number): number {
+	const whole = cp >= 0 && cp <= 1114111 && (cp as int64) as number == cp;
+	if (!whole || (cp >= 55296 && cp <= 57343)) throw new RangeError(`Invalid code point ${cp}`);
+	return cp;
+}
+
 export function clampIndex(i: int32, len: int32): int32 {
 	return i < 0 ? 0 : i > len ? len : i;
 }
