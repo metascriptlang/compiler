@@ -1210,6 +1210,7 @@ passed_programs() {
     END { close(red); exit !(done && n >= fails) }' || return 1
   [ -e "$OUT/$lane.redprogs" ] || : >"$OUT/$lane.redprogs"
   if [ -n "$only_csv" ]; then printf '%s\n' "$only_csv" | tr ',' '\n'; else cut -f1 "$EMIT/keys.$lane"; fi | sort -u >"$OUT/$lane.ran"
+  [ -z "$(sort -u "$OUT/$lane.redprogs" | comm -13 "$OUT/$lane.ran" -)" ] || return 1
   { cat "$OUT/$lane.redprogs"; known_of "$lane" | sed 's/ \[.*$//'; sed 's/ \[.*$//' "$OUT/flaky.ids"; } | sort -u >"$OUT/$lane.skip"
   comm -23 "$OUT/$lane.ran" "$OUT/$lane.skip"
 }
@@ -1496,8 +1497,9 @@ result_cache_self_test() (
   printf '  ✓ p1 [c] — ok\n3 pass · 1 fail · 0 xfail · 0 xpass\n' >"$OUT/corpus.log"; record_passes corpus 1
   printf '3 pass · 0 fail · 0 xfail · 0 xpass\n' >"$OUT/corpus.log"; record_passes corpus 77
   (MSCORPUS_FILTER=p; lane_log corpus; record_passes corpus 1)
+  printf '  ✓ p1 [c] — ok\n  ✗ FAIL q9 [c] — red\n4 pass · 1 fail · 0 xfail · 0 xpass\n' >"$OUT/corpus.log"; record_passes corpus 1
   [ ! -e "$RESULTS/corpus" ] || [ -z "$(find "$RESULTS/corpus" -type f)" ] \
-    || { printf 'FAIL result cache: a lane that did not finish, a timeout, an uncounted red, a blocked host or a narrowed environment recorded a pass\n'; bad=1; }
+    || { printf 'FAIL result cache: a lane that did not finish, a timeout, an uncounted red, a red the select never ran, a blocked host or a narrowed environment recorded a pass\n'; bad=1; }
   printf '  ✓ p1 [c] — ok\n3 pass · 0 fail · 0 xfail · 0 xpass\n' >"$OUT/corpus.log"; only_csv=p1; : >"$OUT/corpus.scope"
   record_passes corpus 0
   [ "$(todo corpus)" = p2,p3,p4,p5 ] || { printf 'FAIL result cache: a program the narrowed run did not run was recorded, run "%s"\n' "$(todo corpus)"; bad=1; }
