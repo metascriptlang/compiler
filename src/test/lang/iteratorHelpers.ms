@@ -676,6 +676,26 @@ test "iterator consumer: a compound assignment reads its target before the chain
 	assert s == "abc";
 }
 
+function closeNow(it: Iterator<int32>): void {
+	if (it.return != null) it.return();
+}
+
+test "iterator helpers: a stored helper closed after its first next closes the source once" {
+	const log: string[] = [];
+	const t = counter("t", 3, log).take(2);
+	t.next();
+	closeNow(t);
+	closeNow(t);
+	const m = counter("m", 3, log)
+		.map((x: int32, i: number): int32 => x)
+		.filter((x: int32, i: number): boolean => true);
+	m.next();
+	closeNow(m);
+	closeNow(m);
+	assert log.join(",") == "t.next,t.return,m.next,m.return";
+	assert t.next().done && m.next().done;
+}
+
 test "iterator consumer: a chain expands in place when an imported module expands the same instance" {
 	const nums: int32[] = [1, 2, 3];
 	assert doubledSum(nums) == 12;
