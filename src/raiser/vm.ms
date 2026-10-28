@@ -1863,6 +1863,7 @@ function vmHasBlocked(vm: RaiserVM): boolean {
 // skips the drain, Node parity.
 function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void {
 	vm.exitValue = value;
+	if (abrupt) vm.auditLedger = false;
 	if (!abrupt && (vmHasRunnable(vm) || vm.sched.timers.items.length > 0)) {
 		vm.yielded = true;
 		return;
