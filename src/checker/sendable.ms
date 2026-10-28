@@ -312,6 +312,12 @@ function holdsOnlySendableClosures(t: Type): boolean {
 	return isDeepSendable(peelSink(t), (SendLeaf.String | SendLeaf.Function | SendLeaf.Isolated) as int32, declaresNoHook);
 }
 
+// A copy of a value made only of plain data and Sendable closures aliases nothing the source owns:
+// each closure was checked where it was built and its environment is shared immutable state.
+export function holdsOnlySendableValues(t: Type | null): boolean {
+	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Function) as int32, declaresNoHook);
+}
+
 // isolate(x) makes the proof a `move` into an actor call needs: the argument is a fresh value
 // nothing else reaches, or a `move` of a binding that is its sole owner.
 export function checkIsolateArg(ctx: CheckerContext, argNode: Node): void {
