@@ -347,7 +347,12 @@ void msActorWakeEventLoop(void) {
 static HANDLE volatile gLoopEngineIocp = NULL;
 
 void msWakeIocpRegister(void* port) {
-	if (!msIsPoolWorker) gLoopEngineIocp = port;
+	if (msIsPoolWorker) return;
+	void* held = InterlockedCompareExchangePointer((PVOID volatile*)&gLoopEngineIocp, port, NULL);
+	if (held != NULL && held != port) {
+		fprintf(stderr, "internal: a second non-worker thread registered an io engine port; the main loop's wakes would be lost\n");
+		abort();
+	}
 }
 
 void msWakeIocpUnregister(void* port) {
