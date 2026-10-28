@@ -695,7 +695,7 @@ function idleSweep(clients: ClientState[], cfg: Readonly<LoopConfig>): void {
 // See PARALOCK Amendment A for the Layer 2 contract.
 function wireDispatcherWake(): void {
 	const wakeFd = msGetWakePipeFd();
-	if (wakeFd >= 0) msIoEngineAddWakeFd_ms(wakeFd);
+	msIoEngineAddWakeFd_ms(wakeFd);
 }
 
 // The accept loop of one serving thread; it marks its own end so the thread drives the loop's

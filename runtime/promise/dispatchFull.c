@@ -327,11 +327,40 @@ void msEnsureWakePipe(void) {
  * engineIOCP.c) — and the drain in msRunOnce skips NULL entries the same way
  * the engine poll does. One syscall per loop, no allocation: the POSIX wake
  * cost. */
+static void msWakeEngineIocps(void);
 void msActorWakeEventLoop(void) {
 	LONG n = InterlockedCompareExchange(&gWakeIocpCount, 0, 0);
 	if (n > MS_WAKE_IOCP_MAX) n = MS_WAKE_IOCP_MAX;
 	for (LONG i = 0; i < n; i++) {
 		HANDLE h = gWakeIocps[i];
+		if (h != NULL) PostQueuedCompletionStatus(h, 0, 0, NULL);
+	}
+	msWakeEngineIocps();
+}
+
+/* A serve thread's io engine port: a loop parked in msIoEnginePoll waits there, not on the
+ * dispatcher port completions are posted to, so a completion also posts a wake packet here.
+ * Kept apart from gWakeIocps, whose slot 0 must be the dispatcher. A full table returns false
+ * and that engine keeps its poll timeout as the bound. */
+#define MS_ENGINE_IOCP_MAX 64
+static HANDLE volatile gEngineIocps[MS_ENGINE_IOCP_MAX];
+
+bool msWakeIocpRegister(void* port) {
+	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
+		if (InterlockedCompareExchangePointer((PVOID volatile*)&gEngineIocps[i], port, NULL) == NULL) return true;
+	}
+	return false;
+}
+
+void msWakeIocpUnregister(void* port) {
+	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
+		InterlockedCompareExchangePointer((PVOID volatile*)&gEngineIocps[i], NULL, port);
+	}
+}
+
+static void msWakeEngineIocps(void) {
+	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
+		HANDLE h = gEngineIocps[i];
 		if (h != NULL) PostQueuedCompletionStatus(h, 0, 0, NULL);
 	}
 }
@@ -380,6 +409,7 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
 	msg->error = error;
 	msg->kind = 0;
 	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+	msWakeEngineIocps();
 }
 
 /* A closure env's release runs on the thread that owns the cell (ULTRALOCK M1,
