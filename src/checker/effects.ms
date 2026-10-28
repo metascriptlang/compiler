@@ -681,14 +681,39 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
 		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
-	for (const arg of (call.data as CallExprData).arguments) {
-		const passed = argumentEffect(arg, e);
-		if (passed != null) return through(call, "calls '" + name + "'", passed);
+	const args = (call.data as CallExprData).arguments;
+	const decl = unpackDecl(sym!.declNode);
+	const params = decl != null ? routineParams(decl) : [];
+	const receiver = params.length == args.length + 1 && params[0] == "this" ? 1 : 0;
+	for (let i = 0; i < args.length; i += 1) {
+		const passed = argumentEffect(args[i], e);
+		if (passed != null && !(params.length == args.length + receiver && onlyCompared(routineBody(decl), params[i + receiver]))) return through(call, "calls '" + name + "'", passed);
 	}
 	const own = through(call, "calls '" + name + "'", routineEffect(sym!, e));
 	if (own != null) return own;
 	const dispatched = dispatchedEffect(call, sym!, e);
 	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
+}
+
+// A function value a callee only compares by identity is never called there, so passing it runs nothing.
+function onlyCompared(n: Node | null, name: string): boolean {
+	if (n == null) return true;
+	if (n.kind == NodeKind.Identifier) return (n.data as IdentifierData).name != name;
+	if (n.kind == NodeKind.BinaryExpr) {
+		const d = n.data as BinaryExprData;
+		if (d.operator == "===" || d.operator == "!==" || d.operator == "==" || d.operator == "!=") {
+			const l = peelView(d.left);
+			const r = peelView(d.right);
+			const lName = l.kind == NodeKind.Identifier && (l.data as IdentifierData).name == name;
+			const rName = r.kind == NodeKind.Identifier && (r.data as IdentifierData).name == name;
+			if (lName || rName) return (lName || onlyCompared(l, name)) && (rName || onlyCompared(r, name));
+		}
+	}
+	const ok: boolean[] = [true];
+	forEachChild(n, (child: Node): void => {
+		if (ok[0] && !onlyCompared(child, name)) ok[0] = false;
+	});
+	return ok[0];
 }
 
 function isMessageToAnotherActor(call: Node): boolean {
