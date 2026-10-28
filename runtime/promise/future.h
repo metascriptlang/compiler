@@ -75,6 +75,14 @@ static inline void msCallSoon(msClosure cb) {
 	}
 }
 
+void msEnsureOwnerDispatcher(void);
+
+/* queueMicrotask: the queue promise reactions use, so a job runs in FIFO order with them. */
+static inline void msQueueMicrotask(msClosure cb) {
+	if (msCallSoonProc == NULL) msEnsureOwnerDispatcher();
+	msCallSoon(cb);
+}
+
 /* ===== Actor jobs (runtime/actor/actor.h, ULTRALOCK A4) ===== */
 
 #if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
