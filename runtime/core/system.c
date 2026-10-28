@@ -1,7 +1,16 @@
 #include "runtime/core/system.h"
 
+#ifdef MSOS_BARE
+#ifndef MSOS_SOLANA
+bool msErr = false;
+msException* msCurrException = NULL;
+#endif
+msCallSoonFn msCallSoonProc = NULL;
+void* msErrPayload = NULL;
+#endif
+
 /* Under --os=bare, manual.h provides all functions inline via -include.
-   Skip this entire file to avoid redefinitions. */
+   Skip the rest of this file to avoid redefinitions. */
 #ifndef MSOS_BARE
 
 #include <stdio.h>

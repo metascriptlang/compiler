@@ -45,8 +45,8 @@ const cacheRootGroups = [
 	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
-	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
 	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
@@ -1030,6 +1030,37 @@ function runRecordSkip(): void {
 	record("a memory mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-mm", ["--mm=manual"]));
 }
 
+function runManualCrossModuleThrow(): void {
+	const dir = `${root}/manual cross module throw`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/deep.ms`, "export function boom(): int32 { throw new Error(\"deep\"); }\n");
+	put(`${dir}/mid.ms`, [
+		"import { boom } from \"./deep\";",
+		"export function through(): int32 { return boom() + 1; }",
+		"export function rethrown(): int32 {",
+		"\ttry { return boom(); } catch (e) { throw e; }",
+		"}",
+		"",
+	].join("\n"));
+	put(`${dir}/main.ms`, [
+		"import { boom } from \"./deep\";",
+		"import { through, rethrown } from \"./mid\";",
+		"function probe(name: string, f: () => int32): void {",
+		"\ttry { f(); console.log(`${name} no throw`); } catch (e) { console.log(`${name} caught`); }",
+		"}",
+		"probe(\"direct\", boom);",
+		"probe(\"through\", through);",
+		"probe(\"rethrown\", rethrown);",
+		"",
+	].join("\n"));
+	const expected = "direct caught\nthrough caught\nrethrown caught";
+	need(build(dir, "manual-throw", "probe", ["--mm=manual"]) == 0, "manual cross-module build");
+	record("a throw in another module is caught under --mm=manual", expected, value(dir));
+	need(build(dir, "drc-throw", "probeDrc") == 0, "default cross-module build");
+	record("a throw in another module is caught under the default memory mode", expected, value(dir, "probeDrc"));
+}
+
 function runAudit(): void {
 	const linkOptions = fixture("link options", "", "");
 	const firstArchive = makeArchive(linkOptions, "first", 41);
@@ -1990,6 +2021,7 @@ if (group == "reproducible-link" || group == "all") runReproducibleLink();
 if (group == "test-scope" || group == "all") runTestScope();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
+if (group == "manual-cross-module-throw" || group == "all") runManualCrossModuleThrow();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
