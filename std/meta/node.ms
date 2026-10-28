@@ -350,6 +350,7 @@ export enum NodeFlag {
 	ActorSelfCall, // checker: a call through `this` in the actor's own method runs the method body on this turn, not as a message
 	TemplateStep,  // parser: this `+` is one step of a template literal; its right operand converts to text with the string hint
 	DefaultAwaitsInstance, // checker: a filled default whose formal is still generic; the instantiation fits it to the instance's type
+	ParamProperty, // checker: this class field was declared by a constructor parameter written with `public`, `private`, `protected` or `readonly`
 }
 
 // ===== Node Kind Enum =====
@@ -526,7 +527,7 @@ export type NodeData =
 	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
-	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string } // ConstructorDecl
+	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[] } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
@@ -755,7 +756,7 @@ export type ClassDeclData = { className: string, classDisplayName: string, class
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string };
+export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[] }; // ctorParamProps: per parameter, the PropertyDecl a parameter property declares (propVisibility, propIsReadonly as written), null for a plain parameter
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };

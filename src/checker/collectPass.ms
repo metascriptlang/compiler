@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
-import { expandParamProperties, hasParamProperties, paramPropertyIndex } from "./paramProperty";
+import { expandParamProperties, hasParamProperties, isParamProperty } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
@@ -738,10 +738,10 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 	if (sym == null || sym.symbolKind != SymbolKind.Class) return;
 	d.classBody = expandParamProperties(expandAutoAccessors(d.classBody));
 	for (const member of d.classBody) {
-		if (paramPropertyIndex(member, d.classBody) < 0) continue;
+		if (!isParamProperty(member)) continue;
 		const name = (member.data as PropertyDeclData).propName;
 		for (const other of d.classBody) {
-			if (other == member || other.kind != NodeKind.PropertyDecl || (other.data as PropertyDeclData).propName != name) continue;
+			if (other.kind != NodeKind.PropertyDecl || isParamProperty(other) || (other.data as PropertyDeclData).propName != name) continue;
 			addError(ctx, `Duplicate identifier '${name}': the constructor parameter that declares field '${name}' (line ${member.location.line}) and this member name the same field; keep one`, other.location.line, other.location.column);
 		}
 	}

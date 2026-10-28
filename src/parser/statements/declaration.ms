@@ -7,7 +7,7 @@ import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBal
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
 
@@ -1421,6 +1421,16 @@ function parseClassConstructor(state: ParserState, visibility: string): NodeResu
 	const ctorDefaults = getLastParsedDefaults();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
+	const ctorParamProps = getLastParamProps();
+	while (ctorParamProps.length < ctorParams.length) ctorParamProps.push(null as unknown as Node);
+	for (let i = 0; i < ctorParams.length; i += 1) {
+		const prop = ctorParamProps[i];
+		if (prop == null) continue;
+		const pd = prop.data as PropertyDeclData;
+		pd.propName = ctorParams[i];
+		pd.propType = ctorParamTypes[i];
+		prop.location = ctorParamLocs[i];
+	}
 	const body = prependParamPatterns(try callBlockParser(state), ctorPatterns, ctorParamLocs);
 	const ctorNode = createNode(NodeKind.ConstructorDecl, {
 		ctorParams,
@@ -1428,6 +1438,7 @@ function parseClassConstructor(state: ParserState, visibility: string): NodeResu
 		ctorBody: body,
 		ctorDefaults,
 		ctorVisibility: visibility,
+		ctorParamProps,
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;

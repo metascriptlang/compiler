@@ -5,7 +5,7 @@ import {
 	ExprStmtData, BinaryExprData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
+	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, PropertyDeclData, makeLoc,
 } from "../../../ast/node";
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
@@ -506,7 +506,7 @@ function inlineObjectPattern(pattern: Node, options: FormatOptions): Doc[] {
 	return [docText("{"), docIndent(body), docLine(), docText("}")];
 }
 
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null, patterns: (Node | null)[] | null = null): Doc[] {
+export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null, patterns: (Node | null)[] | null = null, props: Node[] | null = null): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		const pattern = patterns != null && i < patterns.length ? patterns[i] : null;
@@ -519,12 +519,15 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 			}
 		}
 		let p = spellParamModifiers(names[i]);
-		const colon = names[i].lastIndexOf(":");
-		const bare = colon >= 0 ? names[i].slice(colon + 1) : names[i];
-		let written = bare.startsWith("...") ? bare.byteSlice(3, bare.byteLength) : bare;
+		let written = p.startsWith("...") ? p.byteSlice(3, p.byteLength) : p;
 		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
 			const pattern = rawBalancedAt(options.source, locs[i].line, locs[i].column);
 			if (pattern != "") { p = pattern; written = pattern; }
+		}
+		const prop = props != null && i < props.length ? props[i] : null;
+		if (prop != null) {
+			const pd = prop.data as PropertyDeclData;
+			p = (pd.propVisibility != "" ? pd.propVisibility + " " : "") + (pd.propIsReadonly ? "readonly " : "") + p;
 		}
 		const optional = locs != null && i < locs.length && writtenOptional(options.source, locs[i].line, locs[i].column, written);
 		const type = i < types.length ? types[i] : "";
@@ -623,7 +626,7 @@ function spellParamModifiers(name: string): string {
 	let more = true;
 	while (more) {
 		more = false;
-		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "], ["public:", "public "], ["private:", "private "], ["protected:", "protected "], ["readonly:", "readonly "]]) {
+		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "]]) {
 			if (rest.startsWith(code) && rest.byteLength > code.byteLength) {
 				spelled = spelled + word;
 				rest = rest.byteSlice(code.byteLength, rest.byteLength);

@@ -954,7 +954,7 @@ function injectIntoConstructor(plan: ClassPlan, stmts: Node[]): void {
 		const statements: Node[] = [];
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: statements }, loc);
 		ctor = createNodeAt(NodeKind.ConstructorDecl, {
-			ctorParams: noParams, ctorParamTypes: noTypes, ctorBody: body, ctorDefaults: noDefaults, ctorVisibility: "",
+			ctorParams: noParams, ctorParamTypes: noTypes, ctorBody: body, ctorDefaults: noDefaults, ctorVisibility: "", ctorParamProps: [],
 		}, loc);
 		cd.classBody.push(ctor);
 	}

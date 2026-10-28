@@ -419,6 +419,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 			const d = node.data as ConstructorDeclData;
 			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = bodies ? hN(h, d.ctorBody) : hNull(h); h = hS(h, d.ctorVisibility);
 			h = hNodes(h, d.ctorDefaults);
+			for (const pn of d.ctorParamProps) { if (pn != null) h = hN(h, pn); }
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;

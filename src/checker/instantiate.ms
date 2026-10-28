@@ -1445,9 +1445,8 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		}
 	}
 
-	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults, ctorVisibility: ctorData.ctorVisibility };
+	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults, ctorVisibility: ctorData.ctorVisibility, ctorParamProps: ctorData.ctorParamProps };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
-	ctorDeclNode.paramLocations = ctorNode.paramLocations;
 
 	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
 	const formals = ctorFormalTypes(ctorNode.resolvedSym);

@@ -115,9 +115,7 @@ export function isPropertyName(token: Token): boolean {
 // typeAnnotation is "" if no annotation present.
 // Use extractParamNames/extractParamTypes to split the result.
 // Handles: rest params, destructured params, type annotations, default values,
-// constructor parameter properties (public/private/protected/readonly) keep their modifiers as
-// `public:` / `private:` / `protected:` / `readonly:` name prefixes, which the checker's member
-// collection turns into fields (expandParamProperties)
+// constructor parameter properties (public/private/protected/readonly, see getLastParamProps)
 
 // Module-level: defaults from the last parseParamList call.
 // Indexed by param position (0-based). null = no default.
@@ -150,6 +148,15 @@ let _lastParamPatterns: Node[] = [];
 
 export function getLastParamPatterns(): Node[] {
 	return _lastParamPatterns;
+}
+
+// Per param of the last parseParamList call: the PropertyDecl a constructor parameter written
+// `public`/`private`/`protected`/`readonly` declares, carrying those modifiers; null for a plain
+// parameter. Its name and type are the parameter's, filled in by the constructor parser.
+let _lastParamProps: Node[] = [];
+
+export function getLastParamProps(): Node[] {
+	return _lastParamProps;
 }
 
 let _lastParamsClosed = false;
@@ -249,6 +256,7 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 	_lastParamTypeExprs = [];
 	_lastParamLocations = [];
 	_lastParamPatterns = [];
+	_lastParamProps = [];
 	_lastParamsClosed = false;
 	if (current(state).kind != TokenKind.LParen) { return params; }
 	advance(state);
@@ -256,30 +264,34 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		let paramPrefix = "";
 		if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
-		let propPrefix = "";
+		let propVisibility = "";
+		let propReadonly = false;
 		const accessTok = current(state);
 		if ((accessTok.kind == TokenKind.Public || accessTok.kind == TokenKind.Private || accessTok.kind == TokenKind.Protected) && startsParamName(peek(state, 1))) {
-			propPrefix = `${accessTok.value}:`;
+			propVisibility = accessTok.value;
 			advance(state);
 		}
 		if (isCtor && current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1))) {
-			propPrefix = `${propPrefix}readonly:`;
+			propReadonly = true;
 			advance(state);
 		}
-		if (propPrefix != "") {
+		if (propVisibility != "" || propReadonly) {
+			const written = propVisibility != "" ? propVisibility : "readonly";
 			if (!isCtor) {
-				addError(state, `A parameter property is only allowed in a constructor: '${propPrefix.slice(0, propPrefix.length - 1)}' on a parameter of '${fnName}' at line ${accessTok.line} declares a field, so write the field in the class and assign it`);
-				propPrefix = "";
+				addError(state, `A parameter property is only allowed in a constructor: '${written}' on a parameter of '${fnName}' at line ${accessTok.line} declares a field, so write the field in the class and assign it`);
 			} else if (paramPrefix.indexOf("...") >= 0 || current(state).kind == TokenKind.DotDotDot) {
 				if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
 				addError(state, `A parameter property cannot be declared using a rest parameter (line ${accessTok.line})`);
-				propPrefix = "";
 			} else if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
 				addError(state, `A parameter property may not be declared using a binding pattern (line ${accessTok.line})`);
-				propPrefix = "";
+			} else {
+				while (_lastParamProps.length * 2 < params.length) _lastParamProps.push(null as unknown as Node);
+				_lastParamProps.push(createNodeAt(NodeKind.PropertyDecl, {
+					propName: "", propType: "", propIsStatic: false, propIsReadonly: propReadonly,
+					propVisibility: propVisibility, propInitializer: null as unknown as Node,
+				}, makeLoc(accessTok.line, accessTok.column)));
 			}
 		}
-		paramPrefix = `${paramPrefix}${propPrefix}`;
 		// Out parameter: out name: Type → stored as "out:name". `out` is a contextual keyword:
 		// it's the modifier only when a param name follows; `out: Type` / `out, …` / `out)` mean
 		// `out` is itself the param name (same rule as the out-expression parser).
