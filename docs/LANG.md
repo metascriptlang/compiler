@@ -3577,6 +3577,48 @@ hooks, so by reading it keeps the earlier registry lookup, which the std class h
 with byte-identical C for `std/crypto`); a generic distinct type; an unannotated class method that
 returns a value (it stops in codegen with `unresolved type`, as any unannotated method return does).
 
+### 5b. Owned edges (`Owned<T>`)
+
+`Owned<T>` marks a class reference as the unique owning edge to its object, like `Readonly<T>` marks a view: a
+type wrapper with the representation of `T`. Any number of plain references to the same object may exist; they keep
+it alive after the owner goes. `Owned<T>` takes a class; a `Vec`, a string and a struct are refused (a `Vec` is
+already unique, a struct is a value).
+
+```typescript
+class Node {
+	id: int32 = 0;
+	kids: Vec<Owned<Node>> = [];
+	next: Owned<Node> | null = null;
+}
+```
+
+| Written | Result |
+|---|---|
+| `const o: Owned<N> = new N()`, an object literal, `null` | accepted: a fresh value has no other owner |
+| `const b = new N(); root.kids.push(b)` inside a function | accepted when `push(b)` is the last read of `b`, which keeps its type `N`; a later read is `cannot copy 'b'`; a module-level `b` is never a last read |
+| `const o: Owned<N> = p` or `take(p)` with `p: N` (a `let`, or a `const` bound to anything but a fresh value) | error `Type 'N' is not assignable to type 'Owned<N>'` |
+| `p as Owned<N>` with `p: N` or `unknown` and no fresh operand (also `(p as unknown) as Owned<N>`) | error `cannot cast 'N' to 'Owned<N>'`; a fresh operand or an `Owned` operand casts |
+| `const p: N = o` | accepted: a plain reference to the same object |
+| a second owner from an owned local, field or element | error `cannot copy 'o'` unless it is the last read, where it is a move |
+| copy of a `Vec<Owned<N>>` or a struct holding an owned field | the same error, unless it is the last read |
+| `for (const k of root.kids)` at any scope | `k` is a lent view of the element, no copy, unless the body can write `root.kids` |
+
+An owning edge is move-only, so owning edges form a forest: a cycle needs one edge that is not owned. A class whose
+references are all owned is therefore acyclic and stays out of the cycle collector (`isCyclic = MS_FALSE` in its
+TypeInfo). `Vec<Owned<N>>` and `Owned<N> | null` keep `N` acyclic; `N[]` and `Owned<N>[]` do not, because the shared
+array cell is a plain edge. `A.owned -> B` with `B.plain -> A` stays cyclic. The `new` expression is typed as plain `N`:
+write the owned type on the binding or the field.
+
+Known limit: the forest holds only while no owned value is moved into its own subtree. `r.kids.push(r)`, or
+`k.kids.push(r)` where `k` is a plain reference to a descendant of `r`, compiles and forms an owned cycle `r -> k -> r`
+that the collector never visits, because `N` is acyclic. The result is a leak, never a use-after-free; the check would
+need alias tracking the language does not do. Both forms build and print `1` on C (probe `cyc2.ms`, measured on
+`wt/udrc-owned` 1dc6f5bee).
+
+Measured with `msc` built from this tree: `src/test/c/ownedEdge.ms` (25 tests), corpus programs `1167-ownedTreeDrop`
+(C: a 40-node `Vec<Owned<N>>` tree runs `onDestroy` 40 times on drop) and `1168-ownedTreeSum` (C and `--target=js`
+print the same lines). Not measured: `Owned<T>` on a generic parameter, the Raiser backend, threads.
+
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
 MetaScript uses a unified `T | null` syntax for all nullable types. Under the hood, the compiler chooses the optimal representation based on the inner type — no user intervention needed.
