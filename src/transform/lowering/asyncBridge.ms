@@ -32,7 +32,7 @@ import {
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType } from "./generatorLower";
 import { routineSyms } from "./lambdaLiftingDetect";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { statementCanRaise } from "../../checker/raises";
@@ -566,7 +566,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// 4. Split at yield points (reuse generatorLower's algorithm)
 	const curExcSym = mintSym(ctx, SymbolKind.Variable, "$curExc", null);
 	setFlag(curExcSym, SymbolFlag.Mutable);
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym };
+	const sc: StateCollector = { items: [], loopStack: [], excType: stdErrorType(ctx), finallyStack: [], landings: [], stateSym, curExcSym };
 	const initState = allocState(sc);
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);

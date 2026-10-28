@@ -42,12 +42,12 @@ import {
 	makeTryCatch, makeTryFinally, makeCatchSym, makeMoveExpr, makeString,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, booleanType, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, booleanType, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { isGenericFn } from "../../checker/context";
+import { isGenericFn, stdSymbol } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { closeIterator } from "./forOfLower";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, checkedCtx, checkedStmtCount } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Data Structures =====
@@ -88,7 +88,7 @@ const RAISES_OUT: number = -2;
 export interface StateCollector {
 	items: GenState[];
 	loopStack: LoopFrame[];
-	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
+	excType: Type | null;   // std's Error, the type $curExc carries
 	finallyStack: FinallyFrame[];
 	landings: number[];
 	stateSym: Symbol;
@@ -795,7 +795,6 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 // Shared by the catch-only and catch+finally splits: the reference binds an
 // except branch the same way whether or not a finally follows it.
 function bindCatchToCurExc(node: Node, sc: StateCollector): void {
-	if (node.nodeType != null) sc.excType = node.nodeType;
 	if (node.resolvedSym != null) {
 		renameIdentInSubtree((node.data as TryCatchStmtData).catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
 	}
@@ -841,7 +840,6 @@ function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: 
 // runs it once) — a corner documented at corpus 420.
 function splitTryFinally(node: Node, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
 	const td = node.data as TryCatchStmtData;
-	if (node.nodeType != null) sc.excType = node.nodeType;
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
@@ -957,13 +955,14 @@ export function wrapExcRouting(dispatch: Node, sc: StateCollector, ctx: Transfor
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 	const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
 	curExcDecl.resolvedSym = sc.curExcSym;
-	// No known exception type (catch-less try/finally): a raw Ptr<void> holder.
-	// Never noneType() — TypeKind.None is a sentinel that trips the codegen
-	// unresolved-type gate. DRC corner (documented, same as an untyped env
-	// field): a ref exception rethrown through a catch-less finally has no
-	// destructor hook on this holder and leaks on the error path.
-	curExcDecl.nodeType = sc.excType != null ? sc.excType : createPtr(createPrimitive(TypeKind.Void));
+	if (sc.excType == null) throw new Error("internal: a resumable try carries its exception with no std Error type in scope");
+	curExcDecl.nodeType = sc.excType;
 	return curExcDecl;
+}
+
+export function stdErrorType(ctx: TransformContext): Type | null {
+	const errSym = ctx.checkerCtx != null ? stdSymbol(ctx.checkerCtx, "Error") : null;
+	return errSym != null ? errSym.symbolType : null;
 }
 
 // Split if-else containing yield:
@@ -1310,7 +1309,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const opSym = newLoweredSym(ctx, SymbolKind.Variable, "$op", int32Type(), true);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
+	const sc: StateCollector = { items: [], loopStack: [], excType: stdErrorType(ctx), finallyStack: [], landings: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
 	if (closable) sc.closeOpSym = opSym;
 	const entryState = allocState(sc);
 	const initState = closable ? allocState(sc) : entryState;
@@ -1480,11 +1479,11 @@ test "generator still one stmt" {
 
 test "generator flag removed" { assert firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) == NodeKind.FunctionDecl; }
 
-test "try finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } finally { x = 2; } }", lowerGenerator) == 1; }
+test "try finally with yield splits" { assert checkedStmtCount("let x: int32 = 0; function* gen(): Iterator<int32> { try { yield 1; } finally { x = 2; } }", lowerGenerator) == 2; }
 
-test "try catch finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } catch (e) { y = 3; } finally { x = 2; } }", lowerGenerator) == 1; }
+test "try catch finally with yield splits" { assert checkedStmtCount("let x: int32 = 0; function* gen(): Iterator<int32> { try { yield 1; } catch (e) { x = 3; } finally { x = 2; } }", lowerGenerator) == 2; }
 
-test "yield in finally splits" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) == 1; }
+test "yield in finally splits" { assert checkedStmtCount("let x: int32 = 0; function* gen(): Iterator<int32> { try { x = 1; } finally { yield 2; } }", lowerGenerator) == 2; }
 
 test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) == 1; }
 
@@ -1522,8 +1521,7 @@ test "a hoisted local without its symbol is refused, not rebuilt by name" {
 function hoistedDeclsOf(src: string, name: string = "x"): Node[] {
 	const parsed = parseInput(src);
 	if (!parsed.ok) return [];
-	checkProgram(parsed.value);
-	lowerGenerator(parsed.value, makeCtx());
+	lowerGenerator(parsed.value, checkedCtx(checkProgram(parsed.value)));
 	const fd = (parsed.value.data as ProgramData).programStmts[0].data as FunctionDeclData;
 	const out: Node[] = [];
 	for (const s of (fd.fnBody.data as BlockStmtData).statements) {
@@ -1561,8 +1559,7 @@ function stateCases(node: Node): int32 {
 function stateCasesOf(src: string): int32 {
 	const parsed = parseInput(src);
 	if (!parsed.ok) return -1 as int32;
-	checkProgram(parsed.value);
-	lowerGenerator(parsed.value, makeCtx());
+	lowerGenerator(parsed.value, checkedCtx(checkProgram(parsed.value)));
 	return stateCases(parsed.value);
 }
 
@@ -1575,8 +1572,7 @@ function declsNamed(node: Node, name: string): int32 {
 test "a local declared in a state run in place of its jump is still hoisted once" {
 	const parsed = parseInput("function* g(n: int32): Iterator<int32> { let i: int32 = 0; while (i < n) { const x: int32 = i * 2; yield x; yield x; i += 1; } }");
 	assert parsed.ok;
-	checkProgram(parsed.value);
-	lowerGenerator(parsed.value, makeCtx());
+	lowerGenerator(parsed.value, checkedCtx(checkProgram(parsed.value)));
 	assert declsNamed(parsed.value, "x") == 1;
 }
 
