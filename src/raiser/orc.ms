@@ -215,6 +215,8 @@ function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, e
 
 export function orcRegisterCandidate(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
 	if (handle == 0) return false;
+	const kind = handleHeapKind(handle);
+	if (kind != RaiserHeapKind.Seq && kind != RaiserHeapKind.Object) return false;
 	if (registered(arrHeap, objHeap, handle)) return false;
 	const roots = arrHeap.orcRoots;
 	setColorField(arrHeap, objHeap, handle, COL_BLACK | ((roots.length + 1) << ROOT_SHIFT));
