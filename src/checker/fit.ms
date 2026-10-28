@@ -450,7 +450,8 @@ function refuseEqualityThroughView(ctx: CheckerContext, node: Node, ops: string[
 
 function wrapIntoCarrier(ctx: CheckerContext, operand: Node, carrier: Type, operandType: Type): Node {
 	const payload = carrier.typeReturn;
-	const taken = payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
+	const fitted = fitLiteralToPayload(ctx, operand, carrier, operandType);
+	const taken = payload != null ? widenToSlotUnion(ctx, fitted, payload) : fitted;
 	return synthMaybeWrap(taken, carrier, taken.nodeType ?? operandType, ctx);
 }
 
@@ -521,6 +522,16 @@ function unionEqualityCall(ctx: CheckerContext, left: Node, right: Node, unions:
 	const call = boundCall(ctx, "unionMemberEq", args, loc);
 	callCheckExpr(ctx, call, null);
 	return call;
+}
+
+// A number literal compared with `N | null` takes the payload type N, as it does against a plain N,
+// so the payload comparison sees one representation on every backend.
+function fitLiteralToPayload(ctx: CheckerContext, expr: Node, carrier: Type, exprType: Type): Node {
+	const payload = carrier.typeReturn;
+	const literal = expr.kind == NodeKind.NumberLiteral
+		|| (expr.kind == NodeKind.UnaryExpr && (expr.data as UnaryExprData).operand.kind == NodeKind.NumberLiteral);
+	if (payload == null || !literal || !isNumeric(payload) || sameType(payload, exprType)) return expr;
+	return fitNode(ctx, expr, payload, exprType);
 }
 
 function isMatchStruct(t: Type): boolean {
