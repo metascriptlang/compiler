@@ -1535,6 +1535,11 @@ function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (rhs == null) return declared;
 	if (declared == null) return rhs;
 	if (rhs.kind == TypeKind.Cursor && rhs.typeReturn != null) return constrainToDeclared(rhs.typeReturn, declared);
+	if (isMaybeType(declared) && rhs.kind != TypeKind.Null) {
+		const inner = unwrapMaybeType(declared);
+		if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
+		return declared;
+	}
 	const union = peelTransparentInstance(declared);
 	if (union.kind != TypeKind.Union || union.typeChildren == null) {
 		return declared;
