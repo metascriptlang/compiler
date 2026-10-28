@@ -171,7 +171,7 @@ test "the audit names a heap whose item outlives its roots" {
 	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "internal: 1 string items live after strand end";
 	rcDecref(arr, obj, s);
 	assert ledgerAudit(arr, obj, [raiserObject(o)], "strand") == "";
-	assert ledgerAudit(arr, obj, [], "strand") == "internal: 1 object items live after strand end";
+	assert ledgerAudit(arr, obj, [], "strand").startsWith("internal: 1 object items live after strand end (leaked: [");
 }
 
 test "the audit names an item held more often than it is counted" {
