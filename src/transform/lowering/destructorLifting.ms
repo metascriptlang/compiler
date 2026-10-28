@@ -26,6 +26,7 @@ import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, 
 import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
+import { VALUE_FIELD } from "./unionTagLower";
 import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, swapHeldBeyond, HeldBeyondState, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
@@ -1537,6 +1538,11 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
 			} else if (lctx.raiserBackend && !walksCells(hook) && (raiserFlatCellUnion(objType) || storesUnionTag(objType))) {
 				if (hook != "destroy") valueCellOp(hook, x1, x2, false, lctx, buf, loc);
+				else if (releasesAfterHook && storesUnionTag(objType)) {
+					const payload = makeMember(x1, VALUE_FIELD, loc);
+					payload.nodeType = objType;
+					refOp(hook, payload, clonePath(payload, loc), false, objType, false, false, lctx, buf, loc);
+				}
 			} else if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
