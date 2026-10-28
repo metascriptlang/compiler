@@ -27,3 +27,4 @@ import "./logicalAssignment";
 import "./refParamOwner";
 import "./globalReferences";
 import "./bareReturnLineBreak";
+import "./throwLineBreak";
