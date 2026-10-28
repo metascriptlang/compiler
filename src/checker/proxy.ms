@@ -172,10 +172,10 @@ function reflectCall(ctx: CheckerContext, proxy: Node, op: string, args: Node[],
 	return methodCall(stdIdent(ctx, "Reflect", loc), op, [call(ctx, "proxyTarget", [proxy], loc)].concat(args), loc);
 }
 
-const RECEIVER = "$proxy";
-const KEY = "$key";
+const RECEIVER = ":proxy";
+const KEY = ":key";
 
-// `proxyWith(p, ($proxy) => body)`: a receiver with effects is read once, into the parameter.
+// `proxyWith(p, (:proxy) => body)`: a receiver with effects is read once, into a parameter no source name reaches.
 function readOnce(ctx: CheckerContext, proxy: Node, body: Node, loc: SourceLocation): Node {
 	return call(ctx, "proxyWith", [proxy, routine([RECEIVER], body, loc)], loc);
 }
