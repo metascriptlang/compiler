@@ -1931,9 +1931,15 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	const asyncKind = builtinKind;
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
+		const literal = closureLiteralOf(d.arguments[0]);
+		if (literal != null) {
+			const env = allocRef(s);
+			emitInst(s, fieldInst(s, literal.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, closureReg, addConst(s, raiserConstString("env"))));
+			emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
+		}
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
-		if (isClosureLiteral(d.arguments[0])) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
+		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
 		return dest;
 	}
 	if (asyncKind == "PromiseThen") {
@@ -1984,7 +1990,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			valueReg = allocRef(s);
 			emitLoadConst(s, valueReg, raiserNil());
 		}
-		const consumes = asyncKind == "PromiseSettle" && settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
+		const consumes = asyncKind == "PromiseFail" || settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
 		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, consumes));
 		return futReg;
 	}

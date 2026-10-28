@@ -89,6 +89,7 @@ export interface RaiserStrand {
 	resultFuture: int64;   // future this strand completes when it finishes; -1 for main
 	safePoints: number[];
 	currentException: RaiserValue;
+	spawnEnv: int64;
 }
 
 export interface RaiserStrands {
@@ -345,7 +346,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(i < mod.globalInit.length ? mod.globalInit[i] : raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), spawnEnv: 0 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -584,6 +585,11 @@ function setException(vm: RaiserVM, value: RaiserValue): void {
 	vmIncref(vm, value);
 	vmDecref(vm, vm.currentException);
 	vm.currentException = value;
+}
+
+function clearException(vm: RaiserVM): void {
+	vmDecref(vm, vm.currentException);
+	vm.currentException = raiserNil();
 }
 
 // Writes a plain value (or a box) into register `abs` of file `cls` in that register's class: a Dyn
@@ -934,7 +940,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	vm.sched.strands.items.push(s);
 	t.strand = vm.sched.strands.items.length - 1;
 	vm.sched.readyOrder.push(t.strand);
@@ -1346,6 +1352,7 @@ function unhandledException(vm: RaiserVM): void {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
 		futureFail(vm, s.resultFuture, msg, vm.currentException);
+		releaseSpawnEnv(vm, s);
 		thenFinished(vm, vm.current);
 		s.status = RaiserStrandStatus.Done;
 		vm.yielded = true;
@@ -1415,11 +1422,13 @@ function unwindStep(vm: RaiserVM): void {
 				// now rather than later: a throw inside the handler body
 				// overwrites currentException.
 				setRegConform(vm, packedA(meta) as int32, vm.currentException);
+				clearException(vm);
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
 			if (packedOp(meta) == RaiserOpcode.Finally) {
 				enterFinally(vm, packedA(meta), packedB(meta), FINALLY_RAISE, vm.currentException);
+				clearException(vm);
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
@@ -1563,21 +1572,41 @@ function schedulePick(vm: RaiserVM): number {
 // Returns true when the finished strand was a spawned one and the scheduler
 // should pick another; false when the main strand finished, which ends the
 // program with its value.
+function releaseSpawnEnv(vm: RaiserVM, s: RaiserStrand): void {
+	if (s.spawnEnv == 0) return;
+	vmReleaseChild(vm, s.spawnEnv, true);
+	s.spawnEnv = 0;
+}
+
+function releaseEntryRefs(vm: RaiserVM): void {
+	const own = getModuleFunc(vm.mod, vm.funcIdx).ownRefs;
+	for (let i = 0; i < own.length; i += 1) {
+		const r = vm.base + own[i];
+		const h = vm.regs.slots[r];
+		if (h != 0) {
+			vm.regs.slots[r] = 0;
+			releaseShell(vm, h);
+		}
+	}
+}
+
 function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	const s = vm.sched.strands.items[vm.current];
+	releaseSpawnEnv(vm, s);
 	s.result = value;
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
+	if (vm.current != 0) releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
-		vmLedger(vm, [vm.sched.strands.items[vm.current]], [value], "strand");
+		vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand");
 	}
 	return vm.current != 0;
 }
 
 // The handles the frames of a strand hold: each frame's registers below its callee's first slot, because the
 // callee's frame overlaps the rest of the caller's, which is arguments already read into it.
-function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: RaiserValue[]): void {
+function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: RaiserValue[], names: string[]): void {
 	const slots = s.regs.slots;
 	const frames = running ? vm.callStack : s.callStack;
 	let funcIdx = running ? vm.funcIdx : s.funcIdx;
@@ -1587,7 +1616,10 @@ function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: R
 	while (true) {
 		const classes = getModuleFunc(vm.mod, funcIdx).regClasses;
 		for (let r = 0; r < limit && r < classes.length; r += 1) {
-			if (inRefFile(classes[r]) && slots[base + r] != 0) roots.push(handleValue(slots[base + r]));
+			if (inRefFile(classes[r]) && slots[base + r] != 0) {
+				roots.push(handleValue(slots[base + r]));
+				names.push(`strand ${s.id} ${getModuleFunc(vm.mod, funcIdx).name} register ${r}`);
+			}
 		}
 		if (depth == 0) return;
 		const frame = frames.items[depth - 1];
@@ -1602,16 +1634,18 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 	if (vm.comptime || !vm.auditLedger || vm.error != "") return;
 	vmLedgerCollect(vm);
 	const roots: RaiserValue[] = [];
+	const names: string[] = [];
 	roots.push(vm.currentException);
+	names.push("the running strand's current exception");
 	const running = vm.sched.strands.items[vm.current];
 	for (const s of held) {
-		if (where != "strand" || s.status != RaiserStrandStatus.Done) frameRefRoots(vm, s, s == running, roots);
-		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
-		if (s != running) roots.push(s.currentException);
+		if (s.status != RaiserStrandStatus.Done) frameRefRoots(vm, s, s == running, roots, names);
+		if (s.globals != held[0].globals) for (const g of s.globals) { roots.push(g); names.push(`strand ${s.id} global`); }
+		if (s != running) { roots.push(s.currentException); names.push(`strand ${s.id} current exception`); }
 	}
-	for (const g of held[0].globals) roots.push(g);
-	for (const e of extra) roots.push(e);
-	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where);
+	for (const g of held[0].globals) { roots.push(g); names.push("global"); }
+	for (const e of extra) { roots.push(e); names.push("module state error"); }
+	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where, names);
 	if (verdict != "") vmError(vm, verdict);
 }
 
@@ -1698,7 +1732,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return id;
@@ -1724,6 +1758,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const regs = createRegFile(vm.mod);
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
+	let spawnEnv: int64 = 0;
 	const copyMap = strandCopyMap(vm);
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
@@ -1737,6 +1772,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 			return -1;
 		}
 		regs.slots[callee.regOps[0] >> 3] = envSlot.intVal;
+		spawnEnv = envSlot.intVal;
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -1745,7 +1781,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return fut;
@@ -1908,7 +1944,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return vm.sched.strands.items.length - 1;
@@ -3769,6 +3805,10 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.FutureFail => {
 			futureFail(vm, getDyn(vm, ia).intVal, vmExceptionText(vm, getDyn(vm, ib)), getDyn(vm, ib));
+			if (ic == 1) {
+				const consumed = getDyn(vm, ib);
+				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
+			}
 		},
 		RaiserOpcode.FutureCombine => {
 			vmHandleFutureCombine(vm, ia, ib, ic);
