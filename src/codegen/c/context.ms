@@ -685,6 +685,7 @@ export class CEmissionFacts {
 	hookOps: HashMap<string, Symbol> | null = null;
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
 	inlineDecls: HashMap<Symbol, Node> = new HashMap<Symbol, Node>();
+	preludeUnlowered: boolean = false;
 	headerIncludes: HashMap<string, string[]> | null = null;
 	trimPaths: boolean = false;
 }

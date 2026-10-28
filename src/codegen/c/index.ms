@@ -98,7 +98,7 @@ function bindRegistryFacts(facts: CEmissionFacts): void {
 	if (facts.headerIncludes == null) facts.headerIncludes = headerIncludeTable();
 }
 
-function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
+export function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
 	for (const info of demands.typeInfos) {
 		if (facts.typeInfos.has(info.key)) continue;
 		info.cName = match (info.kind) {

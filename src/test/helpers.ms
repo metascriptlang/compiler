@@ -10,7 +10,7 @@ import { resetBuildState } from "../compiler/buildSession";
 import { checkModuleGraph, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { hasExtraGlobalImports } from "../checker/prelude";
 import { TargetInfo, hostTargetInfo, duVariantMark, instantiatedBodyCount, setConcurrentTypeQueries } from "../checker/types";
-import { computeAliveSet } from "../checker/reachability";
+import { computeAliveSet, collectModuleTypeInfoDemands } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
 import { hasErrors, CheckerError, CheckerContext, GcMode, Severity, ExportRegistry } from "../checker/context";
 import { checkProgramWithRegistry, preludeContextFor } from "../checker/checkPass";
@@ -26,7 +26,7 @@ import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
 import { factInlineDecls } from "../codegen/c/forward";
-import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
+import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission, registerTypeInfoDemands } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
 import { createJsTreeLayout } from "../codegen/js/emit";
@@ -148,7 +148,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
-	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false);
+	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(lowered, checkerCtx, modPath, aliveSet));
 	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
 	return Result.ok(cCode);
 }
@@ -199,9 +199,18 @@ export function compileToCWithStd(source: string): CompileResult {
 	inferRaises([analyzed]);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
-	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
+	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(analyzed, checkerCtx, modPath, aliveSet));
 	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
 	return Result.ok(cCode);
+}
+
+function entryOnlyFacts(entry: Node, ctx: CheckerContext, modPath: string, aliveSet: AliveSet): CEmissionFacts {
+	const facts = new CEmissionFacts();
+	facts.preludeUnlowered = true;
+	factInlineDecls(facts, entry);
+	prepareCModuleEmission(entry, ctx, modPath, aliveSet, facts);
+	registerTypeInfoDemands(collectModuleTypeInfoDemands(entry, modPath), facts);
+	return facts;
 }
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen

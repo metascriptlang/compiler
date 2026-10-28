@@ -44,6 +44,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Read
 export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
 	if (sym.symbolType == null || sym.symbolType.callConv != CallingConvention.CcInline) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return false;
+	if (g.emissionFacts.preludeUnlowered && sym.modulePath != g.modulePath && inlineDeclOf(g.emissionFacts, sym) == null) return false;
 	return !g.emissionFacts.hcrModules.has(sym.modulePath);
 }
 
