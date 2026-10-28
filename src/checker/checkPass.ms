@@ -6,9 +6,9 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -1779,6 +1779,33 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checked;
 }
 
+function declaresStaticMember(classSym: Symbol, name: string): boolean {
+	let cur = parentClassSymOf(classSym);
+	for (let depth = 0; cur != null && depth < 64; depth += 1) {
+		const body = classDeclNodeOf(cur);
+		if (body != null) {
+			for (const declared of (body.data as ClassDeclData).classBody) {
+				const member = declared.kind == NodeKind.DecoratedDecl ? (declared.data as DecoratedDeclData).decoratedNode : declared;
+				if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic && (member.data as MethodDeclData).methodName == name) return true;
+				if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propName == name) return true;
+			}
+		}
+		cur = parentClassSymOf(cur);
+	}
+	return false;
+}
+
+function refuseOrphanOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): void {
+	if (!routineFlagSet(d.methodFlags).has(RoutineFlag.Override) || classType == null || classType.sym == null) return;
+	const parent = classDeclaredParentOf(classType);
+	if (parent == null) {
+		addError(ctx, `This member cannot have an 'override' modifier because its containing class '${className}' does not extend another class`, d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (d.methodIsStatic ? declaresStaticMember(classType.sym, d.methodName) : dispatchOverriddenEntry(classType.sym, d.methodName) != null) return;
+	addError(ctx, `This member cannot have an 'override' modifier because it is not declared in the base class '${typeDisplayName(parent)}'`, d.nameLocation.line, d.nameLocation.column);
+}
+
 function checkOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): DispMethodEntry | null {
 	if (classType == null || classType.sym == null) return null;
 	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
@@ -2001,6 +2028,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const actorMethod = ctx.currentActor != null && ctx.currentActor.symbolType == classType;
 			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
+			refuseOrphanOverride(ctx, d, className, classType);
 			const overridden = d.methodIsStatic ? null : checkOverride(ctx, d, className, classType);
 			if (!d.methodIsStatic) checkOverrideSinkMode(ctx, d, sym, className, classType);
 			refuseAccessorOverField(ctx, node, classType, d.methodName, d.nameLocation);

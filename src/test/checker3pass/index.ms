@@ -83,3 +83,4 @@ import "./scenarios/restTupleArity";
 import "./scenarios/mappedTypeRefusals";
 import "./scenarios/readonlyArrayForms";
 import "./scenarios/literalLocalKeepsType";
+import "./scenarios/overrideModifier";

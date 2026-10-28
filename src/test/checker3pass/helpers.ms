@@ -33,6 +33,11 @@ export interface CheckResult {
 // Stops after Pass 3. No monomorphize, no transform, no codegen — keeps
 // the post-check AST intact so scenarios can inspect nodeType directly.
 export function checkOnly(source: string): CheckResult {
+	return checkOnlyEdited(source, (program: Node): void => {});
+}
+
+// Runs `edit` on the parsed program before Pass 3, to set what the parser cannot yet spell.
+export function checkOnlyEdited(source: string, edit: (program: Node) => void): CheckResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/checker3pass.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -51,6 +56,7 @@ export function checkOnly(source: string): CheckResult {
 		return { program: null as unknown as Node, ctx: null as unknown as CheckerContext, errors: ["parse: " + pr.error] };
 	}
 
+	edit(pr.value);
 	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 
 	const errMsgs: string[] = [];

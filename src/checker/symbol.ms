@@ -94,6 +94,7 @@ export enum RoutineFlag {
 	Template,
 	Generic,
 	ReadonlyParams,
+	Override,
 }
 
 const decodedRoutineFlags: HashMap<string, BitSet<RoutineFlag>> = new HashMap<string, BitSet<RoutineFlag>>();
@@ -120,6 +121,7 @@ export function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 			"extern" => { set = set.incl(RoutineFlag.Extern); }
 			"extern_async" => { set = set.incl(RoutineFlag.Extern).incl(RoutineFlag.Async); }
 			"overload" => { set = set.incl(RoutineFlag.Overload); }
+			"override" => { set = set.incl(RoutineFlag.Override); }
 			"template" => { set = set.incl(RoutineFlag.Template); }
 			"gen:" => { set = set.incl(RoutineFlag.Generic); }
 			"rdonly:" => { set = set.incl(RoutineFlag.ReadonlyParams); }
@@ -695,6 +697,7 @@ test "routine flags split combined words" {
 	const externAsync = routineFlagSet("extern_async");
 	assert externAsync.has(RoutineFlag.Extern) && externAsync.has(RoutineFlag.Async);
 	assert routineFlagSet("generator|overload|template").has(RoutineFlag.Overload);
+	assert routineFlagSet("async|override").has(RoutineFlag.Override) && !routineFlagSet("overload").has(RoutineFlag.Override);
 }
 
 test "routine flags keep a union receiver or constraint as one type text" {
