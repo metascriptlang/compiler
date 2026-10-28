@@ -4959,7 +4959,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	while (ei < exts.length) {
 		const declType = getExtFnType(exts[ei]);
 		let srcType = declType;
-		if (hasGenericParams(srcType)) {
+		if (!exts[ei].isStatic && hasGenericParams(srcType)) {
 			const eb = createUnifyBindings();
 			unifyArrayReceiver(srcType.typeChildren[0], objType, eb);
 			if (eb.names.length > 0) {
@@ -5111,14 +5111,18 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			}
 		}
 	}
-	if (extWinnerSym != null && !exts[idx].isStatic && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == ""
+	if (extWinnerSym != null && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == ""
 			&& extWinnerSym.declNode != null && declTakesReceiver(extWinnerSym.declNode) && isGenericRoutine(winnerType, extWinnerSym)) {
 		const recvBindings = createUnifyBindings();
-		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		if (!exts[idx].isStatic) unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
 		const inst = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, getGenericDeclFlags(extWinnerSym.declNode), null, recvBindings);
 		if (inst != null) {
-			upcastReceiver(callNode, inst);
-			winnerType = stripReceiverParam(inst);
+			if (exts[idx].isStatic) {
+				winnerType = inst;
+			} else {
+				upcastReceiver(callNode, inst);
+				winnerType = stripReceiverParam(inst);
+			}
 		}
 	}
 	const callee = (callNode.data as CallExprData).callee;
