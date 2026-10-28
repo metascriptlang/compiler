@@ -1068,7 +1068,8 @@ static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
     }
     bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
     if (!frozen) {
-        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL) {
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL
+                || atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
             work = true;
         } else if (!msMpscMarkEmpty(&a->mailbox)) {
             work = true;
@@ -1170,9 +1171,9 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
-        /* STOP signal: swallow — its scheduling job is done; the reap gate (or
-         * the owner's reap scan) collects with the flag it rode in with. */
-        if (msg->kind == MS_ACTOR_MSG_STOP) { processed++; continue; }
+        /* STOP signal: end the visit; its end re-queues a stopped actor, so the next
+         * visit's reap gate collects it and messages behind the STOP fail noproc. */
+        if (msg->kind == MS_ACTOR_MSG_STOP) { processed++; break; }
         /* System messages (kind < 0): route to onSystemMsg handler if set */
         if (msg->kind < 0 && a->onSystemMsg != NULL) {
             a->onSystemMsg(a->state, (void*)msg);
