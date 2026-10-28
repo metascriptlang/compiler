@@ -105,9 +105,18 @@ export const NO_ADDRESS_ARITHMETIC = ": a location there has no address arithmet
 
 export const NO_BYTE_MEMORY = ": no byte representation or recoverable typed location for this conversion";
 
+export const NO_ELEMENT_ADDRESS = "; an element has no raw address on JS: pass it to a `ref` or `Borrow<T>` parameter, which receive its array and index, or pass the Span it came from";
+
+function isVoidPointer(t: Type | null): boolean {
+	const b = castType(t);
+	return b != null && b.kind == TypeKind.Ptr && isVoid(b.typeReturn);
+}
+
 function checkPointerCast(ctx: CheckerContext, node: Node, expr: Node, target: Type | null): void {
 	const refusal = byteViewRefusal(expr != null ? expr.nodeType : null, target);
-	if (refusal != null) addError(ctx, refusal + " on JS" + NO_BYTE_MEMORY, node.location.line, node.location.column);
+	if (refusal == null) return;
+	const elementAddress = expr != null && expr.kind == NodeKind.ArrayAccess && isVoidPointer(target);
+	addError(ctx, refusal + " on JS" + NO_BYTE_MEMORY + (elementAddress ? NO_ELEMENT_ADDRESS : ""), node.location.line, node.location.column);
 }
 
 function checkNode(ctx: CheckerContext, node: Node): void {
