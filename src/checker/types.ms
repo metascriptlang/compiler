@@ -3003,6 +3003,18 @@ function mappedSourceMembers(source: Type): Type[] {
 	return [];
 }
 
+// A source the mapped type maps to itself: no members to map back.
+function isInertMappedSource(source: Type): boolean {
+	return source.kind != TypeKind.GenericParam && !isObjectSource(source) && mappedSourceMembers(source).length == 0;
+}
+
+function allInertMappedSources(members: Type[]): boolean {
+	for (const m of members) {
+		if (m == null || !isInertMappedSource(m)) return false;
+	}
+	return true;
+}
+
 function isObjectSource(t: Type): boolean {
 	const s = peelTransparentInstance(unwrapRef(t));
 	return s.kind == TypeKind.Struct || s.kind == TypeKind.Tuple || arrayOf(t) != null;
@@ -4869,10 +4881,17 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		return;
 	}
 	if (formal.kind == TypeKind.Union && unionHasMappedMember(formal) && (concrete.kind == TypeKind.Union || (isMaybeType(concrete) && concrete.typeReturn != null))) {
-		const sources: Type[] = concrete.kind == TypeKind.Union ? concrete.typeChildren : [concrete.typeReturn!];
-		for (const source of sources) {
-			if (source != null && source.kind != TypeKind.Null) unifyIntoUnionFormal(formal, source, bindings);
+		const sources: Type[] = [];
+		const held: Type[] = concrete.kind == TypeKind.Union ? concrete.typeChildren : [concrete.typeReturn!];
+		for (const source of held) {
+			if (source != null && source.kind != TypeKind.Null) sources.push(source);
 		}
+		// A union of members the mapped type leaves as they are is one value of the union: T binds to all of it.
+		if (sources.length > 1 && allInertMappedSources(sources)) {
+			unifyIntoUnionFormal(formal, createUnion(sources), bindings);
+			return;
+		}
+		for (const source of sources) unifyIntoUnionFormal(formal, source, bindings);
 		return;
 	}
 	// Bridge Union<T, Null> ↔ Maybe<X> for nullable witness inference.
@@ -4993,7 +5012,7 @@ function homomorphicMappedSource(source: Type, target: Type, param: Type): Type 
 	const template = target.typeChildren[1];
 	if (template.kind != TypeKind.IndexedAccess || template.typeChildren.length != 2
 		|| withoutReadonlyView(template.typeChildren[0]) != param || template.typeChildren[1] != mappedParam(target)) return null;
-	if (source.kind != TypeKind.GenericParam && !isObjectSource(source) && mappedSourceMembers(source).length == 0) return source;
+	if (isInertMappedSource(source) || (source.kind == TypeKind.Union && allInertMappedSources(source.typeChildren))) return source;
 	const array = arrayOf(source);
 	if (array != null) {
 		const reversed = createRef(createArray(array.typeReturn));
