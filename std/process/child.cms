@@ -3,7 +3,9 @@
 // Every blocking call takes a deadline in milliseconds; 0 polls once. A read, write or wait
 // also drains whichever other pipe is ready, so a child that floods stderr while the parent
 // reads stdout, or that echoes while the parent is still writing, cannot deadlock it.
-// Chunks are bytes: one can end inside a UTF-8 sequence, so concatenate before decoding.
+// A text chunk ends on a complete UTF-8 character: the bytes of a sequence the pipe delivered
+// only in part wait for the next read, and an ill-formed sequence reads as U+FFFD. `readBytes`
+// returns the bytes as they came.
 // The async names readAsync, writeAsync and waitAsync are reserved for the same handle.
 
 @include("runtime/process.h");
@@ -18,6 +20,8 @@ import {
 	pipeClosed,
 	outputOverflow,
 } from "./errors";
+import { incompleteTail } from "./utf8Tail";
+import { utf8String } from "../core/string/bytes";
 
 extern function msProcChildSpawn(
 	path: string,
@@ -63,6 +67,11 @@ export struct ReadChunk {
 	ended: boolean;
 }
 
+export struct ByteChunk {
+	data: Buffer;
+	ended: boolean;
+}
+
 export interface SpawnOptions {
 	cwd?: string;
 	mergeStderr?: boolean;
@@ -72,11 +81,13 @@ export class ChildProcess {
 	private handle: int64;
 	pid: int32;
 	command: string;
+	private held: string[];
 
 	constructor(handle: int64, command: string) {
 		this.handle = handle;
 		this.pid = msProcChildPid(handle);
 		this.command = command;
+		this.held = ["", ""];
 	}
 
 	// All bytes of `data`, or Timeout / PipeClosed naming how many were sent.
@@ -99,22 +110,52 @@ export class ChildProcess {
 	read(stream: ChildStream, timeoutMs: int32): Result<ReadChunk, ProcessError> {
 		const which = stream as int32;
 		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
-		const name = stream.toString().toLowerCase();
-		return match (code) {
-			CHILD_OK => Result.ok({ data: msProcChildTake(this.handle, which), ended: false }),
-			CHILD_ENDED => Result.ok({ data: "", ended: true }),
-			CHILD_TIMEOUT => Result.err(
-				timedOut(this.command, `read ${name} after ${timeoutMs} ms`),
-			),
-			CHILD_PIPE_CLOSED => Result.err(pipeClosed(this.command, `${name} of a closed handle`)),
-			CHILD_OVERFLOW => Result.err(outputOverflow(this.command, name)),
-			_ => Result.err(this.osError(`read ${name}`)),
-		};
+		if (code == CHILD_OK) return Result.ok({ data: this.takeText(which), ended: false });
+		if (code == CHILD_ENDED) return Result.ok(this.endText(which));
+		return Result.err(this.readFailure(stream, code, timeoutMs));
 	}
 
-	// Whatever stderr the pump has drained so far; does not wait.
+	// The same read as `read`, with the bytes untouched.
+	readBytes(stream: ChildStream, timeoutMs: int32): Result<ByteChunk, ProcessError> {
+		const which = stream as int32;
+		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
+		if (code == CHILD_OK) {
+			return Result.ok({ data: Buffer.fromString(msProcChildTake(this.handle, which), "utf8"), ended: false });
+		}
+		if (code == CHILD_ENDED) return Result.ok({ data: Buffer.alloc(0), ended: true });
+		return Result.err(this.readFailure(stream, code, timeoutMs));
+	}
+
+	// Whatever stderr the pump has drained so far, decoded in full; does not wait.
 	takeStderr(): string {
-		return msProcChildTake(this.handle, ChildStream.Stderr as int32);
+		const raw = this.held[1] + msProcChildTake(this.handle, ChildStream.Stderr as int32);
+		this.held[1] = "";
+		return utf8String(raw.asBytes(), false);
+	}
+
+	private takeText(which: int32): string {
+		const raw = this.held[which] + msProcChildTake(this.handle, which);
+		const kept = incompleteTail(raw.asBytes());
+		const length = raw.byteLength;
+		this.held[which] = raw.byteSlice(length - kept, length);
+		return utf8String(raw.byteSlice(0, length - kept).asBytes(), false);
+	}
+
+	// At end of stream a held partial sequence is ill-formed: it reads as U+FFFD.
+	private endText(which: int32): ReadChunk {
+		const raw = this.held[which];
+		this.held[which] = "";
+		return { data: utf8String(raw.asBytes(), false), ended: raw == "" };
+	}
+
+	private readFailure(stream: ChildStream, code: int32, timeoutMs: int32): ProcessError {
+		const name = stream.toString().toLowerCase();
+		return match (code) {
+			CHILD_TIMEOUT => timedOut(this.command, `read ${name} after ${timeoutMs} ms`),
+			CHILD_PIPE_CLOSED => pipeClosed(this.command, `${name} of a closed handle`),
+			CHILD_OVERFLOW => outputOverflow(this.command, name),
+			_ => this.osError(`read ${name}`),
+		};
 	}
 
 	// The exit status, or Timeout with the child still running.

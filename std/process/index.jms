@@ -55,14 +55,25 @@ export function fileExists(path: string): boolean {
 }
 
 export function exec(command: string): Result<string, ProcessError> {
-	const r = spawnCapture(command, [], "", true);
-	if (r.startError != "") return Result.err(spawnFailed(command, r.startError));
-	if (r.pipeError != "") return Result.err(pipeError(command, r.pipeError));
-	if (r.signal != 0) return Result.err(signalTerminated(command, r.signal, r.output, r.errorOutput));
-	if (r.exitCode != 0) {
-		return Result.err(nonZeroExit(command, r.exitCode, r.output, r.errorOutput));
-	}
+	const r = spawnCapture(command, [], "", true, false);
+	const failure = failureOf(command, r, true);
+	if (failure != null) return Result.err(failure);
 	return Result.ok(r.output);
+}
+
+export function execBytes(command: string): Result<Buffer, ProcessError> {
+	const r = spawnCapture(command, [], "", true, true);
+	const failure = failureOf(command, r, true);
+	if (failure != null) return Result.err(failure);
+	return Result.ok(r.outputBytes);
+}
+
+function failureOf(path: string, r: Captured, shell: boolean): ProcessError | null {
+	if (r.startError != "") return shell ? spawnFailed(path, r.startError) : startFailed(path, r.startError);
+	if (r.pipeError != "") return pipeError(path, r.pipeError);
+	if (r.signal != 0) return signalTerminated(path, r.signal, r.output, r.errorOutput);
+	if (r.exitCode != 0) return nonZeroExit(path, r.exitCode, r.output, r.errorOutput);
+	return null;
 }
 
 // Node-style `execFile`: no shell, forward-slash paths accepted natively.
@@ -78,11 +89,13 @@ interface Captured {
 	exitCode: int32;
 	signal: int32;
 	output: string;
+	outputBytes: Buffer;
 	errorOutput: string;
 }
 
-function spawnCapture(path: string, args: string[], cwd: string, shell: boolean): Captured {
-	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, shell: ${shell}, encoding: "utf8", maxBuffer: Infinity });
+// `bytes` captures stdout as the bytes written (stderr still reads as text); otherwise `outputBytes` is empty.
+function spawnCapture(path: string, args: string[], cwd: string, shell: boolean, bytes: boolean): Captured {
+	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, shell: ${shell}, encoding: ${bytes} ? "buffer" : "utf8", maxBuffer: Infinity });
 const code = r.error ? (typeof r.error.code === "string" ? r.error.code : "UNKNOWN") : "";
 const started = !r.error || r.pid !== 0;
 return {
@@ -91,19 +104,25 @@ return {
 	pipeError: started && r.error ? code : "",
 	exitCode: r.status ?? 0,
 	signal: r.signal ? (constants.signals[r.signal] ?? 0) : 0,
-	output: r.stdout ?? "",
-	errorOutput: r.stderr ?? "",
+	output: ${bytes} ? (r.stdout ? r.stdout.toString("utf8") : "") : (r.stdout ?? ""),
+	outputBytes: ${bytes} ? new Uint8Array(r.stdout ?? []) : new Uint8Array(0),
+	errorOutput: ${bytes} ? (r.stderr ? r.stderr.toString("utf8") : "") : (r.stderr ?? ""),
 };`);
 	unreachable;
 }
 
 export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
-	const r = spawnCapture(path, args, cwd, false);
-	if (r.startError != "") return Result.err(startFailed(path, r.startError));
-	if (r.pipeError != "") return Result.err(pipeError(path, r.pipeError));
-	if (r.signal != 0) return Result.err(signalTerminated(path, r.signal, r.output, r.errorOutput));
-	if (r.exitCode != 0) return Result.err(nonZeroExit(path, r.exitCode, r.output, r.errorOutput));
+	const r = spawnCapture(path, args, cwd, false, false);
+	const failure = failureOf(path, r, false);
+	if (failure != null) return Result.err(failure);
 	return Result.ok(r.output);
+}
+
+export function execFileCaptureBytes(path: string, args: string[] = [], cwd: string = ""): Result<Buffer, ProcessError> {
+	const r = spawnCapture(path, args, cwd, false, true);
+	const failure = failureOf(path, r, false);
+	if (failure != null) return Result.err(failure);
+	return Result.ok(r.outputBytes);
 }
 
 export interface ExecFileResult {
@@ -117,7 +136,7 @@ export interface ExecFileResult {
 }
 
 export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
-	const r = spawnCapture(path, args, cwd, false);
+	const r = spawnCapture(path, args, cwd, false, false);
 	return {
 		started: r.startError == "",
 		pipeOk: r.pipeError == "",

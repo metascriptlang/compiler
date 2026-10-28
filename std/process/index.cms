@@ -11,6 +11,7 @@
 @include("runtime/process.h");
 
 import { isExecutable } from "../fs";
+import { utf8String } from "../core/string/bytes";
 import {
 	ProcessError, ProcessErrorKind,
 	spawnFailed, startFailed, errnoName, nonZeroExit, signalTerminated, pipeError,
@@ -19,7 +20,7 @@ import {
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
-export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, SpawnOptions } from "./child";
+export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, ByteChunk, SpawnOptions } from "./child";
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
@@ -42,6 +43,11 @@ extern function msProcessArch(): string;
 extern function msProcessExecPath(): string;
 
 const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
+
+// Each ill-formed UTF-8 sequence reads as U+FFFD, as TextDecoder reads it.
+function textOf(raw: string): string {
+	return utf8String(raw.asBytes(), false);
+}
 
 // =============================================================================
 // Command-line arguments
@@ -97,6 +103,18 @@ export function cwd(): string {
 // Naming convention: sync is the default in std/* — async variant would be
 // named `execAsync` (mirrors hashAsync, rsaGenerateAsync, etc.).
 export function exec(command: string): Result<string, ProcessError> {
+	const raw = try execRaw(command);
+	return Result.ok(textOf(raw));
+}
+
+// Like exec(), with stdout as the bytes the child wrote.
+export function execBytes(command: string): Result<Buffer, ProcessError> {
+	const raw = try execRaw(command);
+	return Result.ok(Buffer.fromString(raw, "utf8"));
+}
+
+// stdout as the string the runtime read, which may hold ill-formed UTF-8; never leaves this module.
+function execRaw(command: string): Result<string, ProcessError> {
 	const stdoutText = msProcessSpawnSync(command);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
@@ -110,10 +128,10 @@ export function exec(command: string): Result<string, ProcessError> {
 	const exitCode = msProcSpawnGetExitCode();
 	const stderrText = msProcSpawnGetStderr();
 	if (signal != 0) {
-		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
+		return Result.err(signalTerminated(command, signal, textOf(stdoutText), textOf(stderrText)));
 	}
 	if (exitCode != 0) {
-		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
+		return Result.err(nonZeroExit(command, exitCode, textOf(stdoutText), textOf(stderrText)));
 	}
 	return Result.ok(stdoutText);
 }
@@ -139,6 +157,17 @@ extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string
 // a shell there is no quote-stripping, no 8191-char line cap, no AutoRun, and
 // no temptation to lean on shell-only syntax (`rm -f`, `2>/dev/null`).
 export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
+	const raw = try execFileCaptureRaw(path, args, cwd);
+	return Result.ok(textOf(raw));
+}
+
+// Like execFileCapture(), with stdout as the bytes the child wrote.
+export function execFileCaptureBytes(path: string, args: string[] = [], cwd: string = ""): Result<Buffer, ProcessError> {
+	const raw = try execFileCaptureRaw(path, args, cwd);
+	return Result.ok(Buffer.fromString(raw, "utf8"));
+}
+
+function execFileCaptureRaw(path: string, args: string[], cwd: string): Result<string, ProcessError> {
 	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
@@ -152,10 +181,10 @@ export function execFileCapture(path: string, args: string[] = [], cwd: string =
 	const exitCode = msProcSpawnGetExitCode();
 	const stderrText = msProcSpawnGetStderr();
 	if (signal != 0) {
-		return Result.err(signalTerminated(path, signal, stdoutText, stderrText));
+		return Result.err(signalTerminated(path, signal, textOf(stdoutText), textOf(stderrText)));
 	}
 	if (exitCode != 0) {
-		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
+		return Result.err(nonZeroExit(path, exitCode, textOf(stdoutText), textOf(stderrText)));
 	}
 	return Result.ok(stdoutText);
 }
@@ -179,8 +208,8 @@ export function execFileResult(path: string, args: string[] = [], cwd: string = 
 		pipeOk: msProcSpawnGetPipeOk() != 0,
 		exitCode: msProcSpawnGetExitCode(),
 		signal: msProcSpawnGetSignal(),
-		output: stdoutText,
-		errorOutput: msProcSpawnGetStderr(),
+		output: textOf(stdoutText),
+		errorOutput: textOf(msProcSpawnGetStderr()),
 		startErrno: msProcSpawnGetErrno(),
 	};
 }
