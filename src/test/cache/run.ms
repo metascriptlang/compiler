@@ -1,6 +1,6 @@
 // Cache lane: after every input change, a warm build must print what a build from an empty cache prints.
 // Each scenario runs once per cache layer; nativeBuildBoundary.ms keeps the per-feature cache contracts.
-import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
+import { argv, cwd, env, execFileCapture, exit, platform, spawn, ChildProcess } from "std/process";
 import { ensureDir, exists, readDir, readFile, remove, removeAll, rename, symlink, writeFile } from "std/fs";
 
 const windows = platform == "windows";
@@ -346,6 +346,16 @@ function localVersions(dir: string, mode: string, module: string): string {
 	return `c=${c} d=${d} cfp=${cfp}`;
 }
 
+function cacheKb(cacheDir: string): string {
+	const size = execFileCapture("du", ["-sk", cacheDir]);
+	return size.ok ? size.value.split("\t")[0] : "unmeasured";
+}
+
+function backdate(cacheDir: string): boolean {
+	if (windows) return false;
+	return execFileCapture("find", [cacheDir, "-type", "f", "-exec", "touch", "-t", "200001010000", "{}", "+"]).ok;
+}
+
 function runEditLoop(loop: EditLoop, index: number): void {
 	const dir = `${root}/loop-${index}`;
 	ensureDir(dir);
@@ -362,7 +372,13 @@ function runEditLoop(loop: EditLoop, index: number): void {
 	need(execFileCapture(compiler, args, dir).ok, `${loop.name} baseline`);
 	const warm: string[] = [];
 	const expected: string[] = [];
+	let liveKb = "unmeasured";
+	let backdated = false;
 	for (let step = 1; step <= EDIT_STEPS; step++) {
+		if (step == EDIT_STEPS) {
+			liveKb = cacheKb(`${dir}/out/${loop.mode}/.cache`);
+			backdated = backdate(`${dir}/out/${loop.mode}/.cache`);
+		}
 		for (const m of loop.edited) put(`${dir}/${m}.ms`, moduleSource(m, step));
 		need(execFileCapture(compiler, args, dir).ok, `${loop.name} step ${step}`);
 		const r = execFileCapture(`${dir}/probe`, []);
@@ -370,10 +386,11 @@ function runEditLoop(loop: EditLoop, index: number): void {
 		expected.push(loop.modules.map((m) => loop.edited.includes(m) ? `${step}` : "0").join(","));
 	}
 	results.push({ name: `local: ${loop.name}: output after each edit`, expected: expected.join(" "), actual: warm.join(" ") });
-	const size = execFileCapture("du", ["-sk", `${dir}/out/${loop.mode}/.cache`]);
-	console.log(`${loop.name}: local cache ${size.ok ? size.value.split("\t")[0] : "unmeasured"} KB after ${EDIT_STEPS} edits`);
-	const versions = loop.modules.map((m) => `${m} ${localVersions(dir, loop.mode, m)}`);
-	results.push({ name: `local: ${loop.name}: versions kept`, expected: loop.modules.map((m) => `${m} c=1 d=1 cfp=1`).join(", "), actual: versions.join(", ") });
+	console.log(`${loop.name}: local cache ${liveKb} KB before edit ${EDIT_STEPS} (versions inside the live window), ${cacheKb(`${dir}/out/${loop.mode}/.cache`)} KB after it (earlier versions unused for hours)`);
+	if (backdated) {
+		const versions = loop.modules.map((m) => `${m} ${localVersions(dir, loop.mode, m)}`);
+		results.push({ name: `local: ${loop.name}: versions kept`, expected: loop.modules.map((m) => `${m} c=1 d=1 cfp=1`).join(", "), actual: versions.join(", ") });
+	}
 	env.set("MSC_CACHE_DIR", `${dir}/truth-cache`);
 	env.set("MSC_NO_GLOBAL_CACHE", "1");
 	const truth = execFileCapture(compiler, buildArgs("truth"), dir);
@@ -389,6 +406,71 @@ for (const loop of editLoops()) {
 	if (only.length == 0 || only.some((name) => loop.name.includes(name))) runEditLoop(loop, loopIndex);
 	loopIndex = loopIndex + 1;
 }
+
+const RIVAL_ROUNDS = 10;
+const RIVAL_SLEEP_SECONDS = 2;
+const RIVALS = "concurrent builds of two programs sharing a module that emits different C";
+
+function rivalSource(program: string): string {
+	return `import { from${program} } from "./shared";\nimport { slow${program}Value } from "./slow${program}";\n` + "console.log(`${from" + program + "()}:${slow" + program + "Value()}`);\n";
+}
+
+function rivalCompiler(dir: string): string {
+	ensureDir(`${dir}/bin`);
+	put(`${dir}/bin/slow`, "none");
+	put(`${dir}/bin/clang`, `#!/bin/sh\ncase "$*" in *"$(cat "$(dirname "$0")/slow")"*) sleep ${RIVAL_SLEEP_SECONDS};; esac\nexec clang "$@"\n`);
+	need(execFileCapture("chmod", ["+x", `${dir}/bin/clang`]).ok, "rival compiler executable");
+	return `${dir}/bin/clang`;
+}
+
+function startRival(dir: string, cc: string, program: string): ChildProcess | null {
+	const started = spawn(compiler, ["build", `prog${program}.ms`, `--output=prog${program}`, `--cc=${cc}`], { cwd: dir });
+	return started.ok ? started.value : null;
+}
+
+function finishRival(dir: string, child: ChildProcess | null, program: string): string {
+	if (child == null) return "build did not start";
+	const status = child.wait(300000);
+	if (!status.ok) return "build timed out";
+	if (status.value.code != 0) return `build failed (exit ${status.value.code}) ${child.takeStderr().slice(0, 160)}`;
+	const ran = execFileCapture(`${dir}/prog${program}`, []);
+	return ran.ok ? ran.value.trim() : "run failed";
+}
+
+function runRivals(): void {
+	if (windows) return;
+	const dir = `${root}/rivals`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/shared.ms`, "export function fromA(): int32 { return 1; }\nexport function fromB(): int32 { return 2; }\n");
+	for (const program of ["A", "B"]) put(`${dir}/prog${program}.ms`, rivalSource(program));
+	const cc = rivalCompiler(dir);
+	put(`${dir}/slowA.ms`, moduleSource("slowA", -1));
+	put(`${dir}/slowB.ms`, moduleSource("slowB", -1));
+	need(finishRival(dir, startRival(dir, cc, "A"), "A") == "1:-1", `${RIVALS}: seed build`);
+	const expected: string[] = [];
+	const actual: string[] = [];
+	for (let round = 0; round < RIVAL_ROUNDS; round++) {
+		const slow = round % 2 == 0 ? "A" : "B";
+		const fast = round % 2 == 0 ? "B" : "A";
+		put(`${dir}/slowA.ms`, moduleSource("slowA", round));
+		put(`${dir}/slowB.ms`, moduleSource("slowB", round));
+		put(`${dir}/bin/slow`, `slow${slow}_x_ms`);
+		backdate(`${dir}/out/debug/.cache`);
+		const slowChild = startRival(dir, cc, slow);
+		execFileCapture("sleep", ["0.4"]);
+		const fastChild = startRival(dir, cc, fast);
+		const slowText = finishRival(dir, slowChild, slow);
+		const fastText = finishRival(dir, fastChild, fast);
+		for (const program of ["A", "B"]) {
+			expected.push(`${program == "A" ? 1 : 2}:${round}`);
+			actual.push(program == slow ? slowText : fastText);
+		}
+	}
+	results.push({ name: `local: ${RIVALS}: every build links and prints its own value`, expected: expected.join(" "), actual: actual.join(" ") });
+}
+
+if (only.length == 0 || only.some((name) => RIVALS.includes(name))) runRivals();
 
 let failures = 0;
 console.log(`root ${root}`);
