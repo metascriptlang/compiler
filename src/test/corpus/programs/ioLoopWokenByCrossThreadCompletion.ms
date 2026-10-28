@@ -1,4 +1,7 @@
 // @stdout: then ran 1 times before the 3000 ms poll expired: true
+// @ledger-slack(Gate): 1
+// @ledger-slack(Source): 1
+// ledger-slack reason: its actors are never stopped, so they are still live at exit
 // @exit: 0
 // @skip-js: the io engine is C backend only
 // @skip-raiser
