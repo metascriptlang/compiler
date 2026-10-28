@@ -8,7 +8,8 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, bindSym } from "std/meta";
+import { stringify } from "./stringify";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -271,7 +272,7 @@ export macro jsonValueOf(t: Node): Node {
 					};
 					vValueNodes.push({
 						kind: NodeKind.CallExpr, line: t.line, column: t.column,
-						callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonValueOf" },
+						callee: bindSym("jsonValueOf"),
 						arguments: [memberExpr],
 					});
 				}
@@ -411,12 +412,7 @@ export macro jsonValueOf(t: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: t.line,
 			column: t.column,
-			callee: {
-				kind: NodeKind.Identifier,
-				line: t.line,
-				column: t.column,
-				name: "jsonValueOf",
-			},
+			callee: bindSym("jsonValueOf"),
 			arguments: [memberExpr],
 		};
 		valueNodes.push(recursive);
@@ -461,23 +457,13 @@ export macro jsonStringify(t: Node): Node {
 		kind: NodeKind.CallExpr,
 		line: t.line,
 		column: t.column,
-		callee: {
-			kind: NodeKind.Identifier,
-			line: t.line,
-			column: t.column,
-			name: "stringify",
-		},
+		callee: bindSym("stringify"),
 		arguments: [
 			{
 				kind: NodeKind.CallExpr,
 				line: t.line,
 				column: t.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: t.line,
-					column: t.column,
-					name: "jsonValueOf",
-				},
+				callee: bindSym("jsonValueOf"),
 				arguments: [t],
 			},
 			{
