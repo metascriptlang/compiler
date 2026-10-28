@@ -3255,7 +3255,8 @@ extern function free(p: Ptr<void>): void;
 Without the `@include`, a call to either extern fails the C compile with
 `call to undeclared function` — an extern binds a C symbol, it does not
 declare one. Match the parameter type to the header too: `size: uint64`
-(`size_t`), not `number` (a `double` the C prototype rejects). Verified
+(`size_t` on a 64-bit target only; wasm32's is 32 bits, so import `size_t` from a `.h` where the
+code must build there), not `number` (a `double` the C prototype rejects). Verified
 2026-09-30 with `msc run` on exactly this shape (malloc, two byte writes
 through `buf as Ptr<uint8>`, free): prints `42|7`. C backend only — extern
 C functions have no JS linkage.
