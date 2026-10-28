@@ -410,13 +410,29 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	if (entry == "nullableEquals") {
 		const a = valueShape(leftType);
 		const b = valueShape(rightType);
-		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType, ctx);
-		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType, ctx);
+		if (!isMaybeType(a)) {
+			left = fitLiteralToPayload(ctx, left, b, leftType);
+			left = synthMaybeWrap(left, b, left.nodeType != null ? left.nodeType : leftType, ctx);
+		}
+		if (!isMaybeType(b)) {
+			right = fitLiteralToPayload(ctx, right, a, rightType);
+			right = synthMaybeWrap(right, a, right.nodeType != null ? right.nodeType : rightType, ctx);
+		}
 	}
 	const call = boundCall(ctx, entry, [left, right], loc);
 	callCheckExpr(ctx, call, null);
 	replaceWithCall(node, call, negated);
 	return true;
+}
+
+// A number literal compared with `N | null` takes the payload type N, as it does against a plain N,
+// so the payload comparison sees one representation on every backend.
+function fitLiteralToPayload(ctx: CheckerContext, expr: Node, carrier: Type, exprType: Type): Node {
+	const payload = carrier.typeReturn;
+	const literal = expr.kind == NodeKind.NumberLiteral
+		|| (expr.kind == NodeKind.UnaryExpr && (expr.data as UnaryExprData).operand.kind == NodeKind.NumberLiteral);
+	if (payload == null || !literal || !isNumeric(payload) || sameType(payload, exprType)) return expr;
+	return fitNode(ctx, expr, payload, exprType);
 }
 
 function isMatchStruct(t: Type): boolean {
