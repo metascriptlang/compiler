@@ -91,16 +91,6 @@ export interface RaiserStrand {
 	safePoints: number[];
 	currentException: RaiserValue;
 	spawnEnv: int64;
-	hold: RaiserGlobalsHold | null;
-}
-
-// The copy of the module globals a spawned strand runs against, kept until the strand and every `.then`
-// registered from it are done; its counted handles are then released.
-export interface RaiserGlobalsHold {
-	users: int32;
-	globals: RaiserValue[];
-	arrayHeap: RaiserArrayHeap;
-	objectHeap: RaiserObjectHeap;
 }
 
 export interface RaiserStrands {
@@ -150,7 +140,6 @@ export interface RaiserThen {
 	strand: number;
 	arg: RaiserValue;
 	shell: int64;
-	hold: RaiserGlobalsHold | null;
 }
 
 export interface RaiserFutures {
@@ -365,7 +354,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(i < mod.globalInit.length ? mod.globalInit[i] : raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), spawnEnv: 0, hold: null };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), spawnEnv: 0 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -825,7 +814,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.safePoints.length = 0;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, hold: null };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -1023,30 +1012,11 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	vm.sched.nextStrandId = id + 1;
 	const sp: number[] = [];
 	futureHold(vm, t.output);
-	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: holdShare(t.hold) };
+	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	t.strand = placeStrand(vm, s);
 	vm.sched.readyOrder.push(t.strand);
 	t.arg = arg;
 	vm.sched.thenRuns.push(t);
-}
-
-function runningHold(vm: RaiserVM): RaiserGlobalsHold | null {
-	const items = vm.sched.strands.items;
-	if (vm.current >= items.length || items[vm.current].arrayHeap != vm.arrayHeap) return null;
-	return items[vm.current].hold;
-}
-
-function holdShare(hold: RaiserGlobalsHold | null): RaiserGlobalsHold | null {
-	if (hold != null) hold.users += 1;
-	return hold;
-}
-
-function holdDrop(hold: RaiserGlobalsHold | null): void {
-	if (hold == null) return;
-	hold.users -= 1;
-	if (hold.users > 0) return;
-	for (const g of hold.globals) rcDecref(hold.arrayHeap, hold.objectHeap, g);
-	hold.globals.length = 0;
 }
 
 function thenRelease(vm: RaiserVM, t: RaiserThen): void {
@@ -1059,8 +1029,6 @@ function thenRelease(vm: RaiserVM, t: RaiserThen): void {
 	}
 	rcDecref(t.arrayHeap, t.objectHeap, t.fulfilled);
 	rcDecref(t.arrayHeap, t.objectHeap, t.rejected);
-	holdDrop(t.hold);
-	t.hold = null;
 }
 
 function thenFinished(vm: RaiserVM, strand: number): boolean {
@@ -1122,7 +1090,7 @@ function vmHandleFutureThen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	f.errorObserved = true;
 	rcIncref(vm.arrayHeap, vm.objectHeap, fulfilled);
 	rcIncref(vm.arrayHeap, vm.objectHeap, rejected);
-	const t: RaiserThen = { input, output, fulfilled, rejected, globals: vm.globals, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, strand: -1, arg: raiserNil(), shell: 0, hold: holdShare(runningHold(vm)) };
+	const t: RaiserThen = { input, output, fulfilled, rejected, globals: vm.globals, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, strand: -1, arg: raiserNil(), shell: 0 };
 	if (f.finished) thenFire(vm, t, input);
 	else f.thens.push(t);
 	setRegConform(vm, ia, raiserFuture(output));
@@ -1698,8 +1666,6 @@ function retireStrand(vm: RaiserVM, idx: number): void {
 	futureRelease(vm, s.resultFuture);
 	s.resultFuture = -1;
 	s.result = raiserNil();
-	holdDrop(s.hold);
-	s.hold = null;
 	vm.sched.spareRegs.push(s.regs);
 	vm.sched.freeStrands.push(idx);
 }
@@ -1763,28 +1729,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	}
 	if (vm.current != 0) releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
-	if (vm.current != 0) {
-		const sharing: RaiserStrand[] = [s];
-		for (const o of vm.sched.strands.items) {
-			if (o != s && o.status != RaiserStrandStatus.Done && o.arrayHeap == s.arrayHeap) sharing.push(o);
-		}
-		vmLedger(vm, sharing, pendingThenValues(vm, s.arrayHeap), "strand", "a pending .then");
-	}
 	return vm.current != 0;
-}
-
-function pendingThenValues(vm: RaiserVM, heap: RaiserArrayHeap): RaiserValue[] {
-	const held: RaiserValue[] = [];
-	for (const t of vm.sched.thenRuns) addThenValues(held, t, heap);
-	for (const f of vm.sched.futures.items) for (const t of f.thens) addThenValues(held, t, heap);
-	return held;
-}
-
-function addThenValues(held: RaiserValue[], t: RaiserThen, heap: RaiserArrayHeap): void {
-	if (t.arrayHeap != heap) return;
-	held.push(t.fulfilled);
-	held.push(t.rejected);
-	held.push(t.arg);
 }
 
 // The handles the frames of a strand hold: each frame's registers below its callee's first slot, because the
@@ -1884,30 +1829,11 @@ function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
 	return map;
 }
 
-function copyStrandGlobals(
-	vm: RaiserVM,
-	arrays: RaiserArrayHeap,
-	objects: RaiserObjectHeap,
-	map: RaiserCopyMap,
-): RaiserValue[] {
-	const globals: RaiserValue[] = [];
-	map.destGlobals = globals;
-	for (const value of vm.globals) {
-		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
-		rcIncref(arrays, objects, copied);
-		globals.push(copied);
-	}
-	return globals;
-}
-
 export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	if (funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
 		vmError(vm, `vmSpawnStrand: function index out of bounds: ${funcIdx}`);
 		return -1;
 	}
-	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const arrayHeap = createArrayHeap();
-	arrayHeap.futures = vm.sched.futures.counts;
 	const regs = createRegFile(vm.mod);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -1915,9 +1841,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	vm.sched.nextStrandId = id + 1;
 	const result = raiserNil();
 	const sp: number[] = [];
-	const objectHeap = createStructHeap();
-	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: null };
+	const s: RaiserStrand = { id, globals: vm.globals, regs, callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return id;
@@ -1939,20 +1863,14 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const arrayHeap = createArrayHeap();
-	arrayHeap.futures = vm.sched.futures.counts;
 	const regs = strandRegFile(vm, callee);
-	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
 	let spawnEnv: int64 = 0;
-	const copyMap = strandCopyMap(vm);
-	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
-		// C hands the thunk a borrow of the parent's captures and the analyzer
-		// proves the parent outlives them; a handle means nothing in another
-		// heap, so the capture graph crosses as a copy the child owns.
-		const envSlot = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrayHeap, objectHeap, envField, copyMap);
-		rcIncref(arrayHeap, objectHeap, envSlot);
+		const copyMap = strandCopyMap(vm);
+		copyMap.destGlobals = vm.globals;
+		const envSlot = copyGraphWith(vm.arrayHeap, vm.objectHeap, vm.arrayHeap, vm.objectHeap, envField, copyMap);
+		rcIncref(vm.arrayHeap, vm.objectHeap, envSlot);
 		if (callee.regOps.length == 0 || (callee.regOps[0] & 7) != CLS_REF) {
 			vmError(vm, `spawn: ${callee.name} does not take the closure environment in a ref register`);
 			return -1;
@@ -1968,7 +1886,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	futureHold(vm, fut);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv, hold: { users: 1, globals, arrayHeap, objectHeap } };
+	const s: RaiserStrand = { id, globals: vm.globals, regs, callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv };
 	vm.sched.readyOrder.push(placeStrand(vm, s));
 	return fut;
 }
@@ -2131,7 +2049,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: null };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return vm.sched.strands.items.length - 1;
@@ -7108,7 +7026,7 @@ test "vmCallFunction: a host call made two frames deep returns through the frame
 
 // --- Strand scheduling ---
 
-test "global slots remain independent across strand heaps" {
+test "a global a spawned strand writes is what its parent reads next" {
 	const main = createRaiserFunction("main", [
 		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
 		raiserABC(RaiserOpcode.LoadGlobal, 0, 0, 0),
@@ -7126,8 +7044,32 @@ test "global slots remain independent across strand heaps" {
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
 	assert vm.error == "", vm.error;
-	assert vm.exitValue.intVal == 3;
-	assert vm.sched.strands.items[1].globals[0].intVal == 9;
+	assert vm.exitValue.intVal == 9;
+}
+
+test "an array a parent stores in a global after spawn is the one its strand reads" {
+	const main = createRaiserFunction("main", [
+		raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+		raiserABC(RaiserOpcode.StoreGlobal, 0, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABC(RaiserOpcode.LoadGlobal, 2, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	], [raiserInt(42)], 0, 0, 3);
+	const worker = createRaiserFunction("worker", [
+		raiserABC(RaiserOpcode.LoadGlobal, 0, 0, 0),
+		raiserABC(RaiserOpcode.ArrayLen, 1, 0, 0),
+		raiserABC(RaiserOpcode.StoreGlobal, 1, 1, 0),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	], [], 0, 0, 2);
+	const mod = createRaiserModule("globals", [main, worker], 0);
+	mod.globalCount = 2;
+	const vm = createVM(mod);
+	vmSpawnStrand(vm, 1);
+	execLoop(vm);
+	assert vm.error == "", vm.error;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "single strand: no scheduler involvement" {
