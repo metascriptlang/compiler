@@ -2,12 +2,16 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, MethodDeclData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, SymbolFlag, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, MethodDeclData, BinaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, IdentifierData, HiddenDerefData, makeLoc } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
+import { isAssignOp } from "../../ast/operators";
+import { isMutatingArrayMethod } from "../../checker/paramMutationAnalysis";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
+import { Type, TypeKind } from "../../ast/node";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
-import { unwrapRef } from "../../checker/types";
+import { unwrapRef, classBodyOf, isReadonlyView } from "../../checker/types";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
@@ -26,7 +30,7 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import { ModuleGraph, createModuleGraph } from "../../module/graph";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
-import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
+import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors, queueRaiserCompileError } from "./context";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
 import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -309,13 +313,111 @@ function vmStdSeeds(sym: Symbol): NamedSymbol[] {
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null, original: Node | null = null): int32 {
+// A std class has one symbol in the build's std and another in the engine's: a module-level routine or
+// variable whose type names one carries the build's, which no value the engine makes belongs to.
+function namesEngineTwin(t: Type | null, seen: Type[]): boolean {
+	if (t == null || seen.indexOf(t) >= 0) return false;
+	seen.push(t);
+	const cls = classBodyOf(t);
+	if (cls != null) {
+		const origin = cls.sym!.instantiatedFrom != null ? cls.sym!.instantiatedFrom! : cls.sym!;
+		const twin = origin.builtinKind.startsWith("Meta") ? null : stdSymbol(raiserPreludeCtx(), origin.name);
+		if (twin != null && twin != origin && twin.symbolKind == SymbolKind.Class) return true;
+	}
+	const body = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	if (body == null || body.kind == TypeKind.Struct) return false;
+	if (body.kind == TypeKind.GenericInstance && namesEngineTwin(body.typeExtra, seen)) return true;
+	if (body.kind != TypeKind.GenericInstance && namesEngineTwin(body.typeReturn, seen)) return true;
+	if (body.typeChildren != null) {
+		for (const child of body.typeChildren) if (namesEngineTwin(child, seen)) return true;
+	}
+	return false;
+}
+
+// A module-level const array is built again from its initializer at every use, so a write through it
+// is never seen by a later read. Reads are accepted; a write is refused.
+function isConstArrayRoot(node: Node): boolean {
+	const sym = node.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Variable || !sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.Mutable)) return false;
+	if (sym.symbolType == null || isReadonlyView(sym.symbolType)) return false;
+	const body = unwrapRef(sym.symbolType);
+	return body != null && body.kind == TypeKind.Array;
+}
+
+function refuseConstArrayWrites(node: Node, writes: boolean): void {
+	if (node.kind == NodeKind.Identifier) {
+		if (writes && isConstArrayRoot(node)) {
+			queueRaiserCompileError(`cannot evaluate '${(node.data as IdentifierData).name}' at comptime: a write through a module-level const array is lost, because macro-time code builds the array again at every use; keep it in a local or pass it as a parameter`, node.location.line, node.location.column);
+		}
+		return;
+	}
+	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator)) {
+		refuseConstArrayWrites((node.data as BinaryExprData).left, true);
+		refuseConstArrayWrites((node.data as BinaryExprData).right, false);
+		return;
+	}
+	if (node.kind == NodeKind.UpdateExpr) {
+		refuseConstArrayWrites((node.data as UpdateExprData).updateArg, true);
+		return;
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		refuseConstArrayWrites((node.data as MemberExprData).object, writes);
+		return;
+	}
+	if (node.kind == NodeKind.ArrayAccess) {
+		refuseConstArrayWrites((node.data as ArrayAccessData).array, writes);
+		refuseConstArrayWrites((node.data as ArrayAccessData).index, false);
+		return;
+	}
+	if (node.kind == NodeKind.HiddenDeref) {
+		refuseConstArrayWrites((node.data as HiddenDerefData).expr, writes);
+		return;
+	}
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const receiver = d.callee.kind == NodeKind.MemberExpr && isMutatingArrayMethod((d.callee.data as MemberExprData).property) ? (d.callee.data as MemberExprData).object
+			: d.callee.kind == NodeKind.Identifier && d.arguments.length > 0 && isMutatingArrayMethod((d.callee.data as IdentifierData).name) ? d.arguments[0] : null;
+		if (receiver != null) refuseConstArrayWrites(receiver, true);
+		if (d.callee.kind != NodeKind.MemberExpr || receiver == null) refuseConstArrayWrites(d.callee, false);
+		for (const a of d.arguments) if (a != receiver) refuseConstArrayWrites(a, false);
+		return;
+	}
+	forEachChild(node, (c: Node): void => { refuseConstArrayWrites(c, false); });
+}
+
+function declaredInEngine(sym: Symbol): Node[] | null {
+	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Variable) return null;
+	const all: Symbol[] = [sym];
+	for (const o of sym.overloads) all.push(o);
+	let names = false;
+	for (const s of all) {
+		if (s.declNode == null || (s.declNode.kind != NodeKind.FunctionDecl && s.declNode.kind != NodeKind.VariableDecl)) return null;
+		if (namesEngineTwin(s.symbolType, [])) names = true;
+	}
+	if (!names) return null;
+	const decls: Node[] = [];
+	for (const s of all) decls.push(cloneNodeForCheck(s.declNode));
+	return decls;
+}
+
+function compileProgramIntoEngine(program: Node, seedsIn: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null, original: Node | null = null): int32 {
+	const seeds: NamedSymbol[] = [];
+	const redeclared: Node[] = [];
+	for (const s of seedsIn) {
+		const decls = declaredInEngine(s.sym);
+		if (decls == null) {
+			seeds.push(s);
+			continue;
+		}
+		for (const d of decls) redeclared.push(d);
+	}
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
-	registerSeedSymbols(withMetaSeeds(seeds), exts);
+	registerSeedSymbols(withMetaSeeds(seeds), exts, redeclared);
 	const transformed = transformForEngine(program);
+	refuseConstArrayWrites(transformed, false);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
