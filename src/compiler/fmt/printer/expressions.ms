@@ -386,13 +386,8 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
 	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
 	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
-	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
-		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
-		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
 	if (typed != "") {
 		parts.push(docText(typed));
-	} else if (bare) {
-		parts.push(params[0]);
 	} else {
 		for (const p of paramListInParens(params, options)) parts.push(p);
 	}
