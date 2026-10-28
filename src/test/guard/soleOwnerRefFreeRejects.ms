@@ -6,7 +6,7 @@
 //
 // RED MEANS: the ref-free exemption widened past types with no ref.
 //
-// GUARD-CHECK-FAIL it is a parameter
+// GUARD-CHECK-FAIL a sink parameter does not prove it is the only owner
 // GUARD-CHECK-FAIL is not a fresh value
 
 class Node { n: int32 = 0; }
