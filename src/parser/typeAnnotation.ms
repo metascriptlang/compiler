@@ -8,7 +8,7 @@
 // plus TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject for structural types.
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
-import { TokenKind, isIdentLikeKind } from "../lexer/token";
+import { Token, TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, finishNode, finishToken } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
@@ -146,13 +146,7 @@ function parseTypeAtom(state: ParserState): Node {
 		return parseTypeAtom(state);
 	}
 
-	if (token.kind == TokenKind.Typeof) {
-		advance(state);
-		const operandAt = state.position;
-		skipTypeQueryOperand(state);
-		const operandText = collectTokenText(state, operandAt, state.position);
-		return finishNode(state, createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt))));
-	}
+	if (token.kind == TokenKind.Typeof) return parseTypeQuery(state);
 
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
@@ -163,6 +157,32 @@ function parseTypeAtom(state: ParserState): Node {
 	if (token.kind == TokenKind.LBrace) {
 		return applyArraySuffix(state, parseTypeObjectLiteral(state));
 	}
+
+	if (token.kind == TokenKind.LBracket || isNegativeNumberAhead(state) || !isIdentLikeKind(token.kind)) return parseTypeLeaf(state);
+
+	let result = parseTypeName(state);
+
+	// Generic type args: Type<A, B>
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
+		const args = parseGenericTypeArgs(state);
+		if (args.length > 0) {
+			result = finishNode(state, createNode(NodeKind.TypeGeneric, { typExprBase: result, typExprArgs: args }, token));
+		}
+	}
+
+	return applyTypeSuffixes(state, result);
+}
+
+function parseTypeQuery(state: ParserState): Node {
+	advance(state);
+	const operandAt = state.position;
+	skipTypeQueryOperand(state);
+	const operandText = collectTokenText(state, operandAt, state.position);
+	return finishNode(state, createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt))));
+}
+
+function parseTypeLeaf(state: ParserState): Node {
+	const token = current(state);
 
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix).
 	// The string form (resolveAnnotation) is the source of truth for the type;
@@ -180,13 +200,12 @@ function parseTypeAtom(state: ParserState): Node {
 		return finishToken(createNode(NodeKind.Identifier, { name: "-" + digits.value }, token), digits);
 	}
 
-	// Named type: identifier (possibly with generics and array suffix)
-	if (!isIdentLikeKind(token.kind)) {
-		// Fallback: create an Identifier with whatever token we have
-		advance(state);
-		return finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
-	}
+	advance(state);
+	return finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
+}
 
+function parseTypeName(state: ParserState): Node {
+	const token = current(state);
 	advance(state);
 	let result = finishToken(createNode(NodeKind.Identifier, { name: token.value }, token), token);
 
@@ -200,17 +219,12 @@ function parseTypeAtom(state: ParserState): Node {
 		advance(state);
 		result = finishToken(createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token), memberToken);
 	}
+	return result;
+}
 
-	// Generic type args: Type<A, B>
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
-		const args = parseGenericTypeArgs(state);
-		if (args.length > 0) {
-			result = finishNode(state, createNode(NodeKind.TypeGeneric, { typExprBase: result, typExprArgs: args }, token));
-		}
-	}
-
+function applyTypeSuffixes(state: ParserState, base: Node): Node {
 	// Array type suffix: T[] or T[N] or T[][]
-	result = applyArraySuffix(state, result);
+	const result = applyArraySuffix(state, base);
 
 	// Optional marker: T? — treat as union with null (skip but preserve base)
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
@@ -315,7 +329,7 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 					advance(state); // consume ?
 					seenOptional = true;
 				} else if (seenOptional) {
-					addError(state, `A required parameter cannot follow an optional parameter ('${nameToken.value}' at line ${nameToken.line})`);
+					reportRequiredAfterOptional(state, nameToken);
 				}
 				advance(state); // consume :
 				paramTypes.push(parseTypeExpr(state));
@@ -335,7 +349,14 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.RParen) {
 		advance(state);
 	}
+	return finishFunctionOrParenType(state, parenToken, paramNames, paramTypes);
+}
 
+function reportRequiredAfterOptional(state: ParserState, nameToken: Token): void {
+	addError(state, `A required parameter cannot follow an optional parameter ('${nameToken.value}' at line ${nameToken.line})`);
+}
+
+function finishFunctionOrParenType(state: ParserState, parenToken: Token, paramNames: string[], paramTypes: Node[]): Node {
 	// Arrow => return type
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
