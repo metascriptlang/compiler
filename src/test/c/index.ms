@@ -75,6 +75,7 @@ import "./externPattern";
 import "./cFunctionPointer";
 import "./headerSizeof";
 import "./headerScalarRefusal";
+import "./headerSizeTSlots";
 import "./notCallable";
 import "./callResultInPlace";
 import "./websocket";
