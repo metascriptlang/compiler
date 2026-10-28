@@ -152,7 +152,8 @@ export function inferSinkParams(trees: Node[], ctxs: TransformContext[]): void {
 		for (let i = 0; i < params.length; i += 1) hits.push(false);
 		findSinks(body, params, hits, false, r.ctx);
 		for (let i = 0; i < formals.length; i += 1) {
-			if (hits[i] && r.sym.symbolType.typeNames[i] != "this" && movable(formals[i], r.ctx)) formals[i] = createSink(formals[i]);
+			const byAddress = i < 31 && (r.sym.mutatedParams & (1 << (i as int32))) != 0;
+			if (hits[i] && !byAddress && r.sym.symbolType.typeNames[i] != "this" && movable(formals[i], r.ctx)) formals[i] = createSink(formals[i]);
 		}
 	}
 }
