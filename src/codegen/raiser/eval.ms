@@ -2138,6 +2138,19 @@ test "engine: an empty span of pointers has no slot to point at" {
 	assert ctx.output == "", ctx.output;
 }
 
+test "engine: an object rest binding that holds a string is released with its scope, in a loop, an array and a return" {
+	const decl = "interface B { count: int32; label: string; } const bs: B = { count: 3, label: 's' + String(1) };";
+	const loop = evalVM(decl + " function f(b: B): void { for (let i = 0; i < 3; i++) { const { count, ...rest } = b; console.log(rest.label + String(i)); } } f(bs);");
+	assert loop.error == "", loop.error;
+	assert loop.output == "s10\ns11\ns12\n", loop.output;
+	const held = evalVM(decl + " function f(b: B): void { const { count, ...rest } = b; const all = [rest]; const again = rest; console.log(all[0].label + again.label); } f(bs);");
+	assert held.error == "", held.error;
+	assert held.output == "s1s1\n", held.output;
+	const returned = evalVM(decl + " function f(b: B): string { const { count, ...rest } = b; return rest.label; } console.log(f(bs));");
+	assert returned.error == "", returned.error;
+	assert returned.output == "s1\n", returned.output;
+}
+
 test "engine: element pointers compare by identity" {
 	const ctx = evalVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }];"
 		+ " const p = ps[1] as Ptr<P>; const q = ps[1] as Ptr<P>; const r = ps[0] as Ptr<P>; console.log(`${p == q} ${p == r}`);");
