@@ -1,8 +1,10 @@
 import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
-import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
+import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
+import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
+import { makeFloatNumber } from "../../checker/literalNodes";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind } from "../util";
@@ -363,16 +365,27 @@ function intoTarget(held: Node, target: Type, slot: int32): Node {
 function literalArms(source: Type, target: Type, valueSym: Symbol, vi: int32, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const member = source.typeChildren[vi];
 	const stmts: Node[] = [];
-	for (const slot of booleanLiteralSlots(target, member)) {
-		const literal = targetMembers(target)[slot];
+	const members = targetMembers(target);
+	for (let slot: int32 = 0; slot < members.length; slot += 1) {
+		const operand = literalOperand(member, members[slot], loc);
+		if (operand == null) continue;
 		const held = slotConv(read(valueSym, source, loc), member, vi);
-		const same = makeBinary(held, "==", makeBool(booleanLiteralValue(literal), loc), loc);
+		const same = makeBinary(held, "==", operand, loc);
 		same.nodeType = booleanType();
-		const value = slotConv(read(valueSym, source, loc), literal, vi);
+		const value = slotConv(read(valueSym, source, loc), members[slot], vi);
 		stmts.push(makeIf(same, makeBlock([makeReturn(intoTarget(value, target, slot), loc)], loc), null, loc));
 	}
 	stmts.push(memberMissing(source, target, vi, ctx, loc));
 	return stmts;
+}
+
+// A literal member shares its runtime kind with the other literals of that kind, so the held
+// value, not the member's position, says which target literal it is.
+function literalOperand(member: Type, literal: Type, loc: SourceLocation): Node | null {
+	if (peelTransparentInstance(member).kind == TypeKind.Boolean && literal.kind == TypeKind.BooleanLiteral) return makeBool(booleanLiteralValue(literal), loc);
+	if (member.kind == TypeKind.StringLiteral && literal.kind == TypeKind.StringLiteral) return makeString(literal.typeName, loc);
+	if (member.kind != TypeKind.NumberLiteral || literal.kind != TypeKind.NumberLiteral) return null;
+	return isFloatType(numberLiteralBase(literal)) ? makeFloatNumber(parseNumberLiteral(literal.typeName), loc) : makeIntNumber(parseIntegerLiteral(literal.typeName), loc);
 }
 
 function testsByTag(source: Type, ctx: TransformContext): boolean {
