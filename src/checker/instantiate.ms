@@ -15,7 +15,7 @@ import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } fr
 import { splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
-import { fitNode } from "./fit";
+import { fitNode, boundCallOf } from "./fit";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
@@ -1269,13 +1269,13 @@ export function omittedFieldDefault(ctx: CheckerContext, fieldType: Type, loc: S
 			node = createNodeAt(NodeKind.NumberLiteral, { value: parseNumberLiteral(first.typeName), isFloat: isFloat, intVal: isFloat ? 0 : parseIntegerLiteral(first.typeName), outOfRangeText: "", isBitPattern: false }, loc);
 		}
 	} else if (fieldType.kind == TypeKind.SizedArray && fieldType.typeReturn != null && needsLiteralDefault(fieldType.typeReturn, [])) {
-		const elements: Node[] = [];
-		for (let i = 0; i < (fieldType.typeValue as int32); i += 1) {
-			const element = omittedFieldDefault(ctx, fieldType.typeReturn!, loc);
-			if (element == null) return null;
-			elements.push(element);
-		}
-		node = createNodeAt(NodeKind.ArrayLiteral, { elements: elements }, loc);
+		const element = omittedFieldDefault(ctx, fieldType.typeReturn!, loc);
+		const factory = ctx.compilerFuncs.get("msFilledSized");
+		if (element == null) return null;
+		if (factory == null) throw new Error("internal: the prelude declares no @compilerFunc msFilledSized");
+		const zero = createNodeAt(NodeKind.ArrayLiteral, { elements: [] }, loc);
+		callCheckExpr(ctx, zero, fieldType);
+		node = boundCallOf(factory, [zero, element], loc);
 	} else if (isDeclaredStruct(fieldType) && needsLiteralDefault(fieldType, [])) {
 		node = createNodeAt(NodeKind.ObjectLiteral, { properties: [], keys: [], keyLocations: [] }, loc);
 	}
@@ -1293,7 +1293,7 @@ function firstLiteralMember(t: Type): Type | null {
 	return t.typeChildren[0];
 }
 
-function needsLiteralDefault(t: Type, seen: Type[]): boolean {
+export function needsLiteralDefault(t: Type, seen: Type[]): boolean {
 	if (firstLiteralMember(t) != null) return true;
 	if (t.kind == TypeKind.SizedArray) return t.typeReturn != null && needsLiteralDefault(t.typeReturn, seen);
 	if (!isDeclaredStruct(t) || seen.includes(t)) return false;

@@ -17,3 +17,11 @@ export extern function isObject<T>(): boolean;
 /** True when `T` is a plain object: an interface, a struct, an object-literal type, an array or a tuple, holding data and no behaviour of its own; false for a class instance, a function or closure, a `Proxy`, and everything `isObject<T>()` is false for. A distinct answers as its base. Answered while compiling, per instance. */
 @builtin("IsPlainObject")
 export extern function isPlainObject<T>(): boolean;
+
+/** True when the default of a `T` is no zero: a union of literals (its first member), or a struct or fixed array holding one. Answered while compiling, per instance, so `when (hasLiteralDefault<T>()) { … }` costs an ordinary `T` nothing. */
+@builtin("HasLiteralDefault")
+export extern function hasLiteralDefault<T>(): boolean;
+
+/** The default of a `T` that `hasLiteralDefault<T>()` is true for, the value an omitted field or a grown slot takes. Refused for a `T` whose default is the zero. */
+@builtin("DefaultOf")
+export extern function defaultOf<T>(): T;
