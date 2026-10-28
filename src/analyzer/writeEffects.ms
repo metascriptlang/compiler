@@ -4,11 +4,11 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, FunctionDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, setFlag } from "../checker/symbol";
+import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet, setFlag } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
-import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
+import { calledRoutine, isViewCall, routineBody as declaredBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { containsPointer } from "../checker/varPartitions";
@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -50,6 +50,8 @@ class WriteSummary {
 	refParamWrites: int32;
 	returnsFresh: boolean;
 	unknown: boolean;
+	paramCalls: Symbol[];
+	paramsAssigned: HashSet<Symbol>;
 	edges: Edge[];
 	forwards: Symbol[];
 	linked: HashSet<Cursor<WriteSummary>>;
@@ -92,6 +94,8 @@ export interface WriteSummaries {
 	unitContracts: CallbackContract[];
 	reusedClones: HashMap<Symbol, Symbol>;
 	lending: Lending;
+	envStores: HashMap<string, HashMap<Type, HashMap<string, Node[]>>>;
+	unloweredWritesAnything: boolean;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
@@ -103,6 +107,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null },
+		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
 	};
 }
 
@@ -115,8 +120,13 @@ export interface WriteEffects {
 }
 
 export function noteRoutineDecls(w: WriteEffects, program: Node): void {
-	const decls = w.tables.routineDecls;
-	const previous = decls.unitRoutines.get(w.unit);
+	noteUnitDecls(w.tables, w.unit, program);
+}
+
+export function noteUnitDecls(tables: WriteSummaries, unit: string, program: Node): void {
+	const decls = tables.routineDecls;
+	tables.envStores.delete(unit);
+	const previous = decls.unitRoutines.get(unit);
 	if (previous != null) {
 		for (const sym of previous) {
 			decls.decls.delete(sym);
@@ -129,10 +139,10 @@ export function noteRoutineDecls(w: WriteEffects, program: Node): void {
 		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = unpackDecl((decl.data as ExportDeclData).exportedDecl);
 		if (decl == null || decl.resolvedSym == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.ClassDecl)) continue;
 		decls.decls.set(decl.resolvedSym!, decl);
-		decls.routineUnits.set(decl.resolvedSym!, w.unit);
+		decls.routineUnits.set(decl.resolvedSym!, unit);
 		syms.push(decl.resolvedSym!);
 	}
-	decls.unitRoutines.set(w.unit, syms);
+	decls.unitRoutines.set(unit, syms);
 }
 
 function unitOf(w: WriteEffects, s: WriteSummary): string {
@@ -146,9 +156,15 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 	return unit != null && w.tables.reloadableUnits.includes(unit) && unit != unitOf(w, caller);
 }
 
+function notLoweredYet(w: WriteEffects, s: WriteSummary): boolean {
+	if (!w.tables.unloweredWritesAnything || s.sym == null) return false;
+	const decls = w.tables.routineDecls;
+	return !decls.decls.has(s.sym!) && !decls.unitRoutines.has(s.sym!.modulePath);
+}
+
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
-		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
+		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false, paramCalls: [], paramsAssigned: new HashSet<Symbol>(),
 		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
@@ -169,6 +185,11 @@ function markUnknown(s: WriteSummary): boolean {
 function unpackDecl(decl: Node | null): Node | null {
 	if (decl != null && decl.kind == NodeKind.DecoratedDecl) return (decl.data as DecoratedDeclData).decoratedNode;
 	return decl;
+}
+
+function routineBody(decl: Node | null): Node | null {
+	if (decl != null && decl.kind == NodeKind.FunctionDecl && routineFlagSet((decl.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern)) return null;
+	return declaredBody(decl);
 }
 
 function routineDecl(w: WriteEffects, sym: Symbol): Node | null {
@@ -270,8 +291,17 @@ function isClassType(t: Type): boolean {
 }
 
 function elementsMayAlias(a: Type | null, b: Type | null, depth: int32): boolean {
-	if (a == null || b == null || a === b) return true;
+	if (a == null || b == null || a === b || depth > 8) return true;
 	if (a.kind == TypeKind.Cursor || b.kind == TypeKind.Cursor) return a.kind == b.kind && elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
+		const union = a.kind == TypeKind.Union ? a : b;
+		const other = a.kind == TypeKind.Union ? b : a;
+		if (union.typeChildren.length == 0) return true;
+		for (const member of union.typeChildren) {
+			if (member == null || elementsMayAlias(member, other, depth + 1)) return true;
+		}
+		return false;
+	}
 	const ha = holderType(a);
 	const hb = holderType(b);
 	if (ha != null && hb != null) return mayBePartOf(ha, hb, depth);
@@ -502,6 +532,63 @@ function constructionsOf(w: WriteEffects, n: Node): WriteSummary[] {
 	return out;
 }
 
+// A call through a function a lifted closure captured from its frame's parameter: the one store into
+// that environment field is the parameter itself, so the callee is the function each caller of the
+// frame passes, whose writes those callers already count.
+function capturedParamCalled(w: WriteEffects, s: WriteSummary, callee: Node): Symbol | null {
+	const t = skipConvDfa(callee);
+	if (t.kind != NodeKind.MemberExpr) return null;
+	const md = t.data as MemberExprData;
+	const env = holderType(md.object.nodeType);
+	if (env == null || env.sym == null || !hasFlag(env.sym, SymbolFlag.ClosureEnv)) return null;
+	const stores = envStoresOf(w, unitOf(w, s), env).get(md.property);
+	if (stores == null || stores.length != 1) return null;
+	const stored = skipConvDfa(stores[0].kind == NodeKind.MoveExpr ? (stores[0].data as MoveExprData).moveArg : stores[0]);
+	const sym = stored.kind == NodeKind.Identifier ? stored.resolvedSym : null;
+	if (sym == null || sym.symbolKind != SymbolKind.Parameter || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return null;
+	return sym;
+}
+
+function envStoresOf(w: WriteEffects, unit: string, env: Type): HashMap<string, Node[]> {
+	let byEnv = w.tables.envStores.get(unit);
+	if (byEnv == null) {
+		const found = new HashMap<Type, HashMap<string, Node[]>>();
+		byEnv = found;
+		const note = (envType: Type | null, field: string, value: Node): void => {
+			const held = holderType(envType);
+			if (held == null || held.sym == null || !hasFlag(held.sym, SymbolFlag.ClosureEnv)) return;
+			let fields = found.get(held);
+			if (fields == null) {
+				fields = new HashMap<string, Node[]>();
+				found.set(held, fields);
+			}
+			const values = fields.get(field);
+			if (values == null) fields.set(field, [value]);
+			else values.push(value);
+		};
+		const scan = (n: Node): void => {
+			if (n.kind == NodeKind.BinaryExpr) {
+				const bd = n.data as BinaryExprData;
+				const left = skipConvDfa(bd.left);
+				if (isAssign(bd.operator) && left.kind == NodeKind.MemberExpr) {
+					const md = left.data as MemberExprData;
+					note(md.object.nodeType, md.property, bd.operator == "=" ? bd.right : n);
+				}
+			} else if (n.kind == NodeKind.ObjectLiteral) {
+				const od = n.data as ObjectLiteralData;
+				for (let i = 0; i < od.keys.length; i += 1) note(n.nodeType, od.keys[i], od.properties[i]);
+			}
+			forEachChild(n, scan);
+		};
+		for (const sym of w.tables.routineDecls.unitRoutines.get(unit) ?? []) {
+			const decl = w.tables.routineDecls.decls.get(sym);
+			if (decl != null) scan(decl);
+		}
+		w.tables.envStores.set(unit, byEnv);
+	}
+	return byEnv.get(env) ?? new HashMap<string, Node[]>();
+}
+
 function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] | null, own: OwnCalls | null, defs: LocalDefs | null): WriteSummary[] {
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym)) {
@@ -517,6 +604,11 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 		if (own == null && sym != null && w.tables.lending.callbacks.includes(sym)) return [];
 		const known: WriteSummary[] = [];
 		if (defs != null && callee != null && routinesOf(w, callee, null, null, defs, 0, known)) return known;
+		const captured = own != null && callee != null ? capturedParamCalled(w, s, callee) : null;
+		if (captured != null) {
+			if (!s.paramCalls.includes(captured)) s.paramCalls.push(captured);
+			return [];
+		}
 		if (callee == null || !sendableWritesNothingHeld(callee.nodeType)) markUnknown(s);
 		return [];
 	}
@@ -658,6 +750,9 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 	};
 	step(body);
 	const assigned = assignedParams(targets, params);
+	if (params != null) {
+		for (const p of params) { if (assigned.has(p)) s.paramsAssigned.add(p); }
+	}
 	for (const p of own.called) {
 		if (assigned.has(p)) markUnknown(s);
 	}
@@ -926,6 +1021,10 @@ function link(w: WriteEffects, s: WriteSummary, call: Node | null, callee: Write
 }
 
 function walkSummary(w: WriteEffects, s: WriteSummary): void {
+	if (notLoweredYet(w, s)) {
+		markUnknown(s);
+		return;
+	}
 	match (s.kind) {
 		SummaryKind.Routine | SummaryKind.Closure => {
 			const decl = summaryDecl(w, s);
@@ -995,6 +1094,15 @@ function absorb(w: WriteEffects, s: WriteSummary, e: Edge): boolean {
 	const c = e.callee;
 	let changed = false;
 	if (c.unknown && markUnknown(s)) changed = true;
+	for (const p of c.paramCalls) {
+		const decl = (s.kind == SummaryKind.Routine || s.kind == SummaryKind.Closure) && (s.sym != null || s.literal != null) ? summaryDecl(w, s) : null;
+		if (decl != null && decl.paramSyms != null && decl.paramSyms!.includes(p)) {
+			if (s.paramsAssigned.has(p) && markUnknown(s)) changed = true;
+		} else if (!s.paramCalls.includes(p)) {
+			s.paramCalls.push(p);
+			changed = true;
+		}
+	}
 	for (const slot of c.slots) {
 		if (addSlot(s, slot)) changed = true;
 	}
@@ -1265,7 +1373,7 @@ export function callsPlainRoutine(call: Node): boolean {
 
 export function reachesModuleState(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
 	for (const writes of callWriteParts(w, call, defs)) {
-		if (writes.unknown) return true;
+		if (writes.unknown || writes.paramCalls.length > 0) return true;
 		for (const slot of writes.slots) {
 			if (slot.startsWith("G:")) return true;
 		}
@@ -1278,7 +1386,7 @@ export function runsHooks(w: WriteEffects, target: Node): boolean {
 }
 
 function mayWriteAny(w: WriteEffects, writes: WriteSummary, slots: string[]): boolean {
-	if (writes.unknown) return true;
+	if (writes.unknown || writes.paramCalls.length > 0) return true;
 	for (const slot of slots) {
 		if (slot == ANY_HEAP_SLOT ? writes.slots.length > 0 : writes.slotSet.has(slot)) return true;
 		if (slot == ANY_HEAP_SLOT) continue;
@@ -1604,6 +1712,16 @@ test "a store through a generated access macro writes only elements of its array
 	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
 	assert mayWrite(w, store, [heldSlot(w, ELEMENT_SLOT, createArray(stringType()))], null);
 	assert !mayWrite(w, store, [heldSlot(w, ELEMENT_SLOT, createArray(createArray(int32Type())))], null);
+}
+
+test "a store into elements of a type matches a union slot only through a member that can be it" {
+	const w = writeProbe();
+	const loc = makeLoc(0, 0);
+	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
+	const slotOf = (element: Type): string => heldSlot(w, ELEMENT_SLOT, createArray(element));
+	assert mayWrite(w, store, [slotOf(createUnion([stringType(), nullType()]))], null);
+	assert !mayWrite(w, store, [slotOf(createUnion([int32Type(), nullType()]))], null);
+	assert mayWrite(w, store, [slotOf(createUnion([int32Type(), createGenericParam("T")]))], null);
 }
 
 function loweredViewCall(returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {

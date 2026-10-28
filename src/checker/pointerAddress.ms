@@ -2,12 +2,12 @@ import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind, ArrayAccessData, createNodeAt, TypeAssertionData,
 	MemberExprData, HiddenStdConvData, BinaryExprData, ConditionalExprData, ObjectLiteralData, ArrayLiteralData,
 	CallExprData, VariableDeclData, ReturnStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
-	ArrowFunctionData, FunctionExprData, ProgramData,
+	ArrowFunctionData, FunctionExprData, ProgramData, CallingConvention,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isScopeBoundary } from "../ast/shape";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage } from "./types";
+import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage, unwrapRefNullUnion } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { CheckerContext, addError } from "./context";
 import { writeRefusal, WriteSite } from "./assignable";
@@ -22,11 +22,15 @@ function pointee(target: Type | null): Type | null {
 }
 
 function bareSource(source: Type | null): Type | null {
-	const src = skipModifier(source);
-	return src != null ? peelTransparentInstance(src) : null;
+	let src = skipModifier(source);
+	if (src == null) return null;
+	const pointer = unwrapRefNullUnion(src);
+	if (pointer != null) src = pointer;
+	return peelTransparentInstance(src);
 }
 
 function storedInline(t: Type): boolean {
+	if (t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure) return false;
 	return isValueStorage(t) || t.kind == TypeKind.SizedArray;
 }
 
@@ -54,6 +58,11 @@ export function nativeAddressSource(source: Type | null, target: Type | null): T
 export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node, target: Type): void {
 	const source = bareSource(expr.nodeType);
 	const dest = bareSource(target);
+	if (source != null && dest != null && source.kind == TypeKind.Function && source.callConv == CallingConvention.CcClosure && dest.kind == TypeKind.Ptr) {
+		addError(ctx, "cannot cast " + typeDisplayName(source) + " to " + typeDisplayName(target)
+			+ ": a closure carries an environment, which a C pointer cannot hold; cast a module-level function instead", expr.location.line, expr.location.column);
+		return;
+	}
 	if (source != null && dest != null && dest.kind == TypeKind.Span && dest.typeReturn != null) {
 		let view = source;
 		if (view.kind == TypeKind.Ref && view.typeReturn != null) view = peelTransparentInstance(view.typeReturn);

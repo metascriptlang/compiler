@@ -14,6 +14,7 @@ import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../..
 import { isLocation } from "../../checker/assignable";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { makeMember, makeNull, makeCall, makeString, runtimeRef } from "../util";
 import { wrapMaybeValue, unwrapRefusesNull, nullAccessHead } from "../maybeCarrier";
 import { isNullExpr } from "../../ast/shape";
@@ -54,19 +55,21 @@ function maybeSlotType(n: Node): Type | null {
 
 // Keep this after the analyzer: it must see a plain `.value` read to own it.
 export function checkMaybeReads(program: Node): void {
-	walkNode(program, (n: Node): Node => {
-		if (n.kind != NodeKind.MemberExpr || !n.flags.has(NodeFlag.ConvCheck)) return n;
-		const d = n.data as MemberExprData;
-		const carrier = d.object != null ? d.object.nodeType : null;
-		if (d.property != "value" || carrier == null || !isMaybeType(carrier)) return n;
-		const loc = n.location;
-		const check = isLocation(d.object) ? "msMaybeAccess" : "msMaybeAccessVal";
-		const call = makeCall(runtimeRef(check, loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
-		call.nodeType = carrier;
-		d.object = call;
-		n.flags = n.flags.excl(NodeFlag.ConvCheck);
-		return n;
-	});
+	checkMaybeRead(program);
+}
+
+function checkMaybeRead(n: Node): void {
+	forEachChild(n, checkMaybeRead);
+	if (n.kind != NodeKind.MemberExpr || !n.flags.has(NodeFlag.ConvCheck)) return;
+	const d = n.data as MemberExprData;
+	const carrier = d.object != null ? d.object.nodeType : null;
+	if (d.property != "value" || carrier == null || !isMaybeType(carrier)) return;
+	const loc = n.location;
+	const check = isLocation(d.object) ? "msMaybeAccess" : "msMaybeAccessVal";
+	const call = makeCall(runtimeRef(check, loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
+	call.nodeType = carrier;
+	d.object = call;
+	n.flags = n.flags.excl(NodeFlag.ConvCheck);
 }
 
 export function lowerNullable(program: Node, ctx: TransformContext): Node {

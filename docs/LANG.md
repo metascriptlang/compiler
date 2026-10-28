@@ -1109,7 +1109,7 @@ continuation, while C and the bundle evaluate it before the continuation. Measur
 | JS bundle | `start` `a body` `b body` `main got 1` `a got 2` |
 | `--split` (5 of 5 runs) | `start` `a body` `main got 1` `b body` `a got 2` |
 
-The Raiser stops on this program with "deadlock: no runnable strand" (inbox card
+The Raiser ends this program as an unsettled await, exit 13 after printing `a body` (measured 2026-10-26; inbox card
 `2026-10-16-raiser-import-awaited-inside-a-module-body-deadlocks`).
 
 ### Converter Declarations
@@ -2044,17 +2044,24 @@ return match (escChar) {
     _ => escChar,
 };
 
-// Expression match — block arms require explicit `return`
-return match (node.kind) {
+// Expression match — a block arm's value is its last expression
+const label = match (node.kind) {
     NodeKind.Identifier => getName(node),
     NodeKind.BinaryExpr => {
         const d = node.data as BinaryExprData;
-        return d.left.toString() + d.op + d.right.toString();
+        d.left.toString() + d.op + d.right.toString()
+    },
+    NodeKind.Call => {
+        if (isBuiltin(node)) { "builtin" } else { "call" }
     },
     _ => "unknown",
 };
-// Rule: `arm => expr` = implicit return; `arm => { return expr; }` = explicit return
-// Applies to both `return match` and `const x = match` forms
+// Rule: an arm's value is its expression, or the last expression of its block, through a
+// trailing if/else or a nested match. `return x` always returns x from the function,
+// whether the match is returned, bound, passed or an arrow body, and is checked against the
+// function's return type; the arm that returns gives the match no value.
+// A path ending in throw, break or continue gives no value; any other ending (a loop, a
+// declaration, an `if` without `else`, an empty block) is an error.
 
 // Statement match with side effects (generates native C switch)
 match (ch) {
@@ -2344,6 +2351,8 @@ function borrowing(d: Data): Promise<int32> {
 - **Borrowing** — the thunk reads a reference the parent lends it. Every exit of the scope cancels the tasks no worker has started and waits for the rest, so the handle stays in that scope: returning it, storing it in a field, a module variable or an object, or passing it to a function or a constructor is a compile error. Keeping it in a local array or `Map` and passing it to `Promise.all` stays inside the scope and is accepted.
 
 The same `Promise<T>` produced by `async function`s, actor CALLs, and `spawn(...)` all interoperate: you can mix them in arrays, pass them through generic code, etc. When a spawn-origin `Promise<T>` flows into a context that drops the affine guarantee (mixed array, generic parameter, explicit upcast), the compiler emits a lint so the safety loss is visible.
+
+**An await nothing can settle** ends the program with exit code 13 and the warning `Detected unsettled await` on stderr, as Node does for a top-level await, instead of waiting forever. The program is ended when the awaiting thread finds no pending task, timer, interval, loop message, actor run, actor idle timeout, pending stop or I/O request; a suspended actor counts only through what will settle its own await. So an actor CALL cycle (A awaits B, and B awaits a CALL back into A, which stays frozen under A2) ends with exit 13 on C and the Raiser. Pinned by the corpus programs `unsettledAwaitExits`, `unsettledAwaitActorCycle`, `unsettledAwaitLiveSources` and `unsettledAwaitLiveActors`.
 
 **Spawn groups** — parallel fan-out with structured results:
 
@@ -3246,7 +3255,8 @@ extern function free(p: Ptr<void>): void;
 Without the `@include`, a call to either extern fails the C compile with
 `call to undeclared function` — an extern binds a C symbol, it does not
 declare one. Match the parameter type to the header too: `size: uint64`
-(`size_t`), not `number` (a `double` the C prototype rejects). Verified
+(`size_t` on a 64-bit target only; wasm32's is 32 bits, so import `size_t` from a `.h` where the
+code must build there), not `number` (a `double` the C prototype rejects). Verified
 2026-09-30 with `msc run` on exactly this shape (malloc, two byte writes
 through `buf as Ptr<uint8>`, free): prints `42|7`. C backend only — extern
 C functions have no JS linkage.
@@ -3272,7 +3282,15 @@ live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Rais
 | `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
 | `view as Span<U>`, `U ≠ T` | refused, as the reference refuses `cast[openArray[U]]` | refused | refused |
 | `p + n`, `q - p`, `p < q`, `p[i]` with `i ≠ 0`, `p += n` | pointer arithmetic | refused: no address arithmetic | refused, traps |
+| `p[a..b]`, `p[a...b]` for `Ptr<T>`, `T` not `void`; bounds of any integer type | a `Span<T>` of the `b - a` elements at `p + a`, no copy (`Readonly<Span<T>>` from a `Readonly<Ptr<T>>`). The end is trusted as the length; `a < 0`, `b < a` or a `uint64` end past `int64` raises `slice a..b out of bounds (length b)` | refused: `cannot slice a pointer` | refused, traps |
 | `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | location identity and access |
+
+A pointer slice is how a C `(const uint8_t* bytes, size_t n)` pair becomes a view: `bytes[0..n]`. It borrows
+like any Span (§Spans): it must not outlive the memory behind the pointer. Measured 2026-10-28 on Linux
+(oci-u), C and `--danger`: corpus `pointerSliceViewsLibcBytes` (libc `malloc`/`memset`/`strlen`; `size_t`,
+`int32`, inclusive and computed ends, a write C reads back, a read-only view) prints `6 hhXhh 5|hX|Xhh|504`;
+`pointerSliceLengthNegative` and `pointerSliceLengthOutOfRange` stop with `slice 0..-2 out of bounds (length -2)`
+and `slice 0..-1 out of bounds (length -1)` on C. Not run: `--os=emcc`, macOS, Windows.
 
 A `ref` / `out` argument of any type reaches the caller's location on the Raiser VM too (`RegAddr`,
 `ElemAddr`, `FieldAddr`, `GlobalAddr`; `src/codegen/raiser/CLAUDE.md`).

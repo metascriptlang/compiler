@@ -27,6 +27,9 @@
 typedef bool (*msActorPollFn)(void);
 static _Atomic(msActorPollFn) msActorPollHook = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
+static _Atomic(msActorPollFn) msActorIdleHook = NULL;
+void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
+
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
  * When > 0, msRunOnce caps its sleep to this value so idle timeouts fire on time. */
@@ -172,6 +175,25 @@ static msClosure msDequePop(msCallbackDeque* d) {
 static MS_THREAD_LOCAL msDispatcher* gDispatcher = NULL;
 
 extern _Thread_local bool msIsPoolWorker;  /* pool.c — true only on pool worker threads */
+
+/* The first non-worker thread to open an event loop owns the main loop: it alone reads
+ * the main channel, its I/O count and the unsettled-await check. */
+static _Atomic(int64_t) msLoopThread = 0;
+static void msClaimLoopThread(void) {
+	int64_t self = msLockedSelf();
+	int64_t owner = 0;
+	if (!atomic_compare_exchange_strong_explicit(&msLoopThread, &owner, self, memory_order_relaxed, memory_order_relaxed) && owner != self) {
+		fputs("internal: an event loop or an await was started on a thread that is neither the main loop thread nor a pool worker\n", stderr);
+		abort();
+	}
+}
+
+static int32_t msMainIoOps = 0;
+void msIoOpsAdd(int32_t delta) {
+	if (msIsPoolWorker) return;
+	if (atomic_load_explicit(&msLoopThread, memory_order_relaxed) != msLockedSelf()) msClaimLoopThread();
+	msMainIoOps += delta;
+}
 extern _Thread_local int msPoolWorkerSchedId;
 extern void msPoolWakeWorker(int schedulerID);
 extern void msPoolPendingAdd(int32_t delta);
@@ -267,6 +289,7 @@ static volatile LONG gWakeIocpCount = 0;
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
+		if (!msIsPoolWorker) msClaimLoopThread();
 		gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
 		gDispatcher->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 		/* Register in the wake registry — the IOCP mirror of POSIX's
@@ -821,6 +844,7 @@ static void msDispatcherThreadDestroy(void) {
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
+		if (!msIsPoolWorker) msClaimLoopThread();
 		gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
 		msOnThreadDestruction(msDispatcherThreadDestroy);
 		gDispatcher->selector = msSelectorCreate();
@@ -1176,6 +1200,31 @@ static inline bool msFutureHasEdge(msFutureBase* f) {
 	return atomic_load_explicit(&f->edge, memory_order_acquire) != NULL;
 }
 
+/* Read under the pool lock with every worker parked (msPoolQuiescentWith). */
+static bool msMainLoopIdle(void) {
+	msDispatcher* d = msGetDispatcher();
+	if (msDequeLen(&d->callbacks) != 0 || msMainIoOps != 0) return false;
+	msTimerLock();
+	bool timers = gTimers.len != 0;
+	msTimerUnlock();
+	if (timers) return false;
+	msActorPollFn actorIdle = atomic_load_explicit(&msActorIdleHook, memory_order_acquire);
+	return actorIdle == NULL || actorIdle();
+}
+
+/* A main-thread wait that found nothing left to run. With every worker parked only
+ * this thread can wake one, so a last pass that does no work proves no posted
+ * completion was missed between the snapshot and here. */
+static bool msNothingCanSettle(void) {
+	return msPoolQuiescentWith(msMainLoopIdle) && !msRunOnce(0);
+}
+
+static void msExitUnsettledAwait(void) {
+	fflush(stdout);
+	fputs("Warning: Detected unsettled await: no task, timer, message or I/O is left to settle it\n", stderr);
+	exit(13);
+}
+
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
@@ -1189,7 +1238,7 @@ void* msWaitFor(void* fp) {
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
-			msRunOnce(msMainWaitMs());
+			if (!msRunOnce(msMainWaitMs()) && msNothingCanSettle()) msExitUnsettledAwait();
 		} else if (!msWorkerLoopPump()) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msWorkerWaitOnFuture(fp);
@@ -1215,7 +1264,7 @@ void msWaitForReady(void* fp) {
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
-			msRunOnce(msMainWaitMs());
+			if (!msRunOnce(msMainWaitMs()) && msNothingCanSettle()) msExitUnsettledAwait();
 		} else if (msWorkerLoopPump()) {
 			spins = 0;
 		} else if (helped && spins < 32) {
@@ -1254,7 +1303,7 @@ void msPostEnvRelease(void* env) {
 	if (iocp == NULL) {
 		/* No loop exists yet — the process is effectively single-threaded at
 		 * this point, so an inline decref is race-free. */
-		msDecref(env);
+		msDecrefAny(env);
 		return;
 	}
 	msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
@@ -1408,7 +1457,7 @@ void* msAsyncCurrentChain(void) { return gAsyncChain; }
 
 static void msAsyncCbEnvDrop(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
-	if (e->stepper.env != NULL) msDecref(e->stepper.env);
+	if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
 	free(e);
 }
 
@@ -1467,7 +1516,7 @@ static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e,
 		 * +1 (this decref here). After this msDecref, msDecRefIsLast sees rc=0
 		 * → destroyFn fires → memory freed. The raw msAsyncCbEnv* pointer that
 		 * carried env through the callback chain is then released via free(e). */
-		if (e->stepper.env != NULL) msDecref(e->stepper.env);
+		if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
 		free(e);
 		return;
 	}
@@ -1534,7 +1583,7 @@ void msDestroyDispatcher(void) {
 			msFutureCancel(t.fut);
 			msFutureDrcDestroy(t.fut);
 		} else if (t.actorJob) msActorJobAbandon(t.cb.env);
-		else if (t.cb.env != NULL) msDecref(t.cb.env);
+		else if (t.cb.env != NULL) msDecrefAny(t.cb.env);
 	}
 	free(gTimers.data);
 	gTimers.data = NULL;

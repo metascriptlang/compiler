@@ -8,16 +8,18 @@
 import { Node, NodeKind, Type, TypeKind, DeclKind, VariableDeclData, BinaryExprData, ExprStmtData, BlockStmtData, ProgramData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { nullType, createArray, createRef } from "../../checker/types";
 import { TransformContext, freshOwnedSym } from "../context";
-import { walkNode, walkBlockExpanding } from "../walker";
+import { walkBlockExpanding } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { makeNull, makeExprStmt, makeVarDecl, makeIdentResolved } from "../util";
 
 export function lowerVoidBind(program: Node, ctx: TransformContext): Node {
-	walkNode(program, (n: Node): Node => expandVoidBinds(n, ctx));
-	walkNode(program, restampVoidUse);
+	expandVoidBinds(program, ctx);
+	restampVoidUse(program);
 	return program;
 }
 
-function expandVoidBinds(node: Node, ctx: TransformContext): Node {
+function expandVoidBinds(node: Node, ctx: TransformContext): void {
+	forEachChild(node, (child: Node): void => expandVoidBinds(child, ctx));
 	if (node.kind == NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;
 		d.statements = walkBlockExpanding(d.statements, (s: Node): Node[] => rewriteStmt(s, ctx));
@@ -25,7 +27,6 @@ function expandVoidBinds(node: Node, ctx: TransformContext): Node {
 		const d = node.data as ProgramData;
 		d.programStmts = walkBlockExpanding(d.programStmts, (s: Node): Node[] => rewriteStmt(s, ctx));
 	}
-	return node;
 }
 
 function isVoidTyped(n: Node): boolean {
@@ -164,7 +165,8 @@ function rewriteStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-function restampVoidUse(node: Node): Node {
+function restampVoidUse(node: Node): void {
+	forEachChild(node, restampVoidUse);
 	if (node.kind == NodeKind.Identifier && node.nodeType != null
 		&& node.nodeType.kind == TypeKind.Void
 		&& node.resolvedSym != null && node.resolvedSym.symbolType != null
@@ -177,5 +179,4 @@ function restampVoidUse(node: Node): Node {
 		&& node.nodeType != null && node.nodeType.kind == TypeKind.Void) {
 		node.nodeType = nullType();
 	}
-	return node;
 }

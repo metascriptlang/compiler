@@ -14,8 +14,8 @@
 // instances are resolved before this pass (and substitution copies callConv),
 // and Sink/Lent are never built for a callee — probed, not assumed.
 
-import { Node, NodeKind, SymbolKind, Symbol, CallExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
-import { createFunction, voidType, peelTransparentInstance, closureStorageType } from "../../checker/types";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, TypeAssertionData, ObjectLiteralData, BinaryExprData, createNodeAt, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { createFunction, createPtr, voidType, peelTransparentInstance, closureStorageType, peelToStructOrUnion } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeObjectLiteral, makeNull } from "../util";
@@ -28,6 +28,15 @@ export function markClosureCalls(program: Node, ctx: TransformContext): Node {
 }
 
 function markCall(node: Node): Node {
+	if (node.kind == NodeKind.ObjectLiteral) {
+		eraseFieldRoutines(node);
+		return node;
+	}
+	if (node.kind == NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.operator == "=") bd.right = asPointerSlot(bd.right, bd.left.nodeType);
+		return node;
+	}
 	if (node.kind != NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
 
@@ -57,7 +66,12 @@ function wrapFuncArgsAsThunks(node: Node): void {
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		const arg = cd.arguments[i];
 		if (arg.flags.has(NodeFlag.Closure)) continue;
-		if (i < calleeType.typeChildren.length && calleeType.typeChildren[i].kind == TypeKind.Ptr) continue;
+		const formal = i < calleeType.typeChildren.length ? calleeType.typeChildren[i] : null;
+		if (formal != null && formal.kind == TypeKind.Ptr) continue;
+		if (formal != null && isPlainFunctionPointer(formal)) {
+			cd.arguments[i] = asPointerSlot(arg, formal);
+			continue;
+		}
 		let argType = arg.nodeType;
 		if (argType == null && arg.resolvedSym != null && arg.resolvedSym.symbolKind == SymbolKind.Function) {
 			argType = arg.resolvedSym.symbolType;
@@ -72,6 +86,32 @@ function wrapFuncArgsAsThunks(node: Node): void {
 		thunk.nodeType = closureStorageType(fnType);
 		cd.arguments[i] = thunk;
 	}
+}
+
+function isPlainFunctionPointer(t: Type): boolean {
+	return t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure;
+}
+
+function eraseFieldRoutines(node: Node): void {
+	const od = node.data as ObjectLiteralData;
+	const shape = peelToStructOrUnion(node.nodeType);
+	if (shape == null || shape.typeNames == null) return;
+	for (let i = 0; i < od.properties.length && i < od.keys.length; i += 1) {
+		const at = shape.typeNames.indexOf(od.keys[i]);
+		if (at >= 0) od.properties[i] = asPointerSlot(od.properties[i], shape.typeChildren[at]);
+	}
+}
+
+function asPointerSlot(value: Node, slot: Type | null): Node {
+	if (slot == null || !isPlainFunctionPointer(slot)) return value;
+	if (value.resolvedSym == null || value.resolvedSym.symbolKind != SymbolKind.Function) return value;
+	return asRawAddress(value);
+}
+
+function asRawAddress(arg: Node): Node {
+	const cast = createNodeAt(NodeKind.TypeAssertion, { asExpr: arg, asType: "Ptr<void>" } as TypeAssertionData, arg.location);
+	cast.nodeType = createPtr(voidType());
+	return cast;
 }
 
 function isClosureTypedCallee(callee: Node): boolean {

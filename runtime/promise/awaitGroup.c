@@ -164,7 +164,7 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 		pthread_mutex_unlock(&g->mutex);
 #endif
 	} else {
-		msDecref(error);
+		msDecrefAny(error);
 	}
 
 	/* Still decrement pending so waiters unblock even on failure. */

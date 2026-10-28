@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, DeclKind, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
-import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
+import { walkNode, walkExpandBlocks, mapExprChildren, mapExprChildrenWith } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
 import { hoistStmtValue } from "../blockExpand";
@@ -433,18 +433,30 @@ function hoistOperand(operand: Node, pre: Node[], ctx: TransformContext): Node {
 	return ref;
 }
 
+class ArrayHoist {
+	pre: Node[] = [];
+	ctx: TransformContext;
+}
+
 function hoistArrayOperands(expr: Node, pre: Node[], ctx: TransformContext): Node {
+	const st: ArrayHoist = { ctx };
+	const result = hoistArrayIn(st, expr);
+	for (let i = 0; i < st.pre.length; i += 1) pre.push(st.pre[i]);
+	return result;
+}
+
+function hoistArrayIn(st: ArrayHoist, expr: Node): Node {
 	if (expr == null || expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) return expr;
-	mapExprChildren(expr, (child: Node): Node => hoistArrayOperands(child, pre, ctx));
+	mapExprChildrenWith(expr, st, hoistArrayIn);
 	if (!isArrayOp(expr)) return expr;
 	if (expr.kind == NodeKind.CallExpr) {
 		const d = expr.data as CallExprData;
-		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = hoistOperand(d.arguments[i], pre, ctx);
+		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = hoistOperand(d.arguments[i], st.pre, st.ctx);
 		return expr;
 	}
 	const d = expr.data as BinaryExprData;
-	d.left = isSetCompoundOp(d.operator) ? hoistTargetEffects(d.left, pre, ctx) : hoistOperand(d.left, pre, ctx);
-	d.right = hoistOperand(d.right, pre, ctx);
+	d.left = isSetCompoundOp(d.operator) ? hoistTargetEffects(d.left, st.pre, st.ctx) : hoistOperand(d.left, st.pre, st.ctx);
+	d.right = hoistOperand(d.right, st.pre, st.ctx);
 	return expr;
 }
 

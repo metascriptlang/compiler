@@ -200,7 +200,7 @@ static void msModuleAsyncFulfilled(msModuleRecord* m) {
 		void* error = NULL;
 		if (!msModuleRunBody(p, &error)) {
 			msModuleAsyncRejected(p, error);
-			msDecref(error);
+			msDecrefAny(error);
 			continue;
 		}
 		p->asyncEvaluation = false;
@@ -218,7 +218,7 @@ static void msModuleAsyncSettled(void* env) {
 		void* error = f->error != NULL ? f->error : msMakeError(msStringFromCStr("noproc"));
 		f->error = NULL;
 		msModuleAsyncRejected(m, error);
-		msDecref(error);
+		msDecrefAny(error);
 	} else {
 		msModuleAsyncFulfilled(m);
 	}
@@ -235,7 +235,7 @@ static void msModuleExecuteAsync(msModuleRecord* m) {
 	if (!ran) {
 		if (fut != NULL) msFutureDrcDestroy(fut);
 		msModuleAsyncRejected(m, error);
-		msDecref(error);
+		msDecrefAny(error);
 		return;
 	}
 	if (fut == NULL) {
@@ -321,7 +321,7 @@ static void msModuleEvaluate(msModuleWaiter* w) {
 		free(stack);
 		if (failed) {
 			msModuleSettle(w->fut, error);
-			if (thrown) msDecref(error);
+			if (thrown) msDecrefAny(error);
 			free(w);
 			return;
 		}
@@ -397,7 +397,7 @@ void msModuleDeinitLazy(void) {
 	}
 	for (int32_t i = 0; i < gRecordCount; i++) {
 		msModuleRecord* r = &gRecords[i];
-		if (r->error != NULL) msDecref(r->error);
+		if (r->error != NULL) msDecrefAny(r->error);
 		r->error = NULL;
 		free(r->asyncParents);
 		r->asyncParents = NULL;

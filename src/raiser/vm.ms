@@ -216,6 +216,7 @@ export interface RaiserVM {
 	loopCount: int64;    // backward jumps (loop iterations) since the last entry reset
 	loopLimit: int64;    // max loop iterations before the VM refuses (reference: maxLoopIterationsVM)
 	error: string;    // Non-empty when VM stopped due to error
+	unsettled: boolean;   // stopped with a strand parked on a future nothing can complete (exit 13)
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	orc: boolean;     // gcMode == "orc", decided once in createVM
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
@@ -325,7 +326,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [] };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
@@ -1803,10 +1804,12 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (vm.halted) return;
 		if (next < 0) {
 			// Nothing runnable — the event loop is empty and the program is
-			// over. A strand still parked on a future nobody can complete is
-			// a real deadlock, not an idle loop.
+			// over. A strand still parked on a future nobody can complete ends
+			// the program with exit 13, as on C and in Node.
 			if (vmHasBlocked(vm)) {
-				vmError(vm, "deadlock: no runnable strand");
+				vm.unsettled = true;
+				vm.exitValue = raiserInt(13);
+				vm.halted = true;
 				return;
 			}
 			vm.halted = true;
@@ -6138,7 +6141,9 @@ test "a strand parked on a timer is not a deadlock, one parked on a future nobod
 	];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
 	assert vm.output == "2\n";
-	assert vm.error == "deadlock: no runnable strand";
+	assert vm.error == "";
+	assert vm.unsettled;
+	assert vm.exitValue.intVal == 13;
 }
 
 // --- Exceptions ---

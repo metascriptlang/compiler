@@ -89,7 +89,7 @@ void msClearException(void) {
  * MOVE the reference into the binding and the analyzer decrefs it at handler
  * scope-end, so those keep using msClearException (null only). */
 void msDiscardCurrentException(void) {
-	msDecref((void*)msCurrException);
+	msDecrefAny((void*)msCurrException);
 	msErr = false;
 	msCurrException = NULL;
 }
@@ -131,7 +131,7 @@ void msTestErrorFlag(void) {
 	fputs("Error: unhandled exception: ", stderr);
 	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
 	fputc('\n', stderr);
-	msDecref((void*)msCurrException);
+	msDecrefAny((void*)msCurrException);
 	msCurrException = NULL;
 	exit(1);
 }
@@ -156,7 +156,7 @@ void msFutureRaiseFrom(msFutureBase* f) {
 void msFutureDropError(msFutureBase* f) {
 	void* err = f->error;
 	f->error = NULL;
-	msDecref(err);
+	msDecrefAny(err);
 }
 
 void (*msFatalTrap)(void) = NULL;

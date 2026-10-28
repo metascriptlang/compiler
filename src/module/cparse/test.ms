@@ -12,6 +12,7 @@ import "./error";
 import "./tokenize";
 import "./preprocess";
 
+import { ObjKind } from "./obj";
 import { parseHeader, defaultOptions } from "../cimport/index";
 
 test "end-to-end skeleton runs without crashing" {
@@ -66,4 +67,37 @@ test "an identifier left in an #if expression is 0" {
 	assert out.diagnostics.length == 0;
 	assert out.objs.length == 1;
 	assert out.objs[0].name == "yes";
+}
+
+test "a C23 fixed underlying type sets the enum's size and signedness" {
+	const src = "typedef enum : unsigned char { A = 1 } U8;\n"
+		+ "typedef enum Tag : int { B = -1 } Named;\n"
+		+ "typedef unsigned short u16;\n"
+		+ "enum Wide : u16 { C = 1 };\n"
+		+ "enum Fwd : long long;\n"
+		+ "enum Fwd : long long { D = 1 };\n"
+		+ "struct S { enum Wide w : 3; };\n";
+	const out = parseHeader(src, "fixed.h", defaultOptions());
+	assert out.diagnostics.length == 0, out.diagnostics[0].message;
+	let u8 = -1;
+	let named = -1;
+	let wide = -1;
+	let fwd = -1;
+	for (const o of out.objs) {
+		if (o.kind == ObjKind.EnumConstant && o.name == "A") u8 = o.type.size;
+		if (o.kind == ObjKind.EnumConstant && o.name == "B") named = o.type.size;
+		if (o.kind == ObjKind.EnumConstant && o.name == "C") wide = o.type.size;
+		if (o.kind == ObjKind.EnumConstant && o.name == "D") fwd = o.type.size;
+	}
+	assert u8 == 1;
+	assert named == 4;
+	assert wide == 2;
+	assert fwd == 8;
+}
+
+test "a token no rule consumes is a diagnostic, not a hang" {
+	const out = parseHeader("typedef int : 3;\nint after;", "stuck.h", defaultOptions());
+	assert out.diagnostics.length == 1;
+	assert out.diagnostics[0].message.includes("':'"), out.diagnostics[0].message;
+	assert out.objs[out.objs.length - 1].name == "after";
 }

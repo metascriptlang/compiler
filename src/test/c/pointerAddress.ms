@@ -49,3 +49,26 @@ test "pointerAddress: a read-only pointer-slot view cannot replace its slot" {
 	assert cError(prefix + "console.log(`${at[][].n}`); }\n") == "compiled";
 	assert cError(prefix + "at[] = next; }\n").includes("cannot write through Readonly<Ptr<Ptr<S>>>");
 }
+
+function castEmit(pointer: string, read: string): string {
+	const c = compileToC(`struct Box { a: int32; }\nfunction read(p: ${pointer} | null): int32 { const q = ${read}; return q[0] as int32; }\n`
+		+ `let box: Box = { a: 1 };\nconst n = read(box as ${pointer});\n`);
+	return c.ok ? c.value : "error: " + c.error;
+}
+
+test "pointerAddress: a nullable pointer is cast by value, never by the address of its slot" {
+	const cases = [
+		{ pointer: "Ptr<void>", read: "p as Ptr<int32>" },
+		{ pointer: "Ptr<void>", read: "p! as Ptr<int32>" },
+		{ pointer: "Ptr<void>", read: "p as Ptr<uint8>" },
+		{ pointer: "Ptr<void>", read: "p! as Ptr<uint8>" },
+		{ pointer: "Ptr<Box>", read: "p as Ptr<int32>" },
+	];
+	for (const item of cases) {
+		const c = castEmit(item.pointer, item.read);
+		const name = item.pointer + " | null via " + item.read;
+		assert !c.startsWith("error:"), name + ": " + c.slice(0, 400);
+		assert c.includes("read__"), name + ": the routine was not emitted";
+		assert !c.includes("&(p_p0)"), name + " took the address of the parameter slot";
+	}
+}

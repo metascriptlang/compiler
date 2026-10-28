@@ -455,12 +455,12 @@ function captureOperand(n: Node, captured: Node[], writes: Symbol[], dctx: DrcCo
 }
 
 function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
-	const pre = currentScope(dctx).preStmts;
+	const scope = currentScope(dctx);
 	let i = marks.length - 1;
 	while (i >= 0) {
 		let at = 0;
-		while (at < pre.length && pre[at] != marks[i]) at += 1;
-		if (at == pre.length) {
+		while (at < scope.preStmts.length && scope.preStmts[at] != marks[i]) at += 1;
+		if (at == scope.preStmts.length) {
 			dctx.ctx.checkerCtx.errors.push({
 				message: "DRC internal error: a hoist flushed the statement's pre-list between two operands, so their order cannot be kept",
 				line: marks[i].location.line, column: marks[i].location.column, fatal: false,
@@ -468,13 +468,13 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 			return;
 		}
 		const captured: Node[] = [];
-		if (at + 1 < pre.length && kids[i] != null) {
+		if (at + 1 < scope.preStmts.length && kids[i] != null) {
 			const writes: Symbol[] = [];
-			for (let w = at + 1; w < pre.length; w += 1) { collectWrites(pre[w], writes); }
+			for (let w = at + 1; w < scope.preStmts.length; w += 1) { collectWrites(scope.preStmts[w], writes); }
 			kids[i] = captureOperand(kids[i], captured, writes, dctx);
 		}
-		pre.splice(at, 1);
-		for (let c = 0; c < captured.length; c += 1) { pre.splice(at + c, 0, captured[c]); }
+		scope.preStmts.splice(at, 1);
+		for (let c = 0; c < captured.length; c += 1) { scope.preStmts.splice(at + c, 0, captured[c]); }
 		for (const r of dctx.stmtBorrowReads) {
 			if (r.preStmtIdx > at) r.preStmtIdx += captured.length - 1;
 		}
@@ -1626,10 +1626,10 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 		// Per-scope isolation (reference parity): each scope has its own
 		// preStmts/pendingStmts, so branch processing can't leak parent stmts.
 		const curScope = currentScope(dctx);
-		for (const pre of curScope.preStmts) { buf.push(pre); }
+		for (let k = 0; k < curScope.preStmts.length; k += 1) { buf.push(curScope.preStmts[k]); }
 		curScope.preStmts = [];
 		buf.push(processed);
-		for (const post of curScope.pendingStmts) { buf.push(post); }
+		for (let k = 0; k < curScope.pendingStmts.length; k += 1) { buf.push(curScope.pendingStmts[k]); }
 		curScope.pendingStmts = [];
 		dctx.capturedNodes = [];
 		dctx.capturedSyms = [];
@@ -1693,7 +1693,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.BlockStmt => processBlockBody(stmt, dctx, false, false, sloc),
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
-		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); return stmt; },
+		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); stmt },
 		NodeKind.ThrowStmt => processThrow(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, idx, stmts, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),

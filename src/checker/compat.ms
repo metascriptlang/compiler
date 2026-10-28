@@ -927,8 +927,15 @@ export function returnReprRefusal(source: Type | null, target: Type | null, fnTe
 	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
 }
 
-function leavesInlineConv(source: Type, target: Type): boolean {
-	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
+export function closureIntoCPointerReason(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	if (source.callConv != CallingConvention.CcClosure || target.callConv == CallingConvention.CcClosure) return "";
+	return "a C function pointer, which holds no environment: a closure cannot fill it; pass a module-level function";
+}
+
+function callConvMismatch(source: Type, target: Type): boolean {
+	if (source.callConv == CallingConvention.CcInline) return target.callConv != CallingConvention.CcInline;
+	return source.callConv == CallingConvention.CcClosure && target.callConv != CallingConvention.CcClosure;
 }
 
 export function runtimeParams(fn: Type): Type[] {
@@ -946,7 +953,7 @@ export function sinkModeDiffers(a: Type, b: Type): boolean {
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
-	if (leavesInlineConv(source, target)) return false;
+	if (callConvMismatch(source, target)) return false;
 	const sourceParams = runtimeParams(source);
 	const targetParams = runtimeParams(target);
 	if (sourceParams.length != targetParams.length) return false;
@@ -1748,9 +1755,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			TypeKind.Function => {
 				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
 				// the return type, combined with minRel — the weakest component wins.
-				// callConv is folded in only for the inline convention (NIM-REF CK-52:
-				// MS has one closure repr, so the others carry no discriminating information).
-				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
+				// callConv as getProcConvMismatch folds it: an inline routine fits only an
+				// inline slot, and a closure never fits a plain function pointer.
+				if (callConvMismatch(actual, formal)) return TypeRelation.None;
 				const formalParams = runtimeParams(formal);
 				const actualParams = runtimeParams(actual);
 				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;

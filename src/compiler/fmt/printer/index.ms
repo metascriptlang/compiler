@@ -181,7 +181,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 
 		_ => {
 			unprintedKinds.push(node.kind.toString());
-			return docNil();
+			docNil()
 		},
 	};
 

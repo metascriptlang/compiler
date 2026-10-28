@@ -36,3 +36,18 @@ test "an inclusive slice checks the end past its last element" {
 	assert c != "";
 	assert c.contains("msSliceLen(a_p1, msAddI32(b_p2, 1), ");
 }
+
+test "a pointer slice checks its length against its own end" {
+	const c = cFor("function f(p: Ptr<uint8>, a: int32, n: uint64): int64 { const s: Span<uint8> = p[a..n]; return s.length; }");
+	assert c != "";
+	assert c.contains("msSliceLen(a_p1, n_p2, n_p2)");
+}
+
+test "a pointer slice reads a computed end once" {
+	const c = cFor("function f(p: Ptr<uint8>, n: uint64): int64 { const s: Span<uint8> = p[0..n - 1]; return s.length; }");
+	assert c != "";
+	const at = c.indexOf("msSliceLen(0ULL, ");
+	assert at >= 0;
+	const ends = c.slice(at + 17, c.indexOf(")", at)).split(", ");
+	assert ends.length == 2 && ends[0] == ends[1] && ends[0].startsWith("__spansrc"), ends.join(" | ");
+}

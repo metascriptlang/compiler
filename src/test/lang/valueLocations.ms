@@ -497,3 +497,24 @@ test "valueLocations: a ref string parameter appends to the caller's string" {
 	appendThroughRef(text);
 	assert text == "hi!?ab";
 }
+
+enum ViewMod { Shift, Ctrl }
+struct ViewKey { code: string; mods: BitSet<ViewMod>; }
+struct ViewPress { key: ViewKey; at: int32; }
+
+function firstKey(keys: Readonly<Span<ViewKey>>): ViewKey | null {
+	for (const k of keys) { return k; }
+	return null;
+}
+
+function firstPress(presses: Readonly<Span<ViewPress>>): ViewPress | null {
+	for (const p of presses) { return p; }
+	return null;
+}
+
+test "valueLocations: an element of a read-only span that holds a BitSet is a value, not a view" {
+	const key = firstKey([{ code: "a", mods: ViewMod.Shift | ViewMod.Ctrl }]);
+	assert key != null && key.mods.size() == 2;
+	const press = firstPress([{ key: { code: "b", mods: (0 as BitSet<ViewMod>).incl(ViewMod.Ctrl) }, at: 3 }]);
+	assert press != null && press.key.mods.has(ViewMod.Ctrl) && press.at == 3;
+}

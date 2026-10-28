@@ -353,9 +353,8 @@ export function bindContainerNames(ctx: CheckerContext, params: string[], body: 
 	const paramSyms: Symbol[] = [];
 	for (const p of params) {
 		const sym = makeSymbol(p, SymbolKind.Parameter, inferredType(), false);
+		if (!b.scopes[0].names.has(p)) b.scopes[0].names.set(p, sym);
 		paramSyms.push(sym);
-		const scope = b.scopes[0];
-		if (!scope.names.has(p)) scope.names.set(p, sym);
 	}
 	ctx.adoptedParams.set(body, paramSyms);
 	b.keys.push(body);

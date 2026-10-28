@@ -13,9 +13,9 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, MemberExprData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, MemberExprData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, ArrowFunctionData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
-import { walkExpandBlocks, containsExprKind } from "../walker";
+import { walkExpandBlocksHooked, containsExprKind } from "../walker";
 import { hoistGuarded, expandConditionStmt } from "./guardedLower";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
@@ -61,8 +61,15 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 // ===== Main Entry Point =====
 
 export function lowerMatch(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandMatchStmt, ctx);
+	walkExpandBlocksHooked(program, expandMatchStmt, ctx, returnArrowBodyMatch, null);
 	return program;
+}
+
+function returnArrowBodyMatch(fn: Node): void {
+	if (fn.kind != NodeKind.ArrowFunction) return;
+	const d = fn.data as ArrowFunctionData;
+	if (d.arrowBody.kind == NodeKind.BlockStmt || !containsExprKind(d.arrowBody, NodeKind.MatchExpr)) return;
+	d.arrowBody = makeBlock([makeReturn(d.arrowBody, d.arrowBody.location)], d.arrowBody.location);
 }
 
 function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
@@ -391,17 +398,6 @@ function moveInto(node: Node, mode: ArmMode, assignSym: Symbol | null, loc: Sour
 		d.consequent = moveInto(d.consequent, mode, assignSym, loc, ctx);
 		if (d.alternate != null) {
 			d.alternate = moveInto(d.alternate, mode, assignSym, loc, ctx);
-		}
-		return node;
-	}
-	// ReturnStmt in "return" mode: keep as-is (already correct).
-	// ReturnStmt in "assign" mode: strip return, convert to assignment.
-	// This supports `const x = match { arm => { return expr; } }` syntax.
-	if (node.kind == NodeKind.ReturnStmt) {
-		if (mode == ArmMode.Return) return node;
-		const rd = node.data as ReturnStmtData;
-		if (rd.argument != null) {
-			return moveInto(rd.argument, mode, assignSym, loc, ctx);
 		}
 		return node;
 	}

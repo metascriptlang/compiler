@@ -9,7 +9,7 @@ import { pkDumpNode } from "../../ast/fieldspec";
 import { CheckerContext } from "../../checker/context";
 import { identName } from "../../checker/idents";
 import { checkPreludeFromSource } from "../../checker/checkPass";
-import { writePreludePack, tryLoadPreludePack, packRoot } from "../../checker/preludePack";
+import { writePreludePack, tryLoadPreludePack, packRoot, emptyPreludeTables } from "../../checker/preludePack";
 import { resolveRuntimeDir } from "../../utils/path";
 
 const STAMP = "pack-parity-stamp";
@@ -114,7 +114,7 @@ test "a pack read back holds the symbols, types, declaration trees and tables of
 	try {
 		assert packRoot() != "";
 		const fresh = checkPreludeFromSource(join(resolveRuntimeDir(), "std"), ".rms");
-		writePreludePack(KEY, STAMP, fresh);
+		writePreludePack(KEY, STAMP, fresh, emptyPreludeTables());
 		const path = `${packRoot()}/${KEY}.pk`;
 		const loaded = tryLoadPreludePack(KEY, STAMP);
 		assert loaded != null, `the pack at ${path} did not load`;

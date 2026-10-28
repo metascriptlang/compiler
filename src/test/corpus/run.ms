@@ -52,7 +52,7 @@
 //
 // MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
 // directive on purpose and names the red it must produce (`// @selftest-red <substr>`
-// on one of its FAIL lines); a fixture that stays green, or that is red for another
+// on one of its FAIL lines, or `// @selftest-red none` for a fixture that must stay green); a fixture that stays green, or that is red for another
 // reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/,
 // with MSCORPUS_TSAN=1 every fixture in selftest-tsan/ (no threaded list).
 //
@@ -64,9 +64,10 @@
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
 // no ASan report + no DOUBLE-DESTROY + per-type ledger balance. Balance
-// rule: fail iff 0 < destroy != alloc — a type whose destroy count is 0
-// may legitimately have a NULL destroyFn (e.g. msFuture); that blind spot
-// is exactly what the RSS cells backstop. @maxrss is NOT asserted under
+// rule: fail iff alloc - destroy differs from the declared @ledger-slack,
+// except that a program with a non-zero @exit exempts its destroy=0 rows. The
+// LEDGER row carries hooks=0|1 (destroyFn present); a red row names a type
+// without a destroy hook, whose destroy count is 0 by construction. @maxrss is NOT asserted under
 // ASan (shadow memory inflates RSS). ASan on this platform has no leak
 // sanitizer — the ledger IS the leak signal in this lane.
 
@@ -940,11 +941,13 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 		let typeName = "";
 		let alloc = -1;
 		let destroy = -1;
+		let hooks = true;
 		let i = 0;
 		for (const tok of line.split(" ")) {
 			if (i == 1) { typeName = tok; }
 			if (tok.indexOf("alloc=") == 0) { alloc = tok.slice(6, tok.length).parseInt() as int32; }
 			if (tok.indexOf("destroy=") == 0) { destroy = tok.slice(8, tok.length).parseInt() as int32; }
+			if (tok == "hooks=0") { hooks = false; }
 			i = i + 1;
 		}
 		if (typeName == "TOTAL") { continue; }
@@ -955,7 +958,7 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 		if (slack > 0 && diff == 0) {
 			return typeName + " slack unused (declared " + slack + ", diff 0) — global-destroy landed? remove @ledger-slack";
 		}
-		return typeName + " alloc=" + alloc + " destroy=" + destroy + (slack > 0 ? " (slack " + slack + ")" : "");
+		return typeName + " alloc=" + alloc + " destroy=" + destroy + (hooks ? "" : " (type has no destroy hook)") + (slack > 0 ? " (slack " + slack + ")" : "");
 	}
 	return "";
 }
@@ -1659,15 +1662,17 @@ function judgeSelftest(specs: Spec[]): int32 {
 	let bad = 0;
 	for (const spec of specs) {
 		const mine = redLines.filter((l: string): boolean => l.contains(" " + spec.name + " ["));
-		let verdict = "red as declared";
+		const clean = spec.selftestRed == "none";
+		let verdict = clean ? "clean as declared" : "red as declared";
 		if (spec.selftestRed == "") { verdict = "no // @selftest-red line"; }
+		else if (clean) { if (mine.length > 0) { verdict = "declared clean, but red: " + mine[0]; } }
 		else if (mine.length == 0) { verdict = "stayed green, the directive it breaks is hollow"; }
 		else if (!mine.some((l: string): boolean => l.contains(spec.selftestRed))) { verdict = "red for another reason, wanted '" + spec.selftestRed + "'"; }
-		if (verdict != "red as declared") { bad = bad + 1; }
-		console.log((verdict == "red as declared" ? "red  " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
+		if (verdict != "red as declared" && verdict != "clean as declared") { bad = bad + 1; }
+		console.log((verdict == "red as declared" || verdict == "clean as declared" ? "ok   " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
 	}
 	if (specs.length == 0) { bad = bad + 1; console.log("BAD  selftest: no fixtures under " + PROG_DIR); }
-	console.log(bad == 0 ? "corpus selftest: ALL RED AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
+	console.log(bad == 0 ? "corpus selftest: ALL AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
 	return bad == 0 ? 0 : 1;
 }
 

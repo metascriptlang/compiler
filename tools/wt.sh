@@ -474,6 +474,17 @@ queued_for() {
 runner_alive() { local p; p=$(cat "$1/runner.lock/pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 start_runner() { (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &); }
 
+# A land gates on the Mac (the queue, or a direct land with no verdict to reuse) only when Linux cannot verify it:
+# while gatedash shows a Linux gate VM up, a change with no macOS-only line rides the gate train instead.
+mac_gate_allowed() {
+  local w=$1 old=$2 new=$3 hosts=$HOME/.local/share/gatedash/hosts.tsv
+  [ -z "${MSC_LAND_MAC:-}" ] && [ -f "$hosts" ] && [ -f "$HOME/metascript/.gate-host/mac-only-paths.sh" ] || return 0
+  [ $(( $(date +%s) - $(stat -f %m "$hosts" 2>/dev/null || stat -c %Y "$hosts") )) -le 120 ] || return 0
+  awk -F'\t' '$3 == "vm" && $4 == "up" { up = 1 } END { exit !up }' "$hosts" || return 0
+  [ -z "$(cd "$w" && bash "$HOME/metascript/.gate-host/mac-only-paths.sh" "$old" "$new")" ] || return 0
+  die "land: a Linux gate host is up and no changed line needs macOS, so this land rides the gate train: send READY to merge-train (~/metascript/.gate-host/README.md, Ready). When the person approves the Mac for it (a Linux host red, no merge-train live), run again with MSC_LAND_MAC=1."
+}
+
 commit_pruned_known() {
   local w=$1 pruned="$1/out/gate/known-red.pruned.json"
   [ -f "$pruned" ] || return 0
@@ -548,6 +559,7 @@ cmd_land() {
   [ "$new" != "$old" ] || die "land: nothing to land"
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
   if [ "$async" -eq 1 ]; then
+    mac_gate_allowed "$w" "$old" "$new"
     mkdir -p "$qd"
     if [ -n "$(queued_for "$qd" "$name" run)" ]; then
       runner_alive "$qd" && die "land: $name is landing now; wait with: wt.sh land $name --wait"
@@ -577,6 +589,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new"); then
     say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ]; then
+    mac_gate_allowed "$w" "$old" "$new"
     rm -f "$verdict"
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
     for cmd in "${also[@]+"${also[@]}"}"; do

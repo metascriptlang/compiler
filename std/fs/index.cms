@@ -21,6 +21,7 @@ const FAILED_WITHOUT_ERRNO: int32 = -1;
 
 extern let errno: int32;
 extern const EEXIST: int32;
+extern const ENOENT: int32;
 extern struct FILE;
 extern function cFwrite(data: cstring, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fwrite";
 extern function cFclose(file: Ptr<FILE>): int32 from "fclose";
@@ -64,6 +65,7 @@ when (windows) {
 	extern const SYMBOLIC_LINK_FLAG_DIRECTORY: uint32;
 	extern const INVALID_FILE_ATTRIBUTES: uint32;
 	extern const FILE_ATTRIBUTE_DIRECTORY: uint32;
+	extern const FILE_ATTRIBUTE_REPARSE_POINT: uint32;
 	extern const FILE_READ_ATTRIBUTES: uint32;
 	extern const FILE_SHARE_READ: uint32;
 	extern const FILE_SHARE_WRITE: uint32;
@@ -259,6 +261,19 @@ when (windows) {
 		return text;
 	}
 
+	function removalOf(path: string): Result<Removal, IoError> {
+		const wide = widePath(path);
+		if (wide == null) return Result.err(ioErrorFromErrno(EINVAL, path));
+		const attributes = GetFileAttributesW(wide);
+		const failure = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
+		freeWide(wide);
+		if (attributes == INVALID_FILE_ATTRIBUTES) return absentOrError(msFsErrnoFromWin32(failure), path);
+		const directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		const link = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+		if (directory && link) return Result.ok(Removal.DirectoryLink);
+		return Result.ok(directory ? Removal.Tree : Removal.Entry);
+	}
+
 	function statOf(path: string, ref st: Stat): boolean {
 		const wide = widePath(path);
 		if (wide == null) return false;
@@ -299,6 +314,18 @@ when (windows) {
 	function modifiedTimeKernel(path: string): number {
 		let st: Stat = {};
 		return statOf(path, st) ? st.st_mtime as number : -1;
+	}
+	function changedTimeKernel(path: string): number {
+		const wide = widePath(path);
+		if (wide == null) return -1;
+		const file = openForAttributes(wide);
+		freeWide(wide);
+		if (file == INVALID_HANDLE_VALUE) return -1;
+		let basic: BasicInformation = {};
+		const ok = GetFileInformationByHandleEx(file, FileBasicInfo, basic, sizeof(BasicInformation) as uint32) != 0;
+		CloseHandle(file);
+		if (!ok || basic.ChangeTime.QuadPart == 0) return -1;
+		return ((basic.ChangeTime.QuadPart - UNIX_EPOCH_IN_FILETIME) / FILETIME_PER_SECOND) as number;
 	}
 	function changeStampKernel(path: string): string {
 		const wide = widePath(path);
@@ -353,7 +380,13 @@ when (windows) {
 	}
 	extern function cFopen(path: cstring, mode: cstring): Ptr<FILE> from "fopen";
 	extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
+	extern function cLstat(path: cstring, ref buf: Stat): int32 from "lstat";
 	function statOf(path: string, ref st: Stat): boolean { return cStat(path as cstring, st) == 0; }
+	function removalOf(path: string): Result<Removal, IoError> {
+		let st: Stat = {};
+		if (cLstat(path as cstring, st) != 0) return absentOrError(errno, path);
+		return Result.ok((st.st_mode & S_IFMT) == S_IFDIR ? Removal.Tree : Removal.Entry);
+	}
 	extern const S_IFMT: uint32;
 	extern const S_IFREG: uint32;
 	extern const S_IFDIR: uint32;
@@ -404,6 +437,10 @@ when (windows) {
 		let st: Stat = {};
 		return cStat(path as cstring, st) == 0 ? mtimeOf(st).tv_sec as number : -1;
 	}
+	function changedTimeKernel(path: string): number {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 ? ctimeOf(st).tv_sec as number : -1;
+	}
 	@inline
 	function putTime(ref buf: uint8[128], at: int32, t: Timespec): int32 {
 		const dot = putSigned(buf, at, t.tv_sec);
@@ -423,6 +460,18 @@ when (windows) {
 		buf[n] = 58; n = putTime(buf, n + 1, changed);
 		return msStringNew(((buf as Span<uint8>) as Ptr<uint8>) as cstring, n as int64);
 	}
+}
+
+enum Removal {
+	Absent,
+	Entry,
+	DirectoryLink,
+	Tree,
+}
+
+function absentOrError(err: int32, path: string): Result<Removal, IoError> {
+	if (err == ENOENT) return Result.ok(Removal.Absent);
+	return Result.err(ioErrorFromErrno(err, path));
 }
 
 function writeAndClose(file: Ptr<FILE>, content: string): int32 {
@@ -540,20 +589,25 @@ export function remove(path: string): Result<void, IoError> {
 // no boolean flag to misuse, two names read as the thing they do.
 //
 // Uses recursion — fine for msc cache layouts (~2 levels). Not suitable
-// for pathological trees (> ~1000 deep). Symlink handling follows
-// whatever runtime/fs/*.c does for remove().
+// for pathological trees (> ~1000 deep). A link, the root included, is
+// removed itself and never followed.
 export function removeAll(path: string): Result<void, IoError> {
-	if (!exists(path)) return Result.ok(null);
-	if (isDir(path)) {
-		for (const entry of readDir(path)) {
-			// readDir marks directories with a trailing "/" — strip for the child path.
-			const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
-			const r = removeAll(path + "/" + name);
-			if (!r.ok) return r;
-		}
-		return rmdir(path);
+	const removal = try removalOf(path);
+	return match (removal) {
+		Removal.Absent => Result.ok(null),
+		Removal.Entry => remove(path),
+		Removal.DirectoryLink => rmdir(path),
+		Removal.Tree => removeTree(path),
+	};
+}
+
+function removeTree(path: string): Result<void, IoError> {
+	for (const entry of readDir(path)) {
+		// readDir marks directories with a trailing "/" — strip for the child path.
+		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+		try removeAll(path + "/" + name);
 	}
-	return remove(path);
+	return rmdir(path);
 }
 
 export function symlink(target: string, path: string): Result<void, IoError> {
@@ -573,6 +627,7 @@ export function isDir(path: string): boolean { return isDirKernel(path); }
 export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
 export function fileSize(path: string): number { return fileSizeKernel(path); }
 export function modifiedTime(path: string): number { return modifiedTimeKernel(path); }
+export function changedTime(path: string): number { return changedTimeKernel(path); }
 export function changeStamp(path: string): string { return changeStampKernel(path); }
 
 // List directory entries. Directories have a trailing "/" marker.

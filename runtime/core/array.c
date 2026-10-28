@@ -614,7 +614,7 @@ void msAcyclicRefArrayDestroy(msRefArray* arr) {
 	arr->p = NULL;
 	arr->len = 0;
 	if (p != NULL) {
-		for (int64_t i = 0; i < len; i++) msDecref(p->data[i]);
+		for (int64_t i = 0; i < len; i++) msDecrefAny(p->data[i]);
 		free(p);
 	}
 }
@@ -625,7 +625,7 @@ void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen) {
 		arr->len--;
 		void* evicted = arr->p->data[arr->len];
 		arr->p->data[arr->len] = NULL;
-		msDecref(evicted);
+		msDecrefAny(evicted);
 	}
 }
 
@@ -769,7 +769,7 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
 static void msReleaseCyclic(void* p) { msDecrefCyclic(p); }
 static void msReleaseAtomic(void* p) { msAtomicDecref(p); }
-static void msReleaseAcyclic(void* p) { msDecref(p); }
+static void msReleaseAcyclic(void* p) { msDecrefAny(p); }
 
 static void msRefArraySpliceThenRelease(msRefArray* arr, int64_t start, int64_t deleteCount, void* item, void (*release)(void*)) {
 	start = msSpliceStart(start, arr->len);

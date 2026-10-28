@@ -63,6 +63,7 @@ void msIoEngineDestroy(msIoEngine* e);
 /* Thread-local singleton (lazy-init) */
 msIoEngine* msGetIoEngine(void);
 msIoEngine* msGetIoEngineIfExists(void);
+void msIoOpsAdd(int32_t delta);  /* dispatchFull.c */
 
 /* ===== Async Operations ===== */
 

@@ -120,13 +120,13 @@ never known, and never known-now-green — a program that fails half the time ca
 answer either question. Putting one there needs a run that shows both outcomes.
 
 A run that ends BUSY (75) keeps the lanes that ended green in out/gate/resume. The
-next run reads their logs instead of running them, and waits for load only before a
+next run reads their logs instead of running them, and waits for free CPU only before a
 phase with a lane left to run, when HEAD, a clean status, the resolved --base, the
 lanes and options, ./msc, both known-red files, the corpus/guard/hcr selector
 environment and the candidate binary are all unchanged; any other ending drops the record.
 
 exit: 0 no new red · 1 new red · 2 usage · 75 machine busy past GATE_WAIT_MAX
-env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
+env:  GATE_WAIT_MAX seconds to wait, once the queue is passed, until the CPU sampled now has a fifth of the gate's core share idle (default 1800, 0 = refuse at once, < 0 = skip the check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
       MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
@@ -358,19 +358,24 @@ resume_busy() { [ -z "$RESUME_KEY" ] || printf 'cand %s\nbusy\n' "$(file_digest 
 resume_close() { rm -f "$OUT/resume"; }
 skip_lane() { { [ "$reuse" -eq 1 ] || resume_kept "$1"; } && [ "$(tail -1 "$OUT/$1.log" 2>/dev/null)" = END ]; }
 
-load1() {
-  if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
+idle_pct() {
+  if [ -r /proc/stat ]; then
+    { head -1 /proc/stat; sleep 0.5; head -1 /proc/stat; } | awk '{i=$5+$6; t=0; for(k=2;k<=NF;k++) t+=$k; if (NR==1) {i0=i; t0=t} else print 100*(i-i0)/(t-t0)}'
+  else
+    top -l 2 -n 0 -s 1 | awk '/^CPU usage/ {i=$7} END {print i+0}'
+  fi
 }
+free_cores() { awk -v i="$(idle_pct)" -v n="$(cores)" 'BEGIN{printf "%.1f\n", i*n/100}'; }
 admit() {
-  local max=${GATE_WAIT_MAX:-1800} waited=0 n l
+  local max=${GATE_WAIT_MAX:-1800} t0=$SECONDS shown=-60 f need
   [ "$max" -ge 0 ] || return 0
-  n=$(cores)
+  need=$(share_of_cores 5) || exit $?
   while :; do
-    l=$(load1)
-    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
-    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; resume_busy; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
-    say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
-    sleep 60; waited=$((waited + 60))
+    f=$(free_cores)
+    awk -v f="$f" -v n="$need" 'BEGIN{exit !(f>=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + SECONDS - t0)); return 0; }
+    [ $((SECONDS - t0)) -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + SECONDS - t0)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; resume_busy; say "gate: BUSY $f free cores < $need after $((SECONDS - t0))s"; exit 75; }
+    if [ $((SECONDS - t0 - shown)) -ge 60 ]; then shown=$((SECONDS - t0)); say "gate: waiting, $f free cores < $need (${shown}s/${max}s)"; fi
+    sleep 5
   done
 }
 
@@ -396,8 +401,10 @@ resume_self_test() (
   kept_after "build suite corpus" "a second BUSY run keeps what the first kept"
   resume_green build; kept_after "" "a run that did not end BUSY"
   seed; resume_close; kept_after "" "a run that ended GREEN or RED"
-  greens; ( GATE_WAIT_MAX=0 ADMIT_WAITED=0; cores() { echo 1; }; load1() { echo 99; }; admit >/dev/null ); k=$?
-  [ "$k" -eq 75 ] || { printf 'FAIL resume: admit past GATE_WAIT_MAX exited %s, not 75\n' "$k"; bad=1; }
+  ( GATE_WAIT_MAX=0 ADMIT_WAITED=0; share_of_cores() { echo 2; }; load1() { echo 99; }; free_cores() { echo 2.0; }; admit >/dev/null ); k=$?
+  [ "$k" -eq 0 ] || { printf 'FAIL resume: admit with free cores while the load average reads 99 exited %s, not 0\n' "$k"; bad=1; }
+  greens; ( GATE_WAIT_MAX=0 ADMIT_WAITED=0; share_of_cores() { echo 2; }; load1() { echo 0; }; free_cores() { echo 1.9; }; admit >/dev/null ); k=$?
+  [ "$k" -eq 75 ] || { printf 'FAIL resume: admit short of free cores while the load average reads 0 exited %s, not 75\n' "$k"; bad=1; }
   kept_after "build suite" "the record admit leaves when it gives up"
   seed; printf 'c\n' >c.ms; $g add -A; $g commit -qm more; kept_after "" "another HEAD"
   seed; printf 'dirty\n' >>a.ms; kept_after "" "a dirty tree"; git checkout -q -- a.ms
@@ -521,6 +528,9 @@ bounded() {
 
 hash_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
+EMIT_VMEM_KB=${GATE_EMIT_VMEM_KB:-16777216}
+cap_emit_memory_on_linux() { ulimit -v "$EMIT_VMEM_KB" 2>/dev/null || [ "$(uname -s)" != Linux ]; }
+
 emit_many() {
   local bin=$1 root=$GATE_EMIT_DIR work i n h p c_rc js_rc text
   local -a args dirs files
@@ -528,6 +538,7 @@ emit_many() {
   shift; args=("$@")
   for ((i = 0; i < ${#args[@]}; i += 3)); do dirs+=("$root/${args[i]}"); done
   work="$root/.sig.$$"
+  cap_emit_memory_on_linux || { echo "emit: cannot cap the address space at ${EMIT_VMEM_KB} KB" >&2; exit 1; }
   rm -rf "${dirs[@]}" "$work"; mkdir -p "${dirs[@]}" "$work" || exit 1
   for ((i = 0; i < ${#args[@]}; i += 3)); do
     n=${args[i]}
@@ -1055,7 +1066,7 @@ queue_self_test() {
   out="$GATES_DIR.out" QUEUE_POLL=0.2
   fake() { printf '%s %s fake\n' "$3" "$2" >"$GATES_DIR/$1"; }
   live() { sleep 120 >/dev/null 2>&1 & LIVE=$!; pids="$pids $LIVE"; }
-  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; }
+  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; : >"$out"; }
   seen() { for ((i = 0; i < 100; i++)); do grep -q "$1" "$2" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
   held() { for ((i = 0; i < 50; i++)); do grep -q ' hold ' "$GATES_DIR/$$" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
   queue_acquire >"$out"
@@ -1613,6 +1624,8 @@ FAKE
   mkdir "$d/other"; printf 'x\n' >"$d/other/broken.ms"
   [ "$(emit_one "$d/fake" 3 broken "$d/other/broken.ms" | cut -f2)" != "$(sed -n 3p <<<"$both" | cut -f2)" ] \
     || { printf 'FAIL emit batch: two different failures shared a signature\n'; bad=1; }
+  [ "$(uname -s)" != Linux ] || [ "$(cap_emit_memory_on_linux; ulimit -v)" = "$EMIT_VMEM_KB" ] \
+    || { printf 'FAIL emit batch: a program emit runs without the %s KB address-space cap\n' "$EMIT_VMEM_KB"; bad=1; }
   rm -rf "$d"
   return $bad
 )

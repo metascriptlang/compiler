@@ -20,7 +20,7 @@
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
-import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
 import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
@@ -66,7 +66,8 @@ class LiftCtx {
 	refCellTraces: Type[];
 	refCellCustodies: Type[];
 	scannedTypes: HashSet<Type>;
-	arrayRootEpochs: HashMap<Type, int32>;
+	arraysScanned: HashSet<Type>;
+	arraysScannedEpoch: int32;
 	refusedArrayElems: HashSet<Type>;
 	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
@@ -631,7 +632,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic
 function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Type, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
+	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : (isAwaitable(heldType) ? "msDecrefFuture" : "msDecref"));
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => {
@@ -675,21 +676,21 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
-interface HookLift {
-	unavailable: boolean;
+interface HookLiftScope {
+	callsUnavailableCopy: boolean;
 	dropOwner: Symbol | null;
 }
 
-function beginHookLift(lctx: LiftCtx): HookLift {
-	const outer: HookLift = { unavailable: lctx.callsUnavailableCopy, dropOwner: lctx.dropOwner };
+function beginHookLift(lctx: LiftCtx): HookLiftScope {
+	const outer: HookLiftScope = { callsUnavailableCopy: lctx.callsUnavailableCopy, dropOwner: lctx.dropOwner };
 	lctx.callsUnavailableCopy = false;
 	lctx.dropOwner = null;
 	return outer;
 }
 
-function endHookLift(lctx: LiftCtx, outer: HookLift, hook: string, sym: Symbol, unavailable: boolean): void {
+function endHookLift(lctx: LiftCtx, outer: HookLiftScope, hook: string, sym: Symbol, unavailable: boolean): void {
 	if (hook == "copy" && (unavailable || lctx.callsUnavailableCopy)) setFlag(sym, SymbolFlag.UnavailableOp);
-	lctx.callsUnavailableCopy = outer.unavailable;
+	lctx.callsUnavailableCopy = outer.callsUnavailableCopy;
 	lctx.dropOwner = outer.dropOwner;
 }
 
@@ -823,7 +824,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			refOp(hook, xf, yf, empties, fieldType, true, false, lctx, buf, loc);
 		},
 		TypeKind.Function => {
-			if (hook == "copy") {
+			if (fieldType.callConv != CallingConvention.CcClosure) {
+				defaultOp(hook, xf, yf, buf, loc);
+			} else if (hook == "copy") {
 				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
 			} else if (hook == "sink") {
 				genCall("msClosureSink", hook, xf, yf, buf, loc);
@@ -1365,7 +1368,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
 	const releasesAfterHook = hookSym != null && hook == "destroy";
 	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
-	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
@@ -1437,7 +1439,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	} else if (held != null) {
 		buf.items.push(leftNoRef(s1, held, loc));
 	}
-	lctx.dropOwner = outerDropOwner;
 
 	const suffix = hookSuffix(hook);
 
@@ -2051,9 +2052,9 @@ function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellCustodies.push(canon);
 }
 
-function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void {
-	if (t == null || visited.has(t)) return;
-	visited.add(t);
+function scanTypeForArrays(t: Type, lctx: LiftCtx): void {
+	if (t == null || lctx.arraysScanned.has(t)) return;
+	lctx.arraysScanned.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
 		registerRefCellCustody(t.typeReturn, lctx);
@@ -2063,17 +2064,18 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void
 		return;
 	}
 	if (t.typeChildren != null) {
-		for (const child of t.typeChildren) scanTypeForArrays(child, lctx, visited);
+		for (const child of t.typeChildren) scanTypeForArrays(child, lctx);
 	}
-	if (t.typeReturn != null) scanTypeForArrays(t.typeReturn, lctx, visited);
+	if (t.typeReturn != null) scanTypeForArrays(t.typeReturn, lctx);
 }
 
 function scanRootForArrays(root: Type, lctx: LiftCtx): void {
 	const epoch = instantiatedBodyCount();
-	const seen = lctx.arrayRootEpochs.get(root);
-	if (seen != null && seen == epoch) return;
-	scanTypeForArrays(root, lctx, new HashSet<Type>());
-	if (instantiatedBodyCount() == epoch) lctx.arrayRootEpochs.set(root, epoch);
+	if (lctx.arraysScannedEpoch != epoch) {
+		lctx.arraysScanned = new HashSet<Type>();
+		lctx.arraysScannedEpoch = epoch;
+	}
+	scanTypeForArrays(root, lctx);
 }
 
 function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
@@ -2378,7 +2380,8 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refCellTraces: [],
 		refCellCustodies: [],
 		scannedTypes: new HashSet<Type>(),
-		arrayRootEpochs: new HashMap<Type, int32>(),
+		arraysScanned: new HashSet<Type>(),
+		arraysScannedEpoch: -1,
 		refusedArrayElems: new HashSet<Type>(),
 		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,

@@ -94,7 +94,9 @@ export function pointerOpRefusal(node: Node): string | null {
 		if (isPointer(d.updateArg.nodeType)) return "cannot apply '" + d.updateOp + "' to a pointer";
 	} else if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		if (isPointer(d.array.nodeType) && !literalZero(d.index)) return "cannot index a pointer past the element it addresses";
+		if (!isPointer(d.array.nodeType) || literalZero(d.index)) return null;
+		const op = d.index.kind == NodeKind.BinaryExpr ? (d.index.data as BinaryExprData).operator : "";
+		return op == ".." || op == "..." ? "cannot slice a pointer" : "cannot index a pointer past the element it addresses";
 	}
 	return null;
 }

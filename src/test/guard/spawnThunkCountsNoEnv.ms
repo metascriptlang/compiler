@@ -18,7 +18,7 @@ const root = cwd();
 const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const dir = `${root}/out/guardSpawnThunkCountsNoEnv`;
-const RC_OPS = ["msIncref(", "msDecref(", "msIncRef(", "msDecRef(", "msAtomicIncref(", "msAtomicDecref(", "msAtomicIncRef(", "msAtomicDecRef("];
+const RC_OPS = ["msIncref(", "msDecref(", "msDecrefFuture(", "msIncRef(", "msDecRef(", "msAtomicIncref(", "msAtomicDecref(", "msAtomicIncRef(", "msAtomicDecRef("];
 const THUNKS = ["dollarlifted_held_", "dollarlifted_fused_", "dollarlifted_inAsync_fexpr", "dollarlifted_viaLocal_", "dollarlifted_makesOwn_"];
 
 let failed = 0;

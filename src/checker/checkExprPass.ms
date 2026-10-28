@@ -128,7 +128,7 @@ function bindDeclaredOperator(ctx: CheckerContext, node: Node, op: string, opera
 // Overload scoring lets an operand of a generic parameter, of `unknown` or still inferred match any
 // routine; such an operator binds in each instance, and an `unknown` operand is compared as itself,
 // since a call refuses it for a typed parameter.
-function operandTypeSettled(t: Type): boolean {
+function operandTypeSettled(t: Readonly<Type>): boolean {
 	return !hasGenericParams(t) && t.kind != TypeKind.Unknown && t.kind != TypeKind.Inferred && t.kind != TypeKind.None;
 }
 
@@ -2997,10 +2997,9 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (mapObjType != null && mapObjType.kind == TypeKind.Ref && mapObjType.typeReturn != null) {
 		mapObjType = mapObjType.typeReturn;
 	}
-	if (mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
-		&& isIndexableMapType(mapObjType)
-		&& !isRangeIndex(d.index)
-		&& ctx.initTracker.leftPartOfAsgn == 0) {
+	const mapSubscript = mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
+		&& isIndexableMapType(mapObjType) && !isRangeIndex(d.index);
+	if (mapSubscript && ctx.initTracker.leftPartOfAsgn == 0) {
 		const loc = node.location;
 		const memberTok = createToken(TokenKind.Ident, "", loc.line);
 		const memberData: NodeData = { object: d.array, property: "get", isOptional: false };
@@ -3076,8 +3075,14 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") {
+			const pointer = skipModifier(arrType);
+			if (pointer != null && pointer.kind == TypeKind.Ptr && pointer.typeReturn != null && pointer.typeReturn.kind != TypeKind.Void) {
+				const view = createSpan(pointer.typeReturn);
+				node.nodeType = isReadonlyView(pointer) ? createReadonlyView(view) : view;
+				return;
+			}
 			if (!isSliceSource(arrType)) {
-				addError(ctx, "cannot slice '" + typeDisplayName(arrType) + "' with '" + bd.operator + "': only an array, a Span or a string has the length that bounds a slice", node.location.line, node.location.column);
+				addError(ctx, "cannot slice '" + typeDisplayName(arrType) + "' with '" + bd.operator + "': only an array, a Span, a string or a typed pointer can be sliced", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
 			accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
@@ -3092,8 +3097,11 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	} else {
 		accessType = getElementType(arrType);
 	}
+	if (isUnresolvedType(accessType) && !isSliceSource(arrType) && arrType.kind != TypeKind.Ptr && !mapSubscript) {
+		addError(ctx, "type '" + typeDisplayName(arrType) + "' has no '[]' operator", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
 	node.nodeType = accessType;
-	node.nodeType = accessType; return;
 }
 
 function isRangeIndex(index: Node): boolean {
@@ -3731,7 +3739,7 @@ function checkYield(ctx: CheckerContext, node: Node): void {
 	}
 	checkExpr(ctx, d.yieldArg, null);
 	const t = d.yieldArg.nodeType;
-	if (t == null || ctx.matchExprDepth > 0) return;
+	if (t == null) return;
 	if (ctx.inferredReturn.kind == TypeKind.Inferred) ctx.inferredReturn = t;
 	else if (ctx.inferredReturn != t) {
 		const joined = joinBranchTypes([ctx.inferredReturn, t]);
@@ -3742,7 +3750,7 @@ function checkYield(ctx: CheckerContext, node: Node): void {
 
 export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boolean {
 	const fn = ctx.currentFunction;
-	if (ctx.matchExprDepth > 0 || !yieldsInferred(fn) || !isUnresolvedType(declaredReturnOf(fn!))) return false;
+	if (!yieldsInferred(fn) || !isUnresolvedType(declaredReturnOf(fn!))) return false;
 	const arg = (node.data as ReturnStmtData).argument;
 	if (arg != null) {
 		addError(ctx, "a generator's 'return' ends it and carries no value: its values are what it yields; write 'return;'", node.location.line, node.location.column);
@@ -3752,7 +3760,7 @@ export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boo
 
 export function checkBareReturn(ctx: CheckerContext, node: Node): void {
 	const fn = ctx.currentFunction;
-	if (fn == null || ctx.matchExprDepth > 0 || ctx.inferredReturn == null) return;
+	if (fn == null || ctx.inferredReturn == null) return;
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.ConstructorDecl) return;
 	if (isGeneratorFlags(routineFlags(fn.declNode))) return;
 	const declared = declaredReturnOf(fn);
@@ -3871,8 +3879,6 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturnStmts = [];
 	const savedReturnTries = ctx.inferredReturnTries;
 	ctx.inferredReturnTries = [];
-	const savedMatchDepth = ctx.matchExprDepth;
-	ctx.matchExprDepth = 0;
 
 	// Contextual param types from expectedType (e.g. callback signature at the call site).
 	// Used when the user wrote untyped params: `arr.forEach(n => f(n))` — `n` typed by callee.
@@ -4010,7 +4016,6 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.readonlyBoundary = savedBoundary;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
-	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = explicitReturnType == null && returnTypeAnnotation == "" && isGenerator && !isAsync
 		? settleYields(ctx, name, fnNode.location)

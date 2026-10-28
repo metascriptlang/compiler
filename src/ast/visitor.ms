@@ -195,23 +195,27 @@ function visitChild(cb: ChildVisitor, n: Node | null): void {
 	if (n != null) cb(n);
 }
 
+function visitAll(cb: ChildVisitor, nodes: Node[]): void {
+	for (let i = 0; i < nodes.length; i++) visitChild(cb, nodes[i]);
+}
+
 export function forEachChild(node: Node, cb: ChildVisitor): void {
 	if (node == null) return;
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
 			const d: Cursor<ProgramData> = node.data as ProgramData;
-			for (const child of d.programStmts) visitChild(cb, child);
+			visitAll(cb, d.programStmts);
 		},
 		// SpliceMany — A2 macro multi-decl emission
 		NodeKind.SpliceMany => {
 			const d: Cursor<SpliceManyData> = node.data as SpliceManyData;
-			for (const child of d.spliceNodes) visitChild(cb, child);
+			visitAll(cb, d.spliceNodes);
 		},
 		// Block
 		NodeKind.BlockStmt => {
 			const d: Cursor<BlockStmtData> = node.data as BlockStmtData;
-			for (const child of d.statements) visitChild(cb, child);
+			visitAll(cb, d.statements);
 		},
 		// Statements with child nodes
 		NodeKind.IfStmt => {
@@ -251,26 +255,26 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.SwitchStmt => {
 			const d: Cursor<SwitchStmtData> = node.data as SwitchStmtData;
 			visitChild(cb, d.switchDisc);
-			for (const child of d.switchCases) visitChild(cb, child);
+			visitAll(cb, d.switchCases);
 		},
 		NodeKind.SwitchCase => {
 			const d: Cursor<SwitchCaseData> = node.data as SwitchCaseData;
-			for (const child of d.caseTests) visitChild(cb, child);
-			for (const child of d.caseStmts) visitChild(cb, child);
+			visitAll(cb, d.caseTests);
+			visitAll(cb, d.caseStmts);
 		},
 		NodeKind.MatchStmt => {
 			const d: Cursor<MatchStmtData> = node.data as MatchStmtData;
 			visitChild(cb, d.matchStmtDisc);
-			for (const child of d.matchStmtCases) visitChild(cb, child);
+			visitAll(cb, d.matchStmtCases);
 		},
 		NodeKind.MatchExpr => {
 			const d: Cursor<MatchExprData> = node.data as MatchExprData;
 			visitChild(cb, d.matchDisc);
-			for (const child of d.matchCases) visitChild(cb, child);
+			visitAll(cb, d.matchCases);
 		},
 		NodeKind.MatchCase => {
 			const d: Cursor<MatchCaseData> = node.data as MatchCaseData;
-			for (const child of d.casePatterns) visitChild(cb, child);
+			visitAll(cb, d.casePatterns);
 			visitChild(cb, d.caseGuard);
 			visitChild(cb, d.caseBody);
 		},
@@ -289,7 +293,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.ClassDecl => {
 			const d: Cursor<ClassDeclData> = node.data as ClassDeclData;
-			for (const child of d.classBody) visitChild(cb, child);
+			visitAll(cb, d.classBody);
 		},
 		NodeKind.MethodDecl => {
 			const d: Cursor<MethodDeclData> = node.data as MethodDeclData;
@@ -305,12 +309,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.DecoratedDecl => {
 			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
-			for (const dec of d.decorators) visitChild(cb, dec);
+			visitAll(cb, d.decorators);
 			visitChild(cb, d.decoratedNode);
 		},
 		NodeKind.EnumDecl => {
 			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
-			for (const init of d.enumInits) visitChild(cb, init);
+			visitAll(cb, d.enumInits);
 		},
 		NodeKind.MacroDecl => {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
@@ -360,7 +364,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.CallExpr => {
 			const d: Cursor<CallExprData> = node.data as CallExprData;
 			visitChild(cb, d.callee);
-			for (const child of d.arguments) visitChild(cb, child);
+			visitAll(cb, d.arguments);
 		},
 		NodeKind.MemberExpr => {
 			const d: Cursor<MemberExprData> = node.data as MemberExprData;
@@ -373,11 +377,11 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.ObjectLiteral => {
 			const d: Cursor<ObjectLiteralData> = node.data as ObjectLiteralData;
-			for (const child of d.properties) visitChild(cb, child);
+			visitAll(cb, d.properties);
 		},
 		NodeKind.ArrayLiteral => {
 			const d: Cursor<ArrayLiteralData> = node.data as ArrayLiteralData;
-			for (const child of d.elements) visitChild(cb, child);
+			visitAll(cb, d.elements);
 		},
 		NodeKind.ConditionalExpr => {
 			const d: Cursor<ConditionalExprData> = node.data as ConditionalExprData;
@@ -392,7 +396,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.NewExpr => {
 			const d: Cursor<NewExprData> = node.data as NewExprData;
 			visitChild(cb, d.newCallee);
-			for (const child of d.newArguments) visitChild(cb, child);
+			visitAll(cb, d.newArguments);
 		},
 		NodeKind.TryExpr => {
 			const d: Cursor<TryExprData> = node.data as TryExprData;
@@ -442,7 +446,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.MacroInvocation => {
 			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
-			for (const child of d.macroArgs) visitChild(cb, child);
+			visitAll(cb, d.macroArgs);
 		},
 		NodeKind.TestDecl => {
 			const d: Cursor<TestDeclData> = node.data as TestDeclData;
@@ -455,7 +459,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.ActorDecl => {
 			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
-			for (const child of d.actorBody) visitChild(cb, child);
+			visitAll(cb, d.actorBody);
 		},
 		NodeKind.PropertyDecl => {
 			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
@@ -463,12 +467,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.ArrayPattern => {
 			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
-			for (const child of d.patternElements) visitChild(cb, child);
-			for (const child of d.patternDefaults) visitChild(cb, child);
+			visitAll(cb, d.patternElements);
+			visitAll(cb, d.patternDefaults);
 		},
 		NodeKind.ObjectPattern => {
 			const d: Cursor<ObjectPatternData> = node.data as ObjectPatternData;
-			for (const child of d.patternProps) visitChild(cb, child);
+			visitAll(cb, d.patternProps);
 		},
 		NodeKind.ObjectPatternProp => {
 			const d: Cursor<ObjectPatternPropData> = node.data as ObjectPatternPropData;
@@ -478,7 +482,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.TypeGeneric => {
 			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
 			visitChild(cb, d.typExprBase);
-			for (const child of d.typExprArgs) visitChild(cb, child);
+			visitAll(cb, d.typExprArgs);
 		},
 		NodeKind.TypeArray => {
 			const d: Cursor<TypeArrayData> = node.data as TypeArrayData;
@@ -486,36 +490,32 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.TypeUnion => {
 			const d: Cursor<TypeUnionData> = node.data as TypeUnionData;
-			for (const child of d.typExprMembers) visitChild(cb, child);
+			visitAll(cb, d.typExprMembers);
 		},
 		NodeKind.TypeIntersection => {
 			const d: Cursor<TypeIntersectionData> = node.data as TypeIntersectionData;
-			for (const member of d.typExprMembers) {
-				visitChild(cb, member);
-			}
+			visitAll(cb, d.typExprMembers);
 		},
 		NodeKind.TypeFunction => {
 			const d: Cursor<TypeFunctionData> = node.data as TypeFunctionData;
-			for (const child of d.typExprParams) visitChild(cb, child);
+			visitAll(cb, d.typExprParams);
 			visitChild(cb, d.typExprReturn);
 		},
 		NodeKind.TypeObject => {
 			const d: Cursor<TypeObjectData> = node.data as TypeObjectData;
-			for (const child of d.typExprFieldTypes) visitChild(cb, child);
+			visitAll(cb, d.typExprFieldTypes);
 			visitChild(cb, d.typExprIndexKey);
 			visitChild(cb, d.typExprIndexValue);
-			for (const decs of d.typExprFieldDecorators) {
-				for (const child of decs) visitChild(cb, child);
-			}
+			for (let i = 0; i < d.typExprFieldDecorators.length; i++) visitAll(cb, d.typExprFieldDecorators[i]);
 		},
 		NodeKind.JSXElement => {
 			const d: Cursor<JSXElementData> = node.data as JSXElementData;
-			for (const a of d.jsxAttrs) { visitChild(cb, a); }
-			for (const c of d.jsxChildren) { visitChild(cb, c); }
+			visitAll(cb, d.jsxAttrs);
+			visitAll(cb, d.jsxChildren);
 		},
 		NodeKind.JSXFragment => {
 			const d: Cursor<JSXFragmentData> = node.data as JSXFragmentData;
-			for (const c of d.jsxFragChildren) { visitChild(cb, c); }
+			visitAll(cb, d.jsxFragChildren);
 		},
 		NodeKind.JSXExpressionContainer => {
 			const d: Cursor<JSXExpressionContainerData> = node.data as JSXExpressionContainerData;

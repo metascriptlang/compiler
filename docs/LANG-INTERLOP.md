@@ -92,7 +92,7 @@ type.
 | `bool` | `boolean` |
 | `char*`, `const char*`, `uint8_t*`, `const uint8_t*` | `cstring` |
 | `char**` parameter | `Ptr<Ptr<cchar>> \| null`, taking `null` or a `Ptr<cchar>` variable by address, `cchar` being the header module's `extern type cchar: int8 from "char"` (`uint8` where the target's `char` is unsigned) |
-| `size_t`, `ssize_t`, `uintptr_t`, `intptr_t` | the typedef's own name, declared `extern type size_t: uint64 from "size_t"`; it interchanges with its base, and a pointer to it is `size_t *` in the emitted C |
+| `size_t`, `ssize_t`, `uintptr_t`, `intptr_t` | the typedef's own name, declared `extern type size_t: <base> from "size_t"`, where the base has the target's width (`uint64` on 64-bit targets, `uint32` on wasm32 and `--os=emcc`); it interchanges with its base, and a pointer to it is `size_t *` in the emitted C. Write `as size_t` (imported from the header) for the portable cast: `as uint64` is refused on wasm32, and the refusal names `size_t` |
 | `void*` | `Ptr<void> \| null` |
 | `T*`, `T[N]` (scalar or enum `T`) | `Ptr<T> \| null` |
 | `const T*` (scalar `T`) | `Borrow<T>` |
@@ -110,7 +110,7 @@ Measured 2026-10-27 with `./msc-cand` and gcc 15.2 on macOS arm64: `src/test/cor
 `--cc=gcc-15` (not measured on a GNU host or Windows).
 
 A return type maps the same way without `| null` (`void*` → `Ptr<void>`, read in
-`src/module/cimport/emit.ms`, not measured). Struct field types were not re-measured.
+`src/module/cimport/emit.ms`, not measured). A struct field of type `const T*` (scalar `T`) is `Ptr<T>`, not `Borrow<T>`, so the author indexes it: measured 2026-10-28 with `./msc-cand`, corpus `importedConstPointerFieldIndexes` (`uint8` and `int32` elements into a `Vec`, a fixed array and a struct field, C only). Other field types were not re-measured.
 
 At a call, a `Ptr<T> | null` parameter takes `null` or a variable, a field or an element of exactly
 type `T`, and C receives its address for the call; `Ptr<void> | null` takes any scalar, enum or

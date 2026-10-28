@@ -155,10 +155,10 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.kind = TypeKind.Struct;
 	t.typeName = name;
 	t.typeNames = propNames;
-	t.typeChildren = propTypes;
 	if (isInterface) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct); }
 	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
 	for (const pt of propTypes) { propagateToOwner(t, pt); }
+	t.typeChildren = propTypes;
 	return t;
 }
 
@@ -278,6 +278,17 @@ export function closureStorageType(t: Type): Type {
 	c.typeValue = t.typeValue;
 	c.typeFlags = t.typeFlags;
 	return c;
+}
+
+export function callConvKey(t: Readonly<Type>): string {
+	return t.callConv == CallingConvention.CcClosure ? "" : "@" + (t.callConv as number).toString();
+}
+
+export function plainFunctionPointerType(t: Type): Type {
+	if (t.kind != TypeKind.Function || t.callConv != CallingConvention.CcClosure) return t;
+	const p = copyTypeShallow(t);
+	p.callConv = CallingConvention.CcDefault;
+	return p;
 }
 
 export function createEnum(name: string, members: string[], values: number[] = []): Type {
@@ -1748,7 +1759,7 @@ function isPodFieldType(t: Readonly<Type | null>, depth: int32): boolean {
 		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.Char
 			| TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
-		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
+		TypeKind.Distinct | TypeKind.SizedArray | TypeKind.Set | TypeKind.Alias => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
 		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
 		_ => false,
@@ -2088,6 +2099,11 @@ export function createBrandDistinct(brandKey: string, inner: Type): Type {
 	t.typeName = brandKey;
 	t.typeFlags = t.typeFlags.incl(TypeFlag.BrandWiden);
 	return t;
+}
+
+export function importedScalarSym(t: Readonly<Type | null>): Readonly<Symbol> | null {
+	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.TypeAlias || !t.sym.symFlags.has(SymbolFlag.ImportC) || !isNumeric(t)) return null;
+	return t.sym;
 }
 
 export function isBrandDistinct(t: Readonly<Type | null>): boolean {
@@ -3601,7 +3617,7 @@ function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): stri
 				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void");
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void") + callConvKey(t);
 		},
 		TypeKind.Union => {
 			let k = "union(";
@@ -4451,6 +4467,39 @@ function substituteAllParamsInner(t: Type | null, params: Type[], concretes: Typ
 	return result;
 }
 
+function substitutedUnionOrTupleAll(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	const copy = copyTypeForSubst(t);
+	substituteChildrenInPlaceAll(copy, params, concretes, active);
+	for (const child of copy.typeChildren) { propagateToOwner(copy, child); }
+	return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
+}
+
+function substitutedInstanceAll(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
+	const reused = reusedPastLimit(t);
+	if (reused != null) return reused;
+	const gi = copyTypeForSubst(t);
+	noteSessionInstance(t, gi);
+	substituteChildrenInPlaceAll(gi, params, concretes, active);
+	const building = instanceBeingBuilt(gi);
+	if (building != null) return building;
+	if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
+		if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(gi)}' would reach emission without its body`);
+		gi.typeReturn = null as unknown as Type;
+		instantiateGenericBody(gi, genericParamsOf(gi));
+	} else if (gi.typeReturn != null) {
+		_substitutingFrom.push(t);
+		_substitutingTo.push(gi);
+		gi.typeReturn = substituteAllParamsInner(gi.typeReturn, params, concretes, active);
+		_substitutingFrom.pop();
+		_substitutingTo.pop();
+		nameInstanceBody(gi, t);
+	} else if (!_queryCachesReadOnly) {
+		instantiateGenericBody(gi, genericParamsOf(gi));
+	}
+	return gi;
+}
+
 function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
@@ -4468,15 +4517,11 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				const fn = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(fn, params, concretes, active);
 				fn.typeReturn = substituteAllParamsInner(t.typeReturn, params, concretes, active);
-				return fn;
+				fn
 			},
-			TypeKind.Union | TypeKind.Tuple => {
-				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
-				const copy = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(copy, params, concretes, active);
-				for (const child of copy.typeChildren) { propagateToOwner(copy, child); }
-				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
-			},
+			TypeKind.Union | TypeKind.Tuple => t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)
+				? t
+				: substitutedUnionOrTupleAll(t, params, concretes, active),
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), params, concretes, active)),
 			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
@@ -4485,41 +4530,17 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Distinct => substitutedDistinct(t, substituteAllParamsInner(t.typeReturn, params, concretes, active)),
 			TypeKind.Struct => substituteStructAll(t, params, concretes, active),
-			TypeKind.GenericInstance => {
-				// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
-				const reused = reusedPastLimit(t);
-				if (reused != null) return reused;
-				const gi = copyTypeForSubst(t);
-				noteSessionInstance(t, gi);
-				substituteChildrenInPlaceAll(gi, params, concretes, active);
-				const building = instanceBeingBuilt(gi);
-				if (building != null) return building;
-				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
-					if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(gi)}' would reach emission without its body`);
-					gi.typeReturn = null as unknown as Type;
-					instantiateGenericBody(gi, genericParamsOf(gi));
-				} else if (gi.typeReturn != null) {
-					_substitutingFrom.push(t);
-					_substitutingTo.push(gi);
-					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, params, concretes, active);
-					_substitutingFrom.pop();
-					_substitutingTo.pop();
-					nameInstanceBody(gi, t);
-				} else if (!_queryCachesReadOnly) {
-					instantiateGenericBody(gi, genericParamsOf(gi));
-				}
-				return gi;
-			},
+			TypeKind.GenericInstance => substitutedInstanceAll(t, params, concretes, active),
 			TypeKind.Conditional => substitutedConditionalAll(t, params, concretes, active),
 			TypeKind.IndexedAccess => {
 				const access = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(access, params, concretes, active);
-				return evaluateIndexedAccessType(access);
+				evaluateIndexedAccessType(access)
 			},
 			TypeKind.KeyOf => {
 				const keyOf = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(keyOf, params, concretes, active);
-				return evaluateKeyOfType(keyOf);
+				evaluateKeyOfType(keyOf)
 			},
 			TypeKind.Mapped => substitutedMapped(t, params, concretes, active),
 			_ => t,
@@ -5280,6 +5301,22 @@ function isDisplaying(open: Readonly<Cursor<Readonly<Type>>[]>, t: Readonly<Type
 	return false;
 }
 
+// Display string literal unions as "north" | "south".
+// Children are rendered for display, so use typeDisplayName so a
+// `null` member shows as "null" instead of an empty segment that
+// would produce "string |  | int32".
+function unionDisplayName(t2: Readonly<Type>, open: Cursor<Readonly<Type>>[], shapes: int32): string {
+	if (t2.typeChildren.length == 0 || (t2.typeName != "" && isDisplaying(open, t2))) return t2.typeName;
+	open.push(t2);
+	let display = "";
+	for (const child of t2.typeChildren) {
+		if (display != "") display = display + " | ";
+		display = display + typeDisplayNameInner(child, 0 as BitSet<TypeFlag>, open, shapes);
+	}
+	open.pop();
+	return display;
+}
+
 function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[], shapes: int32): string {
 	if (t == null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming.
@@ -5341,23 +5378,7 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 		TypeKind.Enum => t2.typeName,
 		TypeKind.TypeReference => t2.typeName,
 		TypeKind.Distinct => t2.typeName,
-		TypeKind.Union => {
-			// Display string literal unions as "north" | "south".
-			// Children are rendered for display, so use typeDisplayName so a
-			// `null` member shows as "null" instead of an empty segment that
-			// would produce "string |  | int32".
-			if (t2.typeChildren.length > 0 && !(t2.typeName != "" && isDisplaying(open, t2))) {
-				open.push(t2);
-				let display = "";
-				for (const child of t2.typeChildren) {
-					if (display != "") display = display + " | ";
-					display = display + typeDisplayNameInner(child, 0 as BitSet<TypeFlag>, open, shapes);
-				}
-				open.pop();
-				return prefix + display;
-			}
-			return prefix + t2.typeName;
-		},
+		TypeKind.Union => unionDisplayName(t2, open, shapes),
 		_ => "",
 	};
 }
@@ -5387,6 +5408,8 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	if (t == null) return "<null>";
 	if (t.typeInst != null) return typeDisplayNameInner(t.typeInst, 0 as BitSet<TypeFlag>, open, shapes);
 	if (isBrandDistinct(t) && t.sym != null) return t.sym.name;
+	const imported = importedScalarSym(t);
+	if (imported != null) return imported.name;
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayNameInner(t.typeChildren[0], 0 as BitSet<TypeFlag>, open, shapes);

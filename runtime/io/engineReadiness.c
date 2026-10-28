@@ -35,6 +35,7 @@ struct msIoEngine {
 
 static msIoRequest* allocRequest(msIoEngine* e) {
 	e->live++;
+	msIoOpsAdd(1);
 	if (e->freeList != NULL) {
 		msIoRequest* r = e->freeList;
 		e->freeList = r->next;
@@ -48,6 +49,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
 	e->live--;
 	if (r->fut != NULL) { void* held = r->fut; r->fut = NULL; msFutureDrcDestroy(held); }
+	msIoOpsAdd(-1);
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;

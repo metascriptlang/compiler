@@ -25,7 +25,7 @@ static void msPromiseAllCb(void* env) {
 		}
 	}
 	msFutureEdgeSettle(s->result, idx);
-	msDecref(f);
+	msDecrefAny(f);
 
 	/* Always decrement. Last callback frees state. */
 	s->remaining--;
@@ -36,7 +36,7 @@ static void msPromiseAllCb(void* env) {
 		} else {
 			free(s->values);
 		}
-		msDecref(s->result);
+		msDecrefAny(s->result);
 		free(s->inputs);
 		free(s);
 	}
@@ -95,12 +95,12 @@ static void msPromiseRaceCb(void* env) {
 		}
 	}
 
-	msDecref(f);
+	msDecrefAny(f);
 
 	/* Last callback frees state */
 	s->remaining--;
 	if (s->remaining == 0) {
-		msDecref(s->result);
+		msDecrefAny(s->result);
 		free(s);
 	}
 }
@@ -138,13 +138,13 @@ static void msPromiseAllSettledCb(void* env) {
 	int idx = e->index;
 	free(e);
 	msFutureEdgeSettle(s->result, idx);
-	msDecref(s->inputs[idx]);
+	msDecrefAny(s->inputs[idx]);
 
 	/* Always decrement. Last callback completes (never fails). */
 	s->remaining--;
 	if (s->remaining == 0) {
 		msFutureComplete(s->result, NULL);
-		msDecref(s->result);
+		msDecrefAny(s->result);
 		free(s->inputs);
 		free(s);
 	}
@@ -205,12 +205,12 @@ static void msPromiseAnyCb(void* env) {
 		}
 	}
 
-	msDecref(f);
+	msDecrefAny(f);
 
 	/* Last callback frees state */
 	s->remaining--;
 	if (s->remaining == 0) {
-		msDecref(s->result);
+		msDecrefAny(s->result);
 		free(s);
 	}
 }

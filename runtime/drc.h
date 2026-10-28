@@ -5,10 +5,10 @@
  * ORC: cycle collector (Bacon's trial deletion), linked in every --mm=drc build.
  *
  * RefHeader prepended to all heap-allocated RC objects.
- * Layout: [rc:4][rootIdx:4][type:8] = 16 bytes on 64-bit
+ * Layout: msRefHeader below, [rc:8][type:8][rootIdx:4][allocSize:4] = 24 bytes on 64-bit
  *
  * ORC supplements ARC for cyclic data structures. Non-cyclic objects
- * use plain ARC (zero overhead). Cyclic objects get registered in the
+ * use plain ARC and never touch the root set. Cyclic objects get registered in the
  * root set; periodically the collector runs a 3-phase mark-scan-collect.
  */
 
@@ -25,7 +25,7 @@
 #include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
-/* rc field = [count:28][flags:4].
+/* rc field = [count:60][flags:4] (intptr_t).
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
  * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits. */
 #define MS_RC_INCREMENT 16
@@ -92,6 +92,17 @@ void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
 } while (0)
 #else
 #define MS_HCR_COUNT(t, delta) ((void)0)
+#endif
+
+#ifdef MS_DRC_LEDGER
+void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op);
+static inline void msRcFamilyCheck(void* p, bool wantAtomic, const char* op) {
+	const msTypeInfo* t = msHeader(p)->type;
+	if (t != NULL && ((t->flags & MS_TYPE_FLAG_ATOMIC) != 0) != wantAtomic) msRcFamilyMismatch(p, wantAtomic, op);
+}
+#define MS_RC_FAMILY_CHECK(p, wantAtomic, op) msRcFamilyCheck((p), (wantAtomic), (op))
+#else
+#define MS_RC_FAMILY_CHECK(p, wantAtomic, op) ((void)0)
 #endif
 
 #ifdef MS_DRC_LEDGER
@@ -272,6 +283,7 @@ static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
  * non-atomic path, or its first decref would underflow and never free. */
 static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
 	void* p = msAllocTyped(size, type);
+	MS_RC_FAMILY_CHECK(p, true, "msAllocArc");
 	msHeader(p)->rc = MS_RC_INCREMENT;
 	return p;
 }
@@ -313,6 +325,7 @@ static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
+		MS_RC_FAMILY_CHECK(p, false, "msIncRef");
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -323,6 +336,7 @@ static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		MS_LEDGER_COUNT(MS_LEDGER_SHARE_INC);
+		MS_RC_FAMILY_CHECK(p, true, "msAtomicIncRef");
 		__atomic_fetch_add(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELAXED);
 	}
 }
@@ -333,6 +347,7 @@ static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
+	MS_RC_FAMILY_CHECK(p, false, "msDecRefIsLast");
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
@@ -353,6 +368,7 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
+	MS_RC_FAMILY_CHECK(p, true, "msAtomicDecRefIsLast");
 	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
@@ -366,9 +382,8 @@ static inline void msDestroyAndDispose(void* p) {
 		msRefHeader* h = msHeader(p);
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
-		 * scrub it from msRoots — every free path, including codegen's sole-owner
-		 * direct dispose that bypasses msOrcDecRefIsLast. Else msOrcCollect later
-		 * walks a dangling root (UAF in markGray/getColor). */
+		 * scrub it from msRoots, else msOrcCollect later walks a dangling root
+		 * (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
@@ -486,12 +501,14 @@ static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
+	MS_RC_FAMILY_CHECK(p, false, "msOrcIncRef");
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
+	MS_RC_FAMILY_CHECK(p, false, "msOrcDecRefIsLast");
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & ~MS_RC_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);

@@ -838,7 +838,7 @@ export function readonlyGet<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>)
 	return m.entries[m.indices[slot]].value;
 }
 
-export function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
+export function has<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return false;
 	const hc = keyHash<K>(key);
@@ -977,7 +977,7 @@ function orderedSetInitIndices<T>(s: Set<T>, cap: int32): void {
 	while (k < cap) { s.indices[k] = -1; k = k + 1; }
 }
 
-function orderedSetRawGet<T>(s: Set<T>, key: Readonly<T>, hc: int64): int32 {
+function orderedSetRawGet<T>(s: Readonly<Set<T>>, key: Readonly<T>, hc: int64): int32 {
 	if (s.indices.length == 0) return -1;
 	const mask: int32 = s.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -1072,7 +1072,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Set<T>, value: Readonly<T>): boolean {
+export function has<T>(this s: Readonly<Set<T>>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length == 0) return false;
 	const hc = keyHash<T>(value);

@@ -60,7 +60,7 @@ import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
-	readFile, writeFile, appendFile, chmod, changeStamp,
+	readFile, writeFile, appendFile, chmod, changeStamp, changedTime,
 	mkdir, rmdir, remove, rename, symlink, readDir,
 	ensureDir, removeAll, readLines, writeLines, copyFile,
 } from "std/fs";
@@ -246,6 +246,10 @@ function _stdFsModifiedTime(args: RaiserValue[]): RaiserValue {
 	return boxInt(modifiedTime(unboxString(args[0])));
 }
 
+function _stdFsChangedTime(args: RaiserValue[]): RaiserValue {
+	return boxInt(changedTime(unboxString(args[0])));
+}
+
 function _stdFsChangeStamp(args: RaiserValue[]): RaiserValue {
 	return boxString(changeStamp(unboxString(args[0])));
 }
@@ -278,6 +282,10 @@ function _bridgeMsFsFileSize(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsModifiedTime(args: RaiserValue[]): RaiserValue {
 	return boxInt(modifiedTime(unboxString(args[0])));
+}
+
+function _bridgeMsFsChangedTime(args: RaiserValue[]): RaiserValue {
+	return boxInt(changedTime(unboxString(args[0])));
 }
 
 function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
@@ -1259,6 +1267,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
+	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
 	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
 	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
@@ -1270,6 +1279,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.realpath",    _stdFsRealpath, HostCapability.FileRead);
 	registerHostFn("std/fs.fileSize",    _stdFsFileSize, HostCapability.FileRead);
 	registerHostFn("std/fs.modifiedTime", _stdFsModifiedTime, HostCapability.FileRead);
+	registerHostFn("std/fs.changedTime", _stdFsChangedTime, HostCapability.FileRead);
 	registerHostFn("std/fs.changeStamp", _stdFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
 	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);

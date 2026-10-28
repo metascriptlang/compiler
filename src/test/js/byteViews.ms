@@ -90,6 +90,12 @@ test "byteViews: pointer arithmetic and ordering are refused on JS" {
 	assert refusedOp(at("let i = 0; console.log(p[i]);\n"), "cannot index a pointer past the element it addresses");
 }
 
+test "byteViews: a pointer slice is refused on JS, whatever its end type or readonliness" {
+	const at = (body: string): string => "{ let xs: uint8[] = [1, 2, 3]; let p = xs[0..3] as Ptr<uint8>; const n: uint64 = 2;\n" + body + "}\n";
+	assert refusedOp(at("console.log(p[0..n].length);\n"), "cannot slice a pointer");
+	assert refusedOp(at("const r: Readonly<Ptr<uint8>> = p; console.log(r[0...1].length);\n"), "cannot slice a pointer");
+}
+
 test "byteViews: pointer identity and the first element stay legal on JS" {
 	const out = js("{ let xs: uint8[] = [1, 2]; const p = xs[0..2] as Ptr<uint8>; const q = xs[0..1] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`); }\n");
 	assert !out.startsWith("ERROR:"), out.slice(0, 300);

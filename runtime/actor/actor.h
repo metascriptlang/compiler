@@ -947,7 +947,7 @@ static inline bool msActorLendBusy(msActorJobs* j) {
     for (int32_t i = 0; i < j->lentLen; i++) {
         msActorLend l = j->lent[i];
         if ((l.chain == NULL || l.joined)
-                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecref(l.fut);
+                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecrefAny(l.fut);
         else j->lent[k++] = l;
     }
     j->lentLen = k;
@@ -1045,7 +1045,7 @@ static inline void msActorJobsTeardown(msActorJobs* j) {
         msActorJobDropEnv(j, r);
     }
     msActorJobsDrain(j);
-    for (int32_t i = 0; i < j->lentLen; i++) msDecref(j->lent[i].fut);
+    for (int32_t i = 0; i < j->lentLen; i++) msDecrefAny(j->lent[i].fut);
     j->lentLen = 0;
 }
 
@@ -1823,6 +1823,8 @@ static inline int64_t msActorStolenVisits(void) { return atomic_load_explicit(&m
 
 /* Forward declarations */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
+extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
+static inline bool msActorSystemIdle(void);           /* defined below */
 extern void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));  /* pool.c */
 static inline bool msActorPollLocal(void);            /* defined below */
 
@@ -1870,6 +1872,7 @@ static inline void msActorSystemInit(void) {
     msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
     msCDInit();
     msSetActorPollHook(msActorPollEventLoop);
+    msSetActorIdleHook(msActorSystemIdle);
     atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
 }
 
@@ -2041,15 +2044,19 @@ static inline bool msActorPollAll(void) {
     return didWork;
 }
 
-/* Quiescence detection: true when ALL actors across ALL schedulers are idle. */
-static inline bool msActorSystemQuiescent(void) {
+/* No actor can run: none is queued or in a visit, and no idle timeout or pending stop
+ * is armed. A suspended actor with no queued run is not a source of work; whatever
+ * settles its awaited future is. Called by msPoolQuiescentWith with every worker
+ * parked, so no registry changes under the scan. */
+static inline bool msActorSystemIdle(void) {
+    if (atomic_load_explicit(&msActorsWithTimeout, memory_order_acquire) != 0) return false;
+    if (atomic_load_explicit(&msActorsStopPending, memory_order_acquire) != 0) return false;
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
+        if (atomic_load_explicit(&sched->runHead, memory_order_acquire) != NULL) return false;
         int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
         for (int i = 0; i < cnt; i++) {
-            msActor* a = sched->actors[i];
-            if (atomic_load_explicit(&a->hasWork, memory_order_acquire)) return false;
-            if (atomic_load_explicit(&a->processing, memory_order_acquire)) return false;
+            if (atomic_load_explicit(&sched->actors[i]->processing, memory_order_acquire)) return false;
         }
     }
     return true;

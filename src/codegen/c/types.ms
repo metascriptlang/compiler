@@ -4,8 +4,8 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement } from "../../checker/types";
-import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement } from "../../checker/types";
+import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
@@ -381,7 +381,7 @@ function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | nul
 				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open);
+			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open) + callConvKey(t);
 		},
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKeyIn(roots, t.typeChildren[0], open) : "varargs:empty",
@@ -622,7 +622,7 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
-			key = key + "):" + typeKeyIn(roots, t.typeReturn);
+			key = key + "):" + typeKeyIn(roots, t.typeReturn) + callConvKey(t);
 			return key;
 		},
 		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
@@ -687,8 +687,8 @@ export function typeKey(t: Readonly<Type | null>): string {
 // An imported scalar (`extern type size_t: uint64 from "size_t"`) is the C name itself, so a pointer
 // to it matches the C prototype's pointee; a plain scalar of that kind is the fixed-width spelling.
 function importedScalarName(t: Readonly<Type | null>): string {
-	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.TypeAlias || !hasFlag(t.sym, SymbolFlag.ImportC) || !isNumeric(t)) return "";
-	return t.sym.nativeName;
+	const sym = importedScalarSym(t);
+	return sym == null ? "" : sym.nativeName;
 }
 
 export function getSimpleTypeDesc(t: Readonly<Type>): string {
@@ -752,6 +752,7 @@ export function isPointerType(t: Readonly<Type>): boolean {
 // Reference parity: value types that can't be nil in C.
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Readonly<Type>): boolean {
+	if (t != null && t.kind == TypeKind.Function && t.callConv != CallingConvention.CcClosure) return false;
 	if (isValueStorage(t)) return true;
 	if (t == null) return false;
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
@@ -1252,7 +1253,7 @@ function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
@@ -1299,8 +1300,9 @@ function gateFlaglessUnknown(g: CGen, t: Readonly<Type>): void {
 	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
 }
 
-function typeInfoFlags(subject: Readonly<Type | null>): string {
-	return subject != null && subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
+function typeInfoFlags(info: Readonly<CTypeInfoDemand>): string {
+	if (info.kind == TypeInfoKind.ArcCell) return "MS_TYPE_FLAG_ATOMIC";
+	return info.subject != null && info.subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
 }
 
 export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
@@ -1873,7 +1875,7 @@ function elemArrayCNameIn(roots: Readonly<ModuleNameRoots>, elem: Readonly<Type>
 	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeNameIn(roots, elem);
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCNameIn(roots, elem.typeReturn) + "*";
-	if (elem.kind == TypeKind.Function) return "msClosure";
+	if (elem.kind == TypeKind.Function) return elem.callConv == CallingConvention.CcClosure ? "msClosure" : functionPointerTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCNameIn(roots, rm);
@@ -2011,12 +2013,23 @@ function genSpanType(g: CGen, t: Readonly<Type>): string {
 // ===== Function Type Generation =====
 // Closure: msClosure { .fn, .env }. Raw function pointer for non-capturing.
 
+function functionPointerTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
+	return "msFnPtr_" + hashToBase36(typeKeyIn(roots, t));
+}
+
 function genFunctionType(g: CGen, t: Readonly<Type>): string {
 	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
-	// Default to closure type
-	const cType = "msClosure";
-	typeCacheSet(g.typeCache, key, cType);
-	return cType;
+	if (t.callConv == CallingConvention.CcClosure) {
+		typeCacheSet(g.typeCache, key, "msClosure");
+		return "msClosure";
+	}
+	const name = functionPointerTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
+	typeCacheSet(g.typeCache, key, name);
+	const declKey = "fnptr:" + name;
+	if (typeCacheHas(g.typeCache, declKey)) return name;
+	typeCacheSet(g.typeCache, declKey, name);
+	addLine(sec(g, CSection.Types), "typedef " + genClHalfCast(g, t).replace("(*)", "(*" + name + ")") + ";");
+	return name;
 }
 
 // ===== Closure Cast Helpers (Standard reference pattern) =====

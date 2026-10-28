@@ -20,8 +20,8 @@ import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild, anyDescendant, initializerHoldsClosure, Visit } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
-	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
-	popFuncBoundary, defineVar, defineLocalRoutines, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
+	ScopeStack, createScopeStack, pushFuncBoundary,
+	popFuncBoundary, truncateScopeStack, defineVar, defineLocalRoutines, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
 } from "./lambdaLiftingScope";
 
 // Result of capture detection over a single closure-bearing function body.
@@ -174,18 +174,19 @@ function definedAtOrAboveInitial(sym: Symbol, w: DetectWalk): boolean {
 // belong to that nested closure's own env. Each closure boundary records its
 // own captures via separate detectAllCaptures calls (see `detectPassWalk`).
 export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
-	const scopes = cloneScopeStack(ss);
+	const entryLength = ss.syms.length;
 	const w: DetectWalk = {
 		captured: createSymSet(),
-		ss: scopes,
+		ss,
 		idents: [],
 		closureDepth: 0,
-		initialMarkers: scopes.funcMarkers.length,
+		initialMarkers: ss.funcMarkers.length,
 		pendingRoutine: null,
 		routine: null,
 		routineDepth: 0,
 	};
 	detectAllWalk(body, w);
+	truncateScopeStack(ss, entryLength);
 	return { captures: w.captured, capturedIdents: w.idents };
 }
 
@@ -380,14 +381,14 @@ export function detectPass(program: Node): DetectionState {
 // body, push results into the parallel arrays, then recurse into the body
 // with this fn as the new enclosing fn.
 function recordFnCaptures(node: Node, body: Node, params: string[], state: DetectionState, ss: ScopeStack): void {
-	const fnSS = cloneScopeStack(ss);
-	pushFuncBoundary(fnSS);
-	defineParams(fnSS, node.paramSyms, params);
-	const result = detectAllCaptures(body, fnSS);
+	pushFuncBoundary(ss);
+	defineParams(ss, node.paramSyms, params);
+	const result = detectAllCaptures(body, ss);
 	state.fnNodes.push(node);
 	state.fnCaptures.push(result.captures);
 	state.fnCapturedIdents.push(result.capturedIdents);
-	detectPassWalk(body, state, fnSS, node);
+	detectPassWalk(body, state, ss, node);
+	popFuncBoundary(ss);
 }
 
 // Recursive walker. `enclosingFn` is the nearest containing FunctionDecl /

@@ -17,7 +17,7 @@ export extern class Set<T> {
 }
 
 export extern function add<T>(this s: Set<T>, value: T): void from "#.add(#)";
-export extern function has<T>(this s: Set<T>, value: Readonly<T>): boolean from "#.has(#)";
+export extern function has<T>(this s: Readonly<Set<T>>, value: Readonly<T>): boolean from "#.has(#)";
 export extern function delete<T>(this s: Set<T>, value: Readonly<T>): boolean from "#.delete(#)";
 export extern function clear<T>(this s: Set<T>): void from "#.clear()";
 export extern function forEach<T>(this s: Set<T>, fn: (value: T) => void): void from "#.forEach(#)";
@@ -29,7 +29,8 @@ export extern class Map<K, V> {
 
 export extern function set<K, V>(this m: Map<K, V>, key: K, sink value: V): void from "#.set(#, #)";
 export extern function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null from "(#.get(#) ?? null)";
-export extern function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean from "#.has(#)";
+export extern function readonlyGet<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): Readonly<V | null> from "(#.get(#) ?? null)";
+export extern function has<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): boolean from "#.has(#)";
 export extern function delete<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean from "#.delete(#)";
 export extern function clear<K, V>(this m: Map<K, V>): void from "#.clear()";
 export extern function keys<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
@@ -50,6 +51,7 @@ export extern class HashMap<K, V> {
 
 export extern function set<K, V>(this m: HashMap<K, V>, key: K, sink value: V): void from "#.set(#, #)";
 export extern function get<K, V>(this m: HashMap<K, V>, key: Readonly<K>): V | null from "(#.get(#) ?? null)";
+export extern function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): Readonly<V | null> from "(#.get(#) ?? null)";
 export extern function has<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): boolean from "#.has(#)";
 export extern function delete<K, V>(this m: HashMap<K, V>, key: Readonly<K>): boolean from "#.delete(#)";
 export extern function clear<K, V>(this m: HashMap<K, V>): void from "#.clear()";

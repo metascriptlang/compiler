@@ -13,7 +13,7 @@ import {
 	makeShort, makeUShort, makeInt, makeUInt, makeLong, makeULong, makeLongLong,
 	makeULongLong, makeFloat, makeDouble, makeLongDouble, makePointer, makeArray,
 	makeFunc, makeEnum, makeStruct, makeUnion, makeMember, copyType,
-	computeStructLayout, computeUnionLayout,
+	computeStructLayout, computeUnionLayout, isInteger,
 } from "./type";
 
 export interface ParseResult {
@@ -70,6 +70,13 @@ function expect(ctx: ParseCtx, s: string): void {
 		return;
 	}
 	advance(ctx);
+}
+
+function skipStuck(ctx: ParseCtx): void {
+	ctx.diags.push(makeDiag(DiagSeverity.Error, ctx.tok.file, ctx.tok.line, ctx.tok.col,
+		`cannot parse at '${ctx.tok.stringVal}'`));
+	while (!isEnd(ctx) && !eq(ctx, ";")) advance(ctx);
+	if (eq(ctx, ";")) advance(ctx);
 }
 
 function consume(ctx: ParseCtx, s: string): boolean {
@@ -714,6 +721,12 @@ function structMembers(ctx: ParseCtx): CMember[] {
 
 // ===== Enum =====
 
+function fitUnderlying(enumTy: CType, under: CType): void {
+	enumTy.size = under.size;
+	enumTy.align = under.align;
+	enumTy.isSigned = under.isSigned;
+}
+
 function enumSpecifier(ctx: ParseCtx): CType {
 	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
 
@@ -723,6 +736,20 @@ function enumSpecifier(ctx: ParseCtx): CType {
 		advance(ctx);
 	}
 
+	// C23 fixed underlying type: enum [tag] : type-specifier. A `:` before a non-type is a bit-field width.
+	let fixed: CType | null = null;
+	if (eq(ctx, ":") && ctx.tok.next != null && isTypenameStr(ctx, ctx.tok.next.stringVal)) {
+		advance(ctx);
+		const at = ctx.tok;
+		const under = declspec(ctx, newVarAttr());
+		if (isInteger(under) && under.kind != CTypeKind.Enum) {
+			fixed = under;
+		} else {
+			ctx.diags.push(makeDiag(DiagSeverity.Error, at.file, at.line, at.col,
+				"enum underlying type must be an integer type"));
+		}
+	}
+
 	if (!eq(ctx, "{")) {
 		if (tagName != "") {
 			const existingTag = ctx.tags.get(tagName);
@@ -730,12 +757,14 @@ function enumSpecifier(ctx: ParseCtx): CType {
 		}
 		const ty = makeEnum(ctx.target);
 		ty.tagName = tagName;
+		if (fixed != null) fitUnderlying(ty, fixed);
 		if (tagName != "") ctx.tags.set(tagName, ty);
 		return ty;
 	}
 
 	const ty = makeEnum(ctx.target);
 	ty.tagName = tagName;
+	if (fixed != null) fitUnderlying(ty, fixed);
 	if (tagName != "") ctx.tags.set(tagName, ty);
 
 	advance(ctx); // skip {
@@ -809,7 +838,13 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		packUnknown: false,
 	};
 
+	let lastStart: CToken | null = null;
 	while (!isEnd(ctx)) {
+		if (ctx.tok == lastStart) {
+			skipStuck(ctx);
+			continue;
+		}
+		lastStart = ctx.tok;
 		// Skip stray semicolons and braces
 		if (consume(ctx, ";")) continue;
 		if (consume(ctx, "}")) continue;
@@ -981,6 +1016,7 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 	const specAttrSeen = ctx.layoutAttrSeen;
 	let first = true;
 	while (!eq(ctx, ";") && !isEnd(ctx)) {
+		const declStart = ctx.tok;
 		if (!first) expect(ctx, ",");
 		first = false;
 
@@ -1008,6 +1044,10 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 				file: declResult.at.file,
 				line: declResult.at.line,
 			});
+		}
+		if (ctx.tok == declStart) {
+			skipStuck(ctx);
+			return;
 		}
 	}
 	expect(ctx, ";");

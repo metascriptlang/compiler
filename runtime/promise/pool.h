@@ -109,6 +109,7 @@ void msPoolCompensateEnd(void);
 bool msPoolBusyDec(void);
 void msPoolBusyInc(void);
 int32_t msPoolPendingPeek(void);
+bool msPoolQuiescentWith(bool (*mainIdle)(void));
 
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);

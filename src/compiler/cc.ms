@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
+import { CliOptions, CC_PREPARED, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
@@ -434,7 +434,8 @@ export function markCppCompile(path: string): void {
 // Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
 function toCppCompiler(cName: string): string {
 	if (cName.endsWith(" cc")) return cName.slice(0, cName.length - 2) + "c++";
-	if (cName == "clang")  return "clang++";
+	if (basename(cName) == "clang") return cName + "++";
+	if (basename(cName) == "clang.exe") return cName.slice(0, cName.length - 4) + "++.exe";
 	if (cName == "gcc")    return "g++";
 	if (cName == "cc")     return "c++";
 	if (cName.endsWith("-gcc"))   return cName.slice(0, cName.length - 4) + "-g++";
@@ -574,6 +575,33 @@ export function resolveLto(opts: CliOptions): void {
 	}
 }
 
+// -- TSan capability --
+// Same shape as LTO above. zig → Mach-O: a binary built with
+// -fsanitize=thread segfaults at startup (exit 139) even for a 5-line
+// pthread_create/join program, so no run through that pair can be trusted.
+// Measured on zig 0.16.0 / macOS arm64; other targets are not known broken.
+export function tsanBroken(cc: string, targetOs: string): boolean {
+	if (!isZigCC(cc)) return false;
+	return targetOs == "darwin" || targetOs == "macos";
+}
+
+// Runs right after resolveCC, before the header root is read from opts.ccCompiler.
+// An auto-detected compiler that cannot run TSan is swapped for clang with a
+// notice; an explicit --cc= against a proven-broken pair fails loud.
+export function resolveSanitizerCC(opts: CliOptions): void {
+	if (!opts.sanitize.split(",").includes("thread")) return;
+	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
+	if (!tsanBroken(cc, opts.targetOs)) return;
+	const explicit = opts.ccBinary != "" || opts.ccCompiler != 0;
+	if (explicit || !cmdExists("clang")) {
+		writeStderr(`error: zig cc cannot run --sanitize=thread targeting ${opts.targetOs}.\n`);
+		writeStderr(`  → ${explicit ? "re-run with --cc=clang" : "install clang"}, or drop --sanitize=thread.\n`);
+		stopBuild();
+	}
+	opts.ccCompiler = 1;
+	writeStderr(`note: --sanitize=thread builds with clang: zig cc cannot run TSan targeting ${opts.targetOs}.\n`);
+}
+
 // -- LTO strategy flags --
 // Orthogonal to opt-level. Thin = parallel per-function LTO (fast link, ~full
 // runtime); full = monolithic whole-program LTO (slow serial link). Rides the
@@ -662,7 +690,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	if (opts.targetOs == "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+	if (opts.targetOs == "windows" && opts.ccCompiler != CC_PREPARED && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
@@ -724,6 +752,9 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 		flags = appendFlag(flags, "-lws2_32");
 		flags = appendFlag(flags, "-lmswsock");
 		flags = appendFlag(flags, "-lbcrypt");
+		if (opts.ccCompiler != CC_PREPARED && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+			flags = appendFlag(flags, "-Wl,-Bstatic -lpthread");
+		}
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
 		flags = appendFlag(flags, "-Wl,-dead_strip");
 	}
@@ -743,6 +774,7 @@ export struct ToolCommand {
 }
 
 export function compilerInvocation(ccOption: number, ccBinary: string): Result<ToolCommand, ProcessError> {
+	if (ccOption == CC_PREPARED && ccBinary == "") return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, "prepared compiler invocation has no binary"));
 	const base = getCompilerName(ccOption, ccBinary);
 	if (ccBinary == "") {
 		if (isZigCC(base)) return Result.ok({ path: base.slice(0, base.length - 3), args: ["cc"] });
@@ -756,15 +788,61 @@ export function compilerInvocation(ccOption: number, ccBinary: string): Result<T
 	return Result.ok({ path: words.value[0], args });
 }
 
+test "an absolute Clang invocation keeps its directory for the C++ driver" {
+	assert toCppCompiler("/toolchain with spaces/bin/clang") == "/toolchain with spaces/bin/clang++";
+	assert toCppCompiler("C:/toolchain/bin/clang.exe") == "C:/toolchain/bin/clang++.exe";
+	assert toCppCompiler("clang") == "clang++";
+}
+
+test "prepared C++ commands prepend their config without changing C or explicit compilers" {
+	const invocation = `"/prepared with spaces/bin/clang" --no-default-config "--config=/prepared with spaces/runtime/target.cfg"`;
+	const c = compilerCommand(CC_PREPARED, invocation, false);
+	assert c.ok;
+	assert c.value.path == "/prepared with spaces/bin/clang";
+	assert c.value.args.join("|") == "--no-default-config|--config=/prepared with spaces/runtime/target.cfg";
+	const cpp = compilerCommand(CC_PREPARED, invocation, true);
+	assert cpp.ok;
+	assert cpp.value.path == "/prepared with spaces/bin/clang++";
+	assert cpp.value.args.join("|") == "--no-default-config|--config=/prepared with spaces/runtime/target.cxx.cfg|--config=/prepared with spaces/runtime/target.cfg";
+	const explicit = compilerCommand(0, invocation, true);
+	assert explicit.ok;
+	assert explicit.value.args.join("|") == c.value.args.join("|");
+}
+
+test "prepared DLL config pairs and SDK-only C++ commands keep their native shape" {
+	const dll = compilerCommand(CC_PREPARED, "/prepared/clang --no-default-config --config=/prepared/target.dll.cfg", true);
+	assert dll.ok;
+	assert dll.value.args.join("|") == "--no-default-config|--config=/prepared/target.dll.cxx.cfg|--config=/prepared/target.dll.cfg";
+	const sdk = compilerCommand(CC_PREPARED, "/prepared/clang --no-default-config", true);
+	assert sdk.ok;
+	assert sdk.value.path == "/prepared/clang++";
+	assert sdk.value.args.join("|") == "--no-default-config";
+	assert !compilerInvocation(CC_PREPARED, "").ok;
+	assert !compilerCommand(CC_PREPARED, "/prepared/clang --config=/prepared/not-a-config", true).ok;
+}
+
 function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): Result<ToolCommand, ProcessError> {
 	const r = compilerInvocation(ccOption, ccBinary);
-	if (!r.ok || !isCpp) return r;
-	const command = r.value;
+	if (!r.ok) return r;
+	return compilerLanguageCommand(ccOption, r.value, isCpp);
+}
+
+function compilerLanguageCommand(ccOption: number, command: ToolCommand, isCpp: boolean): Result<ToolCommand, ProcessError> {
+	if (!isCpp) return Result.ok(command);
 	if (command.args.length > 0 && command.args[0] == "cc") {
 		command.args[0] = "c++";
 		return Result.ok(command);
 	}
-	return Result.ok({ path: toCppCompiler(command.path), args: command.args });
+	if (ccOption != CC_PREPARED) return Result.ok({ path: toCppCompiler(command.path), args: command.args });
+	const args: string[] = [];
+	for (const arg of command.args) {
+		if (arg.startsWith("--config=")) {
+			if (!arg.endsWith(".cfg")) return Result.err(processError(ProcessErrorKind.Unknown, command.path, `prepared C++ config requires a .cfg target: ${arg}`));
+			args.push(arg.slice(0, arg.length - 4) + ".cxx.cfg");
+		}
+		args.push(arg);
+	}
+	return Result.ok({ path: toCppCompiler(command.path), args });
 }
 
 
@@ -851,11 +929,18 @@ function planDir(): string {
 
 export function toolchainHeaderRoot(ccOption: number, ccBinary: string): string {
 	const command = compilerInvocation(ccOption, ccBinary);
+	if (command.ok && ccOption == CC_PREPARED) return dirname(dirname(command.value.path));
 	if (!command.ok || !isZigDriver(command.value)) return "";
 	let path = command.value.path;
 	const found = findOnPath(path);
 	if (found != "") path = found;
 	return `${dirname(path)}/lib`;
+}
+
+test "a prepared bundle owns the headers under its root, an explicit clang owns none" {
+	assert toolchainHeaderRoot(CC_PREPARED, `"/prepared with spaces/bin/clang" --no-default-config --config=/prepared/target.cfg`) == "/prepared with spaces";
+	assert toolchainHeaderRoot(CC_PREPARED, "") == "";
+	assert toolchainHeaderRoot(0, "/usr/bin/clang") == "";
 }
 
 function isZigDriver(command: ToolCommand): boolean {
@@ -1294,16 +1379,120 @@ interface LinkCommand {
 	flagArgs: string[];
 }
 
+test "written C++ library requests select runtime without guessing from archive or source names" {
+	for (const name of ["c++", "stdc++", "c++abi", "supc++"]) {
+		assert resolveCppLibraries(["-l" + name], "linux");
+		assert resolveCppLibraries(["-l", name], "linux");
+		assert resolveCppLibraries(["-l" + name.toUpperCase()], "windows");
+		assert resolveCppLibraries(["-l" + name.toUpperCase()], "macos");
+		assert resolveCppLibraries(["-l" + name.toUpperCase()], "darwin");
+		assert !resolveCppLibraries(["-l" + name.toUpperCase()], "linux");
+	}
+	assert !resolveCppLibraries(["libc++.a", "client.cpp", "-lcplusplus", "-lc", "-lm"], "linux");
+	assert !resolveCppLibraries(["-l"], "windows");
+	const canonical = ["-lC++", "-l", "SUPC++", "-lM"];
+	assert resolveCppLibraries(canonical, "windows");
+	assert canonical.join("|") == "-lc++|-l|supc++|-lM";
+}
+
+test "forwarded linker tokens are not direct C++ runtime requests" {
+	assert !resolveCppLibraries(["-Wl,-lc++"], "linux");
+	assert !resolveCppLibraries(["-Xlinker", "-lc++"], "linux");
+	assert !resolveCppLibraries(["-Xlinker", "-l", "-Xlinker", "c++"], "windows");
+}
+
+function resolveCppLibraries(args: string[], targetOs: string): boolean {
+	let requested = false;
+	const foldCase = targetOs == "windows" || targetOs == "macos" || targetOs == "darwin";
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] == "-Xlinker") {
+			i++;
+			continue;
+		}
+		let name = "";
+		let separate = false;
+		if (args[i] == "-l" && i + 1 < args.length) {
+			i++;
+			name = args[i];
+			separate = true;
+		} else if (args[i].startsWith("-l")) {
+			name = args[i].slice(2);
+		}
+		const canonical = foldCase ? name.toLowerCase() : name;
+		if (canonical == "c++" || canonical == "stdc++" || canonical == "c++abi" || canonical == "supc++") {
+			if (name != canonical) args[i] = separate ? canonical : "-l" + canonical;
+			requested = true;
+		}
+	}
+	return requested;
+}
+
+function nativeLinkInvocation(command: ToolCommand, targetOs: string, shared: boolean): Result<ToolCommand, ProcessError> {
+	if (targetOs != "linux" && targetOs != "windows") return Result.ok(command);
+	const args: string[] = [];
+	for (const arg of command.args) {
+		if (!arg.startsWith("--config=")) {
+			args.push(arg);
+			continue;
+		}
+		if (!arg.endsWith(".cfg")) return Result.err(processError(ProcessErrorKind.Unknown, command.path, `prepared link config requires a .cfg target: ${arg}`));
+		let stem = arg.slice(0, arg.length - 4);
+		if (stem.endsWith(".dll")) stem = stem.slice(0, stem.length - 4);
+		else if (stem.endsWith(".so")) stem = stem.slice(0, stem.length - 3);
+		args.push(stem + (shared ? targetOs == "windows" ? ".dll.cfg" : ".so.cfg" : ".cfg"));
+	}
+	return Result.ok({ path: command.path, args });
+}
+
+test "prepared link startup follows each link mode instead of the original config" {
+	for (const target of ["linux", "windows"]) {
+		const suffix = target == "windows" ? ".dll.cfg" : ".so.cfg";
+		const shared = linkCommand("-shared", CC_PREPARED, "/prepared/clang --no-default-config --config=/prepared/target.cfg", target);
+		assert shared.ok;
+		assert shared.value.command.args.includes("--config=/prepared/target" + suffix);
+		assert !shared.value.command.args.includes("--config=/prepared/target.cfg");
+		const exe = linkCommand("", CC_PREPARED, "/prepared/clang --no-default-config --config=/prepared/target" + suffix, target);
+		assert exe.ok;
+		assert exe.value.command.args.includes("--config=/prepared/target.cfg");
+		assert !exe.value.command.args.includes("--config=/prepared/target" + suffix);
+	}
+}
+
+test "prepared shared C++ keeps its config order and explicit compilers keep their invocation" {
+	const invocation = "/prepared/clang --no-default-config --config=/prepared/target.cfg";
+	const cpp = linkCommand("-shared -lc++", CC_PREPARED, invocation, "linux");
+	assert cpp.ok;
+	const args = cpp.value.command.args;
+	assert args.includes("--config=/prepared/target.so.cxx.cfg");
+	assert args.includes("--config=/prepared/target.so.cfg");
+	assert args.indexOf("--config=/prepared/target.so.cxx.cfg") < args.indexOf("--config=/prepared/target.so.cfg");
+	assert cpp.value.flagArgs.includes("-lc++");
+	const explicit = linkCommand("-shared", 0, invocation, "linux");
+	assert explicit.ok;
+	assert explicit.value.command.args.includes("--config=/prepared/target.cfg");
+	assert !explicit.value.command.args.includes("--config=/prepared/target.so.cfg");
+}
+
 function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): Result<LinkCommand, ProcessError> {
-	const resolved = compilerCommand(ccOption, ccBinary, _hasCppCompile);
+	const base = compilerInvocation(ccOption, ccBinary);
+	if (!base.ok) return Result.err(base.error);
+	const flagArgs: string[] = [];
+	const flags = appendParsedFlags(base.value.path, flagArgs, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	const cppLibraries = ccOption == CC_PREPARED && resolveCppLibraries(flagArgs, targetOs);
+	const needsCpp = _hasCppCompile || cppLibraries;
+	let selected = base.value;
+	if (ccOption == CC_PREPARED) {
+		const native = nativeLinkInvocation(selected, targetOs, flagArgs.includes("-shared"));
+		if (!native.ok) return Result.err(native.error);
+		selected = native.value;
+	}
+	const resolved = compilerLanguageCommand(ccOption, selected, needsCpp);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const command = resolved.value;
 	const prefix = command.args;
 	const rtDir = resolveRuntime();
 	if (rtDir != "") prefix.push(`-iquote${dirname(dirname(rtDir))}`);
-	const flagArgs: string[] = [];
-	const flags = appendParsedFlags(command.path, flagArgs, extraFlags);
-	if (!flags.ok) return Result.err(flags.error);
 	if (needsMathLibrary(targetOs) && !flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
 	return Result.ok({ command, prefix, flagArgs });
 }
@@ -1348,12 +1537,19 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	return Result.ok(null);
 }
 
-export function archiveStatic(oFiles: string[], outArchive: string): Result<void, ProcessError> {
+export function archiveStatic(oFiles: string[], outArchive: string, ccOption: number = 0, ccBinary: string = ""): Result<void, ProcessError> {
+	let archiver = "ar";
+	if (ccOption == CC_PREPARED) {
+		const compiler = compilerInvocation(ccOption, ccBinary);
+		if (!compiler.ok) return Result.err(compiler.error);
+		const path = compiler.value.path;
+		archiver = join(dirname(path), path.endsWith(".exe") ? "llvm-ar.exe" : "llvm-ar");
+	}
 	ensureDir(dirname(outArchive));
 	if (exists(outArchive)) remove(outArchive);
 	const args = ["rcs", outArchive];
 	for (const oFile of oFiles) args.push(oFile);
-	const r = execFileCapture("ar", args);
+	const r = execFileCapture(archiver, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
@@ -1361,6 +1557,30 @@ export function archiveStatic(oFiles: string[], outArchive: string): Result<void
 // Get the runtime directory path (for -I include path).
 export function getRuntimeDir(): string {
 	return resolveRuntime();
+}
+
+test "prepared Windows configurations keep their platform baseline instead of the external compiler default" {
+	const opts = newCliOptions();
+	opts.targetOs = "windows";
+	opts.ccBinary = "/prepared/clang --config=/prepared/windows.cfg";
+	opts.ccCompiler = CC_PREPARED;
+	assert !cliCompileFlags(opts).contains("-D_WIN32_WINNT=");
+	opts.ccCompiler = 1;
+	assert cliCompileFlags(opts).contains("-D_WIN32_WINNT=0x0A00");
+}
+
+test "a Windows link through an external clang or gcc carries winpthread inside the executable" {
+	const opts = newCliOptions();
+	opts.targetOs = "windows";
+	opts.ccCompiler = 1;
+	assert cliLinkFlags("", opts).contains("-Wl,-Bstatic -lpthread");
+	opts.ccBinary = "/prepared/clang --config=/prepared/windows.cfg";
+	opts.ccCompiler = CC_PREPARED;
+	assert !cliLinkFlags("", opts).contains("-Bstatic");
+	opts.targetOs = "linux";
+	opts.ccCompiler = 1;
+	opts.ccBinary = "";
+	assert !cliLinkFlags("", opts).contains("-Bstatic");
 }
 
 test "the default math library follows the link target, not the host" {
@@ -1402,6 +1622,27 @@ test "a release build takes thin LTO where its compiler links it, and leaves it 
 	assert resolvedLto(["--release", "--cc=gcc", "--os=linux"]) == "off";
 	assert resolvedLto(["--release", "--cc=clang", "--os=linux", "--lto=off"]) == "off";
 	assert resolvedLto(["--cc=clang", "--os=linux"]) == "off";
+}
+
+test "TSan is broken for zig cc on Mach-O only" {
+	assert tsanBroken("zig cc", "darwin");
+	assert tsanBroken("zig cc", "macos");
+	assert !tsanBroken("zig cc", "linux");
+	assert !tsanBroken("clang", "darwin");
+}
+
+test "an explicit clang with --sanitize=thread on macOS is kept" {
+	const clang = newCliOptions();
+	assert applyArgs(clang, ["--sanitize=thread", "--cc=clang", "--os=macos"], 0).ok;
+	resolveSanitizerCC(clang);
+	assert clang.ccCompiler == 1;
+}
+
+test "a build without thread sanitizing keeps its auto-detected compiler" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["--sanitize=address", "--os=macos"], 0).ok;
+	resolveSanitizerCC(opts);
+	assert opts.ccCompiler == 0;
 }
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {

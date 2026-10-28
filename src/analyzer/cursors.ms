@@ -248,8 +248,7 @@ function summaryIsExact(w: WriteEffects, call: Node): boolean {
 }
 
 function callLeavesGraphAlone(w: WriteEffects, p: Partitions, call: Node, roots: Symbol[]): boolean {
-	if (!callsPlainRoutine(call) || reachesModuleState(w, call, callerDefs) || !summaryIsExact(w, call)) return false;
-	if (isAwaitable(call.nodeType) || !callArgumentRoots(w, p, call, roots) || roots.length == 0) return false;
+	if (!callsPlainRoutine(call) || isAwaitable(call.nodeType) || !callArgumentRoots(w, p, call, roots) || roots.length == 0) return false;
 	const recv = receiverOf(call);
 	if (recv != null && isAwaitable(recv.nodeType)) return false;
 	for (const a of (call.data as CallExprData).arguments) {
@@ -263,7 +262,7 @@ function callLeavesGraphAlone(w: WriteEffects, p: Partitions, call: Node, roots:
 		if (parts.indexOf(part) >= 0) return false;
 		parts.push(part);
 	}
-	return true;
+	return !reachesModuleState(w, call, callerDefs) && summaryIsExact(w, call);
 }
 
 function keepAliveToCall(p: Partitions, roots: Symbol[]): void {
@@ -276,8 +275,8 @@ function keepAliveToCall(p: Partitions, roots: Symbol[]): void {
 function writesOtherPartition(w: WriteEffects, p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
 	const roots: Symbol[] = [];
 	if (site.kind == NodeKind.CallExpr) {
-		if (!callsPlainRoutine(site) || reachesModuleState(w, site, defs) || !callArgumentRoots(w, p, site, roots)) return false;
-		return onlyOtherPartitions(p, roots, viewRoot);
+		if (!callsPlainRoutine(site) || !callArgumentRoots(w, p, site, roots)) return false;
+		return onlyOtherPartitions(p, roots, viewRoot) && !reachesModuleState(w, site, defs);
 	}
 	if (site.kind != NodeKind.BinaryExpr) return false;
 	const target = (site.data as BinaryExprData).left;
@@ -719,8 +718,23 @@ function levelHolders(body: Node, out: Symbol[]): void {
 	step(body);
 }
 
+function moduleRoutines(body: Node): HashSet<Node> {
+	const own = new HashSet<Node>();
+	if (body.kind != NodeKind.Program) return own;
+	for (const stmt of (body.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl.kind == NodeKind.FunctionDecl || decl.kind == NodeKind.ClassDecl || decl.kind == NodeKind.ActorDecl) own.add(decl);
+		else if (decl.kind == NodeKind.VariableDecl) {
+			const lit = closureLiteral((decl.data as VariableDeclData).initializer);
+			if (lit != null) own.add(lit!);
+		}
+	}
+	return own;
+}
+
 function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: HashSet<Symbol>[]): void {
 	if (body == null || (!top && envEscapes)) return;
+	const moduleScope = top ? moduleRoutines(body) : new HashSet<Node>();
 	const level: Symbol[] = [];
 	levelHolders(body, level);
 	const holders = new HashSet<Symbol>();
@@ -736,7 +750,7 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: H
 	};
 	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
 	const routine = (lit: Node, holder: Symbol | null): void => {
-		if (top) {
+		if (top && !moduleScope.has(lit)) {
 			const names = namesOf(lit);
 			closureNames.set(lit, names);
 			if (holder != null) holderNames.set(holder!, names);

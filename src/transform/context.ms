@@ -88,10 +88,35 @@ export function reportTransformError(ctx: TransformContext, msg: string, loc: So
 export class NameSet {
 	items: string[];
 	index: HashSet<string>;
+	identities: TypeIdentities | null;
 }
 
 export function createNameSet(): NameSet {
-	return { items: [], index: new HashSet<string>() };
+	return { items: [], index: new HashSet<string>(), identities: null };
+}
+
+export interface TypeIdentities {
+	byType: HashMap<Type, string>;
+}
+
+function identitiesOf(ns: NameSet): TypeIdentities {
+	const known = ns.identities;
+	if (known != null) return known;
+	const created: TypeIdentities = { byType: new HashMap<Type, string>() };
+	ns.identities = created;
+	return created;
+}
+
+export function createSharingNameSet(owner: NameSet): NameSet {
+	return { items: [], index: new HashSet<string>(), identities: identitiesOf(owner) };
+}
+
+export function nameSetTypeKey(ns: NameSet, t: Type): string | null {
+	return identitiesOf(ns).byType.get(t);
+}
+
+export function nameSetRememberTypeKey(ns: NameSet, t: Type, key: string): void {
+	identitiesOf(ns).byType.set(t, key);
 }
 
 export function nameSetContains(ns: NameSet, name: string): boolean {

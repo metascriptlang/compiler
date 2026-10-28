@@ -94,6 +94,7 @@ export class BuildSession {
 	loweredCount: int32;
 	instanceFingerprints: HashMap<Node, string>;
 	typeShapes: HashMap<Type, string>;
+	layoutDigests: HashMap<Type, string>;
 	prepareMemos: HashMap<string, PrepareMemo>;
 	emitMemos: HashMap<string, EmitMemo>;
 	directiveMemos: HashMap<string, DirectiveHit[]>;
@@ -114,6 +115,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		loweredCount: 0,
 		instanceFingerprints: new HashMap<Node, string>(),
 		typeShapes: new HashMap<Type, string>(),
+		layoutDigests: new HashMap<Type, string>(),
 		prepareMemos: new HashMap<string, PrepareMemo>(),
 		emitMemos: new HashMap<string, EmitMemo>(),
 		directiveMemos: new HashMap<string, DirectiveHit[]>(),
@@ -138,39 +140,113 @@ export function startSessionBuild(session: BuildSession): void {
 	session.moduleCount = 0;
 	session.loweredCount = 0;
 	session.typeShapes = new HashMap<Type, string>();
+	session.layoutDigests = new HashMap<Type, string>();
 }
 
 function mix(h: number, value: number): number {
 	return (h * 31 + value) % 2147483647;
 }
 
-function typeShapeWithin(t: Type | null, seen: HashSet<Type>): string {
-	if (t == null) return "_";
-	let shape = monoTypeKey(t) + "!" + String(t.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam) as uint64);
-	if (seen.has(t)) return shape;
-	seen.add(t);
-	if (t.typeNames != null && t.typeNames.length > 0) {
-		shape = shape + "{";
-		for (let i = 0; i < t.typeNames.length; i += 1) {
-			const field = t.typeChildren != null && i < t.typeChildren.length ? t.typeChildren[i] : null;
-			shape = shape + t.typeNames[i] + ":" + typeShapeWithin(field, seen) + ",";
-		}
-		shape = shape + "}";
-	} else if (t.typeChildren != null) {
-		for (const child of t.typeChildren) shape = shape + "(" + typeShapeWithin(child, seen) + ")";
-	}
-	if (t.typeReturn != null && t.kind != TypeKind.GenericInstance) shape = shape + ">" + typeShapeWithin(t.typeReturn, seen);
-	seen.delete(t);
-	return shape;
-}
-
 function typeShape(session: BuildSession, t: Type | null): string {
 	if (t == null) return "_";
 	const memo = session.typeShapes.get(t);
 	if (memo != null) return memo;
-	const shape = typeShapeWithin(t, new HashSet<Type>());
+	const shape = monoTypeKey(t) + "!" + String(t.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam) as uint64);
 	session.typeShapes.set(t, shape);
 	return shape;
+}
+
+function peelToDeclaration(t: Type): Type {
+	let body = t;
+	const passed = new HashSet<Type>();
+	while ((body.kind == TypeKind.Alias || body.kind == TypeKind.Ref) && body.typeReturn != null) {
+		if (passed.has(body)) throw new Error("internal: alias cycle while peeling " + monoTypeKey(t));
+		passed.add(body);
+		body = body.typeReturn;
+	}
+	return body;
+}
+
+function layoutDigest(session: BuildSession, t: Type | null): string {
+	if (t == null) return "_";
+	const memo = session.layoutDigests.get(t);
+	if (memo != null) return memo;
+	const body = peelToDeclaration(t);
+	let digest = typeShape(session, body);
+	if (body.kind == TypeKind.Struct) {
+		digest = digest + "{";
+		for (let i = 0; i < body.typeNames.length; i += 1) {
+			digest = digest + body.typeNames[i] + ":" + (i < body.typeChildren.length ? monoTypeKey(body.typeChildren[i]) : "void") + ",";
+		}
+		digest = digest + "}";
+	} else if (body.kind == TypeKind.Enum) {
+		digest = digest + "{";
+		for (let i = 0; i < body.typeNames.length; i += 1) {
+			digest = digest + body.typeNames[i] + (i < body.typeChildren.length ? "=" + String(body.typeChildren[i].typeValue) : "") + ",";
+		}
+		digest = digest + "}";
+	}
+	session.layoutDigests.set(t, digest);
+	return digest;
+}
+
+function isWrapperKind(kind: TypeKind): boolean {
+	return kind == TypeKind.Alias || kind == TypeKind.Ref || kind == TypeKind.Ptr || kind == TypeKind.Borrow || kind == TypeKind.Var
+		|| kind == TypeKind.Array || kind == TypeKind.Span || kind == TypeKind.Set || kind == TypeKind.Sink || kind == TypeKind.Lent;
+}
+
+function collectLayouts(session: BuildSession, t: Type | null, direct: boolean, visited: HashSet<Type>, out: string[]): void {
+	if (t == null) return;
+	const kind = t.kind;
+	if (isWrapperKind(kind)) {
+		if (direct && !visited.has(t)) {
+			visited.add(t);
+			collectLayouts(session, t.typeReturn, true, visited, out);
+		}
+		return;
+	}
+	if (kind == TypeKind.GenericInstance) {
+		if (direct && !visited.has(t)) {
+			visited.add(t);
+			for (const arg of t.typeChildren) collectLayouts(session, arg, true, visited, out);
+		}
+		return;
+	}
+	if (kind == TypeKind.Enum) {
+		if (!visited.has(t)) {
+			visited.add(t);
+			out.push(layoutDigest(session, t));
+		}
+		return;
+	}
+	if (kind == TypeKind.Struct) {
+		if ((direct || t.typeFlags.has(TypeFlag.IsStruct)) && !visited.has(t)) {
+			visited.add(t);
+			out.push(layoutDigest(session, t));
+			for (const field of t.typeChildren) collectLayouts(session, field, false, visited, out);
+		}
+		return;
+	}
+	if (kind == TypeKind.Union || kind == TypeKind.Tuple || kind == TypeKind.Distinct) {
+		if (!visited.has(t)) {
+			visited.add(t);
+			for (const member of t.typeChildren) collectLayouts(session, member, direct, visited, out);
+			collectLayouts(session, t.typeReturn, direct, visited, out);
+		}
+		return;
+	}
+	if (kind == TypeKind.SizedArray) {
+		if (!visited.has(t)) {
+			visited.add(t);
+			collectLayouts(session, t.typeReturn, direct, visited, out);
+		}
+	}
+}
+
+function argFingerprint(session: BuildSession, arg: Type): string {
+	const layouts: string[] = [];
+	collectLayouts(session, arg, true, new HashSet<Type>(), layouts);
+	return typeShape(session, arg) + "<" + layouts.join(";") + ">";
 }
 
 function foldTypes(session: BuildSession, node: Node, h: number): number {
@@ -192,7 +268,7 @@ function instanceFingerprint(session: BuildSession, node: Node): string {
 	if (sym != null && sym.instantiatedFrom != null) {
 		const generic = sym.instantiatedFrom;
 		identity = generic.modulePath + ":" + String(generic.item) + ":" + String(generic.disamb);
-		for (const arg of instanceArgsOf(sym)) identity = identity + "|" + typeShape(session, arg);
+		for (const arg of instanceArgsOf(sym)) identity = identity + "|" + argFingerprint(session, arg);
 	}
 	const fingerprint = identity + "#" + String(foldTypes(session, node, transAmHashNode(node)));
 	session.instanceFingerprints.set(node, fingerprint);
@@ -227,7 +303,7 @@ export function projectTypesFingerprint(session: BuildSession, paths: string[]):
 		if (ctx == null || ctx.table == null || ctx.table.current == null) continue;
 		for (const sym of ctx.table.current.symbols.values()) {
 			if (sym.modulePath != path || !isTypeDeclaration(sym.symbolKind)) continue;
-			shapes.push(path + "::" + sym.name + "=" + typeShape(session, sym.symbolType));
+			shapes.push(path + "::" + sym.name + "=" + layoutDigest(session, sym.symbolType));
 		}
 	}
 	shapes.sort();
@@ -236,7 +312,7 @@ export function projectTypesFingerprint(session: BuildSession, paths: string[]):
 
 import { NodeKind, createNodeAt, makeLoc } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
-import { int32Type } from "../checker/types";
+import { int32Type, stringType, createStruct, createEnum, createTuple } from "../checker/types";
 
 function slotReference(disamb: int32): Node {
 	const sym = makeSymbol("slot", SymbolKind.Variable, int32Type(), false);
@@ -250,4 +326,71 @@ function slotReference(disamb: int32): Node {
 test "an instance fingerprint tells two same-named symbols of one module apart" {
 	const session = createBuildSession(true);
 	assert instancesFingerprint(session, [slotReference(1)]) != instancesFingerprint(session, [slotReference(2)]);
+}
+
+function declared(t: Type, kind: SymbolKind): Type {
+	const sym = makeSymbol(t.typeName, kind, t, false);
+	sym.modulePath = "/m.ms";
+	t.sym = sym;
+	return t;
+}
+
+function classB(fieldType: Type): Type {
+	return declared(createStruct("B", ["x"], [fieldType], false), SymbolKind.Class);
+}
+
+function instanceOver(arg: Type): Node {
+	const sym = makeSymbol("f", SymbolKind.Function, int32Type(), false);
+	sym.modulePath = "/m.ms";
+	const generic = makeSymbol("f", SymbolKind.Function, null, false);
+	generic.modulePath = "/g.ms";
+	sym.instantiatedFrom = generic;
+	sym.instanceArgs = [arg];
+	const ref = createNodeAt(NodeKind.Identifier, { name: "f" }, makeLoc(1, 1));
+	ref.resolvedSym = sym;
+	return ref;
+}
+
+test "a type shape of a diamond chain stays flat" {
+	const session = createBuildSession(true);
+	let level = declared(createStruct("L0", ["v"], [int32Type()], false), SymbolKind.Class);
+	for (let i = 1; i <= 14; i += 1) level = declared(createStruct("L" + String(i), ["a", "b"], [level, level], false), SymbolKind.Class);
+	assert typeShape(session, level).length < 200;
+}
+
+test "an instance over a diamond chain fingerprints in linear size" {
+	const session = createBuildSession(true);
+	let level = declared(createStruct("L0", ["v"], [int32Type()], false), SymbolKind.Struct);
+	level.typeFlags = level.typeFlags.incl(TypeFlag.IsStruct);
+	for (let i = 1; i <= 14; i += 1) {
+		level = declared(createStruct("L" + String(i), ["a", "b"], [level, level], false), SymbolKind.Struct);
+		level.typeFlags = level.typeFlags.incl(TypeFlag.IsStruct);
+	}
+	assert instancesFingerprint(session, [instanceOver(level)]).length < 8000;
+}
+
+test "an instance fingerprint changes when the argument class changes a field type" {
+	const session = createBuildSession(true);
+	assert instancesFingerprint(session, [instanceOver(classB(int32Type()))]) != instancesFingerprint(session, [instanceOver(classB(stringType()))]);
+}
+
+test "an instance fingerprint changes when a by-value member of the argument changes" {
+	const session = createBuildSession(true);
+	const first = declared(createStruct("P", ["n"], [int32Type()], true), SymbolKind.Struct);
+	first.typeFlags = first.typeFlags.incl(TypeFlag.IsStruct);
+	const second = declared(createStruct("P", ["n"], [stringType()], true), SymbolKind.Struct);
+	second.typeFlags = second.typeFlags.incl(TypeFlag.IsStruct);
+	const a = declared(createStruct("B", ["p"], [first], false), SymbolKind.Class);
+	const b = declared(createStruct("B", ["p"], [second], false), SymbolKind.Class);
+	assert instancesFingerprint(session, [instanceOver(a)]) != instancesFingerprint(session, [instanceOver(b)]);
+	assert instancesFingerprint(session, [instanceOver(createTuple([first]))]) != instancesFingerprint(session, [instanceOver(createTuple([second]))]);
+}
+
+test "an enum layout changes with a member name or a member value" {
+	const session = createBuildSession(true);
+	const base = declared(createEnum("E", ["A", "B"], [0, 1]), SymbolKind.Enum);
+	const renamed = declared(createEnum("E", ["A", "C"], [0, 1]), SymbolKind.Enum);
+	const revalued = declared(createEnum("E", ["A", "B"], [0, 2]), SymbolKind.Enum);
+	assert layoutDigest(session, base) != layoutDigest(session, renamed);
+	assert layoutDigest(session, base) != layoutDigest(session, revalued);
 }

@@ -99,8 +99,9 @@ static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
 	for (int i = 0; i < gLedgerRowCount; i++) {
-		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld\n",
-			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i]);
+		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld hooks=%d\n",
+			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i],
+			gLedgerType[i] != NULL && gLedgerType[i]->destroyFn != NULL);
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
@@ -136,6 +137,12 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 	int idx = msLedgerRowIdx(type);
 	if (idx >= 0) gLedgerDestroyN[idx]++;
 	pthread_mutex_unlock(&gLedgerMutex);
+}
+void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op) {
+	fprintf(stderr, "\nNIM-GUARD LEDGER: RC-FAMILY MISMATCH %s of %s at %p: the cell's rc is %s\n",
+		op, msLedgerRowName(msHeader(p)->type), p, wantAtomic ? "plain" : "atomic");
+	fflush(stderr);
+	abort();
 }
 #endif  /* MS_DRC_LEDGER */
 
@@ -489,7 +496,6 @@ void msCellSeqFree(msCellSeq* s) {
 
 /* O(1) removal by swapping with last element */
 static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
-	if (idx < 0 || idx >= s->len) return;
 	s->len--;
 	if (idx < s->len) {
 		/* Swap with last — update the swapped element's rootIdx */
@@ -503,7 +509,7 @@ static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
 
 _Thread_local msCellSeq msRoots;
 MS_TLS_PUBLISH(msRoots)
-_Thread_local int32_t msRootsThreshold = 128;
+_Thread_local int32_t msRootsThreshold = 0;
 MS_TLS_PUBLISH(msRootsThreshold)
 
 /* ===== ORC Diagnostics ===== */
@@ -514,7 +520,6 @@ _Thread_local int32_t msOrcCollections = 0;
 MS_TLS_PUBLISH(msOrcCollections)
 #endif
 
-#if defined(MS_DRC_LEDGER) || defined(MS_ROOT_OWNER_AT_FREE)
 static void msRootOwnerCheck(void* p, const char* site) {
 	int32_t idx = msHeader(p)->rootIdx;
 	if (idx < 0 || (idx < msRoots.len && msRoots.data[idx].ptr == p)) return;
@@ -522,7 +527,6 @@ static void msRootOwnerCheck(void* p, const char* site) {
 		site, p, idx, msRoots.len);
 	abort();
 }
-#endif
 
 #ifdef MS_DRC_LEDGER
 #define MS_ROOT_OWNER_CHECK(p, site) msRootOwnerCheck((p), (site))
@@ -550,9 +554,7 @@ void msUnregisterCycle(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (h->rootIdx < 0) return;
-#if defined(MS_DRC_LEDGER) || defined(MS_ROOT_OWNER_AT_FREE)
 	msRootOwnerCheck(p, "free");
-#endif
 	msCellSeqRemoveAt(&msRoots, h->rootIdx);
 	h->rootIdx = -1;
 }

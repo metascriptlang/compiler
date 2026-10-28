@@ -1,13 +1,15 @@
 // @stdout: str=5 up=HELLO int=42 pt=7/3
 // @stdout: re=5 rep=world/5
 // @stdout: lk=2
+// @stdout: arr=7/2.5
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
-// note: Arc<T> over a value payload (string, int32, struct) and Locked<T> over a plain struct build and run with one result on C and JS. A string pointee reads `.length` without an explicit `[]`; a call takes `[]`; an int32 pointee reads through `[]`; a second Arc handle is created while a spawn still reads the first.
+// note: Arc<T> over a value payload (string, int32, struct) and Locked<T> over a plain struct and over a fixed array of structs build and run with one result on C and JS. A string pointee reads `.length` without an explicit `[]`; a call takes `[]`; an int32 pointee reads through `[]`; a second Arc handle is created while a spawn still reads the first.
 
 import { lockedRead, lockedUpdate } from "std/core/promise";
 
 struct Point { x: int32; y: int32; }
 struct Idx { head: int32; tail: int32; }
+struct Cell { x: int32; y: float64; }
 
 async function main(): Promise<void> {
 	const s: Arc<string> = new Arc("hello");
@@ -29,5 +31,16 @@ async function main(): Promise<void> {
 	await bump;
 	await bump2;
 	console.log(`lk=${lockedRead(l, (v: Idx): int32 => v.head)}`);
+	const cells = new Locked<Cell[2]>([{ x: 1, y: 2.5 }, { x: 3, y: 4.5 }]);
+	const set = spawn(() => {
+		lockedUpdate(cells, (v: Cell[2]): Cell[2] => {
+			let w = v;
+			w[1].x = 7;
+			return w;
+		});
+		return 0;
+	});
+	await set;
+	console.log(`arr=${lockedRead(cells, (v: Cell[2]): int32 => v[1].x)}/${lockedRead(cells, (v: Cell[2]): float64 => v[0].y)}`);
 }
 await main();

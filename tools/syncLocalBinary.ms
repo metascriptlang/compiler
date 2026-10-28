@@ -384,6 +384,78 @@ for (const lib of VENDOR_LIBS) {
 	syncTree(`vendor/${lib}`);
 }
 
+function bundleIdentity(root: string): string {
+	const text = readFile(`${root}/IDENTITY`);
+	return text.ok ? text.value.trim() : "";
+}
+
+function probeBundle(bundle: string, scratch: string): string {
+	const dir = `${scratch}/probe`;
+	if (!ensureDir(dir).ok) die(`cannot create ${dir}`);
+	if (!writeFile(`${dir}/probe.ms`, "console.log(42);\n").ok) die(`cannot write ${dir}/probe.ms`);
+	const previous = env.get("MSC_NATIVE_TOOLCHAIN");
+	env.set("MSC_NATIVE_TOOLCHAIN", `${bundle}/absent`);
+	const absent = execFileResult(`${DEST}/bin/msc${EXE}`, ["build", "--no-color", "probe.ms"], dir);
+	env.set("MSC_NATIVE_TOOLCHAIN", bundle);
+	const run = execFileResult(`${DEST}/bin/msc${EXE}`, ["run", "--no-color", "probe.ms"], dir);
+	if (previous != "") env.set("MSC_NATIVE_TOOLCHAIN", previous);
+	else env.delete("MSC_NATIVE_TOOLCHAIN");
+	removeAll(dir);
+	if (!absent.started) return `cannot run ${DEST}/bin/msc${EXE}`;
+	if (absent.exitCode == 0 || !`${absent.output}${absent.errorOutput}`.includes(`native toolchain: missing bundle ${bundle}/absent`)) return `${DEST}/bin/msc${EXE} does not select the prepared bundle it is given; sync a binary that does`;
+	if (!run.started || run.exitCode != 0 || run.output.trim().split("\n").pop() != "42") return `${DEST}/bin/msc${EXE} refused ${bundle}:\n${run.output}${run.errorOutput}`;
+	return "";
+}
+
+function renameNoReplace(from: string, to: string): string {
+	const code = "import sys; sys.path.insert(0, sys.argv[1]); import prepareRuntime as pr; pr.renameNoReplace(sys.argv[2], sys.argv[3])";
+	const r = execFileResult("python3", ["-I", "-c", code, `${SRC}/tools/managedToolchain`, from, to]);
+	return r.started && r.exitCode == 0 ? "" : `${r.output}${r.errorOutput}`;
+}
+
+function syncToolchain(): void {
+	const from = `${SRC}/msc-toolchain`;
+	if (!isDir(from)) {
+		console.log(`msc-toolchain/: none beside ${SRC}, installed bundle left as it is`);
+		return;
+	}
+	const to = `${DEST}/msc-toolchain`;
+	const identity = bundleIdentity(from);
+	if (identity == "") die(`${from} has no IDENTITY; prepare it with tools/managedToolchain/prepareBundle.py`);
+	const installed = exists(to) ? bundleIdentity(to) : "";
+	if (exists(to) && installed != identity) die(`${to} holds bundle ${installed == "" ? "without IDENTITY" : installed.slice(0, 12)}, not ${identity.slice(0, 12)}; replacing an installed bundle is not supported yet`);
+	if (check) {
+		console.log(installed == identity ? `msc-toolchain/: ${identity.slice(0, 12)} installed, would verify it` : `would: publish msc-toolchain ${identity.slice(0, 12)} → ${to}`);
+		return;
+	}
+	if (windows) die(`publishing ${from} is not supported on Windows yet`);
+	const made = execFileResult("mktemp", ["-d", `${DEST}/.msc-toolchain.stage.XXXXXX`]);
+	if (!made.started || made.exitCode != 0) die(`cannot create a stage under ${DEST}: ${made.errorOutput}`);
+	const scratch = made.output.trim();
+	if (installed == identity) {
+		const refused = probeBundle(to, scratch);
+		removeAll(scratch);
+		if (refused != "") die(refused);
+		console.log(`msc-toolchain/: ${identity.slice(0, 12)} already installed, verified by a build through it`);
+		return;
+	}
+	const staged = `${scratch}/msc-toolchain`;
+	const copied = execFileResult("cp", ["-a", from, staged]);
+	if (!copied.started || copied.exitCode != 0) {
+		removeAll(scratch);
+		die(`cannot stage ${from} at ${staged}: ${copied.errorOutput}`);
+	}
+	const refused = probeBundle(staged, scratch);
+	if (refused != "") {
+		removeAll(scratch);
+		die(refused);
+	}
+	const moved = renameNoReplace(staged, to);
+	removeAll(scratch);
+	if (moved != "") die(`cannot publish ${staged} as ${to}: ${moved}`);
+	console.log(`synced msc-toolchain ${identity.slice(0, 12)} → ${to}`);
+}
+
 function recordBuild(key: string): void {
 	const stamp = git(["log", "-1", "--format=%h %cI"]);
 	const path = `${DEST}/BUILD`;
@@ -396,6 +468,8 @@ function recordBuild(key: string): void {
 	}
 	writeFile(path, `${text}${key} ${stamp}\n`);
 }
+
+syncToolchain();
 
 if (!check) {
 	if (syncBinary) recordBuild("binary");

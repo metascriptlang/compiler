@@ -356,6 +356,18 @@ test "callRoutine passes floats and strings and returns them" {
 	removeAll(dir);
 }
 
+test "callRoutine returns the JSON of a typed config that spreads an imported theme" {
+	const dir = scratchDir();
+	writeFile(`${dir}/theme.ms`, `export interface Config { fontSize: int32; background: string; }\nexport const night: Config = { fontSize: 11, background: "#16161e" };\n`);
+	writeFile(`${dir}/config.ms`, `import { Config, night } from "./theme";\nexport const config: Config = { ...night, fontSize: 13 };\n`);
+	writeFile(`${dir}/main.ms`, `import { config } from "./config";\nexport function configJson(): string { return JSON.stringify(config); }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const got = callRoutine(interp, routineOf(interp, "configJson"), []);
+	assert got.ok;
+	if (got.ok) assert got.value.text() == `{"fontSize":13,"background":"#16161e"}`, got.value.text();
+	removeAll(dir);
+}
+
 test "selectRoutine finds only an exported function of the evaluated module" {
 	const dir = scratchDir();
 	writeFile(`${dir}/lib.ms`, `export function fromLib(): int32 { return 1; }\n`);

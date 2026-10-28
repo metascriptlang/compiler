@@ -6,7 +6,7 @@ import { ensureDir, exists, readDir, readFile, removeAll } from "std/fs";
 
 const ROOT_PREFIX = "emitModuleJob__";
 const ROOT_SUFFIX = "compileOms_u0";
-const RC_OPS = ["msIncrefCyclic(", "msDecrefCyclic(", "msIncref(", "msDecref("];
+const RC_OPS = ["msIncrefCyclic(", "msDecrefCyclic(", "msIncref(", "msDecref(", "msDecrefFuture("];
 const PROGRAM_CELLS = ["Node__", "Type__", "Symbol__", "CheckerContext__"];
 const JOB_INPUTS = ["ModuleEmissionJob__", "AliveSet__", "CEmissionFacts__"];
 const CLOSURE_LITERAL = " = (msClosure){ .fn = (void*)";

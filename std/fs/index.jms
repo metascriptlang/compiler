@@ -9,7 +9,7 @@
 // classifies on both backends - no second error taxonomy on js.
 
 @import("node:fs", {
-	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, accessSync,
+	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, accessSync,
 	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync, openSync, readSync, closeSync,
 });
 
@@ -22,6 +22,7 @@ extern function appendFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
 extern function realpathSync(path: string): string;
 extern function statSync(path: string): Stats;
+extern function lstatSync(path: string): Stats;
 extern function accessSync(path: string, mode: number): void;
 extern function mkdirSync(path: string): void;
 extern function rmdirSync(path: string): void;
@@ -176,18 +177,24 @@ export function remove(path: string): Result<void, IoError> {
 // without racing isExist checks. Walks children depth-first, then rmdir's
 // the root. Companion to `remove` (file only) for explicit intent —
 // no boolean flag to misuse, two names read as the thing they do.
+// A link, the root included, is removed itself and never followed.
 export function removeAll(path: string): Result<void, IoError> {
-	if (!exists(path)) return Result.ok(null);
-	if (isDir(path)) {
-		for (const entry of readDir(path)) {
-			// readDir marks directories with a trailing "/" — strip for the child path.
-			const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
-			const r = removeAll(path + "/" + name);
-			if (!r.ok) return r;
-		}
-		return rmdir(path);
+	let tree = false;
+	try {
+		tree = lstatSync(path).isDirectory();
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err == 2) return Result.ok(null);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "removeAll failed"));
 	}
-	return remove(path);
+	if (!tree) return remove(path);
+	for (const entry of readDir(path)) {
+		// readDir marks directories with a trailing "/" — strip for the child path.
+		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+		try removeAll(path + "/" + name);
+	}
+	return rmdir(path);
 }
 
 export function symlink(target: string, path: string): Result<void, IoError> {
@@ -240,6 +247,10 @@ export function fileSize(path: string): number {
 
 export function modifiedTime(path: string): number {
 	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
+}
+
+export function changedTime(path: string): number {
+	try { return Math.floor(statSync(path).ctimeMs / 1000); } catch (e) { return -1; }
 }
 
 export function changeStamp(path: string): string {

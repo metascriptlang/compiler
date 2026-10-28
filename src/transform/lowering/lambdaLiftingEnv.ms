@@ -15,7 +15,7 @@ import {
 import { CaptureCursors, inferCaptureCursors } from "../../analyzer/cursors";
 import { WriteEffects, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
 import { RcInfo, RcKind, classifyType } from "../../analyzer/classify";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, setFlag, SymbolFlag } from "../../checker/symbol";
 import { DetectionState, createDetectionState } from "./lambdaLiftingDetect";
 import { ScopeStack, createScopeStack, isModuleLevelVar } from "./lambdaLiftingScope";
 import { findCapturedIdent } from "./lambdaLiftingCaptures";
@@ -325,6 +325,7 @@ export function makeEnvStruct(state: LiftState, envName: string, fieldSyms: Symb
 	const envSym = mintSym(state.ctx, SymbolKind.Interface, envName, createRef(envDecl.nodeType!));
 	envSym.declNode = envDecl;
 	envSym.location = loc;
+	setFlag(envSym, SymbolFlag.ClosureEnv);
 	envDecl.nodeType!.sym = envSym;
 	state.envFieldSyms.set(envDecl.nodeType!, fieldSyms);
 	return envDecl;

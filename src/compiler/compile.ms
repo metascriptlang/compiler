@@ -19,7 +19,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { scanJsCells } from "../transform/lowering/jsVarParamLower";
 import { analyzeProgram } from "../analyzer/index";
-import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -81,11 +81,12 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -3100,7 +3101,8 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	// checker needs the resolved mode (freestanding async gate) — applyGcMode
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
-	resolveCC(opts);
+	resolveCC(opts, stampMemoRoot());
+	resolveSanitizerCC(opts);
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	useDriverPlans(session.keep && opts.isHcr);
@@ -3226,6 +3228,7 @@ resetLiftedOps();
 	}
 	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
 	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths);
+	liftTables.unloweredWritesAnything = true;
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -3390,6 +3393,7 @@ resetLiftedOps();
 			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
 			if (job.ran) {
 				staged.push({ at, job, tree });
+				noteUnitDecls(liftTables, modPath, tree);
 			} else {
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
@@ -3399,9 +3403,12 @@ resetLiftedOps();
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
 				loweredByPath.set(modPath, tree);
+				noteUnitDecls(liftTables, modPath, tree);
 			}
 		} else {
-			staged.push({ at, job, tree: transformModuleA2(program, ctx, job) });
+			const tree = transformModuleA2(program, ctx, job);
+			staged.push({ at, job, tree });
+			noteUnitDecls(liftTables, modPath, tree);
 		}
 	}
 	for (const st of staged) {
@@ -3980,7 +3987,7 @@ resetLiftedOps();
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	if (opts.appMode == "staticlib") {
-		const arRes = archiveStatic(oFiles, outBinary);
+		const arRes = archiveStatic(oFiles, outBinary, opts.ccCompiler, opts.ccBinary);
 		if (!arRes.ok) {
 			printError(`ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
 			if (arRes.error.errorOutput != "") printDiag(arRes.error.errorOutput);
@@ -4055,7 +4062,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// target-implied gc resolution, so the checker sees the mode the test
 	// binary will actually be built with.
 	resolveTargetGcMode(opts);
-	resolveCC(opts);
+	resolveCC(opts, stampMemoRoot());
+	resolveSanitizerCC(opts);
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
@@ -4108,6 +4116,7 @@ resetLiftedOps();
 	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	liftTables.unloweredWritesAnything = true;
 	const stagedTests: { cm: { program: Node, ctx: CheckerContext, modPath: string, source: string }, nativeCtx: TransformContext, tree: Node }[] = [];
 	for (const cm of checkedMods) {
 		const program = cm.program;
@@ -4132,6 +4141,7 @@ resetLiftedOps();
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		stagedTests.push({ cm, nativeCtx, tree: hcrResult });
+		noteUnitDecls(liftTables, modPath, hcrResult);
 	}
 	for (const st of stagedTests) {
 		const cm = st.cm;
@@ -5049,6 +5059,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		}
 		exit(1);
 	}
+
+	if (ctx.vm != null && ctx.vm.unsettled) console.log("Warning: Detected unsettled await: no task, timer, message or I/O is left to settle it");
 
 	// C-target parity: the program's exit code becomes msc's own.
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {

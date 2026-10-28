@@ -22,6 +22,7 @@ import { cmdInstall } from "./compiler/package/install";
 import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { collectGlobalCache } from "./compiler/cache";
+import { configureCachePaths } from "./utils/cachePaths";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile == "") {
@@ -65,8 +66,6 @@ export function main(): int32 {
 	// No-op on Unix. Must run before any network/heavy work.
 	sweepUpgradeBackups();
 
-	collectGlobalCache();
-
 	const opts = parseArgs();
 	const cmd = opts.command;
 	if (opts.eventsPath != "" && !(cmd == "run" && opts.isHcr && opts.target != Target.JS && opts.target != Target.Raiser)) {
@@ -84,6 +83,8 @@ export function main(): int32 {
 		process.exit(1);
 	}
 	const cfg = applied.value;
+	configureCachePaths(opts.cacheDir, opts.globalCacheDir, opts.globalCache);
+	collectGlobalCache();
 	if (opts.showDefines) {
 		console.log(formatDefines(opts.defines));
 		process.exit(0);

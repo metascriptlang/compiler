@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -11,9 +11,9 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable } from "./compat";
+import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, stampOwner, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol } from "./context";
-import { comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitArmsToSlot, fitNode, slotRefuses, slotTakesValue, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString } from "./fit";
+import { branchFitsSlot, comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitArmsToSlot, fitNode, slotRefuses, slotTakesValue, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -1918,8 +1918,8 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 // A macro replacement owns its type arguments as bound typed operands: the callee
 // `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
 function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
+	if (d.callee.kind != NodeKind.TypeGeneric) return true;
 	const callee = d.callee;
-	if (callee.kind != NodeKind.TypeGeneric) return true;
 	const g = callee.data as TypeGenericData;
 	for (const operand of g.typExprArgs) {
 		if (operand.nodeType == null) {
@@ -2693,6 +2693,13 @@ function sharesArrayReceiver(recvFormal: Type): boolean {
 	return inner.kind == TypeKind.Array || inner.kind == TypeKind.SizedArray || inner.kind == TypeKind.Span;
 }
 
+function closureIntoCPointerRefusal(calleeName: string, calleeType: Type, pi: int32, argType: Type, paramType: Type): string {
+	const reason = closureIntoCPointerReason(argType, paramType);
+	if (reason == "") return "";
+	const name = pi < calleeType.typeNames.length ? calleeType.typeNames[pi] : String(pi);
+	return "'" + calleeName + "' parameter '" + name + "' is " + reason;
+}
+
 function argLabel(pi: int32, hasReceiver: boolean): string {
 	if (!hasReceiver) return "arg " + String(pi);
 	return pi == 0 ? "receiver" : "arg " + String(pi - 1);
@@ -2987,7 +2994,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						} else {
 							const calleeName = getCalleeName(d.callee);
 							const variantRefusal = variantIntoObjectRefusal(args[pi], argTypes[pi], paramType);
-							addError(ctx, variantRefusal != "" ? variantRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							const pointerRefusal = closureIntoCPointerRefusal(calleeName, calleeType, pi, argTypes[pi], paramType);
+							addError(ctx, variantRefusal != "" ? variantRefusal : pointerRefusal != "" ? pointerRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -4721,16 +4729,32 @@ function isValueCallee(callee: Node): boolean {
 // Reference (semIndirectOp, semexprs.nim): a value is called only through a
 // procedure type; every other type in call position is refused. A type not
 // known yet is left to the code that settles it.
-// The node whose value a match arm yields: its expression, or the argument of
-// the return that ends its block.
-function matchArmValue(cd: MatchCaseData, asStatement: boolean): Node {
-	const none = null as unknown as Node;
-	if (cd.caseBody.kind != NodeKind.BlockStmt) return cd.caseBody;
-	if (asStatement) return none;
-	const bd = cd.caseBody.data as BlockStmtData;
-	if (bd.statements.length == 0) return none;
-	const last = bd.statements[bd.statements.length - 1];
-	return last.kind == NodeKind.ReturnStmt ? (last.data as ReturnStmtData).argument ?? none : none;
+// A block arm's value is its last statement's expression, through a trailing if/else and
+// nested blocks; a path that leaves the arm (return, throw, break, continue) gives none, and
+// any other ending (a loop, a declaration, an if without else) leaves the arm without a value.
+type ArmTails = { values: Node[]; missing: Node[] };
+
+function collectArmTails(node: Node, out: ArmTails): void {
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			const stmts = (node.data as BlockStmtData).statements;
+			if (stmts.length == 0) out.missing.push(node);
+			else collectArmTails(stmts[stmts.length - 1], out);
+		},
+		NodeKind.ExprStmt => { out.values.push(node); },
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			collectArmTails(d.consequent, out);
+			if (d.alternate == null || isEmptyBlock(d.alternate)) out.missing.push(node);
+			else collectArmTails(d.alternate, out);
+		},
+		NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt => {},
+		_ => { out.missing.push(node); },
+	};
+}
+
+function tailValue(tail: Node): Node {
+	return (tail.data as ExprStmtData).expr;
 }
 
 function unionCalleeHint(t: Type): string {
@@ -5120,8 +5144,8 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 	const recvT = withoutArrayEnvelope(formal);
 	const objT = withoutArrayEnvelope(objType);
 	const rel = typeRelation(recvT, objT);
-	if (rel == TypeRelation.None && hasGenericParams(recvT)) return TypeRelation.Generic;
-	return rel;
+	if (rel == TypeRelation.None && hasGenericParams(recvT)) return recvT.kind != TypeKind.GenericParam && dropsReadonlyView(objT, recvT) ? TypeRelation.None : TypeRelation.Generic;
+	return rel == TypeRelation.Generic && recvT.kind != TypeKind.Unknown && !isUnresolvedType(recvT) && dropsReadonlyView(recvT, objT) ? TypeRelation.Subtype : rel;
 }
 
 function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], args: Node[],
@@ -5376,6 +5400,18 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 
 function refuseReadonlyViewCall(ctx: CheckerContext, node: Node, property: string, objType: Type, receiverName: string): void {
 	addError(ctx, "cannot call '" + property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + property + "(this: Readonly<" + receiverName + ">)' on the class, or 'function " + property + "(this x: Readonly<" + receiverName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
+}
+
+function receiverViewPeer(exts: ExtensionMethod[], ext: ExtensionMethod | null, wantView: boolean): ExtensionMethod {
+	if (ext == null || ext.isStatic) return ext as ExtensionMethod;
+	const recv = getExtFnType(ext).typeChildren[0];
+	if (recv == null || isReadonlyView(recv) == wantView || isUnresolvedType(recv) || recv.kind == TypeKind.Unknown) return ext;
+	for (const other of exts) {
+		if (other == ext || other.isStatic) continue;
+		const otherRecv = getExtFnType(other).typeChildren[0];
+		if (otherRecv != null && isReadonlyView(otherRecv) == wantView && sameType(withoutReadonlyView(otherRecv), withoutReadonlyView(recv))) return other;
+	}
+	return ext;
 }
 
 function boundExtensions(member: Node, byName: ExtensionMethod[]): ExtensionMethod[] {
@@ -5894,7 +5930,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (ctx.extensionRegistry != null) {
 		const allByName = boundExtensions(node, findAllExtensionsByName(ctx.extensionRegistry, d.property));
 		const recvLookupType = withoutReadonlyView(objType);
-		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : findFirstMatchingExt(allByName, recvLookupType);
+		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : receiverViewPeer(allByName, findFirstMatchingExt(allByName, recvLookupType), isReadonlyView(objType));
 		let extObjType = recvLookupType;
 		const narrowedDeclared = ext == null ? declaredUnionOfNarrowed(d.object) : null;
 		if (narrowedDeclared != null) {
@@ -6315,6 +6351,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
 	const branchBodyTypes: Type[] = [];
+	const armTails: Node[][] = [];
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		restoreInitState(ctx.initTracker, oldState);
@@ -6362,25 +6399,26 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 			callCheckExpr(ctx, cd.caseGuard, null);
 		}
 		let bodyType = inferredType();
+		armTails.push([]);
 		if (cd.caseBody.kind == NodeKind.BlockStmt && asStatement) {
 			callCheckStmt(ctx, cd.caseBody);
 		} else if (cd.caseBody.kind == NodeKind.BlockStmt) {
+			const tails: ArmTails = { values: [], missing: [] };
+			collectArmTails(cd.caseBody, tails);
+			const outerTails = ctx.armTails;
 			const outerArmExpected = ctx.matchArmExpected;
+			ctx.armTails = tails.values;
 			ctx.matchArmExpected = expectedType;
-			ctx.matchExprDepth = ctx.matchExprDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
-			ctx.matchExprDepth = ctx.matchExprDepth - 1;
 			ctx.matchArmExpected = outerArmExpected;
-			const bd = cd.caseBody.data as BlockStmtData;
-			if (bd.statements.length > 0) {
-				const last = bd.statements[bd.statements.length - 1];
-				if (last.kind == NodeKind.ReturnStmt) {
-					const rd = last.data as ReturnStmtData;
-					if (rd.argument != null && rd.argument.nodeType != null) {
-						bodyType = rd.argument.nodeType;
-					}
-				}
+			ctx.armTails = outerTails;
+			for (const m of tails.missing) {
+				addError(ctx, m.kind == NodeKind.IfStmt
+					? "this arm of a match used as a value has an 'if' without 'else': the path that skips it gives the arm no value"
+					: "this arm of a match used as a value ends without a value: end the block with an expression",
+					m.location.line, m.location.column);
 			}
+			armTails[armTails.length - 1] = tails.values;
 		} else {
 			callCheckExpr(ctx, cd.caseBody, expectedType); if (cd.caseBody.nodeType != null) { bodyType = cd.caseBody.nodeType; }
 		}
@@ -6411,27 +6449,37 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		for (const t of branchBodyTypes) { if (!sameType(slotType, t)) slotType = expectedType!; }
 	}
 	const armValues: Node[] = [];
-	for (const c of d.matchCases) armValues.push(matchArmValue(c.data as MatchCaseData, asStatement));
-	adoptLiteralArms(ctx, armValues);
-	for (let ai = 0; ai < armValues.length && ai < branchBodyTypes.length; ai += 1) {
-		if (armValues[ai] != null && armValues[ai].nodeType != null) branchBodyTypes[ai] = armValues[ai].nodeType;
+	for (let ai = 0; ai < d.matchCases.length; ai += 1) {
+		const cd = d.matchCases[ai].data as MatchCaseData;
+		if (cd.caseBody.kind != NodeKind.BlockStmt) armValues.push(cd.caseBody);
+		for (const t of armTails[ai]) armValues.push(tailValue(t));
 	}
-	const joined = slotFitted != null ? slotType : joinBranchTypes(branchBodyTypes);
+	adoptLiteralArms(ctx, armValues);
+	const joinTypes: Type[] = [];
+	for (let ai = 0; ai < d.matchCases.length; ai += 1) {
+		const cd = d.matchCases[ai].data as MatchCaseData;
+		if (cd.caseBody.kind != NodeKind.BlockStmt) {
+			joinTypes.push(cd.caseBody.nodeType != null ? cd.caseBody.nodeType : branchBodyTypes[ai]);
+			continue;
+		}
+		for (const t of armTails[ai]) {
+			const vt = tailValue(t).nodeType;
+			if (vt != null && vt.kind != TypeKind.Never) joinTypes.push(vt);
+		}
+	}
+	let joined = slotFitted != null ? slotType : joinBranchTypes(joinTypes);
+	if (joined.kind == TypeKind.Null && expectedType != null && !isUnresolvedType(expectedType) && isAssignable(joined, expectedType)) joined = expectedType;
+	if (expectedType != null && !isUnresolvedType(joined) && !hasGenericParams(expectedType)
+			&& !isAssignable(joined, expectedType) && armValues.every((v) => branchFitsSlot(ctx, v.nodeType, expectedType))) joined = expectedType;
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		if (cd.caseBody.kind == NodeKind.BlockStmt && asStatement) continue;
 		if (cd.caseBody.kind == NodeKind.BlockStmt) {
-			const bd = cd.caseBody.data as BlockStmtData;
-			if (bd.statements.length > 0) {
-				const last = bd.statements[bd.statements.length - 1];
-				if (last.kind == NodeKind.ReturnStmt) {
-					const rd = last.data as ReturnStmtData;
-					if (rd.argument != null) {
-						retypeEmptyArrayBranch(rd.argument, returnType);
-						if (matchJoined != null) rd.argument = fitJoinedBranch(ctx, rd.argument, matchJoined);
-					}
-				}
+			for (const t of armTails[d.matchCases.indexOf(c)]) {
+				const td = t.data as ExprStmtData;
+				retypeEmptyArrayBranch(td.expr, returnType);
+				if (matchJoined != null) td.expr = fitJoinedBranch(ctx, td.expr, matchJoined);
 			}
 		} else {
 			retypeEmptyArrayBranch(cd.caseBody, returnType);

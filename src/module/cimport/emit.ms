@@ -6,7 +6,7 @@
 import { Obj, ObjKind } from "../cparse/obj";
 import { CType, CTypeKind } from "../cparse/type";
 import { TargetInfo, hostTarget, targetFor } from "../cparse/target";
-import { Diagnostic } from "../cparse/error";
+import { Diagnostic, DiagSeverity, makeDiag } from "../cparse/error";
 import { parseHeader } from "./index";
 import { writeFile, ensureDir, readFile } from "std/fs";
 
@@ -51,7 +51,7 @@ function isMutableChar(c: CType): boolean {
 // emitTypedef so `type MyId = ...` resolves to the underlying type, not back
 // to itself (a struct, union or enum carries the name of the typedef that
 // first names it, so its typedefName === obj.name).
-function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
+function cTypeToMs(t: CType, skipTypedef: boolean = false, inField: boolean = false): string {
 	if (!skipTypedef && t.typedefName != "") {
 		if (isNamedScalar(t.typedefName)) return t.typedefName;
 		const mapped = mapRuntimeType(t.typedefName);
@@ -88,15 +88,16 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
 			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") return `Ptr<${t.base.tagName}>`;
-			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base);
+			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base, false, inField);
 			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) return `Ptr<${inner}>`;
-			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
-			// borrow-promotion); mutable → Ptr<T>.
-			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
+			// Other typed pointer — a const pointee is a Borrow<T> in a parameter or return
+			// (read-only, accepts arr[0] borrow-promotion); a field stores the pointer, so
+			// it is a Ptr<T> the author indexes.
+			return t.base.isConst && !inField ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
 			if (t.base == null) return "unknown";
-			const elem = cTypeToMs(t.base);
+			const elem = cTypeToMs(t.base, false, inField);
 			if (t.arrayLen >= 0) return elem.includes("=>") ? `(${elem})[${t.arrayLen}]` : `${elem}[${t.arrayLen}]`;
 			return `Span<${elem}>`;
 		},
@@ -138,7 +139,7 @@ function emitParams(t: CType, outHandles: boolean): string {
 }
 
 function emitFuncType(t: CType): string {
-	return "(" + emitParams(t, false) + ") => " + cTypeToMs(t.returnType);
+	return "(" + emitParams(t, false) + ") => " + nullablePointer(t.returnType, cTypeToMs(t.returnType));
 }
 
 // ===== Emit Declarations =====
@@ -161,7 +162,7 @@ function emitStructBody(name: string, t: CType, prefix: string): string {
 	let result = `${prefix}extern struct ${name} {\n`;
 	for (const m of t.members) {
 		if (m.name == "") continue;
-		result = result + `\t${m.name}: ${cTypeToMs(m.type)};\n`;
+		result = result + `\t${m.name}: ${cTypeToMs(m.type, false, true)};\n`;
 	}
 	result = result + "}\n";
 	return result;
@@ -265,7 +266,7 @@ function translatedStructKey(name: string, t: CType, target: TargetInfo): string
 	const types: string[] = [];
 	for (const m of t.members) {
 		names.push(m.name);
-		types.push(cTypeToMs(m.type));
+		types.push(cTypeToMs(m.type, false, true));
 	}
 	const key = completeStructKey(`${target.os}-${target.cpu}`, name, names, types);
 	return t.kind == CTypeKind.Union ? key + UNION_KEY_MARK : key;
@@ -359,6 +360,13 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 		const file = fileOf(obj.file);
 		const mine = file == own;
 		if (mine ? declaredNames.has(obj.name) : seenInFile.has(`${file}\t${obj.name}`)) continue;
+		if (mine && obj.kind == ObjKind.TypedefName && obj.type.kind == CTypeKind.Enum && obj.type.size != tg.intSize) {
+			if (outDiags != null) {
+				outDiags.push(makeDiag(DiagSeverity.Error, obj.file, obj.line, 1,
+					`enum ${obj.name} has a ${obj.type.size}-byte underlying type; a C enum imports only at int width (${tg.intSize} bytes)`));
+			}
+			continue;
+		}
 		const text = emitObj(obj, parsed.objs, tg, emittedEnums, mine ? outCompleteKeys : null, mine);
 		if (text == "") continue;
 		if (mine) {
@@ -557,6 +565,11 @@ test "emit pointer types" {
 	assert ms.indexOf("name: cstring") >= 0;
 }
 
+test "a function-pointer type's pointer return is nullable like its pointer parameters" {
+	const ms = translateHeaderModule("typedef void* (*Alloc)(void* ctx, unsigned long len);\ntypedef struct Vt { Alloc alloc; } Vt;").source;
+	assert ms.indexOf("(ctx: Ptr<void> | null, len: uint64) => Ptr<void> | null") >= 0, ms;
+}
+
 test "opaque struct-pointer typedef points at its tag declared under its C name" {
 	const ms = translateHeaderModule("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);").source;
 	assert ms.indexOf("OpaqueRef = Ptr<Opaque>") >= 0;
@@ -621,6 +634,14 @@ function explicitCharPointersAreBytes(os: string, cpu: string): boolean {
 		&& ms.indexOf("function cs(): Borrow<int8>") >= 0
 		&& ms.indexOf("function u(): Ptr<uint8>") >= 0
 		&& ms.indexOf("function cu(): Borrow<uint8>") >= 0;
+}
+
+test "a const pointer field is a Ptr the author indexes, a const pointer parameter a Borrow" {
+	const ms = emitFor("macos", "arm64", "typedef struct { const unsigned char *p; const int *q[2]; const int **r; } S;\nvoid f(const int *x);");
+	assert ms.indexOf("p: Ptr<uint8>;") >= 0, ms;
+	assert ms.indexOf("q: Ptr<int32>[2];") >= 0, ms;
+	assert ms.indexOf("r: Ptr<Ptr<int32>>;") >= 0, ms;
+	assert ms.indexOf("f(x: Borrow<int32>)") >= 0, ms;
 }
 
 test "plain char pointers are cstring whether the target's char is signed or unsigned" {
@@ -854,4 +875,20 @@ test "a header declares what its own file writes and imports and re-exports what
 	const shape = t.includedShapes.get("/tmp/mscparse-split/common.h") ?? "";
 	const common = try readFile("/tmp/mscparse-split/common.h") catch "";
 	assert shape == translateHeaderModule(common, "/tmp/mscparse-split/common.h").ownShape, shape;
+}
+
+test "an enum whose fixed underlying type is not int width is refused, naming it and its size" {
+	const diags: Diagnostic[] = [];
+	const src = "typedef enum : unsigned char { A = 1 } Byte;\n"
+		+ "typedef enum : short { B = 1 } Half;\n"
+		+ "typedef enum : long long { C = 1 } Wide;\n"
+		+ "typedef enum : int { D = 1 } Plain;\n"
+		+ "typedef enum : unsigned int { E = 1 } Unsigned;\n";
+	const ms = translateHeaderModule(src, "fixed.h", [], diags).source;
+	assert diags.length == 3, `${diags.length}`;
+	assert diags[0].message.includes("enum Byte has a 1-byte"), diags[0].message;
+	assert diags[1].message.includes("enum Half has a 2-byte"), diags[1].message;
+	assert diags[2].message.includes("enum Wide has a 8-byte"), diags[2].message;
+	assert ms.includes("enum Plain {") && ms.includes("enum Unsigned {"), ms;
+	assert !ms.includes("enum Byte") && !ms.includes("enum Half") && !ms.includes("enum Wide"), ms;
 }

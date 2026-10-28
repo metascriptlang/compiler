@@ -98,3 +98,21 @@ test "paralockLicences: a class instance bound outside the thunk is read-only in
 	`);
 	assert got.contains("cannot write through Readonly<Box>"), got;
 }
+
+test "paralockLicences: a Locked payload holding a raw address names the address, and a fixed array of numbers is plain data" {
+	const field = outcome("struct H { p: Ptr<void>; n: int32; }", `
+		const c = new Locked<H>({ p: null as unknown as Ptr<void>, n: 1 });
+		return 0;
+	`);
+	assert field.contains("holds the raw address 'Ptr<void>'"), field;
+	const bare = outcome("", `
+		const b = new Locked<Ptr<int32>>(null as unknown as Ptr<int32>);
+		return 0;
+	`);
+	assert bare.contains("holds the raw address 'Ptr<int32>'"), bare;
+	const cells = outcome("", `
+		const a = new Locked<int32[4]>([1, 2, 3, 4]);
+		return 0;
+	`);
+	assert !cells.contains("payload must be plain data"), cells;
+}

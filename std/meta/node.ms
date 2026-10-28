@@ -246,6 +246,7 @@ export enum SymbolFlag {
 	CompilerProc, // a routine a synthesized call names: a @compilerFunc declaration or a generated runtime proc (reference: sfCompilerProc)
 	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
+	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
 }
 
 // ===== Symbol =====
