@@ -15,7 +15,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
-import { appendLoopTail, bodySuspends } from "./forLoopLower";
+import { appendLoopTail } from "./forLoopLower";
 import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
@@ -113,8 +113,8 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 		bodyStmts.push(itemDecl);
 	}
 	const userStmts = extractBodyStmts(d.forOfBody);
-	const nextAt = (): Node => makeBlock([setLive(false), makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc)], loc);
-	const tail = appendLoopTail(userStmts, nextAt(), nextAt, bodySuspends(userStmts), ctx, loc);
+	const next = makeBlock([setLive(false), makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc)], loc);
+	const tail = appendLoopTail(userStmts, next, ctx, loc);
 	for (const s of tail.tailStmts) { bodyStmts.push(s); }
 
 	const loop = makeWhile(cond, makeBlock(bodyStmts, loc), loc);
@@ -264,8 +264,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	let bodyStmts = extractBodyStmts(d.forOfBody);
 	let whileLabel = "";
 	if (lengthCanChange) {
-		const checkAt = (): Node => lengthCheck(iterExpr, lenSym, isString, loc);
-		const tail = appendLoopTail(bodyStmts, checkAt(), checkAt, bodySuspends(bodyStmts), ctx, loc);
+		const tail = appendLoopTail(bodyStmts, lengthCheck(iterExpr, lenSym, isString, loc), ctx, loc);
 		bodyStmts = tail.tailStmts;
 		whileLabel = tail.tailLabel;
 	}

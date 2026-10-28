@@ -5,11 +5,10 @@
 // →
 // { let i = 0; while (i < 10) { body; i++; } }
 
-import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, DoWhileStmtData, MatchStmtData, MatchCaseData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, WhileStmtData, DoWhileStmtData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
 import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext, freshOwnedSym } from "../context";
-import { walkNode, mapChildren, isFuncBoundary } from "../walker";
-import { isRoutineOrTestNode } from "../../ast/shape";
+import { walkNode, isFuncBoundary } from "../walker";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, makeBreak, makeSwitchWrapper, extractBodyStmts, makeVarDecl, makeIdentResolved, makeAssign, makeIf, makeUnary, syntheticToken } from "../util";
 import { LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
 import { booleanType } from "../../checker/types";
@@ -47,7 +46,7 @@ export function lowerForStmt(node: Node, ctx: TransformContext): Node {
 	let whileLabel = "";
 	if (d.forUpdate != null) {
 		const updateStmt = makeExprStmt(d.forUpdate, loc);
-		const tail = appendLoopTail(bodyStmts, updateStmt, (): Node => cloneStmt(updateStmt), loopSuspends(d, bodyStmts), ctx, loc);
+		const tail = appendLoopTail(bodyStmts, updateStmt, ctx, loc);
 		bodyStmts = tail.tailStmts;
 		whileLabel = tail.tailLabel;
 	}
@@ -66,104 +65,22 @@ export interface LoopTail {
 	tailLabel: string;
 }
 
-export function appendLoopTail(bodyStmts: Node[], tail: Node, tailAt: () => Node, suspends: boolean, ctx: TransformContext, loc: SourceLocation): LoopTail {
+export function appendLoopTail(bodyStmts: Node[], tail: Node, ctx: TransformContext, loc: SourceLocation): LoopTail {
 	let stmts = bodyStmts;
 	let label = "";
 	if (hasLoopContinue(stmts, "")) {
-		if (suspends) {
-			rewriteContinues(stmts, tailAt);
-		} else {
-			ctx.tempCounter += 1;
-			const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: `__lp${ctx.tempCounter}`, loopBroken: false };
-			let i = 0;
-			while (i < stmts.length) {
-				stmts[i] = retargetLoopJumps(stmts[i], jumps, false);
-				i += 1;
-			}
-			stmts = [makeSwitchWrapper(stmts, jumps.bodyLabel, loc)];
-			if (jumps.loopBroken) label = jumps.loopLabel;
+		ctx.tempCounter += 1;
+		const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: `__lp${ctx.tempCounter}`, loopBroken: false };
+		let i = 0;
+		while (i < stmts.length) {
+			stmts[i] = retargetLoopJumps(stmts[i], jumps, false);
+			i += 1;
 		}
+		stmts = [makeSwitchWrapper(stmts, jumps.bodyLabel, loc)];
+		if (jumps.loopBroken) label = jumps.loopLabel;
 	}
 	stmts.push(tail);
 	return { tailStmts: stmts, tailLabel: label };
-}
-
-function loopSuspends(d: ForStmtData, bodyStmts: Node[]): boolean {
-	if (d.forCondition != null && hasSuspendPoint(d.forCondition)) return true;
-	if (hasSuspendPoint(d.forUpdate)) return true;
-	return bodySuspends(bodyStmts);
-}
-
-export function bodySuspends(bodyStmts: Node[]): boolean {
-	for (const s of bodyStmts) {
-		if (hasSuspendPoint(s)) return true;
-	}
-	return false;
-}
-
-function hasSuspendPoint(node: Node): boolean {
-	return anyDescendant(node, (n: Node): Visit => {
-		if (n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr) return Visit.Hit;
-		return isRoutineOrTestNode(n) ? Visit.Skip : Visit.Descend;
-	});
-}
-
-// Rewrite continue → { update; continue; } at current loop level.
-// Does NOT descend into nested loops (their continues target inner loops).
-function rewriteContinues(stmts: Node[], tailAt: () => Node): void {
-	let i = 0;
-	while (i < stmts.length) {
-		stmts[i] = rewriteContinuesInNode(stmts[i], tailAt);
-		i += 1;
-	}
-}
-
-// Returns the rewritten statement: a bare continue becomes { update; continue; }.
-// Recurses into every position that can host a same-level continue — blocks,
-// full if/else-if chains (alternate is an IfStmt, not a block), try/catch/finally,
-// and match cases (matchLower runs after forLoopLower and keeps continue as-is).
-function rewriteContinuesInNode(node: Node, tailAt: () => Node): Node {
-	if (node.kind == NodeKind.ContinueStmt) {
-		return makeBlock([tailAt(), node], node.location);
-	}
-	if (node.kind == NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		rewriteContinues(bd.statements, tailAt);
-	} else if (node.kind == NodeKind.IfStmt) {
-		const ifd = node.data as IfStmtData;
-		if (ifd.consequent != null) ifd.consequent = rewriteContinuesInNode(ifd.consequent, tailAt);
-		if (ifd.alternate != null) ifd.alternate = rewriteContinuesInNode(ifd.alternate, tailAt);
-	} else if (node.kind == NodeKind.TryCatchStmt) {
-		const td = node.data as TryCatchStmtData;
-		if (td.tryBody != null) td.tryBody = rewriteContinuesInNode(td.tryBody, tailAt);
-		if (td.catchBody != null) td.catchBody = rewriteContinuesInNode(td.catchBody, tailAt);
-		if (td.finallyBody != null) td.finallyBody = rewriteContinuesInNode(td.finallyBody, tailAt);
-	} else if (node.kind == NodeKind.MatchStmt) {
-		const md = node.data as MatchStmtData;
-		let i = 0;
-		while (i < md.matchStmtCases.length) {
-			const c = md.matchStmtCases[i];
-			if (c.kind == NodeKind.MatchCase) {
-				const cd = c.data as MatchCaseData;
-				if (cd.caseBody != null) cd.caseBody = rewriteContinuesInNode(cd.caseBody, tailAt);
-			}
-			i += 1;
-		}
-	}
-	// While/For/ForOf/DoWhile untouched — nested loops own their continues
-	return node;
-}
-
-// Shallow clone of statement node (for duplicating updateStmt)
-function cloneStmt(node: Node): Node {
-	return {
-		kind: node.kind,
-		data: node.data,
-		location: node.location,
-		nodeType: node.nodeType,
-		flags: node.flags,
-		resolvedSym: node.resolvedSym,
-	};
 }
 
 function capturedLetBinding(d: ForStmtData): Symbol | null {
@@ -404,15 +321,9 @@ test "a continue of a nested loop stays with that loop" {
 	assert continuesIn(loop).length == 1 && continuesIn(loop)[0] == "";
 }
 
-test "a body that yields keeps the update before each continue" {
-	const loop = loweredLoop("function* g() { for (let i = 0; i < 4; i += 1) { if (i === 1) continue; yield i; } }");
-	assert bodyBlockLabel(loop) == "" && continuesIn(loop).length == 1;
-}
+test "a continue in a body that yields leaves the body block" { assert leavesBodyBlock("function* g() { for (let i = 0; i < 4; i += 1) { switch (i) { case 1: continue; default: i; } yield i; } }"); }
 
-test "a body that awaits keeps the update before each continue" {
-	const loop = loweredLoop("async function g() { for (let i = 0; i < 4; i += 1) { if (i === 1) continue; await h(i); } }");
-	assert bodyBlockLabel(loop) == "" && continuesIn(loop).length == 1;
-}
+test "a continue in a body that awaits leaves the body block" { assert leavesBodyBlock("async function g() { for (let i = 0; i < 4; i += 1) { try { if (i === 1) continue; await h(i); } finally { i; } } }"); }
 
 test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerForLoop) == NodeKind.WhileStmt; }
 
