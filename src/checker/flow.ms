@@ -959,11 +959,29 @@ function joinRestoresMaybe(parent: Type, members: Type[]): boolean {
 	return nulls > 0 && payloads > 0;
 }
 
+// Types are not interned, so the same pointee reaching a join from two sources is two objects:
+// members equal by structure are one alternative, as one interned type is in the reference.
+function withoutRepeats(members: Type[]): Type[] {
+	const out: Type[] = [];
+	for (const m of members) {
+		const parts = m.kind == TypeKind.Union && m.typeChildren != null ? m.typeChildren : [m];
+		for (const part of parts) {
+			let dup = false;
+			for (const o of out) {
+				if (o == part || sameType(o, part)) { dup = true; break; }
+			}
+			if (!dup) out.push(part);
+		}
+	}
+	return out;
+}
+
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	if (parent != null && joinRestoresMaybe(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union && parent.typeChildren != null && joinCoversParent(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union) {
-		return unionPreservingDiscriminant(parent, members);
+		const plain = parent.typeNames == null || parent.typeNames.length == 0;
+		return unionPreservingDiscriminant(parent, plain ? withoutRepeats(members) : members);
 	}
 	// A merge of a nullable's narrowed halves (`T` on the true edge, `null` on
 	// the false edge) rebuilds the DECLARED type, not a fresh spelling of it.
