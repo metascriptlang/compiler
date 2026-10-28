@@ -1362,7 +1362,8 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (!isMatchingReference(d.left, refNode)) return null;
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
-		return constrainToDeclared(assignedValueType(rhs), declared);
+		const assigned = assignedValueType(rhs);
+		return isMaybeType(declared) ? constrainAssignedToMaybe(assigned, declared) : constrainToDeclared(assigned, declared);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
@@ -1549,15 +1550,20 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 // (no narrowing). Non-union declared types fall through unchanged — we never
 // tighten e.g. `Node[]` to `BinaryExpr[]` across an assignment, because
 // structurally-similar arrays join to an ugly union at control flow merges.
+// An assignment of a plain value to a `T | null` local narrows it to T. The Maybe carrier is kept for
+// a union T and for a declaration's initializer, whose readers (out arguments, storage reads) take the declared type.
+function constrainAssignedToMaybe(rhs: Type, declared: Type): Type {
+	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null) return declared;
+	const inner = unwrapMaybeType(declared);
+	if (inner.kind == TypeKind.Union) return declared;
+	if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
+	return declared;
+}
+
 function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (rhs == null) return declared;
 	if (declared == null) return rhs;
 	if (rhs.kind == TypeKind.Cursor && rhs.typeReturn != null) return constrainToDeclared(rhs.typeReturn, declared);
-	if (isMaybeType(declared) && rhs.kind != TypeKind.Null) {
-		const inner = unwrapMaybeType(declared);
-		if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
-		return declared;
-	}
 	const union = peelTransparentInstance(declared);
 	if (union.kind != TypeKind.Union || union.typeChildren == null) {
 		return declared;
