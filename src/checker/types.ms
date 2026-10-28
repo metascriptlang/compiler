@@ -5045,6 +5045,7 @@ function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindi
 			return;
 		}
 	}
+	let mappedBound = false;
 	for (const m of formal.typeChildren) {
 		if (m == null || m.kind == TypeKind.GenericParam || !hasGenericParams(m)) continue;
 		const before = bindings.names.length;
@@ -5052,11 +5053,12 @@ function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindi
 		if (m.kind == TypeKind.Mapped) {
 			const primitive = primitiveThroughMapped(m, concrete);
 			if (primitive != null) bindParam(bindings, primitive, concrete);
+			if (primitive != null || bindings.names.length > before) mappedBound = true;
 			continue;
 		}
 		if (bindings.names.length > before) return;
 	}
-	if (nakedCount == 1 && naked != null) unifyType(naked, concrete, bindings);
+	if (nakedCount == 1 && naked != null && !mappedBound) unifyType(naked, concrete, bindings);
 }
 
 function isMemberItself(member: Readonly<Type>, value: Readonly<Type>): boolean {
