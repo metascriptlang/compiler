@@ -10,7 +10,7 @@
 @passC("-Ivendor/monocypher/src");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "../bytes";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 

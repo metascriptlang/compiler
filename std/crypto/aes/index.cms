@@ -23,7 +23,7 @@
 @passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "../bytes";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 
 // C bindings

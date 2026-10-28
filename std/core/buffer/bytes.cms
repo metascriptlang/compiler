@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { wellFormedString } from "../core/string/bytes";
+import { wellFormedString } from "../string/bytes";
 
 export type Bytes = string | Buffer;
 

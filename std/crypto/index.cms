@@ -1,7 +1,7 @@
 @include("runtime/crypto/hash.h");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "./bytes";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { encodedHash, encodedHmac, encodedHashFinal, encodedHmacFinal } from "./encodingNative";
 
 // mbedTLS include paths + minimal config
