@@ -532,6 +532,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
 
 /* Pre-instances for element types whose array mapping is stable across codegen:
  *   number[]  → msNumberArray (double element storage)
+ *   void[]    → msUint8Array  (a length with no values)
  *   Ref<T>[]  → msRefArray    (all reference/pointer arrays collapse to void*[])
  * int32[] / int64[] / user-struct[] map to per-type codegen-emitted array typedefs
  * (int32_tArray / int64_tArray / T##Array) — the matching MS_PROMISE_ALL_FOR
@@ -629,5 +630,11 @@ static inline void* msPromiseFirstStart(msRefArray* arr, msClosure share, msClos
 	static inline void* name##Any(msRefArray* arr, msClosure share, msClosure drop) { \
 		return msPromiseFirstStart(arr, share, drop, true, sizeof(futType), (msClosureFn)name##_cb); \
 	}
+
+/* A void future is its base alone; its result array keeps one uint8 slot per promise so
+ * `void[]` has a length and no value. */
+typedef struct { msFutureBase base; } msFutureVoidCell;
+#define MS_COPY_NONE(dst, src) ((void)0)
+MS_PROMISE_ALL_FOR(void, msFutureVoidCell, uint8_t, msUint8Array, msUint8Payload, MS_COPY_NONE, msUint8ArrayDestroy)
 
 #endif /* MS_COMBINATOR_H */

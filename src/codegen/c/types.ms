@@ -1858,6 +1858,7 @@ export function getArrayTypeName(elemType: string): string {
 	if (elemType == "msString") return "msStringArray";
 	if (elemType == "MS_BOOL") return "msUint8Array";
 	if (elemType == "uint8_t") return "msUint8Array";
+	if (elemType == "void") return "msUint8Array";
 	if (elemType == "msClosure") return "msClosureArray";
 	return mangle(elemType) + "Array";
 }
