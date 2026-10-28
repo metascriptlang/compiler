@@ -68,6 +68,7 @@ export function joinBranchTypes(types: Type[]): Type {
 	}
 	if (prepared.length == 0) return inferredType();
 	dropSubclassMembers(prepared);
+	dropHeldVariants(prepared);
 	if (prepared.length == 1) return prepared[0];
 	const anonJoined = joinAnonLiteralStructs(prepared);
 	if (anonJoined != null) return anonJoined;
@@ -131,6 +132,28 @@ function joinNumericMembers(prepared: Type[]): Type | null {
 	for (const o of others) parts.push(o);
 	if (nullable) parts.push(nullType());
 	return canonicalizeBranchJoin(unionOfTypes(parts, null));
+}
+
+// A variant of a union that another arm already holds adds nothing to the join: the narrowed arm of
+// `c ? r : r_narrowed` joins back to the declared union, as TS's subtype reduction does.
+function dropHeldVariants(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let held = false;
+		for (let j = 0; j < members.length && !held; j++) {
+			if (j == i) continue;
+			const whole = instantiatedUnionBehind(members[j]);
+			if (whole.kind != TypeKind.Union || whole.typeChildren == null) continue;
+			for (const v of whole.typeChildren) {
+				if (v == members[i] || (isReadonlyView(v) == isReadonlyView(members[i]) && sameType(v, members[i]))) { held = true; break; }
+			}
+		}
+		if (!held) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.shrink(kept);
 }
 
 function dropSubclassMembers(members: Type[]): void {
