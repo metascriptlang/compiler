@@ -4,7 +4,6 @@
 // a rejection, and whether the reader is try/catch around an await, .catch or the second
 // callback of .then. A .then rejection handler sees only the input's rejection; a throw from
 // the fulfilled callback fails the promise .then returns.
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs (no host bridge for then/catch)
 // @stdout: await reject: boom|catch reject: boom|then reject: boom|await executor: boom|catch executor: boom|then executor: boom
 // @stdout: await returned: boom|await returned error: rich|catch coded 7|then coded 7|out from fulfilled|done
 
