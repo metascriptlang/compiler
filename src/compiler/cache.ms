@@ -20,7 +20,7 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch, prefixMapsByToken } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
@@ -883,7 +883,7 @@ function searchProbe(ccOption: number, ccBinary: string, isCpp: boolean, mode: n
 	if (!parts.ok) return null;
 	const args = withoutSearchDirs(parts.value.lead);
 	for (const arg of withoutSearchDirs(parts.value.trail)) args.push(arg);
-	let inputs = `${SEARCH_FORMAT}\n${ccContentIdentity(ccOption, ccBinary)}\n${parts.value.command.path}\n${isCpp}\n${args.join("\n")}`;
+	let inputs = `${SEARCH_FORMAT}\n${ccContentIdentity(ccOption, ccBinary)}\n${parts.value.command.path}\n${isCpp}\n${prefixMapsByToken(args).join("\n")}`;
 	for (const name of SEARCH_ENV) inputs = `${inputs}\n${name}=${env.get(name)}`;
 	inputs = `${inputs}${developerToolchain()}`;
 	return { path: parts.value.command.path, args, key: hashContent(inputs) };

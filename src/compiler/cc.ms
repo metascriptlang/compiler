@@ -1208,7 +1208,11 @@ export function objectCompileArgsKey(ccOption: number, ccBinary: string, isCpp: 
 const PREFIX_MAP = "-ffile-prefix-map=";
 
 function keyedArgs(args: string[]): string[] {
-	return withoutIncludeDirs(args).map((arg: string): string => arg.startsWith(PREFIX_MAP) ? `${PREFIX_MAP}${arg.slice(arg.lastIndexOf("=") + 1, arg.length)}` : arg);
+	return prefixMapsByToken(withoutIncludeDirs(args));
+}
+
+export function prefixMapsByToken(args: string[]): string[] {
+	return args.map((arg: string): string => arg.startsWith(PREFIX_MAP) ? `${PREFIX_MAP}${arg.slice(arg.lastIndexOf("=") + 1, arg.length)}` : arg);
 }
 
 const INCLUDE_DIR_KINDS: string[] = ["-iquote", "-isystem", "-idirafter", "-I"];
