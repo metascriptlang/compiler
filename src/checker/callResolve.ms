@@ -893,7 +893,7 @@ export function adoptThenable(ctx: CheckerContext, operand: Node, site: string):
 // a void e runs first and the helper settles after it, since a void value cannot be passed on.
 export function adoptPlainAwaited(ctx: CheckerContext, d: AwaitExprData): void {
 	const t = d.awaitArg.nodeType;
-	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t) || thenSignatureOf(ctx, t) != null) return;
 	const loc = d.awaitArg.location;
 	const operand = d.awaitArg;
 	let call: Node;
