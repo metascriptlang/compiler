@@ -70,6 +70,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
 	e->live--;
+	if (r->fut != NULL) { void* held = r->fut; r->fut = NULL; msFutureDrcDestroy(held); }
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
@@ -186,6 +187,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	req->fd = listenFd;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	/* Allocate OVERLAPPED wrapper */
 	msIocpOv* iov = allocOv(e, req);
@@ -241,6 +243,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	msIocpOv* iov = allocOv(e, req);
 	iov->wsaBuf.buf = req->buf;
@@ -271,6 +274,7 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	req->len = len;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	msIocpOv* iov = allocOv(e, req);
 	iov->wsaBuf.buf = (char*)data;
@@ -299,6 +303,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	req->strRef = data;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 
 	msIocpOv* iov = allocOv(e, req);
 	iov->wsaBuf.buf = req->buf;
@@ -357,6 +362,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	req->len = MS_FS_WATCH_BUFFER;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	msIocpOv* iov = allocOv(e, req);
 	BOOL armed = ReadDirectoryChangesW((HANDLE)(intptr_t)handle, req->buf, MS_FS_WATCH_BUFFER, recursive != 0,
 	                                   FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
