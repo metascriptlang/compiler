@@ -66,7 +66,7 @@ export extern function includes(this arr: Vec<number>, value: number): boolean f
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: Vec<number>, start: number, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
+export extern function slice(this arr: Vec<number>, start: number = 0, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -78,13 +78,23 @@ export extern function concat(this arr: Vec<number>, other: number[]): number[] 
  * Reverses the elements in an array in place.
  * This method mutates the array and returns a reference to the same array.
  */
-export extern function reverse(this arr: number[]): void from "&msNumberArrayReverse";
+extern function reverseInPlace(this arr: number[]): void from "&msNumberArrayReverse";
+
+export function reverse(this arr: number[]): number[] {
+	arr.reverseInPlace();
+	return arr;
+}
 
 /**
  * Sorts an array in place.
  * This method mutates the array and returns a reference to the same array.
  */
-export extern function sort(this arr: number[]): void from "&msNumberArraySort";
+extern function sortInPlace(this arr: number[]): void from "&msNumberArraySort";
+
+export function sort(this arr: number[]): number[] {
+	arr.sortInPlace();
+	return arr;
+}
 
 /** Changes all array elements to a static value, from a start index to an end index. */
 export extern function fill(this arr: number[], value: number): void from "&msNumberArrayFill";
@@ -149,7 +159,7 @@ export extern function lastIndexOf(this arr: Vec<string>, value: string, fromInd
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: Vec<string>, start: number, end: number = 9007199254740991): string[] from "&msStringArraySlice";
+export extern function slice(this arr: Vec<string>, start: number = 0, end: number = 9007199254740991): string[] from "&msStringArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -161,13 +171,23 @@ export extern function concat(this arr: Vec<string>, other: string[]): string[] 
  * Reverses the elements in an array in place.
  * This method mutates the array and returns a reference to the same array.
  */
-export extern function reverse(this arr: string[]): void from "&msStringArrayReverse";
+extern function reverseInPlace(this arr: string[]): void from "&msStringArrayReverse";
+
+export function reverse(this arr: string[]): string[] {
+	arr.reverseInPlace();
+	return arr;
+}
 
 /**
  * Sorts an array in place.
  * This method mutates the array and returns a reference to the same array.
  */
-export extern function sort(this arr: string[]): void from "&msStringArraySort";
+extern function sortInPlace(this arr: string[]): void from "&msStringArraySort";
+
+export function sort(this arr: string[]): string[] {
+	arr.sortInPlace();
+	return arr;
+}
 
 /** Changes all array elements to a static value. */
 export extern function fill(this arr: string[], value: string): void from "&msStringArrayFill";
@@ -333,8 +353,13 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
 	arr.sortBy(cmp);
+	return arr;
+}
+
+export function sort<T>(this arr: T[]): T[] {
+	return arr.sort((a: T, b: T): number => a < b ? -1 : (a > b ? 1 : 0));
 }
 
 /**
@@ -368,7 +393,7 @@ export function join<T>(this arr: Vec<T>, sep: string): string {
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export function slice<T>(this arr: Vec<T>, start: number, end: number = 9007199254740991): T[] {
+export function slice<T>(this arr: Vec<T>, start: number = 0, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -384,7 +409,7 @@ export function slice<T>(this arr: Vec<T>, start: number, end: number = 90071992
 }
 
 /** Copies a range of a byte view into a new owned array, like `Uint8Array.prototype.slice`. */
-export function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] {
+export function slice(this view: Readonly<Span<uint8>>, start: number = 0, end: number = 9007199254740991): uint8[] {
 	const n = view.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -466,7 +491,7 @@ export function fill<T>(this arr: T[], value: T): void {
 }
 
 /** Reverses the array in place. */
-export function reverse<T>(this arr: T[]): void {
+export function reverse<T>(this arr: T[]): T[] {
 	let lo: int64 = 0;
 	let hi = (arr.length as int64) - 1;
 	while (lo < hi) {
@@ -474,6 +499,7 @@ export function reverse<T>(this arr: T[]): void {
 		lo = lo + 1;
 		hi = hi - 1;
 	}
+	return arr;
 }
 
 /** Removes and returns the first element, shifting the rest down. */

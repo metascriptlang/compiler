@@ -71,7 +71,7 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number, ite
 	arr[s] = item;
 }
 
-export function reverse<T>(this arr: T[]): void {
+export function reverse<T>(this arr: T[]): T[] {
 	let lo: int64 = 0;
 	let hi = (arr.length as int64) - 1;
 	while (lo < hi) {
@@ -81,6 +81,7 @@ export function reverse<T>(this arr: T[]): void {
 		lo = lo + 1;
 		hi = hi - 1;
 	}
+	return arr;
 }
 
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
@@ -128,16 +129,23 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-export function sort(this arr: number[]): void {
+export function sort(this arr: number[]): number[] {
 	arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
+	return arr;
 }
 
-export function sort(this arr: string[]): void {
+export function sort(this arr: string[]): string[] {
 	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
+	return arr;
 }
 
-export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
 	arr.sortBy(cmp);
+	return arr;
+}
+
+export function sort<T>(this arr: T[]): T[] {
+	return arr.sort((a: T, b: T): number => a < b ? -1 : (a > b ? 1 : 0));
 }
 
 export function join(this arr: Vec<string>, sep: string): string {
