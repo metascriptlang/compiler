@@ -2738,10 +2738,20 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 	return convNode;
 }
 
+// A `ref` or `out` argument names the slot, so a Maybe slot flow-narrowed to its payload is passed at its stored type.
+function storedTypeOfSlotArg(expr: Node, exprType: Type, formal: Type): Type {
+	if (formal.kind != TypeKind.Var || isMaybeType(exprType)) return exprType;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || !isMaybeType(stored)) return exprType;
+	expr.nodeType = stored;
+	return stored;
+}
+
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
 export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): Type {
+	if (formal.kind == TypeKind.Var) return storedTypeOfSlotArg(expr, exprType, formal);
 	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || !isNullableShape([formal])) return exprType;
 	const stored = declaredTypeOfLocation(expr);
 	if (stored == null || stored.kind == TypeKind.Null) return exprType;
