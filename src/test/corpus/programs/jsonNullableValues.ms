@@ -2,8 +2,11 @@
 // @stdout: {"id":2,"s":"q\"","n":"x","i":7,"f":1.5,"b":true,"c":"Green","o":{"x":3},"arr":["x",null],"ai":[null,4],"ao":[null,{"x":5}],"sa":["k"],"du":{"kind":"b","s":"z"},"dus":[{"kind":"a","v":1},{"kind":"b","s":"t"}]}
 // @stdout: ["x",null] [null,2.5] null "a"
 // @stdout: [{"n":"x","m":{"a":1,"ps":[{"c":"y"}]}},{"n":"z","m":null}] {"a":2,"ps":[]}
+// @stdout: parsed holder y null inner 4 null
+// @stdout: lenient holder y null
 // @stdout: parsed {"id":3,"n":"y","i":null,"f":null,"b":false,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
 // note: JSON.stringify writes a null `T | null` value as null, field, array element or top level alike; an optional field `s?: string` holding null is left out, as TypeScript leaves out an absent property. Same output on every lane.
+import { jsonValueToStruct } from "std/serialize/json";
 enum Color { Red, Green }
 interface Inner { x: int32; }
 interface ShapeA { kind: "a"; v: int32; }
@@ -27,6 +30,7 @@ interface Rec {
 struct Part { c: string; }
 struct Mid { a: int32; ps: Part[]; }
 struct Holder { n: string; m: Mid | null; }
+interface InnerHolder { o: Inner | null; }
 interface Flat { id: int32; s?: string; n: string | null; i: int32 | null; f: number | null; b: boolean | null; c: Color | null; }
 
 function main(): void {
@@ -46,6 +50,22 @@ function main(): void {
 	const held: Holder[] = [{ n: "x", m: { a: 1, ps: [{ c: "y" }] } }, { n: "z", m: null }];
 	const mid: Mid | null = { a: 2, ps: [] };
 	console.log(`${JSON.stringify(held)} ${JSON.stringify(mid)}`);
+	const hp = JSON.parse<Holder>(`{"n":"x","m":{"a":1,"ps":[{"c":"y"}]}}`);
+	const hn = JSON.parse<Holder>(`{"n":"z","m":null}`);
+	const ip = JSON.parse<InnerHolder>(`{"o":{"x":4}}`);
+	const im = JSON.parse<InnerHolder>(`{}`);
+	const hpText = hp.ok && hp.value.m != null ? hp.value.m.ps[0].c : "-";
+	const hnText = hn.ok && hn.value.m == null ? "null" : "-";
+	const ipText = ip.ok && ip.value.o != null ? ip.value.o.x.toString() : "-";
+	const imText = im.ok && im.value.o == null ? "null" : "-";
+	console.log(`parsed holder ${hpText} ${hnText} inner ${ipText} ${imText}`);
+	const lp = JSON.parseValue(`{"n":"x","m":{"a":1,"ps":[{"c":"y"}]}}`);
+	const ln = JSON.parseValue(`{"n":"z","m":null}`);
+	if (lp.ok && ln.ok) {
+		const lh: Holder = jsonValueToStruct(lp.value, null as Holder | null);
+		const lnh: Holder = jsonValueToStruct(ln.value, null as Holder | null);
+		console.log(`lenient holder ${lh.m == null ? "-" : lh.m.ps[0].c} ${lnh.m == null ? "null" : "-"}`);
+	}
 	const r = JSON.parse<Flat>("{\"id\":3,\"n\":\"y\",\"i\":null,\"f\":null,\"b\":false,\"c\":null}");
 	if (r.ok) {
 		const back: Rec = { id: r.value.id, s: r.value.s, n: r.value.n, i: r.value.i, f: r.value.f, b: r.value.b, c: r.value.c, o: null, arr: [], ai: [], ao: [], sa: null, du: null, dus: [] };
