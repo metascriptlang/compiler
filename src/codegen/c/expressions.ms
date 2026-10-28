@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn, openArrayDataName, openArrayLenName } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn, openArrayDataName, openArrayLenName, isPromotedParam } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -3149,17 +3149,11 @@ function dispatcherForward(g: CGen, ft: Readonly<Type>, nrvo: boolean, baseMut: 
 			args = args + `, ${openArrayDataName(name)}, ${openArrayLenName(name)}`;
 			continue;
 		}
-		const baseInd = isIndirectParam(g, bt, (baseMut & (1 << (i as int32))) != 0);
-		const ovInd = i < calleeType.typeChildren.length && isIndirectParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0);
+		const baseInd = isPromotedParam(g, bt, (baseMut & (1 << (i as int32))) != 0, false, false);
+		const ovInd = i < calleeType.typeChildren.length && isPromotedParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0, false, false);
 		args = args + ", " + (baseInd == ovInd ? name : baseInd ? `*${name}` : `&${name}`);
 	}
 	return `${callee}(${args})`;
-}
-
-function isIndirectParam(g: CGen, t: Readonly<Type>, mut: boolean): boolean {
-	if (!shouldIndirectParam(g.target, t, mut, false)) return false;
-	const desc = getTypeDesc(g, t);
-	return desc.byteLength == 0 || desc.charAt(desc.byteLength - 1) != "*";
 }
 
 // ===== Binary helpers =====

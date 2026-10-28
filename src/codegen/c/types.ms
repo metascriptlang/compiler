@@ -248,6 +248,13 @@ export function runtimeParamCount(t: Readonly<Type>): int32 {
 	return n;
 }
 
+export function isPromotedParam(g: CGen, t: Readonly<Type>, mut: boolean, hookAbi: boolean, borrowsFirst: boolean): boolean {
+	const promote = hookAbi ? ccgIntroducedPtr(g.target, t) : shouldIndirectParam(g.target, t, mut, borrowsFirst);
+	if (!promote) return false;
+	const desc = getTypeDesc(g, t);
+	return desc.byteLength > 0 && desc.charAt(desc.byteLength - 1) != "*";
+}
+
 export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramNames: Readonly<string[]> | null, mutBits: int32, hookAbi: boolean): string {
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	if (fnType.typeReturn == null) cRetType = "void";
@@ -267,8 +274,7 @@ export function procHeader(g: CGen, name: string, fnType: Readonly<Type>, paramN
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
-		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut, i == 0 && returnsBorrow(fnType)));
-		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
+		if (typed && isPromotedParam(g, fnType.typeChildren[i], mut, hookAbi, i == 0 && returnsBorrow(fnType))) {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
 		parts.push(named ? `${pType} ${paramCName(paramNames![i], i)}` : pType);
