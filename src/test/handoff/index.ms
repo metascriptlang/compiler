@@ -174,6 +174,7 @@ import "./constructorVisibility";
 import "./classExtendsInterface";
 import "./useBeforeAssign";
 import "./outParameterWrites";
+import "./paramModeFunctionSlot";
 import "./sinkParamModes";
 import "./borrowReturn";
 import "./arrayLengthGrowth";

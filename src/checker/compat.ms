@@ -970,14 +970,18 @@ export function sinkModeDiffers(a: Type, b: Type): boolean {
 	return takesOwnership(a) != takesOwnership(b);
 }
 
-export function varModeDiffers(a: Type, b: Type): boolean {
-	return (a.kind == TypeKind.Var) != (b.kind == TypeKind.Var) || isOutParam(a) != isOutParam(b);
-}
-
 function takesOwnership(t: Type): boolean {
 	if (t.kind == TypeKind.Sink) return true;
 	const held = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
 	return held != null && isOwnedRef(held);
+}
+
+function isModalParam(t: Type): boolean {
+	return t.kind == TypeKind.Lent || t.kind == TypeKind.Var;
+}
+
+function paramModeDiffers(a: Type, b: Type): boolean {
+	return sinkModeDiffers(a, b) || (a.kind != b.kind && (isModalParam(a) || isModalParam(b))) || isOutParam(a) != isOutParam(b);
 }
 
 // Function assignability: contravariant params, covariant return
@@ -990,7 +994,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of sourceParams) {
-		if (sinkModeDiffers(sourceParam, targetParams[i]) || varModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
+		if (paramModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -1038,7 +1042,7 @@ function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetP
 	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
 	if (element == null) return false;
 	for (let i = fixed; i < targetParams.length; i += 1) {
-		if (sinkModeDiffers(targetParams[i], element) || varModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+		if (paramModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
 	}
 	return true;
 }
@@ -1093,6 +1097,10 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		const passed = targetParams[ri];
 		if (taken == null) return "";
 		const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (paramModeDiffers(taken, passed)) {
+			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassing(taken) + ", but the expected '"
+				+ signatureText(target) + "' passes it " + paramPassing(passed) + "; declare '" + name + "' the same way in both";
+		}
 		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
 			if (!isAssignable(passed, taken)) {
 				return " — parameter '" + name + "' is typed '" + signatureText(taken) + "', but the expected function passes it '"
@@ -1113,14 +1121,29 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 	return " — the function returns '" + signatureText(held) + "', but the expected function returns '" + signatureText(slot) + "'";
 }
 
+function paramModeWord(t: Type): string {
+	if (isOutParam(t)) return "out";
+	if (t.kind == TypeKind.Var) return "ref";
+	if (t.kind == TypeKind.Sink) return "sink";
+	if (t.kind == TypeKind.Lent) return "lent";
+	return "";
+}
+
+function paramPassing(t: Type): string {
+	const word = paramModeWord(t);
+	return word == "" ? "by value" : word == "ref" ? "by reference" : "as '" + word + "'";
+}
+
 function signatureText(t: Type): string {
 	if (t.kind != TypeKind.Function) return typeDisplayName(t);
 	const parts: string[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const param = t.typeChildren[i];
 		if (param != null && param.kind == TypeKind.Void) continue;
-		const text = param != null ? signatureText(param) : "?";
-		parts.push(i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text);
+		const mode = param != null ? paramModeWord(param) : "";
+		const text = param == null ? "?" : signatureText(mode != "" && param.typeReturn != null ? param.typeReturn : param);
+		const named = i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text;
+		parts.push(mode != "" ? mode + " " + named : named);
 	}
 	return "(" + parts.join(", ") + ") => " + (t.typeReturn != null ? signatureText(t.typeReturn) : "void");
 }
@@ -1801,7 +1824,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
-					if (sinkModeDiffers(formalParams[pi], actualParams[pi]) || varModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
+					if (paramModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
