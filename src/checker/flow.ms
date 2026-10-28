@@ -104,8 +104,15 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 
 function isDottedReference(node: Node | null): boolean {
 	if (node == null) return false;
-	if (node.kind == NodeKind.Identifier) return true;
-	if (node.kind == NodeKind.MemberExpr) return isDottedReference((node.data as MemberExprData).object);
+	const n = skipReferenceHidden(node);
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.MemberExpr) return isDottedReference((n.data as MemberExprData).object);
+	if (n.kind == NodeKind.ArrayAccess) {
+		const ad = n.data as ArrayAccessData;
+		const index = ad.index == null ? null : skipReferenceHidden(ad.index);
+		return isDottedReference(ad.array) && index != null
+			&& (index.kind == NodeKind.NumberLiteral || index.kind == NodeKind.StringLiteral || index.kind == NodeKind.Identifier);
+	}
 	return false;
 }
 
@@ -920,7 +927,25 @@ export function canonicalizeBranchJoin(t: Type): Type {
 	return nullableUnionOf(rebuilt);
 }
 
+// A join whose branches together hold every member of the declared union is the declared union
+// itself: a rebuilt spelling in another order loses the discriminant's variant index.
+function joinCoversParent(parent: Type, members: Type[]): boolean {
+	const held: Type[] = [];
+	for (const m of members) {
+		if (m.kind == TypeKind.Union && m.typeChildren != null) {
+			for (const c of m.typeChildren) held.push(c);
+		} else {
+			held.push(m);
+		}
+	}
+	for (const member of parent.typeChildren) {
+		if (!held.includes(member)) return false;
+	}
+	return true;
+}
+
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent != null && parent.kind == TypeKind.Union && parent.typeChildren != null && joinCoversParent(parent, members)) return parent;
 	if (parent != null && parent.kind == TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
@@ -1314,7 +1339,8 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (!isMatchingReference(d.left, refNode)) return null;
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
-		return constrainToDeclared(assignedValueType(rhs), declared);
+		const assigned = assignedValueType(rhs);
+		return isMaybeType(declared) ? constrainAssignedToMaybe(assigned, declared) : constrainToDeclared(assigned, declared);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
@@ -1501,6 +1527,16 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 // (no narrowing). Non-union declared types fall through unchanged — we never
 // tighten e.g. `Node[]` to `BinaryExpr[]` across an assignment, because
 // structurally-similar arrays join to an ugly union at control flow merges.
+// An assignment of a plain value to a `T | null` local narrows it to T. The Maybe carrier is kept for
+// a union T and for a declaration's initializer, whose readers (out arguments, storage reads) take the declared type.
+function constrainAssignedToMaybe(rhs: Type, declared: Type): Type {
+	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null) return declared;
+	const inner = unwrapMaybeType(declared);
+	if (inner.kind == TypeKind.Union) return declared;
+	if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
+	return declared;
+}
+
 function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (rhs == null) return declared;
 	if (declared == null) return rhs;
