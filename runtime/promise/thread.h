@@ -70,6 +70,11 @@ typedef struct msSpawnCtx {
  * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 extern void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue);
+#ifdef _WIN32
+extern void* msEnvReleaseQueue(void);
+#else
+#define msEnvReleaseQueue() msLoopCompletionQueue()
+#endif
 
 /* Publishes the task's result, or with msErr set its msCurrException, to its target. */
 static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
@@ -141,12 +146,11 @@ static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 #if MS_FUTURE_SUBMIT_REF
 		msCompletionQueuePushEnvRelease(ctx->env, ctx->ownerQueue);
 #elif defined(_WIN32)
-		/* Amendment H parity: MS_FUTURE_SUBMIT_REF is 0 on Windows, but an
-		 * inline worker-thread msDecref still races the owning thread on the
-		 * env's non-atomic rc field (heap corruption 0xC0000374 after a few
-		 * thousand spawns). Route through the IOCP completion (kind=-3) so
-		 * the release runs on the dispatcher drain, exactly like POSIX. */
-		msPostEnvRelease(ctx->env);
+		/* MS_FUTURE_SUBMIT_REF is 0 on Windows, but an inline worker-thread
+		 * msDecref still races the owning thread on the env's non-atomic rc
+		 * field (heap corruption 0xC0000374); the release goes back to the
+		 * submitting thread's inbox, like POSIX. */
+		msCompletionQueuePushEnvRelease(ctx->env, ctx->ownerQueue);
 #else
 		msDecref(ctx->env);
 #endif
@@ -180,7 +184,7 @@ void msPoolSubmit(msSpawnCtx* ctx);
 static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
 	fut->base.spawned = true;
-	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue() };
+	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msEnvReleaseQueue() };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
@@ -215,7 +219,7 @@ static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) 
  * Downstream readers use msWaitForStruct (typed inline read). */
 static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset, _Atomic(bool)* cancelFlag) {
 	msSpawnCtx ctx = {
-		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue(),
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msEnvReleaseQueue(),
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	((msFutureBase*)fut)->spawned = true;
@@ -263,7 +267,7 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.group = group,
 		.slot = slot,
 		.cancelFlag = &group->cancelled,
-		.ownerQueue = msLoopCompletionQueue(),
+		.ownerQueue = msEnvReleaseQueue(),
 	};
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
