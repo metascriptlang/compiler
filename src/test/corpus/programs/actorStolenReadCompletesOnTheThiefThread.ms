@@ -1,3 +1,6 @@
+// @ledger-slack(Reader): 4
+// @ledger-slack(Burner): 4
+// ledger-slack reason: its actors are never stopped, so they are still live at exit
 // @stdout: reads: 4 completed
 // @stdout: stolen: yes
 // @stdout: polls while idle after the reads: 0
