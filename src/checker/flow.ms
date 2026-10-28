@@ -1595,7 +1595,7 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 // its Maybe storage, which a ref or out argument still names (storedTypeOfSlotArg). A declaration's initializer
 // stays unnarrowed: a captured local that a closure later clears must read as the declared type, not stop.
 function constrainAssignedToMaybe(rhs: Type, declared: Type): Type {
-	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null) return declared;
+	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null || isMaybeType(rhs)) return declared;
 	const inner = unwrapMaybeType(declared);
 	if (inner.kind == TypeKind.Union) return rhs.kind == TypeKind.Union ? declared : constrainToDeclared(rhs, inner);
 	if (inner.kind == TypeKind.Function && rhs.kind == TypeKind.Function && typeRelation(inner, rhs) != TypeRelation.None) return inner;
