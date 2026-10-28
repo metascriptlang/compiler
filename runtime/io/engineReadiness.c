@@ -49,6 +49,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
 	msIoOpsAdd(-1);
 	e->live--;
+	if (r->fut != NULL) { void* held = r->fut; r->fut = NULL; msFutureDrcDestroy(held); }
 	r->next = e->freeList;
 	e->freeList = r;
 	e->freeCount++;
@@ -129,6 +130,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	req->fd = listenFd;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	growFdMap(e, listenFd);
 	e->fdMap[listenFd] = req;
 	msSelectorRegister(e->selector, listenFd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
@@ -145,6 +147,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	growFdMap(e, fd);
 	e->fdMap[fd] = req;
 	msSelectorRegister(e->selector, fd, MS_EVENT_READ, req);
@@ -160,6 +163,7 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	req->offset = 0;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	growFdMap(e, fd);
 	e->fdMap[fd] = req;
 	msSelectorRegister(e->selector, fd, MS_EVENT_WRITE, req);
@@ -194,6 +198,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	req->strRef = data;  /* stored for decref on completion */
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	growFdMap(e, fd);
 	e->fdMap[fd] = req;
 	msSelectorRegister(e->selector, fd, MS_EVENT_WRITE, req);
@@ -589,6 +594,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	req->fd = w->readFd;
 	req->offset = handle;
 	req->fut = fut;
+	msIncRef(fut);  /* the engine's reference, dropped by freeRequest once the request completes */
 	fsWatchArm(e, w, req);
 	return fut;
 }
