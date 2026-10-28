@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from js: the Raiser prints 'late' before 'got 1'
 // @serial
 
 import { sleepAsync } from "std/core/promise";

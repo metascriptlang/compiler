@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @maxrss: 22
 // @stdout: ints 100000 strs 100000
 // @serial

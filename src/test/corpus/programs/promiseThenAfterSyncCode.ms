@@ -2,7 +2,6 @@
 // @stdout: 2 sync end
 // @stdout: 3 then 5
 // @stdout: 4 timeout
-// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // note: a `.then` on a settled promise runs after the synchronous code that registered it and before a 0 ms timer, as in TypeScript.
 
 console.log("1 sync start");
