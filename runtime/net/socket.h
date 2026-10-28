@@ -40,6 +40,7 @@
   #define ms_errno()           WSAGetLastError()
   #define MS_EWOULDBLOCK       WSAEWOULDBLOCK
   #define MS_EINTR             WSAEINTR
+  #define MS_ETIMEDOUT         WSAETIMEDOUT
   #define MS_SEND_FLAGS        0
   static inline int32_t ms_set_nonblock(int32_t fd) {
       u_long mode = 1;
@@ -74,6 +75,7 @@
   #define ms_errno()           errno
   #define MS_EWOULDBLOCK       EAGAIN
   #define MS_EINTR             EINTR
+  #define MS_ETIMEDOUT         ETIMEDOUT
   /* MSG_NOSIGNAL on send() suppresses SIGPIPE atomically with the syscall —
    * no race window between accept() and per-fd setsockopt(SO_NOSIGPIPE).
    * Linux always; macOS 10.9+ and FreeBSD also expose it. Fall back to 0 on
@@ -218,7 +220,14 @@ static inline int32_t msNetSend(int32_t fd, msString data) {
  * Receive up to maxBytes from socket.
  * Returns received data, or MS_EMPTY_STRING on error/connection close.
  */
+static _Thread_local int32_t _msNetRecvTimedOut = 0;
+
+static inline int32_t msNetLastRecvTimedOut(void) {
+	return _msNetRecvTimedOut;
+}
+
 static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
+	_msNetRecvTimedOut = 0;
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
 	if (maxBytes > 16777216) maxBytes = 16777216; /* 16 MiB cap */
 
@@ -230,6 +239,8 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
 	} while (received < 0 && ms_errno() == MS_EINTR);
 
 	if (received <= 0) {
+		int err = received < 0 ? ms_errno() : 0;
+		_msNetRecvTimedOut = err == MS_EWOULDBLOCK || err == MS_ETIMEDOUT;
 		free(buf);
 		return MS_EMPTY_STRING;
 	}
