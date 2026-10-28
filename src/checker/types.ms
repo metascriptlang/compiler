@@ -3739,13 +3739,13 @@ let _speculationDepth: int32 = 0;
 
 export class HeldBeyondState {
 	bySym: HashMap<Symbol, HeldBeyond>;
-	byName: HashMap<string, HeldBeyond>;
+	byFieldNames: HashMap<string, HashMap<Type, HeldBeyond>>;
 }
 
 export function swapHeldBeyond(next: HeldBeyondState | null): HeldBeyondState {
-	const prev: HeldBeyondState = { bySym: _heldBySym, byName: _heldByName };
+	const prev: HeldBeyondState = { bySym: _heldBySym, byFieldNames: _heldByFieldNames };
 	_heldBySym = next != null ? next.bySym : new HashMap<Symbol, HeldBeyond>();
-	_heldByName = next != null ? next.byName : new HashMap<string, HeldBeyond>();
+	_heldByFieldNames = next != null ? next.byFieldNames : new HashMap<string, HashMap<Type, HeldBeyond>>();
 	return prev;
 }
 
