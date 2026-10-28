@@ -1595,7 +1595,14 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	releaseSpawnEnv(vm, s);
 	s.result = value;
 	s.status = RaiserStrandStatus.Done;
-	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
+	if (s.resultFuture >= 0) {
+		futureComplete(vm, s.resultFuture, value);
+		if ((value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) && value.intVal != 0) {
+			if (rcDecIsLast(vm.arrayHeap, vm.objectHeap, value.intVal)) vmDestroyTop(vm, value.intVal);
+			else vmRegisterCyclic(vm, value.intVal);
+			vmDrain(vm);
+		}
+	}
 	if (vm.current != 0) releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
 	if (vm.current != 0) {
