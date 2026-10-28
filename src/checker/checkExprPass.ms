@@ -12,7 +12,7 @@ import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcros
 import { stdSymbol, markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, routineFlags, routineSuspends, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
-	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, typeRelation, arityAdapts,
+	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, typeRelation, TypeRelation, arityAdapts,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
@@ -3427,14 +3427,15 @@ function overloadAsValue(ctx: CheckerContext, node: Node, set: Symbol, expectedT
 	const cands: Symbol[] = [set];
 	for (const o of set.overloads) cands.push(o);
 	let best: Symbol | null = null;
-	let bestRank = -1;
+	let bestFit: OverloadValueFit | null = null;
 	let tie: Symbol | null = null;
 	for (const cand of cands) {
 		ensureShaped(cand, ctx);
-		const rank = overloadValueRank(slot, cand.symbolType);
-		if (rank < 0) continue;
-		if (rank > bestRank) { best = cand; bestRank = rank; tie = null; }
-		else if (rank == bestRank) tie = cand;
+		const fit = overloadValueFit(slot, cand.symbolType);
+		if (fit == null) continue;
+		const order = bestFit == null ? 1 : cmpOverloadValueFits(fit, bestFit);
+		if (order > 0) { best = cand; bestFit = fit; tie = null; }
+		else if (order == 0) tie = cand;
 	}
 	const shown = sgTypeToString(slot);
 	if (best == null) {
@@ -3453,8 +3454,18 @@ function overloadAsValue(ctx: CheckerContext, node: Node, set: Symbol, expectedT
 	return best;
 }
 
-function overloadValueRank(slot: Type, cand: Type | null): int32 {
-	if (cand == null || cand.kind != TypeKind.Function) return -1;
+interface OverloadValueFit {
+	exactArity: boolean;
+	relation: TypeRelation;
+}
+
+function cmpOverloadValueFits(a: OverloadValueFit, b: OverloadValueFit): int32 {
+	if (a.exactArity != b.exactArity) return a.exactArity ? 1 : -1;
+	return (a.relation as int32) - (b.relation as int32);
+}
+
+function overloadValueFit(slot: Type, cand: Type | null): OverloadValueFit | null {
+	if (cand == null || cand.kind != TypeKind.Function) return null;
 	let target = slot;
 	if (hasGenericParams(slot)) {
 		const b = createUnifyBindings();
@@ -3462,9 +3473,8 @@ function overloadValueRank(slot: Type, cand: Type | null): int32 {
 		target = substituteBound(slot, b);
 	}
 	const adapted = arityAdapts(cand, target);
-	if (!adapted && !isAssignable(cand, target)) return -1;
-	const rel = typeRelation(target, cand) as int32;
-	return adapted ? rel : rel + 8;
+	if (!adapted && !isAssignable(cand, target)) return null;
+	return { exactArity: !adapted, relation: typeRelation(target, cand) };
 }
 
 function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
