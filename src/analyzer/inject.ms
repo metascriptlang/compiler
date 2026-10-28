@@ -921,7 +921,11 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (!consume) return node;
 	if (element && md.moveArg.nodeType != null) {
 		const elemRc = sinkClassify(md.moveArg.nodeType, dctx);
-		if (elemRc.needsCleanup) md.moveArg = elemRc.wasMovedFn != null ? destructiveMoveVar(md.moveArg, elemRc, dctx) : passCopyToSink(md.moveArg, dctx);
+		if (elemRc.needsCleanup) {
+			dctx.inEnsureMove += 1;
+			md.moveArg = isMovableLastRead(md.moveArg, dctx) ? destructiveMoveVar(md.moveArg, elemRc, dctx) : passCopyToSink(md.moveArg, dctx);
+			dctx.inEnsureMove -= 1;
+		}
 		return node;
 	}
 	if (md.moveArg.kind == NodeKind.MemberExpr) {
