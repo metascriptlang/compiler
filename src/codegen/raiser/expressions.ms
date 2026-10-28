@@ -25,7 +25,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay } from "../../checker/types";
+import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -694,6 +694,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const futReg = compileExpr(s, d.awaitArg);
 			const dest = allocFor(s, node.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
+			if (d.awaitArg.kind == NodeKind.CallExpr && isAwaitable(d.awaitArg.nodeType)) emitInst(s, raiserABC(RaiserOpcode.RcDec, futReg, 0, 0));
 			return dest;
 		},
 		// Hidden* nodes are checker-inserted markers (deref point for Ref<Struct>,

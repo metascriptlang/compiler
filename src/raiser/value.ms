@@ -561,6 +561,64 @@ export interface RaiserArrayHeap {
 	seqViews: HashMap<int64, int64[]>;
 	orcRoots: int64[];
 	orcThreshold: number;
+	futures: RaiserFutureCounts | null;
+}
+
+// The counts of the VM's future table, which every heap of that VM shares, so a future held in a register, a
+// cell or a copy is counted as C counts an msFuture. A count that reaches zero queues the handle on `dead`
+// for the VM to destroy; a heap with no table (a host or test heap) leaves futures uncounted.
+export interface RaiserFutureCounts {
+	rc: int32[];
+	gen: int32[];
+	dead: int64[];
+}
+
+export function createFutureCounts(): RaiserFutureCounts {
+	return { rc: [] as int32[], gen: [] as int32[], dead: [] as int64[] };
+}
+
+const FUTURE_SLOT_MASK: int64 = 0xFFFFFFFF;
+
+export function futureHandle(slot: int64, gen: int32): int64 {
+	return makeHandle(slot | ((gen as int64) << 32), RaiserHeapKind.Future);
+}
+
+export function futureSlot(handle: int64): int64 {
+	return handleIndex(handle) & FUTURE_SLOT_MASK;
+}
+
+export function futureGen(handle: int64): int32 {
+	return (handleIndex(handle) >> 32) as int32;
+}
+
+export function futureHandleLive(counts: RaiserFutureCounts, handle: int64): boolean {
+	const at = futureSlot(handle);
+	return at < counts.gen.length && counts.gen[at] == futureGen(handle);
+}
+
+function countedFutureSlot(counts: RaiserFutureCounts, handle: int64): int64 {
+	if (!futureHandleLive(counts, handle) || counts.rc[futureSlot(handle)] <= 0) throw new Error(`internal: future handle ${handle} is counted after its last reference was released`);
+	return futureSlot(handle);
+}
+
+export function futureCountUp(counts: RaiserFutureCounts, handle: int64): void {
+	counts.rc[countedFutureSlot(counts, handle)] += 1;
+}
+
+export function futureCountDown(counts: RaiserFutureCounts, handle: int64): void {
+	const at = countedFutureSlot(counts, handle);
+	counts.rc[at] -= 1;
+	if (counts.rc[at] == 0) counts.dead.push(handle);
+}
+
+function futureIncref(arrHeap: RaiserArrayHeap, handle: int64): void {
+	const counts = arrHeap.futures;
+	if (counts != null) futureCountUp(counts, handle);
+}
+
+function futureDecref(arrHeap: RaiserArrayHeap, handle: int64): void {
+	const counts = arrHeap.futures;
+	if (counts != null) futureCountDown(counts, handle);
 }
 
 export const ORC_DEFAULT_THRESHOLD = 128;
@@ -569,7 +627,7 @@ export const OWNED_BY_RECEIVER_RC: int32 = 1;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const orcRoots: int64[] = [];
-	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD };
+	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null };
 }
 
 @inline
@@ -1380,7 +1438,8 @@ export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) + 1); },
 		RaiserHeapKind.Box => { const cell = boxCellOf(handle); setCellRc(cell, cellRc(cell) + 1); },
 		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) + 1); },
-		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+		RaiserHeapKind.Future => futureIncref(arrHeap, handle),
+		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
 	}
 }
 
@@ -1411,12 +1470,13 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 			setCellRc(cell, left);
 			if (left <= 0) { rcDestroySeq(arrHeap, objHeap, handle); }
 		},
-		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+		RaiserHeapKind.Future => futureDecref(arrHeap, handle),
+		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
 	}
 }
 
 // The decrement of a counted handle that reports whether it was the last holder, leaving the destroying to the caller;
-// a nil, constant or future handle is never last.
+// a nil or constant handle is never last, and a future's last release queues it for the VM instead.
 export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
 	if (handle == 0) return false;
 	when (mode != "danger") { checkHeapKind(handle); }
@@ -1427,7 +1487,8 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) - 1); last = textRc(cell) <= 0; },
 		RaiserHeapKind.Box => { const cell = boxCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
 		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
-		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+		RaiserHeapKind.Future => futureDecref(arrHeap, handle),
+		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
 	}
 	return last;
 }
@@ -1442,7 +1503,8 @@ export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h
 		RaiserHeapKind.String => { count = textRc(textAddress(handle)) as int32; },
 		RaiserHeapKind.Box => { count = heapBoxRc(handle); },
 		RaiserHeapKind.Seq => { count = cellRc(seqCellOf(handle)) as int32; },
-		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
+		RaiserHeapKind.Future => { const counts = arrHeap.futures; if (counts != null && futureHandleLive(counts, handle)) count = counts.rc[futureSlot(handle)]; },
+		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
 	}
 	return count;
 }

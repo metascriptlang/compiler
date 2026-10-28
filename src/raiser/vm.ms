@@ -15,6 +15,7 @@ import {
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
+	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -90,6 +91,16 @@ export interface RaiserStrand {
 	safePoints: number[];
 	currentException: RaiserValue;
 	spawnEnv: int64;
+	hold: RaiserGlobalsHold | null;
+}
+
+// The copy of the module globals a spawned strand runs against, kept until the strand and every `.then`
+// registered from it are done; its counted handles are then released.
+export interface RaiserGlobalsHold {
+	users: int32;
+	globals: RaiserValue[];
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
 }
 
 export interface RaiserStrands {
@@ -129,6 +140,7 @@ export interface RaiserFuture {
 // registered it, which the callback strand shares so the captures it mutates are the ones the
 // registering code reads. `arg` and `shell` are what the started strand holds until it finishes.
 export interface RaiserThen {
+	input: int64;
 	output: int64;
 	fulfilled: RaiserValue;
 	rejected: RaiserValue;
@@ -138,10 +150,15 @@ export interface RaiserThen {
 	strand: number;
 	arg: RaiserValue;
 	shell: int64;
+	hold: RaiserGlobalsHold | null;
 }
 
 export interface RaiserFutures {
 	items: RaiserFuture[];
+	counts: RaiserFutureCounts;
+	free: int64[];
+	tomb: RaiserFuture;
+	orphans: string[];   // what a failed future nobody read said, kept past its release for the exit report
 }
 
 export interface RaiserTimer {
@@ -222,6 +239,8 @@ export interface RaiserSched {
 	readyOrder: number[];
 	idleWait: boolean;
 	ticked: number[];
+	freeStrands: number[];
+	spareRegs: RaiserRegFile[];
 }
 
 export interface RaiserVM {
@@ -346,15 +365,17 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(i < mod.globalInit.length ? mod.globalInit[i] : raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), spawnEnv: 0 };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), spawnEnv: 0, hold: null };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
-	const futures: RaiserFutures = { items: futureItems };
+	const counts = createFutureCounts();
+	arrayHeap.futures = counts;
+	const futures: RaiserFutures = { items: futureItems, counts, free: [] as int64[], tomb: blankFuture(counts), orphans: [] as string[] };
 	const timerItems: RaiserTimer[] = [];
 	const timers: RaiserTimers = { items: timerItems };
 	const thenRuns: RaiserThen[] = [];
-	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[] };
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
 }
@@ -429,7 +450,7 @@ function releaseShell(vm: RaiserVM, h: int64): void {
 function innerHandle(vm: RaiserVM, h: int64): int64 {
 	if (h == 0 || !isShell(h)) return h;
 	const inner = heapBoxValue(vm.arrayHeap, h);
-	return inner.kind == RaiserValueKind.String || inner.kind == RaiserValueKind.Array || inner.kind == RaiserValueKind.Object ? inner.intVal : 0;
+	return inner.kind == RaiserValueKind.String || inner.kind == RaiserValueKind.Array || inner.kind == RaiserValueKind.Object || inner.kind == RaiserValueKind.Future ? inner.intVal : 0;
 }
 
 function unshell(vm: RaiserVM, abs: int64): void {
@@ -765,9 +786,8 @@ function suspendRun(vm: RaiserVM): void {
 	const frames: RaiserCallFrame[] = [];
 	vm.callStack = { items: frames, depth: 0 };
 	const strandItems: RaiserStrand[] = [];
-	const futureItems: RaiserFuture[] = [];
 	const timerItems: RaiserTimer[] = [];
-	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[], readyOrder: [] as number[], idleWait: false, ticked: [] as number[] };
+	vm.sched = { strands: { items: strandItems }, futures: vm.sched.futures, timers: { items: timerItems }, nextStrandId: 1, modules: createModuleEval(vm.mod), thenRuns: [] as RaiserThen[], readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	vm.safePoints = [];
 	vm.currentException = raiserNil();
 }
@@ -805,12 +825,13 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.safePoints.length = 0;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, hold: null };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
 	vm.yielded = false;
-	vm.sched.futures.items.length = 0;
+	resetFutures(vm);
+	vm.sched.freeStrands.length = 0;
 	vm.sched.timers.items.length = 0;
 	const ev = vm.sched.modules;
 	ev.pending.length = 0;
@@ -828,19 +849,77 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 // --- Futures ---
 
 function futureHandleValid(vm: RaiserVM, handle: int64): boolean {
-	return handleHeapKind(handle) == RaiserHeapKind.Future && handleIndex(handle) < vm.sched.futures.items.length;
+	return handleHeapKind(handle) == RaiserHeapKind.Future && futureSlot(handle) < vm.sched.futures.items.length && futureHandleLive(vm.sched.futures.counts, handle);
 }
 
-function newFuture(vm: RaiserVM): int64 {
-	const waiters: number[] = [];
+function futureAt(vm: RaiserVM, handle: int64): RaiserFuture {
+	if (!futureHandleValid(vm, handle)) throw new Error(`internal: future handle ${handle} names no live future`);
+	return vm.sched.futures.items[futureSlot(handle)];
+}
+
+function blankFuture(counts: RaiserFutureCounts): RaiserFuture {
 	const valueArrayHeap = createArrayHeap();
-	const valueObjectHeap = createStructHeap();
-	const dependents: int64[] = [];
-	const inputs: int64[] = [];
-	const thens: RaiserThen[] = [];
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1, dependents, inputs, combine: -1, thens };
-	vm.sched.futures.items.push(f);
-	return makeHandle((vm.sched.futures.items.length - 1) as int64, RaiserHeapKind.Future);
+	valueArrayHeap.futures = counts;
+	return { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap: createStructHeap(), waiters: [] as number[], record: -1, dependents: [] as int64[], inputs: [] as int64[], combine: -1, thens: [] as RaiserThen[] };
+}
+
+// A future starts with the one reference its creator holds, as msFutureCreate's does; a slot a released future
+// left is reused under the next generation, so a handle that outlived its future names none.
+function newFuture(vm: RaiserVM): int64 {
+	const table = vm.sched.futures;
+	const counts = table.counts;
+	const f = blankFuture(counts);
+	if (table.free.length > 0) {
+		const at = table.free.pop();
+		table.items[at] = f;
+		counts.rc[at] = 1;
+		return futureHandle(at, counts.gen[at]);
+	}
+	const at = table.items.length as int64;
+	table.items.push(f);
+	counts.rc.push(1);
+	if (at < counts.gen.length) counts.gen[at] += 1;
+	else counts.gen.push(0);
+	return futureHandle(at, counts.gen[at]);
+}
+
+function resetFutures(vm: RaiserVM): void {
+	if (vm.suspendedRuns.length > 0) return;
+	const table = vm.sched.futures;
+	table.items.length = 0;
+	table.free.length = 0;
+	table.counts.rc.length = 0;
+	table.counts.dead.length = 0;
+}
+
+function futureHold(vm: RaiserVM, handle: int64): void {
+	futureCountUp(vm.sched.futures.counts, handle);
+}
+
+function futureRelease(vm: RaiserVM, handle: int64): void {
+	futureCountDown(vm.sched.futures.counts, handle);
+}
+
+// The futures whose last reference went: each drops what it holds, as msFutureDestroyInner does, and its slot
+// is free. A failure nobody read stays reported at exit.
+function vmDrainFutures(vm: RaiserVM): void {
+	const table = vm.sched.futures;
+	const dead = table.counts.dead;
+	while (dead.length > 0) {
+		const handle = dead.pop();
+		if (!futureHandleLive(table.counts, handle) || table.counts.rc[futureSlot(handle)] != 0) continue;
+		const at = futureSlot(handle);
+		const f = table.items[at];
+		if (f.waiters.length > 0 || f.thens.length > 0) throw new Error(`internal: future ${handle} was released with a reader still parked on it`);
+		if (f.failed && !f.errorObserved) table.orphans.push(f.errorMsg);
+		table.counts.gen[at] += 1;
+		table.items[at] = table.tomb;
+		table.free.push(at);
+		rcDecref(f.valueArrayHeap, f.valueObjectHeap, f.value);
+		rcDecref(f.valueArrayHeap, f.valueObjectHeap, f.error);
+		for (const d of f.dependents) futureRelease(vm, d);
+		for (const i of f.inputs) futureRelease(vm, i);
+	}
 }
 
 function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
@@ -848,7 +927,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
 	}
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	if (f.finished) return;
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
@@ -860,7 +939,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 }
 
 function futureSettled(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
 		if (s.status == RaiserStrandStatus.Blocked) {
@@ -871,7 +950,10 @@ function futureSettled(vm: RaiserVM, handle: int64): void {
 	f.waiters.length = 0;
 	const dependents = f.dependents;
 	f.dependents = [] as int64[];
-	for (const d of dependents) combineStep(vm, d, handle);
+	for (const d of dependents) {
+		combineStep(vm, d, handle);
+		futureRelease(vm, d);
+	}
 	const thens = f.thens;
 	f.thens = [] as RaiserThen[];
 	for (const t of thens) thenFire(vm, t, handle);
@@ -920,7 +1002,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	}
 	const funcIdx = fnField.intVal as number;
 	const callee = getModuleFunc(vm.mod, funcIdx);
-	const regs = createRegFile(vm.mod);
+	const regs = strandRegFile(vm, callee);
 	const hasEnv = envField.kind == RaiserValueKind.Object;
 	const params = callee.arity - (hasEnv ? 1 : 0);
 	if (params > 1) {
@@ -940,15 +1022,36 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
-	vm.sched.strands.items.push(s);
-	t.strand = vm.sched.strands.items.length - 1;
+	futureHold(vm, t.output);
+	const s: RaiserStrand = { id, globals: t.globals, regs, callStack, arrayHeap: t.arrayHeap, objectHeap: t.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: t.output, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: holdShare(t.hold) };
+	t.strand = placeStrand(vm, s);
 	vm.sched.readyOrder.push(t.strand);
 	t.arg = arg;
 	vm.sched.thenRuns.push(t);
 }
 
-function thenRelease(t: RaiserThen): void {
+function runningHold(vm: RaiserVM): RaiserGlobalsHold | null {
+	const items = vm.sched.strands.items;
+	if (vm.current >= items.length || items[vm.current].arrayHeap != vm.arrayHeap) return null;
+	return items[vm.current].hold;
+}
+
+function holdShare(hold: RaiserGlobalsHold | null): RaiserGlobalsHold | null {
+	if (hold != null) hold.users += 1;
+	return hold;
+}
+
+function holdDrop(hold: RaiserGlobalsHold | null): void {
+	if (hold == null) return;
+	hold.users -= 1;
+	if (hold.users > 0) return;
+	for (const g of hold.globals) rcDecref(hold.arrayHeap, hold.objectHeap, g);
+	hold.globals.length = 0;
+}
+
+function thenRelease(vm: RaiserVM, t: RaiserThen): void {
+	futureRelease(vm, t.input);
+	futureRelease(vm, t.output);
 	rcDecref(t.arrayHeap, t.objectHeap, t.arg);
 	if (t.shell != 0) {
 		if (heapBoxRc(t.shell) <= 1) heapBoxSetValue(t.shell, raiserNil());
@@ -956,6 +1059,8 @@ function thenRelease(t: RaiserThen): void {
 	}
 	rcDecref(t.arrayHeap, t.objectHeap, t.fulfilled);
 	rcDecref(t.arrayHeap, t.objectHeap, t.rejected);
+	holdDrop(t.hold);
+	t.hold = null;
 }
 
 function thenFinished(vm: RaiserVM, strand: number): boolean {
@@ -965,18 +1070,18 @@ function thenFinished(vm: RaiserVM, strand: number): boolean {
 		const t = runs[i];
 		for (let j = i + 1; j < runs.length; j += 1) runs[j - 1] = runs[j];
 		runs.shrink(runs.length - 1);
-		thenRelease(t);
+		thenRelease(vm, t);
 		return true;
 	}
 	return false;
 }
 
 function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
-	const input = vm.sched.futures.items[handleIndex(settled)];
+	const input = futureAt(vm, settled);
 	if (input.failed) {
 		if (t.rejected.kind == RaiserValueKind.Nil) {
 			futureFailFrom(vm, t.output, input);
-			thenRelease(t);
+			thenRelease(vm, t);
 			return;
 		}
 		const error = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.error);
@@ -986,7 +1091,7 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 	}
 	if (t.fulfilled.kind == RaiserValueKind.Nil) {
 		futureCompleteFrom(vm, t.output, input);
-		thenRelease(t);
+		thenRelease(vm, t);
 		return;
 	}
 	const value = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.value);
@@ -1008,13 +1113,16 @@ function vmHandleFutureThen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	} else if (!futureHandleValid(vm, input)) {
 		vmError(vm, `future handle out of bounds: ${input}`);
 		return;
+	} else {
+		futureHold(vm, input);
 	}
 	const output = newFuture(vm);
-	const f = vm.sched.futures.items[handleIndex(input)];
+	futureHold(vm, output);
+	const f = futureAt(vm, input);
 	f.errorObserved = true;
 	rcIncref(vm.arrayHeap, vm.objectHeap, fulfilled);
 	rcIncref(vm.arrayHeap, vm.objectHeap, rejected);
-	const t: RaiserThen = { output, fulfilled, rejected, globals: vm.globals, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, strand: -1, arg: raiserNil(), shell: 0 };
+	const t: RaiserThen = { input, output, fulfilled, rejected, globals: vm.globals, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, strand: -1, arg: raiserNil(), shell: 0, hold: holdShare(runningHold(vm)) };
 	if (f.finished) thenFire(vm, t, input);
 	else f.thens.push(t);
 	setRegConform(vm, ia, raiserFuture(output));
@@ -1023,7 +1131,7 @@ function vmHandleFutureThen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 // --- Combinators: Promise.all, race and any (runtime/promise/combinator.c) ---
 
 function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	f.finished = true;
 	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.value);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
@@ -1032,7 +1140,7 @@ function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): 
 }
 
 function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = source.errorMsg;
@@ -1044,7 +1152,7 @@ function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void
 }
 
 function futureCompleteAll(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	f.finished = true;
 	const arr = heapAllocArray(f.valueArrayHeap);
 	for (let i = 0; i < f.inputs.length; i += 1) {
@@ -1053,7 +1161,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 		if (earlier < i) {
 			item = heapArrayGet(f.valueArrayHeap, arr, earlier as int64);
 		} else {
-			const input = vm.sched.futures.items[handleIndex(f.inputs[i])];
+			const input = futureAt(vm, f.inputs[i]);
 			item = copyGraph(input.valueArrayHeap, input.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, input.value);
 		}
 		heapArrayPush(f.valueArrayHeap, arr, item);
@@ -1068,7 +1176,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 // Every input finished, and each with the outcome `failed` names.
 function combineAllSettledAs(vm: RaiserVM, f: RaiserFuture, failed: boolean): boolean {
 	for (const at of f.inputs) {
-		const input = vm.sched.futures.items[handleIndex(at)];
+		const input = futureAt(vm, at);
 		if (!input.finished || input.failed != failed) return false;
 	}
 	return true;
@@ -1076,21 +1184,21 @@ function combineAllSettledAs(vm: RaiserVM, f: RaiserFuture, failed: boolean): bo
 
 function futuresAllFinished(vm: RaiserVM, f: RaiserFuture): boolean {
 	for (const at of f.inputs) {
-		if (!vm.sched.futures.items[handleIndex(at)].finished) return false;
+		if (!futureAt(vm, at).finished) return false;
 	}
 	return true;
 }
 
 function futureCompleteNil(vm: RaiserVM, handle: int64): void {
-	vm.sched.futures.items[handleIndex(handle)].finished = true;
+	futureAt(vm, handle).finished = true;
 	futureSettled(vm, handle);
 }
 
 // One input of the combinator `handle` settled. A failed input counts as
 // handled, as a future with a callback does on C, even after the result settled.
 function combineStep(vm: RaiserVM, handle: int64, settled: int64): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
-	const input = vm.sched.futures.items[handleIndex(settled)];
+	const f = futureAt(vm, handle);
+	const input = futureAt(vm, settled);
 	if (input.failed) input.errorObserved = true;
 	if (f.finished) return;
 	if (f.combine == RaiserCombine.All as int32) {
@@ -1112,7 +1220,7 @@ function combineStep(vm: RaiserVM, handle: int64, settled: int64): void {
 // Promise.any's rejection when every input rejected: the error the call site
 // made, held in the result's storage until then.
 function futureFailPrepared(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	f.finished = true;
 	f.failed = true;
 	futureSettled(vm, handle);
@@ -1175,7 +1283,7 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 	const arr = vmHeapOperand(vm, getDyn(vm, func.blocks[ic + 3] as int32), RaiserValueKind.Array, "an array of futures");
 	if (arr < 0) return;
 	const handle = newFuture(vm);
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	f.combine = ib;
 	if (ib == RaiserCombine.Any as int32) {
 		const rejection = getDyn(vm, func.blocks[ic + 4] as int32);
@@ -1188,6 +1296,7 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 	for (let i = 0; i < len; i += 1) {
 		const item = heapArrayGet(vm.arrayHeap, arr, i);
 		if (item.kind == RaiserValueKind.Future) {
+			futureHold(vm, item.intVal);
 			f.inputs.push(item.intVal);
 			continue;
 		}
@@ -1201,6 +1310,8 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 		if (ready < 0) {
 			ready = newFuture(vm);
 			futureComplete(vm, ready, item);
+		} else {
+			futureHold(vm, ready);
 		}
 		f.inputs.push(ready);
 	}
@@ -1212,10 +1323,14 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 		return;
 	}
 	for (const at of f.inputs) {
-		if (!vm.sched.futures.items[handleIndex(at)].finished) vm.sched.futures.items[handleIndex(at)].dependents.push(handle);
+		const input = futureAt(vm, at);
+		if (!input.finished) {
+			futureHold(vm, handle);
+			input.dependents.push(handle);
+		}
 	}
 	for (const at of f.inputs) {
-		if (vm.sched.futures.items[handleIndex(at)].finished) combineStep(vm, handle, at);
+		if (futureAt(vm, at).finished) combineStep(vm, handle, at);
 	}
 }
 
@@ -1226,6 +1341,7 @@ function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
 	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
 	const timer: RaiserTimer = { dueMs: performance.now() + (ms as number), future: newFuture(vm) };
+	futureHold(vm, timer.future);
 	insertTimer(vm, timer);
 	return timer.future;
 }
@@ -1248,6 +1364,7 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
 	items.shrink(items.length - 1);
 	futureComplete(vm, timer.future, raiserNil());
+	futureRelease(vm, timer.future);
 }
 
 function vmWaitForTimer(vm: RaiserVM): void {
@@ -1272,7 +1389,7 @@ function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: Raiser
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
 	}
-	const f = vm.sched.futures.items[handleIndex(handle)];
+	const f = futureAt(vm, handle);
 	if (f.finished) return;
 	f.finished = true;
 	f.failed = true;
@@ -1287,6 +1404,7 @@ function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: Raiser
 // contract msReportOrphanFailures enforces at exit on C.
 export function vmOrphanFailures(vm: RaiserVM): string[] {
 	const out: string[] = [];
+	for (const m of vm.sched.futures.orphans) out.push(m);
 	for (const f of vm.sched.futures.items) {
 		if (f.failed && !f.errorObserved) out.push(f.errorMsg);
 	}
@@ -1572,6 +1690,39 @@ function schedulePick(vm: RaiserVM): number {
 // Returns true when the finished strand was a spawned one and the scheduler
 // should pick another; false when the main strand finished, which ends the
 // program with its value.
+// A strand that settles a future (a spawn, a .then callback) is done with its slot once it finished: the slot
+// and its register file go to the next such strand, as C frees a finished task's frame.
+function retireStrand(vm: RaiserVM, idx: number): void {
+	const s = vm.sched.strands.items[idx];
+	if (idx == 0 || s.status != RaiserStrandStatus.Done || s.resultFuture < 0) return;
+	futureRelease(vm, s.resultFuture);
+	s.resultFuture = -1;
+	s.result = raiserNil();
+	holdDrop(s.hold);
+	s.hold = null;
+	vm.sched.spareRegs.push(s.regs);
+	vm.sched.freeStrands.push(idx);
+}
+
+function placeStrand(vm: RaiserVM, s: RaiserStrand): number {
+	const items = vm.sched.strands.items;
+	if (vm.sched.freeStrands.length > 0) {
+		const idx = vm.sched.freeStrands.pop();
+		items[idx] = s;
+		return idx;
+	}
+	items.push(s);
+	return items.length - 1;
+}
+
+function strandRegFile(vm: RaiserVM, entry: RaiserFunction): RaiserRegFile {
+	const spare = vm.sched.spareRegs;
+	if (spare.length == 0) return createRegFile(vm.mod);
+	const regs = spare.pop();
+	startFrame(regs, 0, entry);
+	return regs;
+}
+
 function releaseSpawnEnv(vm: RaiserVM, s: RaiserStrand): void {
 	if (s.spawnEnv == 0) return;
 	vmReleaseChild(vm, s.spawnEnv, true);
@@ -1748,6 +1899,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const arrayHeap = createArrayHeap();
+	arrayHeap.futures = vm.sched.futures.counts;
 	const regs = createRegFile(vm.mod);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -1757,7 +1909,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: null };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return id;
@@ -1780,7 +1932,8 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const arrayHeap = createArrayHeap();
-	const regs = createRegFile(vm.mod);
+	arrayHeap.futures = vm.sched.futures.counts;
+	const regs = strandRegFile(vm, callee);
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
 	let spawnEnv: int64 = 0;
@@ -1804,11 +1957,11 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const fut = newFuture(vm);
+	futureHold(vm, fut);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv };
-	vm.sched.strands.items.push(s);
-	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv, hold: { users: 1, globals, arrayHeap, objectHeap } };
+	vm.sched.readyOrder.push(placeStrand(vm, s));
 	return fut;
 }
 
@@ -1842,7 +1995,7 @@ function vmHandleFutureRead(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 		vmError(vm, `future handle out of bounds: ${source.intVal}`);
 		return;
 	}
-	const f = vm.sched.futures.items[handleIndex(source.intVal)];
+	const f = futureAt(vm, source.intVal);
 	if (ib == 2) {
 		setRegBool(vm, ia, f.finished);
 		return;
@@ -1883,7 +2036,7 @@ function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vmError(vm, `future handle out of bounds: ${v.intVal}`);
 		return;
 	}
-	const f = vm.sched.futures.items[handleIndex(v.intVal)];
+	const f = futureAt(vm, v.intVal);
 	if (f.finished) {
 		if (awaitPaysTick(vm)) return;
 		readSettledFuture(vm, ia, f);
@@ -1955,7 +2108,8 @@ function vmHandleModuleImport(vm: RaiserVM, ia: int32, bx: int32, func: RaiserFu
 		return;
 	}
 	const fut = newFuture(vm);
-	vm.sched.futures.items[handleIndex(fut)].record = at;
+	futureAt(vm, fut).record = at;
+	futureHold(vm, fut);
 	vm.sched.modules.pending.push({ kind: RaiserModuleJobKind.Import, record: at, future: fut, error: raiserNil() });
 	if (vm.sched.modules.strand < 0) moduleArmTask(vm);
 	setRegConform(vm, ia, raiserFuture(fut));
@@ -1969,7 +2123,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0 };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), spawnEnv: 0, hold: null };
 	vm.sched.strands.items.push(s);
 	vm.sched.readyOrder.push(vm.sched.strands.items.length - 1);
 	return vm.sched.strands.items.length - 1;
@@ -2074,9 +2228,10 @@ function moduleHandoffPick(vm: RaiserVM): number {
 
 function moduleSettle(vm: RaiserVM, future: int64, at: int32): void {
 	const st = vm.sched.modules.states[at];
-	vm.sched.futures.items[handleIndex(future)].record = at;
+	futureAt(vm, future).record = at;
 	if (st.failed) futureFail(vm, future, vmExceptionText(vm, st.error), raiserNil());
 	else futureComplete(vm, future, raiserInt(1));
+	futureRelease(vm, future);
 }
 
 function moduleSettleWaiters(vm: RaiserVM, at: int32): void {
@@ -2314,6 +2469,8 @@ function execStrandLoop(vm: RaiserVM): void {
 			vm.sched.readyOrder.push(vm.current);
 		}
 		strandSave(vm);
+		retireStrand(vm, vm.current);
+		if (vm.sched.futures.counts.dead.length > 0) vmDrainFutures(vm);
 		vmFireDueTimer(vm);
 		let next = moduleHandoffPick(vm);
 		if (next < 0) next = schedulePick(vm);
@@ -4041,6 +4198,8 @@ function vmRcDec(vm: RaiserVM, ia: int32, cyclic: boolean): void {
 	} else if (cyclic) {
 		vmRegisterCyclic(vm, handle);
 		vmDrain(vm);
+	} else if (vm.sched.futures.counts.dead.length > 0) {
+		vmDrain(vm);
 	}
 }
 
@@ -4176,6 +4335,7 @@ function vmDrain(vm: RaiserVM): void {
 		const handle = vm.dropped.pop();
 		vmDestroyTop(vm, handle);
 	}
+	if (vm.sched.futures.counts.dead.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) vmDrainFutures(vm);
 }
 
 function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
