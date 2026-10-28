@@ -3,6 +3,7 @@
 // allocator callback. Read back, the field's result is nullable. A plain header function's
 // `void*` return compares to null the same way.
 //
+// @xfail(raiser): raiser has no host bridge for the header's C function 'corpusTryAlloc', so the extern cannot run in the VM
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // @stdout: 1 0 false true
 // @exit: 0

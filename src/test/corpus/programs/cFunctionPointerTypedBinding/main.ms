@@ -3,6 +3,7 @@
 // parameter. The pointer also crosses into a `const void*` parameter by `as Ptr<void>`, from
 // the function, from a typed binding and through `as CorpusFn`, as the pointer's own value.
 //
+// @xfail(raiser): raiser has no host bridge for the header's C function 'corpusCallIt', so the extern cannot run in the VM
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // @stdout: 7,7,7,7,1,2,3,4,
 // @exit: 0

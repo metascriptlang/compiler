@@ -3,6 +3,7 @@
 // nested one struct deep. The structs come from the header because a literal cannot yet fill
 // a C array field of any element type.
 //
+// @xfail(raiser): raiser has no host bridge for the header's C function 'corpusMakeTable', so the extern cannot run in the VM
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // @stdout: 10 6 3|6 7 8|11 20
 // @exit: 0
