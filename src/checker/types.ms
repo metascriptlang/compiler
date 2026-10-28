@@ -4720,6 +4720,13 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		return;
 	}
+	if (formal.kind == TypeKind.Union && unionHasMappedMember(formal) && (concrete.kind == TypeKind.Union || (isMaybeType(concrete) && concrete.typeReturn != null))) {
+		const sources: Type[] = concrete.kind == TypeKind.Union ? concrete.typeChildren : [concrete.typeReturn!];
+		for (const source of sources) {
+			if (source != null && source.kind != TypeKind.Null) unifyIntoUnionFormal(formal, source, bindings);
+		}
+		return;
+	}
 	// Bridge Union<T, Null> ↔ Maybe<X> for nullable witness inference.
 	// At decl time, generic param `T | null` resolves to Union<GP, Null>
 	// (GP isn't Maybe-wrappable). At call site, user-spelled `X | null`
@@ -4829,7 +4836,7 @@ function unifyToMapped(formal: Type, concrete: Type, keys: Type, bindings: Unify
 // Reference: inferTypeForHomomorphicMappedType and createReverseMappedType, for the template
 // `T[P]` that maps each member to itself: an array or tuple of the same elements, else an
 // object type with the source's fields, read-only only where the source was and the modifiers
-// did not add it. A primitive, a union, a type parameter, another template or an optional
+// did not add it. Under `Readonly<T>` the object type is the source itself, view removed. A primitive, a union, a type parameter, another template or an optional
 // modifier has no inverse here and infers nothing.
 function homomorphicMappedSource(source: Type, target: Type, param: Type): Type | null {
 	const mods = mappedModifiers(target);
@@ -4851,6 +4858,7 @@ function homomorphicMappedSource(source: Type, target: Type, param: Type): Type 
 	}
 	const fields = peelToStruct(peeled.kind == TypeKind.GenericInstance ? peeled.typeReturn : peeled);
 	if (fields == null || isMaybeType(fields) || fields.typeNames.length == 0) return null;
+	if (mods.has(MappedModifier.IncludeReadonly)) return withoutReadonlyView(source);
 	const struct = createStruct("", [...fields.typeNames], [...fields.typeChildren], true);
 	if (fields.optionalFields != null) struct.optionalFields = [...fields.optionalFields];
 	const reversed = createRef(struct);
@@ -4865,6 +4873,13 @@ export function primitiveThroughMapped(formal: Type, arg: Type): Type | null {
 	if (keys.kind != TypeKind.KeyOf || keys.typeChildren.length != 1 || keys.typeChildren[0].kind != TypeKind.GenericParam) return null;
 	if (arg.kind == TypeKind.GenericParam || isObjectSource(arg) || mappedSourceMembers(arg).length > 0) return null;
 	return withoutReadonlyView(keys.typeChildren[0]);
+}
+
+function unionHasMappedMember(union: Readonly<Type>): boolean {
+	for (const m of union.typeChildren) {
+		if (m != null && m.kind == TypeKind.Mapped) return true;
+	}
+	return false;
 }
 
 // One value into a union formal: a member it already is binds nothing, a generic member
@@ -4882,13 +4897,20 @@ function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindi
 			return;
 		}
 	}
+	let mappedBound = false;
 	for (const m of formal.typeChildren) {
 		if (m == null || m.kind == TypeKind.GenericParam || !hasGenericParams(m)) continue;
 		const before = bindings.names.length;
 		unifyType(m, concrete, bindings);
+		if (m.kind == TypeKind.Mapped) {
+			const primitive = primitiveThroughMapped(m, concrete);
+			if (primitive != null) bindParam(bindings, primitive, concrete);
+			if (primitive != null || bindings.names.length > before) mappedBound = true;
+			continue;
+		}
 		if (bindings.names.length > before) return;
 	}
-	if (nakedCount == 1 && naked != null) unifyType(naked, concrete, bindings);
+	if (nakedCount == 1 && naked != null && !mappedBound) unifyType(naked, concrete, bindings);
 }
 
 function isMemberItself(member: Readonly<Type>, value: Readonly<Type>): boolean {
