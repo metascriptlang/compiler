@@ -43,6 +43,20 @@ export function filter<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T
 	return out;
 }
 
+export function flatMap<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U[]): U[] {
+	const out: U[] = [];
+	const n = arr.length;
+	for (let i = 0; i < n && i < arr.length; i += 1) {
+		const inner = fn(arr[i], i);
+		for (let j = 0; j < inner.length; j += 1) out.push(inner[j]);
+	}
+	return out;
+}
+
+export function flat<T>(this arr: Vec<T[]>): T[] {
+	return arr.flatMap((x: T[]): T[] => x);
+}
+
 export function some<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
 	return arr.findIndex(fn) >= 0;
 }
