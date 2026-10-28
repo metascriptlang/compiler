@@ -1,6 +1,7 @@
 import { Node, NodeKind, NodeFlag, SymbolKind, Symbol, Type, TypeKind, IdentifierData, ProgramData, SourceLocation } from "../../ast/node";
 import { GcMode, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import { fitNode } from "../../checker/fit";
+import { declaredDefaults, fillDefaults } from "../../checker/callResolve";
 import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, newLoweredSym } from "../context";
 import { walkNode } from "../walker";
@@ -75,6 +76,10 @@ function forward(ctx: TransformContext, callee: Symbol, calleeType: Type, baseTy
 		const formal = calleeType.typeChildren[i];
 		if (i == 0) args.push(sameType(baseType.typeChildren[0], formal) ? arg : makeHiddenSubConv(arg, formal, loc));
 		else args.push(converted(ctx, arg, baseType.typeChildren[i], formal));
+	}
+	if (calleeType.typeChildren.length > forwarded) {
+		fillDefaults(ctx.checkerCtx, args, declaredDefaults(callee), calleeType.typeChildren.length, 0, calleeType.typeChildren, callee.modulePath, calleeType.typeNames);
+		if (args.length != calleeType.typeChildren.length) throw new Error(`internal: the override '${callee.name}' declares parameters beyond the base method without a default`);
 	}
 	const target = makeTypedIdentResolved(callee, null, loc);
 	target.flags = target.flags.incl(NodeFlag.NoDispatch);

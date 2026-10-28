@@ -708,7 +708,7 @@ function isDefaultArgTemp(n: Node): boolean {
 
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
-function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null,
+export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null,
 	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = "",
 	paramNames: string[] | null = null, receiverSlot: Node | null = null): void {
 	if (defaults == null) return;
@@ -762,7 +762,7 @@ function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[],
 // Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
-function declaredDefaults(defSym: Symbol | null): Node[] | null {
+export function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	if (defSym == null) return null;
 	if (defSym.defaultParams.length > 0) return defSym.defaultParams;
 	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
