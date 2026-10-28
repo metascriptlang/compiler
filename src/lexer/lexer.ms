@@ -247,6 +247,23 @@ test "a radix prefix or an exponent without digits is a lex error" {
 	assert lexError("1e-3") == "";
 }
 
+test "a legacy octal literal or a decimal with a leading zero is a lex error naming the 0o spelling" {
+	assert lexError("0777").startsWith("Octal literals are not allowed. Use the syntax '0o777'.");
+	assert lexError("010").startsWith("Octal literals are not allowed. Use the syntax '0o10'.");
+	assert lexError("x = 00;").startsWith("Octal literals are not allowed. Use the syntax '0o0'.");
+	assert lexError("08").startsWith("Decimals with leading zeros are not allowed.");
+	assert lexError("09").startsWith("Decimals with leading zeros are not allowed.");
+	assert lexError("0789").startsWith("Decimals with leading zeros are not allowed.");
+}
+
+test "a zero that is alone, fractional, exponential or radix-prefixed still lexes" {
+	for (const source of ["0", "0.5", "0e1", "0E1", "0x1F", "0o17", "0b101", "0n", "0.0", "0_1", "10", "100", "1.05"]) {
+		assert lexError(source) == "", source;
+	}
+	assert lexFirstVal("0") == "0";
+	assert lexFirstVal("0.5") == "0.5";
+}
+
 test "a slash inside a regex character class does not end the literal" {
 	assert lexFirstVal("/[/]/") == "/[/]/";
 	assert lexFirstVal("/[^/]+/g") == "/[^/]+/g";

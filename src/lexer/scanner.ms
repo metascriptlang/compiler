@@ -54,6 +54,16 @@ export function scanNumber(s: LexerState): void {
 			scanRadixNumber(s, "0o", isOctalDigit, "Octal digit expected", startLine, startCol);
 			return;
 		}
+		if (isDigit(next)) {
+			let end = 1;
+			let octal = true;
+			while (isDigit(peekAt(s, end))) {
+				if (!isOctalDigit(peekAt(s, end))) octal = false;
+				end += 1;
+			}
+			const digits = s.source.byteSlice(s.pos + 1, s.pos + end);
+			setLexError(s, octal ? `Octal literals are not allowed. Use the syntax '0o${digits}'.` : "Decimals with leading zeros are not allowed.");
+		}
 	}
 
 	// Decimal number
