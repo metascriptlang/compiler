@@ -2,8 +2,8 @@
 // Converts source code into a sequence of tokens
 
 import { Token, TokenKind, isIdentOrKeyword } from "./token";
-import { createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
-import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
+import { createLexerState, peek, peekAt, skip, addToken } from "./state";
+import { whitespaceWidth, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
 import { scanJsx } from "./jsx";
 
@@ -21,8 +21,9 @@ export function lex(source: string): Result<Token[], string> {
 		// child text is captured raw.
 		if (scanJsx(s)) { continue; }
 
-		if (isWhitespace(ch) || isNewline(ch)) {
-			advanceChar(s);
+		const whitespace = whitespaceWidth(source, s.pos);
+		if (whitespace > 0) {
+			skip(s, whitespace);
 			continue;
 		}
 
@@ -157,6 +158,37 @@ test "whitespace only" {
 	assert lexOk("\t\t");
 	assert lexOk("\n\n\n");
 	assert lexOk("  \n\t  \n  ");
+}
+
+test "horizontal trivia separates tokens without changing lines or byte columns" {
+	const codes = [9, 11, 12, 32, 0x85, 0xA0, 0x1680, 0x2000, 0x2001,
+		0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009,
+		0x200A, 0x200B, 0x202F, 0x205F, 0x3000, 0xFEFF];
+	for (const code of codes) {
+		const space = String.fromCharCode(code);
+		assert lexLineAt(space + "x", 0) == 1;
+		assert lexColAt(space + "x", 0) == space.byteLength + 1;
+		assert lexCount("a" + space + "b") == 2;
+		assert lexValAt("a" + space + "b", 0) == "a";
+		assert lexValAt("a" + space + "b", 1) == "b";
+	}
+}
+
+test "horizontal trivia stays data inside string literals" {
+	const text = String.fromCharCode(0xFEFF, 0xA0, 0x200B);
+	assert lexFirstVal("\"" + text + "\"") == text;
+}
+
+test "JSX tag trivia does not consume JSX child text" {
+	const space = String.fromCharCode(0xFEFF, 0xA0);
+	const text = space + "value";
+	const source = `<view${space}title="x">${text}</view${space}>`;
+	assert lexOk(source);
+	assert lexKindAt(source, 6) == TokenKind.JsxText;
+	assert lexValAt(source, 6) == text;
+	assert lexValAt(source, 2) == "title";
+	assert lexKindAt(source, 9) == TokenKind.Gt;
+	assert lexCount(source) == 10;
 }
 
 test "numbers" {

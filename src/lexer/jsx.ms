@@ -5,9 +5,9 @@
 // plus a `<`-decision driven by `lastToken`. `scanJsx` is called at the top of the main lex
 // loop; it returns true when it fully handled the iteration.
 
-import { LexerState, JsxMode, peek, peekAt, advanceChar, addToken } from "./state";
+import { LexerState, JsxMode, peek, peekAt, advanceChar, skip, addToken } from "./state";
 import { TokenKind, startsExprAfter } from "./token";
-import { isLetter, isDigit, isWhitespace, isNewline } from "./chars";
+import { isLetter, isDigit, whitespaceWidth } from "./chars";
 import { scanString, scanTemplateContinuation } from "./scanner";
 
 // `<` begins JSX only in expression position. `Gt` is deliberately excluded so
@@ -94,7 +94,8 @@ function scanJsxChildren(s: LexerState): boolean {
 
 function scanJsxTag(s: LexerState): boolean {
 	const ch = peek(s);
-	if (isWhitespace(ch) || isNewline(ch)) { advanceChar(s); return true; }
+	const whitespace = whitespaceWidth(s.source, s.pos);
+	if (whitespace > 0) { skip(s, whitespace); return true; }
 	if (ch == ">".code) {
 		emitSimple(s, TokenKind.Gt, ">");
 		s.jsxStack[s.jsxStack.length - 1] = JsxMode.Children;
@@ -119,7 +120,8 @@ function scanJsxTag(s: LexerState): boolean {
 
 function scanJsxClosing(s: LexerState): boolean {
 	const ch = peek(s);
-	if (isWhitespace(ch) || isNewline(ch)) { advanceChar(s); return true; }
+	const whitespace = whitespaceWidth(s.source, s.pos);
+	if (whitespace > 0) { skip(s, whitespace); return true; }
 	if (ch == ">".code) {
 		emitSimple(s, TokenKind.Gt, ">");
 		// pop the Closing frame and the element's own Children frame beneath it
