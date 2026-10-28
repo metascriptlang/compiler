@@ -2498,6 +2498,19 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 	}
+	if (srcType != null && isMaybeType(srcType) && srcType.typeReturn != null && isSlotUnion(srcType.typeReturn) && !isMaybeType(targetType)
+		&& !isUnresolvedType(targetType) && narrowsToMember(srcType.typeReturn, targetType) && !reportedErrorSince(ctx, operandMark)) {
+		const unwrapped = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: "!" } as TypeAssertionData, d.asExpr.location);
+		unwrapped.nodeType = srcType.typeReturn;
+		unwrapped.flags = unwrapped.flags.incl(NodeFlag.Sem);
+		node.data = { asExpr: unwrapped, asType: d.asType };
+		d = node.data as TypeAssertionData;
+		srcType = srcType.typeReturn;
+	} else if (srcType != null && isMaybeType(srcType) && srcType.typeReturn != null && isSlotUnion(srcType.typeReturn) && isScalarPrimitive(targetType) && !reportedErrorSince(ctx, operandMark)) {
+		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — the value may be null or another member; narrow it first, or cast to a member of the union", asLoc.line, asLoc.column);
+		node.nodeType = targetType;
+		return;
+	}
 	const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
 	const projectedMember = nullableMember != null ? nullableMember : targetType;
 	const sliceMember = srcType != null && isSlotUnion(srcType) && !isUnresolvedType(targetType) ? unionSliceMember(srcType, projectedMember) : null;
