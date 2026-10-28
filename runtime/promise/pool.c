@@ -437,6 +437,38 @@ void msPoolWakeWorker(int schedulerID) {
 	}
 }
 
+/* A worker's I/O engine is its loop's selector (ULTRALOCK A1): an actor visit a worker stole
+ * registers its reads there, so the worker polls it between tasks and parks with a
+ * bounded wait while it exists. */
+bool msWorkerEnginePoll(void) {
+#if MS_IO_HAS_ENGINE
+	msIoEngine* e = msGetIoEngineIfExists();
+	return e != NULL && msIoEnginePoll(e, 0) > 0;
+#else
+	return false;
+#endif
+}
+
+bool msWorkerEngineLive(void) {
+#if MS_IO_HAS_ENGINE
+	return msGetIoEngineIfExists() != NULL;
+#else
+	return false;
+#endif
+}
+
+/* Wake one parked pool worker other than the scheduler that owns the queued actor, so its
+ * actor poll steals it. Spares run no actor poll and are not woken. */
+void msPoolWakeThief(int ownerSchedulerID) {
+	msThreadPool* pool = msPoolGet();
+	if (pool == NULL) return;
+	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
+	if (pool->workerCount < 64) idle &= ((uint64_t)1 << pool->workerCount) - 1;
+	if (ownerSchedulerID >= 1) idle &= ~((uint64_t)1 << (ownerSchedulerID - 1));
+	if (idle == 0) return;
+	msPoolWakeWorker(msCtz64(idle) + 1);
+}
+
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void) {
 	msThreadPool* pool = msPoolGet();
