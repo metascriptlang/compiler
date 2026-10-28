@@ -8,7 +8,7 @@ import { getOpByKey } from "../c/types";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
-import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch } from "./valueCopy";
+import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
 import {
 	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT, ROW_TRACE, ROW_SET_LEN,
 	ownershipName, ownershipRow,
@@ -244,6 +244,14 @@ function isArraySink(call: CallExprData): boolean {
 	return type != null && (isSizedArrayType(type) || isArrayType(type)) && !runsDistinctHook(call, type) && getOpByKey(type, AttachedOp.AttachedSink) == sym;
 }
 
+function isCopyIntoAggregate(call: CallExprData): boolean {
+	const sym = call.callee.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
+	const type = placeOf(call.arguments[0]).nodeType;
+	if (type == null || getOpByKey(type, AttachedOp.AttachedAsgn) != sym) return false;
+	return isCellType(type) || isArrayType(type);
+}
+
 function isLiftedCellSink(call: CallExprData): boolean {
 	if (isArraySink(call)) return true;
 	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookOf(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
@@ -295,7 +303,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		emitCopyValue(s, d.callee.resolvedSym!.name, d.arguments[0], d.arguments[1]);
 		return true;
 	}
-	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink) || isSizedArrayCopy(d)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);
+	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellOp(d, AttachedOp.AttachedSink) || isSizedArrayCopy(d) || isCopyIntoAggregate(d)) emitMaterialize(s, d.callee.resolvedSym!.name, d.arguments[0]);
 	if (isLiftedCellOp(d, AttachedOp.AttachedSink)) {
 		compileExpr(s, call);
 		const source = localOfPlace(s, placeOf(d.arguments[1]));
@@ -333,7 +341,9 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	else if (row == ROW_SET_LEN) {
 		const len = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayLen, len, refRegister(s, name, d.arguments[1]), 0));
-		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, refRegister(s, name, d.arguments[0]), len, 0));
+		const target = refRegister(s, name, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, target, len, 0));
+		emitZeroNilElements(s, target, placeOf(d.arguments[0]).nodeType);
 	}
 	else if (row != ROW_TRACE) throw new Error(`internal: ownership row ${row} of ${name} has no emitter`);
 	return true;

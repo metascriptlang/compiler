@@ -332,6 +332,28 @@ export function emitTrapValue(s: RaiserCompState, message: string, valueType: Ty
 	return emitZeroValue(s, valueType);
 }
 
+export function emitZeroNilElements(s: RaiserCompState, array: int32, arrayType: Type | null): void {
+	const t = zeroArrayType(arrayType);
+	if (t == null || !(nullIsZeroValue(t.typeReturn) || zeroArrayType(t.typeReturn) != null)) return;
+	const count = allocWord(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, count, array, 0));
+	const at = allocWord(s);
+	emitLoadConst(s, at, raiserInt(0));
+	const one = allocWord(s);
+	emitLoadConst(s, one, raiserInt(1));
+	const loopStart = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.BltI64, at, count, 1));
+	const toDone = emitJumpPlaceholder(s);
+	const held = allocDyn(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, array, at));
+	const present = isNilBranch(s, held);
+	emitInst(s, raiserABC(RaiserOpcode.StoreIndex, array, at, emitZeroValue(s, t.typeReturn)));
+	patchJumpTo(s, present, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64, at, at, one));
+	emitInst(s, raiserAx(RaiserOpcode.Jump, loopStart - codeLen(s) - 1));
+	patchJumpTo(s, toDone, codeLen(s));
+}
+
 export function emitZeroFill(s: RaiserCompState, array: int32, count: int32, elementType: Type | null): void {
 	emitZeroElements(s, array, count, elementType, []);
 }
