@@ -1,4 +1,4 @@
-import { Token, TokenKind, tokenKindToString } from "../../lexer/token";
+import { Token, TokenKind, tokenKindToString, isIdentLikeKind } from "../../lexer/token";
 import { lex } from "../../lexer/lexer";
 
 function isCloser(kind: TokenKind): boolean {
@@ -74,6 +74,12 @@ function describe(t: Token, kind: boolean): string {
 	return "`" + text + "` at " + t.line.toString() + ":" + t.column.toString();
 }
 
+function addsArrowParens(a: Token[], i: int32, b: Token[], j: int32): boolean {
+	if (!isIdentLikeKind(a[i].kind) || i + 1 >= a.length || a[i + 1].kind != TokenKind.Arrow) return false;
+	return j + 3 < b.length && b[j].kind == TokenKind.LParen && sameToken(a[i], b[j + 1])
+		&& b[j + 2].kind == TokenKind.RParen && b[j + 3].kind == TokenKind.Arrow;
+}
+
 export function checkLossless(source: string, formatted: string): Result<void, string> {
 	const before = lex(source);
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
@@ -81,15 +87,23 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
 	const a = greaterUnits(significantTokens(before.value));
 	const b = greaterUnits(significantTokens(after.value));
-	const shared = Math.min(a.length, b.length);
-	for (let i = 0; i < shared; i += 1) {
-		if (!sameToken(a[i], b[i])) {
-			const kind = a[i].value == b[i].value;
-			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[i], kind) + " of the output");
+	let i = 0;
+	let j = 0;
+	while (i < a.length && j < b.length) {
+		if (addsArrowParens(a, i, b, j)) {
+			i += 1;
+			j += 3;
+			continue;
 		}
+		if (!sameToken(a[i], b[j])) {
+			const kind = a[i].value == b[j].value;
+			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
+		}
+		i += 1;
+		j += 1;
 	}
-	if (shared < a.length) return Result.err("fmt drops " + describe(a[shared], false) + " and everything after it");
-	if (shared < b.length) return Result.err("fmt adds " + describe(b[shared], false) + " of the output at the end");
+	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
+	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
 	return Result.ok(null);
 }
 
@@ -137,4 +151,17 @@ test "lossless: type-argument closers written apart may print joined" {
 	assert checkLossless("let t: Array<Array<T> > = v;", "let t: Array<Array<T>> = v;\n").ok;
 	assert checkLossless("const f = (): Array<Array<Array<T> > > => v;", "const f = (): Array<Array<Array<T>>> => v;\n").ok;
 	assert !checkLossless("let t: Array<Array<T> > = v;", "let t: Array<Array<T>> v;\n").ok;
+}
+
+test "lossless: parentheses added around a lone arrow parameter are free" {
+	assert checkLossless("set(c => c + 1);", "set((c) => c + 1);\n").ok;
+	assert checkLossless("const k = a => b => a;", "const k = (a) => (b) => a;\n").ok;
+	assert checkLossless("const e = async p => p;", "const e = async (p) => p;\n").ok;
+}
+
+test "lossless: other added or removed parentheses stay refused" {
+	assert !checkLossless("f(c);", "f((c));\n").ok;
+	assert !checkLossless("set((c) => c);", "set(c => c);\n").ok;
+	assert !checkLossless("const f = c => c;", "const f = (c, d) => c;\n").ok;
+	assert !checkLossless("const f = c => c;", "const f = (c) => (c);\n").ok;
 }
