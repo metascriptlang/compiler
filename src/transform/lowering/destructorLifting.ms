@@ -1541,7 +1541,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				generateUnionArms(hook, cName, objType, s1, s2, lctx, buf, loc);
 			}
 		} else if (distinctBody(objType) != null) {
-			fillBody(hook, x1, x2, "", distinctBody(objType) as Type, lctx, buf, createNameSet(), loc);
+			const body = distinctBody(objType) as Type;
+			if (lctx.raiserBackend && !walksCells(hook) && body.kind == TypeKind.Struct && !isMaybeType(body)) {
+				valueCellOp(hook, x1, x2, false, lctx, buf, loc);
+			} else {
+				fillBody(hook, x1, x2, "", body, lctx, buf, createNameSet(), loc);
+			}
 		} else if (walk == "destroy") {
 			const releaseBase = (): void => {
 				if (owner != null) {
