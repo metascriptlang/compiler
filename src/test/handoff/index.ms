@@ -102,6 +102,7 @@ import "./comptimeMacroValues";
 import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
 import "./bitSetCaseLabel";
+import "./destructuringRestLast";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

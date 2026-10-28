@@ -27,7 +27,6 @@ export enum ModuleFact {
 
 export class TransformContext {
 	tempCounter: number;
-	errors: string[];
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;
 	raiserBackend: boolean;
@@ -62,7 +61,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, overflowChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
+	return { tempCounter: 0, checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, overflowChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
@@ -80,8 +79,8 @@ export function mayContain(ctx: TransformContext, need: BitSet<ModuleFact>): boo
 }
 
 export function reportTransformError(ctx: TransformContext, msg: string, loc: SourceLocation): void {
-	if (ctx.checkerCtx != null) addError(ctx.checkerCtx, msg, loc.line, loc.column);
-	else ctx.errors.push(msg);
+	if (ctx.checkerCtx == null) throw new Error(`internal: a transform without a checker context has nowhere to report: ${msg}`);
+	addError(ctx.checkerCtx, msg, loc.line, loc.column);
 }
 
 

@@ -16,7 +16,7 @@ import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
-import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym, reportTransformError } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
@@ -1089,7 +1089,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function identDestSym(dest: Node, dctx: DrcContext): Symbol | null {
 	if (dest.kind != NodeKind.Identifier) return null;
 	if (dest.resolvedSym == null) {
-		dctx.ctx.errors.push("DRC: assignment to '" + (dest.data as IdentifierData).name + "' reached the analyzer without a resolved symbol");
+		throw new Error("internal: DRC: assignment to '" + (dest.data as IdentifierData).name + "' reached the analyzer without a resolved symbol");
 	}
 	return dest.resolvedSym;
 }
@@ -2651,7 +2651,7 @@ function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext,
 		NodeKind.VariableDecl => {
 			const processed = processVarDecl(d.exportedDecl, idx, stmts, dctx, loc);
 			if (processed.kind != NodeKind.VariableDecl) {
-				dctx.ctx.errors.push(`DRC: exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`);
+				reportTransformError(dctx.ctx, `exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`, loc);
 				return stmt;
 			}
 			d.exportedDecl = processed;
@@ -2703,8 +2703,7 @@ function processClass(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
 	const storage = cell.symbolType != null ? cell.symbolType.typeReturn : null;
 	if (storage == null || storage.kind != TypeKind.Struct || storage.typeChildren.length != 1) {
-		dctx.ctx.errors.push(`DRC: HCR cell '${cell.name}' does not point at a one-field storage struct`);
-		return [];
+		throw new Error(`internal: DRC: HCR cell '${cell.name}' does not point at a one-field storage struct`);
 	}
 	const valueType = storage.typeChildren[0];
 	const rcInfo = classifyRc(valueType, dctx);

@@ -5,7 +5,7 @@ import {
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData, VariableDeclData,
 	ArrayLiteralData, ObjectLiteralData, ExprStmtData, BinaryExprData,
 } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym, reportTransformError } from "../context";
 import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -13,6 +13,8 @@ import { cloneIfPure } from "../place";
 import { nullishLowered } from "../coercion/nullishCoalesce";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef, counterType, makeCounterStep } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
+
+const REST_NOT_LAST = "A rest element must be last in a destructuring pattern.";
 
 // ===== Main Entry Point =====
 
@@ -82,6 +84,10 @@ export function expandArrayRet(
 	const items: Node[] = [];
 	for (let i = 0; i < apd.patternElements.length; i += 1) {
 		const elem = apd.patternElements[i];
+		if (elem.kind == NodeKind.SpreadExpr && i != apd.patternElements.length - 1) {
+			reportTransformError(ctx, REST_NOT_LAST, elem.location);
+			continue;
+		}
 
 		// Rest element: last + hasRestElement
 		if (apd.hasRestElement && i == apd.patternElements.length - 1) {
@@ -143,7 +149,12 @@ export function expandObjectRet(
 	for (const prop of opd.patternProps) {
 		if (prop.kind == NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
 	}
-	for (const prop of opd.patternProps) {
+	for (let i = 0; i < opd.patternProps.length; i += 1) {
+		const prop = opd.patternProps[i];
+		if (prop.kind == NodeKind.SpreadExpr && i != opd.patternProps.length - 1) {
+			reportTransformError(ctx, REST_NOT_LAST, prop.location);
+			continue;
+		}
 		if (prop.kind == NodeKind.SpreadExpr) {
 			const inner = (prop.data as SpreadExprData).spreadArg;
 			if (inner.kind != NodeKind.Identifier) continue;
@@ -206,7 +217,7 @@ function assignTarget(target: Node, value: Node, loc: SourceLocation, ctx: Trans
 		return;
 	}
 	if (target.kind != NodeKind.Identifier && target.kind != NodeKind.MemberExpr && target.kind != NodeKind.ArrayAccess) {
-		ctx.errors.push(`${target.location.line}:${target.location.column}: a destructuring assignment target must be a variable, a field or an element`);
+		reportTransformError(ctx, "a destructuring assignment target must be a variable, a field or an element", target.location);
 		return;
 	}
 	items.push(makeExprStmt(makeAssign(target, value, loc), loc));
@@ -218,11 +229,15 @@ function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: Tran
 		for (let i = 0; i < elements.length; i += 1) {
 			const target = elements[i];
 			if (target.kind == NodeKind.SpreadExpr) {
+				if (i != elements.length - 1) {
+					reportTransformError(ctx, REST_NOT_LAST, target.location);
+					continue;
+				}
 				const restTarget = (target.data as SpreadExprData).spreadArg;
 				const restType = isGrowableArray(restTarget.nodeType) ? restTarget.nodeType : destrRestElemType(base.nodeType);
-				const rest = i == elements.length - 1 ? arrayRestValue(base, i, restType, loc, ctx, items) : null;
+				const rest = arrayRestValue(base, i, restType, loc, ctx, items);
 				if (rest == null) {
-					ctx.errors.push(`${target.location.line}:${target.location.column}: a rest element in a destructuring assignment must be the last one, over an array`);
+					reportTransformError(ctx, "a rest element in a destructuring assignment needs an array on the right side", target.location);
 					continue;
 				}
 				assignTarget((target.data as SpreadExprData).spreadArg, rest, loc, ctx, items);
@@ -239,7 +254,7 @@ function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: Tran
 	for (let i = 0; i < od.properties.length; i += 1) {
 		const target = od.properties[i];
 		if (target.kind == NodeKind.SpreadExpr) {
-			ctx.errors.push(`${target.location.line}:${target.location.column}: a rest property in a destructuring assignment is not supported; destructure into a declaration`);
+			reportTransformError(ctx, "a rest property in a destructuring assignment is not supported; destructure into a declaration", target.location);
 			continue;
 		}
 		const access = makeMember(cloneNodeKeepSem(base), od.keys[i], loc);

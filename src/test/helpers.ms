@@ -21,6 +21,8 @@ import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
+import { transformForRaiser } from "../transform/raiserLowering";
+import { evaluateComptimeBlocks } from "../compiler/meta/comptime";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
@@ -141,6 +143,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 		nativeCtx.objChecks = false;
 	}
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
@@ -193,6 +196,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
@@ -327,6 +331,7 @@ export function raiserErrors(source: string): string {
 	const pr = parseSource(source);
 	if (!pr.ok) return "parse failed: " + pr.error;
 	const ctx: CheckerContext = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, preludeContextFor("", ".rms"));
+	if (!hasErrors(ctx)) transformForRaiser(evaluateComptimeBlocks(expandMacros(monomorphizeProgram(pr.value, ctx), ctx)), ctx);
 	let text = "";
 	for (const e of ctx.errors) {
 		if (e.severity == Severity.Error) text = text + e.message + "\n";
@@ -337,7 +342,7 @@ export function raiserErrors(source: string): string {
 export function refusedOnEveryBackend(source: string, needle: string): string {
 	const c = compileToC(source);
 	if (c.ok || !c.error.includes(needle)) return "C: " + (c.ok ? "accepted" : c.error);
-	const js = compileToJS(source);
+	const js = compileToJSWithStd(source);
 	if (js.ok || !js.error.includes(needle)) return "JS: " + (js.ok ? "accepted" : js.error);
 	const raiser = raiserErrors(source);
 	if (!raiser.includes(needle)) return "Raiser: " + (raiser == "" ? "accepted" : raiser);

@@ -15,7 +15,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	DoWhileStmtData, TryCatchStmtData,
 	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData, CallExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
-import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact, reportTransformError } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
@@ -847,7 +847,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const name = d.actorName;
 	const result: Node[] = [];
 	if (node.resolvedSym == null) {
-		ctx.errors.push(`internal: actor lowering met actor '${name}' without a symbol`);
+		reportTransformError(ctx, `internal: actor lowering met actor '${name}' without a symbol`, node.location);
 		return result;
 	}
 	const actorType = node.resolvedSym.symbolType;
@@ -1111,7 +1111,7 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 	}
 	const params = ctor.paramSyms;
 	if (params == null || params.length == 0 || params[0].name != "this") {
-		ctx.errors.push(`internal: actor '${actor.actorSym.name}' constructor has no checked receiver`);
+		reportTransformError(ctx, `internal: actor '${actor.actorSym.name}' constructor has no checked receiver`, ctor.location);
 		return;
 	}
 	const body = (ctor.data as ConstructorDeclData).ctorBody.data as BlockStmtData;

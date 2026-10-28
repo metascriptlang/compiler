@@ -169,8 +169,7 @@ export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean,
 	// to track it by — report it rather than tracking it under a name that another
 	// binding in a sibling scope may share.
 	if (sym == null) {
-		dctx.ctx.errors.push("DRC: a variable reached the analyzer without a resolved symbol");
-		return;
+		throw new Error("internal: DRC: a variable reached the analyzer without a resolved symbol");
 	}
 	if (isCursor) {
 		// Cursors are borrowed — never cleaned up, but MUST be registered so
@@ -423,12 +422,17 @@ test "register RC var" {
 	popScope(dctx);
 }
 
-test "register without a symbol is an error" {
+test "register without a symbol is an internal error" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
-	registerVar(dctx, testStringRc(), false, noSym);
+	let message = "";
+	try {
+		registerVar(dctx, testStringRc(), false, noSym);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("without a resolved symbol"), message;
 	assert currentScope(dctx).varsToCleanup.length == 0;
-	assert dctx.ctx.errors.length == 1;
 	popScope(dctx);
 }
 

@@ -8,7 +8,7 @@ import {
 	AwaitExprData, CallExprData, Symbol,
 } from "../../ast/node";
 import { booleanType } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, reportTransformError } from "../context";
 import { isNativePattern } from "../../checker/context";
 import {
 	makeExprStmt, makeAssign,
@@ -249,9 +249,9 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as HiddenDerefData;
 		d.expr = lowerAwaitExpr(d.expr, pre);
 	} else {
-		_sp.ctx.errors.push(_sp.ctx.jsBackend
+		reportTransformError(_sp.ctx, _sp.ctx.jsBackend
 			? `an extern pattern call inside a ${k.toString()} expression is not supported on the JS backend yet`
-			: `await inside a ${k.toString()} expression is not supported on the C backend yet`);
+			: `await inside a ${k.toString()} expression is not supported on the C backend yet`, e.location);
 	}
 	return e;
 }
