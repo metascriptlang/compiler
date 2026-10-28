@@ -10,7 +10,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, M
 import { MemKind, memKindOf } from "../../raiser/layout";
 import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isPlainFunctionPointer } from "../../checker/types";
+import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
@@ -262,7 +262,7 @@ export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: s
 }
 
 function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): int32 {
-	const t = zeroShape(valueType);
+	const t = isAwaitable(valueType) ? null : zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
 		const array = allocRef(s);
 		emitInst(s, newArrayInst(s, array, 0, t.typeReturn));
