@@ -647,6 +647,12 @@ test "a line break after return ends the statement before the next line" {
 	assert bodyLen("function f() { if (x) return\nside() }") == 2;
 }
 
+test "a block comment that spans a line break ends the return like a line break does" {
+	assert bodyLen("function f() { return /*\n*/ side() }") == 2;
+	assert bodyLen("function f() { return /* a */ x }") == 1;
+	assert bodyLen("function f() { return /* a */ /*\n*/ x }") == 2;
+}
+
 test "return keeps a value that starts on its own line and a bare return before a semicolon or brace" {
 	assert bodyLen("function f() { return x\n }") == 1;
 	assert bodyLen("function f() { return (\nx) }") == 1;

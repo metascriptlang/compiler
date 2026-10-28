@@ -36,3 +36,30 @@ console.log(\`\${count}\`);
 	assert js.indexOf("ERROR", 0) < 0;
 	assert js.indexOf("return count", 0) < 0;
 }
+
+test "E2E JS: a block comment that spans a line break after return ends the statement" {
+	const js = emitBareReturn(`
+let hits = 0;
+function side(): void { hits += 1; }
+function f(): void {
+	return /*
+	*/ side()
+}
+f();
+console.log(\`\${hits}\`);
+`);
+	assert js.indexOf("ERROR", 0) < 0;
+	assert js.indexOf("return side", 0) < 0;
+}
+
+test "E2E JS: a one-line block comment after return keeps the value" {
+	const js = emitBareReturn(`
+function side(): int32 { return 5; }
+function f(): int32 {
+	return /* one line */ side()
+}
+console.log(\`\${f()}\`);
+`);
+	assert js.indexOf("ERROR", 0) < 0;
+	assert js.indexOf("return side", 0) >= 0;
+}
