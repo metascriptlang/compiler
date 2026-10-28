@@ -1527,12 +1527,13 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 // (no narrowing). Non-union declared types fall through unchanged — we never
 // tighten e.g. `Node[]` to `BinaryExpr[]` across an assignment, because
 // structurally-similar arrays join to an ugly union at control flow merges.
-// An assignment of a plain value to a `T | null` local narrows it to T. The Maybe carrier is kept for
-// a union T and for a declaration's initializer, whose readers (out arguments, storage reads) take the declared type.
+// An assignment of a plain value to a `T | null` local narrows it to T; the slot keeps
+// its Maybe storage, which a ref or out argument still names (storedTypeOfSlotArg). A declaration's initializer
+// stays unnarrowed: a captured local that a closure later clears must read as the declared type, not stop.
 function constrainAssignedToMaybe(rhs: Type, declared: Type): Type {
 	if (!isMaybeType(declared) || rhs.kind == TypeKind.Null) return declared;
 	const inner = unwrapMaybeType(declared);
-	if (inner.kind == TypeKind.Union) return declared;
+	if (inner.kind == TypeKind.Union) return rhs.kind == TypeKind.Union ? declared : constrainToDeclared(rhs, inner);
 	if (inner == rhs || typeRelation(inner, rhs) != TypeRelation.None) return isReadonlyView(inner) && !isReadonlyView(rhs) ? inner : rhs;
 	return declared;
 }
