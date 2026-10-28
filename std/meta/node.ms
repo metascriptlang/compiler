@@ -345,6 +345,7 @@ export enum NodeFlag {
 	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
+	ActorSelfCall, // checker: a call through `this` in the actor's own method runs the method body on this turn, not as a message
 }
 
 // ===== Node Kind Enum =====

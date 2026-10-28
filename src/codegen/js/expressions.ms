@@ -584,13 +584,13 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 
 	const memberOverloadSym = node.resolvedSym;
 	if (d.callee.kind == NodeKind.MemberExpr && memberOverloadSym != null
-			&& memberOverloadSym.overloadIdx > 0
+			&& (memberOverloadSym.overloadIdx > 0 || node.flags.has(NodeFlag.ActorSelfCall))
 			&& memberOverloadSym.declNode != null
 			&& memberOverloadSym.declNode.kind == NodeKind.MethodDecl) {
 		const mem = d.callee.data as MemberExprData;
 		emitPostfixBase(gen, mem.object);
 		emit(gen, mem.isOptional ? "?." : ".");
-		emit(gen, jsMethodMemberName(mem.property, memberOverloadSym));
+		emit(gen, (node.flags.has(NodeFlag.ActorSelfCall) ? "$impl_" : "") + jsMethodMemberName(mem.property, memberOverloadSym));
 		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");

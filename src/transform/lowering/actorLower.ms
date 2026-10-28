@@ -13,7 +13,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	VariableDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData,
-	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData,
+	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData, CallExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
 import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact } from "../context";
 import { canFormAcycle } from "../cycles";
@@ -1413,6 +1413,19 @@ function nonisolatedReader(h: ActorHandles, owner: Symbol, field: Node, throughD
 	return fnSym;
 }
 
+// A call through the running actor's own receiver runs the method body on this turn,
+// so its receiver stays the state the body reads instead of becoming the actor's pid.
+function lowerSelfCall(h: ActorHandles, node: Node): Node {
+	const cd = node.data as CallExprData;
+	const base = cd.callee.kind == NodeKind.MemberExpr ? derefTarget((cd.callee.data as MemberExprData).object) : null;
+	const actor = base != null && base.kind == NodeKind.Identifier && base.resolvedSym != null ? h.receivers.get(base.resolvedSym) : null;
+	if (base == null || actor == null) throw new Error("internal: an actor self-call reached handle lowering without the running actor's receiver");
+	base.nodeType = stateOf(h, actor);
+	cd.arguments = cd.arguments.map((arg: Node): Node => lowerHandleNode(h, arg));
+	node.nodeType = handleType(h, node.nodeType);
+	return node;
+}
+
 function lowerHandleNode(h: ActorHandles, node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.Identifier) {
@@ -1452,6 +1465,7 @@ function lowerHandleNode(h: ActorHandles, node: Node): Node {
 		read.nodeType = node.nodeType;
 		return read;
 	}
+	if (node.kind == NodeKind.CallExpr && node.flags.has(NodeFlag.ActorSelfCall)) return lowerSelfCall(h, node);
 	if (node.kind == NodeKind.VariableDecl && bindReceiverAlias(h, node)) return node;
 	if (node.kind == NodeKind.ActorDecl) {
 		const actor = node.resolvedSym;

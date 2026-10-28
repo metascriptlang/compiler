@@ -26,7 +26,7 @@ import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isMetaNodeSym } from "../compiler/meta/nodeSym";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
@@ -2038,7 +2038,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			node.flags = node.flags.incl(NodeFlag.ExtCall);
 			extPreResolved = true;
 			extRecvFormal = methodSym.symbolType.typeChildren.length > 0 ? methodSym.symbolType.typeChildren[0] : null;
-			isActorMethodCall = methodEntry.classSym.symbolKind == SymbolKind.Actor;
+			const ownActorCall = methodEntry.classSym.symbolKind == SymbolKind.Actor && callsOwnActorMethod(ctx, (d.callee.data as MemberExprData).object, methodSym);
+			if (ownActorCall) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
+			isActorMethodCall = methodEntry.classSym.symbolKind == SymbolKind.Actor && !ownActorCall;
 			if (isActorMethodCall && calleeType != null && calleeType.typeReturn != null && calleeType.typeReturn.kind != TypeKind.Void) {
 				calleeType = createFunction(calleeType.typeChildren, calleeType.typeNames, createPromise(calleeType.typeReturn));
 			}
@@ -2112,7 +2114,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
 						|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor)
 					);
-					if (isActorReceiver) {
+					const ownActorCall = isActorReceiver && callsOwnActorMethod(ctx, me.object, winner.sym);
+					if (ownActorCall) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
+					if (isActorReceiver && !ownActorCall) {
 						isActorMethodCall = true;
 						if (calleeType != null
 							&& calleeType.typeReturn != null
@@ -3375,6 +3379,13 @@ function classReceiverBindings(sym: Symbol, callee: Node): UnifyBindings {
 	const object = (callee.data as MemberExprData).object;
 	if (object != null && object.nodeType != null && hasGenericParams(methType.typeChildren[0])) unifyType(methType.typeChildren[0], object.nodeType, eb);
 	return eb;
+}
+
+function callsOwnActorMethod(ctx: CheckerContext, receiver: Node, method: Symbol | null): boolean {
+	const here = ctx.currentFunction;
+	if (ctx.currentActor == null || here == null || here.declNode == null || here.declNode.kind != NodeKind.MethodDecl || !isCurrentActorRef(receiver)) return false;
+	const decl = method != null ? method.declNode : null;
+	return decl != null && decl.kind == NodeKind.MethodDecl && !routineFlagSet((decl.data as MethodDeclData).methodFlags).has(RoutineFlag.Async);
 }
 
 function declTakesReceiver(declNode: Node): boolean {

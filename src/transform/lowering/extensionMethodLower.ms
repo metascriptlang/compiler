@@ -47,6 +47,8 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 		return node;
 	}
 	if (sym == null) throw new Error(`internal: extension call '.${member.property}' reached lowering without its resolved symbol`);
+	const target = node.flags.has(NodeFlag.ActorSelfCall) ? ctx.actorImpls.get(sym) : sym;
+	if (target == null) throw new Error(`internal: actor self-call '.${member.property}' has no _impl handler`);
 
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (node.flags.has(NodeFlag.ExtStatic)) {
@@ -61,7 +63,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
 	}
-	const newCall = makeCall(makeTypedIdentResolved(sym, null, loc), newArgs, loc);
+	const newCall = makeCall(makeTypedIdentResolved(target, null, loc), newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;
 }
