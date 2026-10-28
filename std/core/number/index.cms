@@ -84,17 +84,17 @@ export function isSafeInteger(this typeof Number, x: float64): boolean {
 
 @compilerFunc
 function msNumberToStringRadixChecked(v: float64, radix: int32): string {
-	return numberToStringRadix(v, radix as float64);
+	return numberToStringRadix(v, checkedRadix(radix as float64) as float64);
 }
 
 @compilerFunc
 function msIntToStringRadixChecked(v: int64, radix: int32): string {
-	return intToStringRadix(v, radix as float64);
+	return intToStringRadix(v, checkedRadix(radix as float64) as float64);
 }
 
 @compilerFunc
 function msUint64ToStringRadixChecked(v: uint64, radix: int32): string {
-	return uint64ToStringRadix(v, radix as float64);
+	return uint64ToStringRadix(v, checkedRadix(radix as float64) as float64);
 }
 
 // Statics-only attachment onto the callable Number symbol: reads resolve
@@ -113,4 +113,4 @@ export class Number {
 import { stringToNumber } from "./parse";
 import "./digits";
 import { float64FixedText } from "./fixed";
-import { numberToStringRadix, intToStringRadix, uint64ToStringRadix } from "./radixNative";
+import { checkedRadix, numberToStringRadix, intToStringRadix, uint64ToStringRadix } from "./radixNative";

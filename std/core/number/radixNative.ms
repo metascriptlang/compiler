@@ -22,7 +22,7 @@ function digitValue(byte: uint8): int32 {
 }
 
 @inline
-function checkedRadix(radix: float64): int32 {
+export function checkedRadix(radix: float64): int32 {
 	if (!(radix >= 2.0 && radix < 37.0)) {
 		throw new RangeError("toString() radix argument must be between 2 and 36");
 	}
@@ -51,7 +51,7 @@ function writeRadixEndingAt(out: Span<uint8>, end: int32, value: uint64, radix: 
 
 @exportName("msUint64ToStringRadix")
 export function uint64ToStringRadix(value: uint64, radix: float64): string {
-	const r = checkedRadix(radix);
+	const r = radix as int32;
 	if (r == 10) return uint64ToString(value);
 	let scratch: uint8[66] = [];
 	const out: Span<uint8> = scratch;
@@ -61,7 +61,7 @@ export function uint64ToStringRadix(value: uint64, radix: float64): string {
 
 @exportName("msIntToStringRadix")
 export function intToStringRadix(value: int64, radix: float64): string {
-	const r = checkedRadix(radix);
+	const r = radix as int32;
 	if (r == 10) return intToString(value);
 	let scratch: uint8[66] = [];
 	const out: Span<uint8> = scratch;
@@ -77,7 +77,7 @@ export function intToStringRadix(value: int64, radix: float64): string {
 
 @exportName("msNumberToStringRadix")
 export function numberToStringRadix(input: float64, radix: float64): string {
-	const r = checkedRadix(radix);
+	const r = radix as int32;
 	if (r == 10 || input != input || input == 0.0 || input - input != 0.0) return numberToString(input);
 	const magnitude = input < 0.0 ? -input : input;
 	if (magnitude >= smallestNarrow && magnitude < exactIntegerLimit) {
