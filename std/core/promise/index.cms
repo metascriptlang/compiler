@@ -112,6 +112,11 @@ export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, r
 	return promise;
 }
 
+export function promiseAfterVoid(run: () => void): Promise<void> {
+	run();
+	return new Promise<void>((resolve: () => void, reject: (reason: string | Error) => void): void => { resolve(); });
+}
+
 // Standalone async utilities
 @builtin("PromiseSpawn")
 export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";

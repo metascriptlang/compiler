@@ -52,6 +52,11 @@ function raisedError(reason: string | Error): Error {
 
 extern function msQueueJob(job: () => void): void from "queueMicrotask(#)";
 
+export function promiseAfterVoid(run: () => void): Promise<void> {
+	run();
+	return msNewPromise<void>((resolve: (value: void) => void, reject: (reason: Error) => void): void => { resolve(); });
+}
+
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	return msNewPromise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
 		msQueueJob((): void => {
