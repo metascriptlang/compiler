@@ -1282,13 +1282,6 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			const objReg = keepAcross(s, compileExpr(s, md.object), writesLocals(d.right));
 			const nameIdx = addConst(s, raiserConstString(md.property));
 			const srcReg = compileExpr(s, d.right);
-			if (node.flags.has(NodeFlag.FirstWrite) && zeroArrayType(d.left.nodeType) != null) {
-				const zero = allocRef(s);
-				emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, zero, objReg, nameIdx));
-				emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
-				emitInst(s, raiserABC(RaiserOpcode.RcDec, zero, 0, 0));
-				return srcReg;
-			}
 			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
 			return srcReg;
 		}
