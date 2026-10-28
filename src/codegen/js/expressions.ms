@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -781,10 +781,10 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 	const isAsync = d.arrowFlags == "async" || d.arrowFlags == "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
 	if (isAsync) { emit(gen, "async "); }
 	if (d.arrowParams.length == 1 && !isAsync) {
-		emit(gen, d.arrowParams[0]);
+		emit(gen, safeJsName(d.arrowParams[0]));
 	} else {
 		emit(gen, "(");
-		emitJoinedStrings(gen, d.arrowParams, ", ");
+		emitJoinedSafeStrings(gen, d.arrowParams, ", ", safeJsName);
 		emit(gen, ")");
 	}
 	emit(gen, " => ");
@@ -810,7 +810,7 @@ export function emitFunctionExpr(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function*("); },
 		_ => { emit(gen, autoAsync ? "async function(" : "function("); },
 	};
-	emitJoinedStrings(gen, d.funcExprParams, ", ");
+	emitJoinedSafeStrings(gen, d.funcExprParams, ", ", safeJsName);
 	emit(gen, ") ");
 	emitNode(gen, d.funcExprBody);
 }
