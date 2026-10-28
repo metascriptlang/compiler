@@ -717,6 +717,44 @@ function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	}
 }
 
+// A nullable distinct is a union whose arm is live when the slot is not null: its hooks run on
+// the live arm only, in the order of a case object's (generateUnionArms).
+function nullableDistinctOp(hook: string, d: Type, xf: Node, yf: Node, empties: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	ensureHooks(d.typeName, d, null as unknown as Type, d, false, lctx, loc);
+	const onLiveArm = (op: string, x: Node, y: Node, live: Node): void => {
+		const arm = newBuf();
+		namedObjOp(op, d, clonePath(x, loc), clonePath(y, loc), lctx, arm, loc);
+		buf.items.push(makeIf(makeBinary(clonePath(live, loc), "!==", makeNull(loc), loc), makeBlock(arm.items, loc), null as unknown as Node, loc));
+	};
+	match (hook) {
+		"destroy" => {
+			if (empties) {
+				const old = keepOld(xf, lctx, buf, loc);
+				genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+				onLiveArm("destroy", old, old, old);
+			} else {
+				onLiveArm("destroy", xf, xf, xf);
+			}
+		},
+		"copy" => {
+			const old = keepOld(xf, lctx, buf, loc);
+			genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+			onLiveArm("copy", xf, yf, yf);
+			onLiveArm("destroy", old, old, old);
+		},
+		"sink" => {
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			onLiveArm("destroy", old, old, old);
+		},
+		"wasMoved" => {
+			onLiveArm("wasMoved", xf, xf, xf);
+			genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+		},
+		"trace" | "custody" => { onLiveArm(hook, xf, yf, xf); },
+		_ => { throw new Error(`internal: a nullable distinct field has no '${hook}' operation`); },
+	};
+}
+
 // --- Parameterized runtime op (shared by closure, map) ---
 function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasMovedSuffix: string, traceSuffix: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
 	match (hook) {
@@ -866,7 +904,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Union => {
-			const refInner = unwrapRefNullUnion(fieldType);
+			let refInner = unwrapRefNullUnion(fieldType);
+			while (refInner != null && refInner.kind == TypeKind.Distinct) {
+				if (distinctTakesOp(refInner, hook, lctx)) {
+					if (walksValue(hook, refInner, lctx)) nullableDistinctOp(hook, refInner, xf, yf, empties, lctx, buf, loc);
+					return;
+				}
+				refInner = refInner.typeReturn;
+			}
 			if (refInner != null) {
 				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
