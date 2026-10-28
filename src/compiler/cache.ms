@@ -2977,6 +2977,31 @@ test "an object of the same version keeps while it was used inside the window an
 	removeFixture([moduleVersionRecord(stem)]);
 }
 
+test "a cache hit refreshes its version so the publish of another version keeps it and removes an unused one" {
+	if (platform == "windows") return;
+	const modPath = `test/settle/hit${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const used = moduleCompileFp("int a;", "cc -O0");
+	const idle = moduleCompileFp("int b;", "cc -O0");
+	const next = moduleCompileFp("int c;", "cc -O0");
+	const usedObjectFp = `${used}:objects`;
+	const v1 = versionFixture(modPath, used, usedObjectFp, "int a;");
+	const v2 = versionFixture(modPath, idle, `${idle}:objects`, "int b;");
+	writeFile(v1[5], usedObjectFp);
+	settleModuleVersion(modPath, used, v1[0], [v1[4]]);
+	settleModuleVersion(modPath, idle, v2[0], [v2[4]]);
+	assert execFileCapture("touch", ["-t", "200001010000", ...v1, ...v2]).ok;
+	assert isCCodeCached(modPath, usedObjectFp);
+	const v3 = versionFixture(modPath, next, `${next}:objects`, "int c;");
+	settleModuleVersion(modPath, next, v3[0], [v3[4]]);
+	for (const file of v1) assert exists(file);
+	for (const file of v2) assert !exists(file);
+	for (const file of v3) assert exists(file);
+	removeFixture(v1);
+	removeFixture(v3);
+	removeFixture([moduleVersionRecord(stem)]);
+}
+
 test "the first version recorded for a module also removes the versions an older compiler left once they are unused" {
 	const modPath = `test/settle/legacy${performance.now()}.ms`;
 	const stem = cacheStem(modPath);
