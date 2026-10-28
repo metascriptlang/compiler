@@ -494,13 +494,13 @@ function quickfixText(source: string): string {
 	return lspGetField(quickfixEdit(actions[0]), "newText");
 }
 
-test "indent quickfix keeps each literal spelled as written" {
+test "indent quickfix spells each literal as the document format does" {
 	const prefix = "export function f(): string {\n";
 	const suffix = "\n\treturn x;\n}\n";
-	for (const literal of ["'a'", "\"a\\u0041\"", "`a${1}`"]) {
-		const source = prefix + " \tconst x = " + literal + ";" + suffix;
-		const result = prefix + "  const x = " + literal + ";" + suffix;
-		assert quickfixText(source) == "  const x = " + literal + ";";
+	for (const [written, printed] of [["'a'", "\"a\""], ["\"a\\u0041\"", "\"a\\u0041\""], ["`a${1}`", "`a${1}`"]]) {
+		const source = prefix + " \tconst x = " + written + ";" + suffix;
+		const result = prefix + "\tconst x = " + printed + ";" + suffix;
+		assert quickfixText(source) == "\tconst x = " + printed + ";";
 		assertFormattedBuffer(source, result);
 	}
 }
@@ -508,7 +508,7 @@ test "indent quickfix keeps each literal spelled as written" {
 test "indent quickfix reads its own buffer after another document was formatted" {
 	const source = "export function f(): string {\n \tconst x = \"a\";\n\treturn x;\n}\n";
 	handleFormatting("1", FORMAT_PARAMS, formattingDb("export const a = 1;\nconst x12 = 'zzzz';\n"));
-	assert quickfixText(source) == "  const x = \"a\";";
+	assert quickfixText(source) == "\tconst x = \"a\";";
 }
 
 function applyClientUtf16Edits(source: string, edits: string[]): string {
@@ -557,7 +557,7 @@ function rangeFormatted(source: string, startLine: int32, startCharacter: int32,
 }
 
 const TWO_LOOSE = "export function f(): int32 {\n\tconst  x=1;\n\tconst   y=2;\n\treturn x+y;\n}\n";
-const TWO_TIDY = "export function f(): int32 {\n  const x = 1;\n  const y = 2;\n\treturn x+y;\n}\n";
+const TWO_TIDY = "export function f(): int32 {\n\tconst x = 1;\n\tconst y = 2;\n\treturn x+y;\n}\n";
 
 test "range over two statements formats both and leaves the third alone" {
 	assert rangeFormatted(TWO_LOOSE, 1, 0, 2, 14) == TWO_TIDY;
@@ -569,13 +569,13 @@ test "range starting mid-statement and ending in the next one formats both state
 
 test "range over statements in a nested block formats the run inside the block" {
 	const source = "export function f(c: boolean): int32 {\n\tlet z=0;\n\tif (c) {\n\t\tconst  x=1;\n\t\tconst   y=2;\n\t\tz=x+y;\n\t}\n\treturn z;\n}\n";
-	const expected = "export function f(c: boolean): int32 {\n\tlet z=0;\n\tif (c) {\n\t  const x = 1;\n\t  const y = 2;\n\t\tz=x+y;\n\t}\n\treturn z;\n}\n";
+	const expected = "export function f(c: boolean): int32 {\n\tlet z=0;\n\tif (c) {\n\t\tconst x = 1;\n\t\tconst y = 2;\n\t\tz=x+y;\n\t}\n\treturn z;\n}\n";
 	assert rangeFormatted(source, 3, 2, 4, 5) == expected;
 }
 
 test "range over a statement and one in an outer block formats the enclosing statements" {
 	const source = "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) {\n\t\tz=1;\n\t}\n\treturn  z;\n}\n";
-	const expected = "export function f(c: boolean): int32 {\n  let z = 0;\n  if (c) { z = 1; }\n  return z;\n}\n";
+	const expected = "export function f(c: boolean): int32 {\n\tlet z = 0;\n\tif (c) {\n\t\tz = 1;\n\t}\n\treturn z;\n}\n";
 	assert rangeFormatted(source, 1, 0, 5, 5) == expected;
 }
 
@@ -586,12 +586,12 @@ test "range formatting keeps one blank line between covered statements and squee
 
 test "range formatting keeps one blank line between covered statements of a block, as the document does" {
 	const source = "export function f(): int32 {\n\tconst  x=1;\n\n\n\tconst   y=2;\n\treturn x+y;\n}\n";
-	assert rangeFormatted(source, 1, 0, 4, 14) == "export function f(): int32 {\n  const x = 1;\n\n  const y = 2;\n\treturn x+y;\n}\n";
+	assert rangeFormatted(source, 1, 0, 4, 14) == "export function f(): int32 {\n\tconst x = 1;\n\n\tconst y = 2;\n\treturn x+y;\n}\n";
 }
 
 test "range over two class members formats the whole class declaration" {
 	const source = "export class C {\n\tx:   int32=1;\n\ty:   int32=2;\n\tz:   int32=3;\n}\n";
-	const expected = "export class C {\n  x: int32 = 1;\n  y: int32 = 2;\n  z: int32 = 3;\n}\n";
+	const expected = "export class C {\n\tx: int32 = 1;\n\ty: int32 = 2;\n\tz: int32 = 3;\n}\n";
 	assert rangeFormatted(source, 1, 0, 2, 5) == expected;
 }
 
@@ -619,7 +619,7 @@ test "semicolon formats the statement one block deeper and after a non-ASCII lin
 
 test "closing brace formats the block it closes" {
 	const source = "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) {\n\t\tz=1;\n\t}\n\treturn  z;\n}\n";
-	assert onTypeFormatted(source, 4, 2, "}") == "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) { z = 1; }\n\treturn  z;\n}\n";
+	assert onTypeFormatted(source, 4, 2, "}") == "export function f(c: boolean): int32 {\n\tlet  z=0;\n\tif (c) {\n\t\tz = 1;\n\t}\n\treturn  z;\n}\n";
 }
 
 test "on-type formatting answers no edit when the source does not parse" {
