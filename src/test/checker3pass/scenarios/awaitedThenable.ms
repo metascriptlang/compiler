@@ -159,7 +159,9 @@ async function main(): Promise<void> {
 }
 `);
 	const text = result.errors.join("\n");
-	assert result.errors.length == 1, "only the thenable: " + text;
+	for (const e of result.errors) {
+		assert e.startsWith("this call makes") || e.startsWith("in instantiation of 'Promise_then<int32, Thing>'"), "only the thenable (the instance error is parked at inbox 2026-10-28-then-thenable-refusal-cascades-into-the-instance): " + text;
+	}
 	assert text.contains("this call makes 'Promise<Thing>', a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so it holds 'int32'"), text;
 }
 

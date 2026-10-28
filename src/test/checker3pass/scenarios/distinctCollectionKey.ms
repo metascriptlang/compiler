@@ -16,8 +16,8 @@ const c = new HashSet<Q>();
 const d: HashMap<Again, int32> = new HashMap();
 `;
 	const text = checkOnly(src).errors.join("\n");
-	assert text.contains("'Email' cannot be a Map key: a distinct type hashes as its base only over an integer, char, boolean or enum, and 'Email' is over 'string' — declare 'export function hash(this k: Email): int64'"), "a distinct string, even with a hash that is not exported: " + text;
-	assert text.contains("'Score' cannot be a Set key"), "a distinct number: " + text;
+	assert !text.contains("'Email' cannot be"), "a distinct string with a hash that is not exported: " + text;
+	assert text.contains("'Score' cannot be a Set key: a distinct type hashes as its base only over an integer, char, boolean or enum, and 'Score' is over 'number' — declare 'function hash(this k: Score): int64'"), "a distinct number: " + text;
 	assert text.contains("'Q' cannot be a HashSet key"), "a distinct struct: " + text;
 	assert text.contains("'Again' cannot be a HashMap key") && text.contains("is over 'float64'"), "a distinct over an alias of a distinct float: " + text;
 }
