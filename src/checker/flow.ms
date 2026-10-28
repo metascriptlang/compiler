@@ -926,7 +926,20 @@ function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
 	}
 	// A merge of a nullable's narrowed halves (`T` on the true edge, `null` on
 	// the false edge) rebuilds the DECLARED type, not a fresh spelling of it.
+	const declared = declaredSumBesideNull(members);
+	if (declared != null) return nullableUnionOf([declared, nullType()]);
 	return canonicalizeBranchJoin(createUnion(members));
+}
+
+function declaredSumBesideNull(members: Type[]): Type | null {
+	let sum: Type | null = null;
+	let sawNull = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.Null) sawNull = true;
+		else if (sum == null && m.kind == TypeKind.Union && m.typeNames != null && m.typeNames.length >= 2) sum = m;
+		else return null;
+	}
+	return sawNull ? sum : null;
 }
 
 export function unionOfTypes(types: Type[], parent: Type | null): Type {
