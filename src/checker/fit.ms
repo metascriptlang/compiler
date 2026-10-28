@@ -454,6 +454,7 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 			replaceWithCall(node, direct, negated && declaredNe == null);
 			return true;
 		}
+		if (refuseEqualityThroughView(ctx, node, negated ? ["!=", "=="] : ["=="], pair)) return true;
 	}
 	let left = d.left;
 	let right = d.right;
@@ -483,6 +484,19 @@ function fitLiteralToPayload(ctx: CheckerContext, expr: Node, carrier: Type, exp
 		|| (expr.kind == NodeKind.UnaryExpr && (expr.data as UnaryExprData).operand.kind == NodeKind.NumberLiteral);
 	if (payload == null || !literal || !isNumeric(payload) || sameType(payload, exprType)) return expr;
 	return fitNode(ctx, expr, payload, exprType);
+}
+
+function refuseEqualityThroughView(ctx: CheckerContext, node: Node, ops: string[], pair: Type[]): boolean {
+	const view = isReadonlyView(pair[0]) ? pair[0] : isReadonlyView(pair[1]) ? pair[1] : null;
+	if (view == null) return false;
+	const bare = [withoutReadonlyView(pair[0]), withoutReadonlyView(pair[1])];
+	for (const op of ops) {
+		if (resolveUserOperator(ctx, op, bare) == null) continue;
+		const name = typeDisplayName(withoutReadonlyView(view));
+		addError(ctx, "cannot call '" + op + "' on " + typeDisplayName(view) + " — a read-only view; an operator callable through the view declares its operands read-only: 'function `" + op + "`(a: Readonly<" + name + ">, b: Readonly<" + name + ">)' (PARALOCK E24)", node.location.line, node.location.column);
+		return true;
+	}
+	return false;
 }
 
 function isMatchStruct(t: Type): boolean {
@@ -677,30 +691,12 @@ function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, p
 		addError(ctx, `operator '${op}' cannot compare '${left}' with '${right}': a distinct type compares only with itself — convert one side with \`as\``, at.line, at.column);
 		return;
 	}
-	if (hiddenFromInstance(ctx, primary, leftType)) {
-		addError(ctx, `operator '${op}' cannot be applied to type '${left}' here: its \`${primary}\` is not exported, and a generic routine sees only exported operators — export it`, at.line, at.column);
-		return;
-	}
 	const base = distinctBody(skipModifier(leftType));
 	const follows = primary != op && op != "===" ? ` (\`${op}\` follows from \`${primary}\`)` : "";
 	const fix = base != null && builtinComparisonHolds(ctx, primary, base, base)
 		? `add \`@delegate function \`${primary}\`(this a: ${left}, b: ${left}): boolean;\` to compare as '${typeDisplayName(base)}'`
 		: `declare \`function \`${primary}\`(this a: ${left}, b: ${left}): boolean { … }\``;
 	addError(ctx, `operator '${op}' cannot be applied to type '${left}': a distinct type does not inherit the comparisons of its base; ${fix}${follows}`, at.line, at.column);
-}
-
-function hiddenFromInstance(ctx: CheckerContext, op: string, operand: Type): boolean {
-	if (ctx.instantiatingCtx == null) return false;
-	const set = lookupSymbol(ctx.instantiatingCtx.table, op);
-	if (set == null) return false;
-	const cands: Symbol[] = [set];
-	for (const o of set.overloads) cands.push(o);
-	for (const cand of cands) {
-		const ft = cand.symbolType;
-		if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length != 2 || hasFlag(cand, SymbolFlag.Exported)) continue;
-		if (sameType(ft.typeChildren[0], operand) && sameType(ft.typeChildren[1], operand)) return true;
-	}
-	return false;
 }
 
 function brandBase(t: Type | null): Type | null {
@@ -3933,7 +3929,7 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
-import { makeSymbol, hasFlag, lookupSymbol, RoutineFlag, routineFlagSet } from "./symbol";
+import { makeSymbol, hasFlag, RoutineFlag, routineFlagSet } from "./symbol";
 
 function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
 	const t = createStruct(name, names, types, isValue);
