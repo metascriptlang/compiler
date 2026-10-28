@@ -2196,8 +2196,9 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	if (bd.left.kind == NodeKind.MemberExpr || bd.left.kind == NodeKind.ArrayAccess || bd.left.kind == NodeKind.HiddenDeref) {
 		bd.left = processNode(bd.left, dctx, DrcMode.Normal);
 	}
-	const fieldFlags = ((stmt.data as ExprStmtData).expr.flags.has(NodeFlag.FirstWrite))
-		? MOC_IS_FIELD | MOC_IS_DECL : MOC_IS_FIELD;
+	const firstWriteOfOwnedLocation = (stmt.data as ExprStmtData).expr.flags.has(NodeFlag.FirstWrite)
+		&& bd.left.kind != NodeKind.HiddenDeref;
+	const fieldFlags = firstWriteOfOwnedLocation ? MOC_IS_FIELD | MOC_IS_DECL : MOC_IS_FIELD;
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind == NodeKind.MemberExpr) {
