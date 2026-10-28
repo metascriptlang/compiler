@@ -1912,27 +1912,60 @@ function unrecordedVersionNames(stem: string): string[] {
 	return names;
 }
 
-export function settleModuleVersion(modPath: string, baseFp: string, cFile: string, objects: string[]): void {
+const LIVE_VERSION_SECONDS = 3600;
+const LIVE_REFRESH_SECONDS = 600;
+
+function lastUsedOf(name: string): float64 {
+	const path = `${getCacheDir()}/${name}`;
+	if (name.endsWith(".o.cfp")) return Math.max(modifiedTime(path), modifiedTime(path.slice(0, path.length - 4)));
+	if (name.endsWith(".o")) return Math.max(modifiedTime(path), modifiedTime(`${path}.cfp`));
+	return modifiedTime(path);
+}
+
+function versionLastUsed(names: string[]): float64 {
+	let newest: float64 = -1;
+	for (const name of names) newest = Math.max(newest, lastUsedOf(name));
+	return newest;
+}
+
+export function settleModuleVersion(modPath: string, baseFp: string, cFile: string, objects: string[], now: float64 = nowSeconds()): void {
 	if (modPath == "") return;
 	const stem = cacheStem(modPath);
 	const record = moduleVersionRecord(stem);
 	const config = moduleConfigKey(baseFp);
+	const depName = basename(moduleDepFile(modPath, baseFp));
 	const keep = versionFileNames(moduleDepFile(modPath, baseFp), cFile, objects);
-	const others: string[] = [];
-	let superseded: string[] = [];
+	const cutoff = now - LIVE_VERSION_SECONDS;
+	const known: string[][] = [];
+	const lines: string[] = [];
 	if (exists(record)) {
 		for (const line of (try readFile(record) catch "").split("\n")) {
 			if (line == "") continue;
 			const names = line.split("\t");
-			if (names[0] == config) superseded = names.slice(1, names.length);
-			else others.push(line);
+			if (names[0] == config) known.push(names.slice(1, names.length));
+			else lines.push(line);
 		}
 	} else {
-		superseded = unrecordedVersionNames(stem);
+		known.push(unrecordedVersionNames(stem));
 	}
-	others.push([config, ...keep].join("\t"));
-	if (!atomicWriteFile(record, `${others.join("\n")}\n`)) return;
-	for (const name of superseded) {
+	const current = [...keep];
+	const doomed: string[] = [];
+	for (const names of known) {
+		if (names.includes(depName)) {
+			for (const name of names) {
+				if (keep.includes(name)) continue;
+				if (lastUsedOf(name) < cutoff) doomed.push(name);
+				else current.push(name);
+			}
+		} else if (versionLastUsed(names) < cutoff) {
+			for (const name of names) doomed.push(name);
+		} else {
+			lines.push([config, ...names].join("\t"));
+		}
+	}
+	lines.push([config, ...current].join("\t"));
+	if (!atomicWriteFile(record, `${lines.join("\n")}\n`)) return;
+	for (const name of doomed) {
 		if (keep.includes(name) || !(name.startsWith(`${stem}.`) || name.startsWith(`presence/${stem}.`))) continue;
 		tryRemoveFile(`${getCacheDir()}/${name}`);
 	}
@@ -1949,8 +1982,9 @@ export function isCCodeCached(modPath: string, fp: string): boolean {
 	if (_forceRebuild || !presenceTrusted(fp)) return false;
 	if (!exists(oFile) || !exists(fpFile)) return false;
 	const storedFp = try readFile(fpFile) catch "";
-	if (storedFp == fp) return true;
-	return false;
+	if (storedFp != fp) return false;
+	markUsed(fpFile, nowSeconds(), LIVE_REFRESH_SECONDS);
+	return true;
 }
 
 // Write C code cache after successful compilation of a module.
@@ -2875,7 +2909,30 @@ function removeFixture(files: string[]): void {
 	for (const file of files) tryRemoveFile(file);
 }
 
-test "a new module version removes the previous version of the same compile command and nothing else" {
+const PAST_LIVE_WINDOW = LIVE_VERSION_SECONDS + 60;
+
+test "a superseded version used inside the live window stays beside the new one" {
+	const modPath = `test/settle/live${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const first = moduleCompileFp("int a;", "cc -O0");
+	const second = moduleCompileFp("int b;", "cc -O0");
+	const v1 = versionFixture(modPath, first, `${first}:objects`, "int a;");
+	settleModuleVersion(modPath, first, v1[0], [v1[4]]);
+	const v2 = versionFixture(modPath, second, `${second}:objects`, "int b;");
+	settleModuleVersion(modPath, second, v2[0], [v2[4]]);
+	for (const file of v1) assert exists(file);
+	for (const file of v2) assert exists(file);
+	const third = moduleCompileFp("int d;", "cc -O0");
+	const v3 = versionFixture(modPath, third, `${third}:objects`, "int d;");
+	settleModuleVersion(modPath, third, v3[0], [v3[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	for (const file of v1) assert !exists(file);
+	for (const file of v2) assert !exists(file);
+	for (const file of v3) assert exists(file);
+	removeFixture(v3);
+	removeFixture([moduleVersionRecord(stem)]);
+}
+
+test "a version unused past the live window goes with nothing but its own files" {
 	const modPath = `test/settle/probe${performance.now()}.ms`;
 	const stem = cacheStem(modPath);
 	const first = moduleCompileFp("int a;", "cc -O0");
@@ -2888,10 +2945,10 @@ test "a new module version removes the previous version of the same compile comm
 	writeFile(sibling, "x");
 	settleModuleVersion(modPath, first, v1[0], [v1[4]]);
 	const v3 = versionFixture(modPath, other, `${other}:objects`, "int c;");
-	settleModuleVersion(modPath, other, v3[0], [v3[4]]);
+	settleModuleVersion(modPath, other, v3[0], [v3[4]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of v1) assert exists(file);
 	const v2 = versionFixture(modPath, second, `${second}:objects`, "int b;");
-	settleModuleVersion(modPath, second, v2[0], [v2[4]]);
+	settleModuleVersion(modPath, second, v2[0], [v2[4]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of v2) assert exists(file);
 	for (const file of v3) assert exists(file);
 	for (const file of v1) assert !exists(file);
@@ -2902,7 +2959,25 @@ test "a new module version removes the previous version of the same compile comm
 	removeFixture([bystander, sibling, moduleVersionRecord(stem)]);
 }
 
-test "the first version recorded for a module also removes the versions an older compiler left" {
+test "an object of the same version keeps while it was used inside the window and goes after" {
+	const modPath = `test/settle/objects${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const base = moduleCompileFp("int a;", "cc -O0");
+	const v1 = versionFixture(modPath, base, `${base}:headers-one`, "int a;");
+	const v2 = versionFixture(modPath, base, `${base}:headers-two`, "int a;");
+	settleModuleVersion(modPath, base, v1[0], [v1[4]]);
+	settleModuleVersion(modPath, base, v2[0], [v2[4]]);
+	assert exists(v1[4]);
+	assert exists(v1[5]);
+	settleModuleVersion(modPath, base, v2[0], [v2[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	assert !exists(v1[4]);
+	assert !exists(v1[5]);
+	for (const file of v2) assert exists(file);
+	removeFixture(v2);
+	removeFixture([moduleVersionRecord(stem)]);
+}
+
+test "the first version recorded for a module also removes the versions an older compiler left once they are unused" {
 	const modPath = `test/settle/legacy${performance.now()}.ms`;
 	const stem = cacheStem(modPath);
 	const old = moduleCompileFp("int a;", "cc -O0");
@@ -2912,7 +2987,7 @@ test "the first version recorded for a module also removes the versions an older
 	const bystander = `${getCacheDir()}/${stem}.link.cache`;
 	writeFile(bystander, "x");
 	_cacheListing = null;
-	settleModuleVersion(modPath, current, live[0], [live[4]]);
+	settleModuleVersion(modPath, current, live[0], [live[4]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of legacy) assert !exists(file);
 	for (const file of live) assert exists(file);
 	assert exists(bystander);
