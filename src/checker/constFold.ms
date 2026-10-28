@@ -4,7 +4,7 @@ import {
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
 } from "../ast/node";
-import { isIntegerType, isFloatType, createPrimitive, enumMemberValue } from "./types";
+import { isIntegerType, isFloatType, isUnresolvedType, createPrimitive, enumMemberValue } from "./types";
 import { makeNumber, makeFloatNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -22,7 +22,8 @@ function isInlineConstantType(t: Type | null): boolean {
 
 function constDeclType(sym: Symbol | null): Type | null {
 	if (sym == null || sym.declNode == null) return null;
-	return sym.declNode.nodeType != null ? sym.declNode.nodeType : sym.symbolType;
+	const t = sym.declNode.nodeType != null ? sym.declNode.nodeType : sym.symbolType;
+	return isUnresolvedType(t) ? null : t;
 }
 
 export function constBindingInitializer(sym: Symbol | null): Node | null {
@@ -38,7 +39,8 @@ export function constBindingInitializer(sym: Symbol | null): Node | null {
 function constInitializer(node: Node): Node {
 	const none = null as unknown as Node;
 	const sym = node.resolvedSym;
-	if (sym == null || !isInlineConstantType(constDeclType(sym))) return none;
+	const declared = constDeclType(sym);
+	if (sym == null || (declared != null && !isInlineConstantType(declared))) return none;
 	const init = constBindingInitializer(sym);
 	return init == null ? none : init;
 }
