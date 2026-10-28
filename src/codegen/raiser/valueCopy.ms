@@ -23,6 +23,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	if (valueType != null && (valueType.kind == TypeKind.GenericInstance || isMaybeType(valueType))) {
 		const repr = valueCopyRepr(valueType);
 		if (repr != valueType) return copyPlan(s, repr);
+		if (valueType.typeReturn != null && valueType.typeReturn.kind == TypeKind.Union) return copyPlan(s, valueType.typeReturn);
 	}
 	if (valueType == null) return -1;
 	for (let i = 0; i < s.copyTypes.length; i += 1) {
