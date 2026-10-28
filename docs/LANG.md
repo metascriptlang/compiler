@@ -4696,13 +4696,16 @@ as a parameter name: `src/test/handoff/sinkParam.ms`.
 
 On C under DRC the compiler also infers `sink` for a parameter the body always stores into a
 field or a non-local, puts in an object or array literal, or passes to a `sink` parameter,
-outside any branch. It does so only where no caller can see the routine's type: a routine
+outside any branch, where that slot holds a count: a store into a `Cursor` or `Ptr` slot
+takes no ownership and leaves the parameter borrowed. It does so only where no caller can see the routine's type: a routine
 used as a value, given a native or library export name, overloaded, overridden or dispatched, async, a generator, generic,
 or one that builds a closure keeps its parameters borrowed. A caller's last use then moves
 in instead of being copied, and each program prints the same as with no inference. Measured
 2026-10-28: corpus `inferSinkParamsRcBudget` runs 640008 rc operations on the compiler before
 the pass and 400008 with it (`@maxrcops: 410000`), and `inferSinkParamsBoundaries` keeps the
-excluded routines borrowed across modules.
+excluded routines borrowed across modules; `inferSinkParamsUncountedSlots` runs 280004 rc
+operations when cursor-slot stores count as sinks and 160004 when they do not
+(`@maxrcops: 170000`).
 
 ## Proxy
 
