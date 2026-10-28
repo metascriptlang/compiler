@@ -11,7 +11,7 @@
 // A hold refuses every sync until released, expired, or its pid (bash's $$) has exited.
 // Env: MSC_INSTALL_DIR overrides the destination; MSC_SYNC_BREAK_HOLD=<owner> breaks a hold.
 import { argv, cwd, env, execFileResult, exit, platform } from "std/process";
-import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, realpath, removeAll, rename, writeFile } from "std/fs";
+import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, readFileBytes, realpath, removeAll, rename, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -240,9 +240,9 @@ let changes = 0;
 
 function sameFile(a: string, b: string): boolean {
 	if (!exists(b) || fileSize(a) != fileSize(b)) return false;
-	const x = readFile(a);
-	const y = readFile(b);
-	return x.ok && y.ok && x.value == y.value;
+	const x = readFileBytes(a);
+	const y = readFileBytes(b);
+	return x.ok && y.ok && Buffer.compare(x.value, y.value) == 0;
 }
 
 function put(from: string, to: string): void {
