@@ -1820,6 +1820,8 @@ static inline void msActorUnregisterByPtr(msActor* a) {
  */
 
 extern _Atomic(int) msNextActorRR;        /* round-robin assignment counter */
+extern _Atomic(int64_t) msActorStealCount;  /* run-queue pops taken from another scheduler */
+static inline int64_t msActorStolenVisits(void) { return atomic_load_explicit(&msActorStealCount, memory_order_relaxed); }
 
 /* Forward declarations */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
@@ -1935,6 +1937,7 @@ static inline bool msActorPollLocal(void) {
             msSchedActors* other = &msSchedulers[s];
             a = msSchedRunPop(other);
             if (a != NULL) {
+                atomic_fetch_add_explicit(&msActorStealCount, 1, memory_order_relaxed);
                 int n = msActorProcess(a, MS_ACTOR_BATCH);
                 if (n > 0) didWork = true;
                 break;  /* stole one actor, return to own work */

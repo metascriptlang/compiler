@@ -1,76 +1,58 @@
-// @stdout: two actors: parallel
-// @stdout: one actor twice: serial
-// @stdout: two actors made inside a third: parallel
+// @stdout: two actors: stolen
+// @stdout: two actors made inside a third: stolen
+// @stdout: one actor twice: at most 1 at a time
 // @exit: 0
 // @serial
 // @skip-js: the JS backend runs actors on one thread
-// note: two CPU-bound actors created on the main thread run side by side because a queued actor wakes an idle worker that steals it (old: serial, pair time about twice the single time); one actor still runs its messages one at a time (A2). Each time is the best of seven runs and a class holds if one of three attempts shows it, so a burst of load on the host does not turn a class
+// note: a queued actor wakes an idle worker that steals it (old: two actors created on the main thread ran one after the other and nothing was stolen). A spinner waits until a steal is counted, at most 5 s, so the output does not depend on how loaded the host is; one actor still runs one message at a time (A2)
 
-actor Burner {
-	burn(rounds: int64): uint64 {
-		let x: uint64 = 1;
-		for (let i: int64 = 0; i < rounds; i++) { x = x ^ (x << 13); x = x ^ (x >> 7); x = x ^ (x << 17); }
-		return x;
+@include("runtime/actor/actor.h");
+extern function msActorStolenVisits(): int64;
+import { lockedRead, lockedUpdate } from "std/core/promise";
+
+struct Visits { inside: int32; most: int32; }
+
+const visits: Locked<Visits> = new Locked({ inside: 0, most: 0 });
+
+actor Spinner {
+	spin(base: int64): int64 {
+		const start = performance.now();
+		while (msActorStolenVisits() == base && performance.now() - start < 5000) {}
+		return msActorStolenVisits();
 	}
 }
 
 actor Spawner {
-	pairTime(rounds: int64): number {
-		const a = new Burner();
-		const b = new Burner();
+	pair(): int64 {
+		const a = new Spinner();
+		const b = new Spinner();
+		const before = msActorStolenVisits();
+		await Promise.all([a.spin(before), b.spin(before)]);
+		return msActorStolenVisits() - before;
+	}
+}
+
+actor Once {
+	hold(): int32 {
+		lockedUpdate(visits, (v: Visits): Visits => { return { inside: v.inside + 1, most: v.inside + 1 > v.most ? v.inside + 1 : v.most }; });
 		const start = performance.now();
-		await Promise.all([a.burn(rounds), b.burn(rounds)]);
-		return performance.now() - start;
+		while (performance.now() - start < 100) {}
+		lockedUpdate(visits, (v: Visits): Visits => { return { inside: v.inside - 1, most: v.most }; });
+		return 0;
 	}
 }
 
-const ROUNDS: int64 = 60000000;
-const RUNS = 7;
-const one = new Burner();
-const two = new Burner();
+const a = new Spinner();
+const b = new Spinner();
+await Promise.all([a.spin(0), b.spin(0)]);
+console.log(`two actors: ${msActorStolenVisits() > 0 ? "stolen" : "not stolen"}`);
+
 const outer = new Spawner();
-await Promise.all([one.burn(1000), two.burn(1000)]);
+console.log(`two actors made inside a third: ${(await outer.pair()) > 0 ? "stolen" : "not stolen"}`);
 
-function aloneTime(): number {
-	const start = performance.now();
-	await one.burn(ROUNDS);
-	return performance.now() - start;
-}
-
-function pairTime(): number {
-	const start = performance.now();
-	await Promise.all([one.burn(ROUNDS), two.burn(ROUNDS)]);
-	return performance.now() - start;
-}
-
-function sameTime(): number {
-	const start = performance.now();
-	await Promise.all([one.burn(ROUNDS), one.burn(ROUNDS)]);
-	return performance.now() - start;
-}
-
-function nestedTime(): number {
-	return await outer.pairTime(ROUNDS);
-}
-
-function best(run: () => number): number {
-	let low = run();
-	for (let i = 1; i < RUNS; i++) {
-		const t = run();
-		if (t < low) low = t;
-	}
-	return low;
-}
-
-function holds(measure: () => number, wantParallel: boolean): boolean {
-	for (let attempt = 0; attempt < 3; attempt++) {
-		const single = best(aloneTime);
-		const t = best(measure);
-		if (wantParallel ? t < single * 1.5 : t > single * 1.5) return true;
-	}
-	return false;
-}
-
-console.log(`two actors: ${holds(pairTime, true) ? "parallel" : "serial"}`);
-console.log(`one actor twice: ${holds(sameTime, false) ? "serial" : "parallel"}`);
-console.log(`two actors made inside a third: ${holds(nestedTime, true) ? "parallel" : "serial"}`);
+const once = new Once();
+const idle = [new Spinner(), new Spinner()];
+const base = msActorStolenVisits();
+await Promise.all([once.hold(), once.hold(), idle[0].spin(base), idle[1].spin(base)]);
+const most = lockedRead(visits, (v: Visits): int32 => { return v.most; });
+console.log(`one actor twice: ${most == 1 ? "at most 1 at a time" : "overlapped " + most}`);
