@@ -21,15 +21,7 @@ export function byteEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly
 	return true;
 }
 
-export function byteIsAscii(s: string): boolean {
-	const b = s.asBytes();
-	let i = 0;
-	while (i < b.length) {
-		if (b[i] >= 0x80) return false;
-		i = i + 1;
-	}
-	return true;
-}
+export extern function byteIsAscii(s: string): boolean from "msStringIsAscii";
 
 export function wellFormedString(data: Readonly<Span<uint8>>): string {
 	return data.asString();
