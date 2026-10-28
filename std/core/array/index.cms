@@ -398,6 +398,11 @@ export function slice(this view: Readonly<Span<uint8>>, start: number, end: numb
 	return out;
 }
 
+@compilerFunc
+export function restFrom<T>(this arr: Vec<T>, n: number): T[] {
+	return arr.slice(n);
+}
+
 /** Returns the index of the first occurrence of a value, or -1 if absent. */
 export function indexOf<T>(this arr: Vec<T>, value: T): number {
 	const n = arr.length;

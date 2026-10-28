@@ -1455,7 +1455,11 @@ function fillFromSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], at:
 	if (args.length > fixed) args.shrink(fixed);
 	if (argTypes.length > fixed) argTypes.shrink(fixed);
 	const remainder = fixed == at ? read.first : cloneNodeKeepSem(read.again);
-	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: "slice", isOptional: false }, loc);
+	const routine = ctx.compilerFuncs.get("restFrom");
+	if (routine == null) throw new Error("internal: the array prelude declares no @compilerFunc restFrom");
+	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: routine.name, isOptional: false }, loc);
+	callee.resolvedSym = routine;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
 	const slice = createNodeAt(NodeKind.CallExpr,
 		{ callee, arguments: [indexLiteral(fixed - at, loc)], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 	const rest = createNodeAt(NodeKind.SpreadExpr, { spreadArg: slice }, loc);

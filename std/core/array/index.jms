@@ -42,6 +42,11 @@ export function slice(this view: Readonly<Span<uint8>>, start: number, end: numb
 	@emit(`return Array.from(${view}.base.slice(${view}.off, ${view}.off + ${view}.len).slice(${start}, ${end}));`);
 	unreachable;
 }
+
+@compilerFunc
+export function restFrom<T>(this arr: Vec<T>, n: number): T[] {
+	return arr.slice(n);
+}
 export extern function concat<T>(this arr: Vec<T>, other: T[]): T[] from "#.concat(#)";
 export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // Typed overloads mirroring index.cms — bare native sort() is LEXICOGRAPHIC,

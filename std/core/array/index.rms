@@ -203,6 +203,11 @@ export function slice(this view: Readonly<Span<uint8>>, start: number, end: numb
 	return out;
 }
 
+@compilerFunc
+export function restFrom<T>(this arr: Vec<T>, n: number): T[] {
+	return arr.slice(n);
+}
+
 export function concat<T>(this arr: Vec<T>, other: T[]): T[] {
 	const out: T[] = [];
 	let i = 0;
