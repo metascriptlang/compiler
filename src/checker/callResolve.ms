@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, cal
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
-import { branchFitsSlot, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, slotTakesValue, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership } from "./fit";
+import { branchFitsSlot, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitArmsToSlot, fitNode, slotRefuses, slotTakesValue, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -6440,6 +6440,23 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		}
 	}
 	let matchJoined: Type | null = null;
+	const armBodies: Node[] = [];
+	let expressionArms = !asStatement && d.matchCases.length > 1;
+	for (const c of d.matchCases) {
+		const body = (c.data as MatchCaseData).caseBody;
+		if (body.kind == NodeKind.BlockStmt) expressionArms = false;
+		armBodies.push(body);
+	}
+	const slotFitted = expressionArms ? fitArmsToSlot(ctx, armBodies, expectedType, false) : null;
+	let slotType: Type = inferredType();
+	if (slotFitted != null) {
+		for (let ai = 0; ai < slotFitted.length; ai += 1) {
+			(d.matchCases[ai].data as MatchCaseData).caseBody = slotFitted[ai];
+			branchBodyTypes[ai] = slotFitted[ai].nodeType!;
+		}
+		slotType = branchBodyTypes[0];
+		for (const t of branchBodyTypes) { if (!sameType(slotType, t)) slotType = expectedType!; }
+	}
 	const armValues: Node[] = [];
 	for (let ai = 0; ai < d.matchCases.length; ai += 1) {
 		const cd = d.matchCases[ai].data as MatchCaseData;
@@ -6468,6 +6485,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		if (slot != null && slot != joined && slot.kind == TypeKind.Union && slot.typeName != ""
 				&& armValues.every((v) => branchFitsSlot(ctx, v.nodeType, expectedType))) joined = expectedType;
 	}
+	if (slotFitted != null) joined = slotType;
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
