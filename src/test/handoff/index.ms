@@ -83,6 +83,7 @@ import "./literalAwaitsBinding";
 import "./functionValueMisuse";
 import "./paramProperty";
 import "./yieldValue";
+import "./overloadValue";
 import "./fnFormalArgFit";
 import "./fnParamMode";
 import "./maybeRefPayloadKey";
