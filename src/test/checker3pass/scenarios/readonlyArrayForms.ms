@@ -66,3 +66,20 @@ test "utility-type: NonNullable<T> of a non-nullable type is that type" {
 	const ok = checkOnly("const n: NonNullable<int32> = 4;\nconst m: int32 = n;\n");
 	assert ok.errors.length == 0, ok.errors.join("; ");
 }
+
+test "tuple-annotation: [A, B][] is an array of tuples and [A, B[]] stays a tuple" {
+	const arrayOfTuple = typeDisplayName(annotated("[string, int32][]"));
+	const tuple = typeDisplayName(annotated("[string, int32]"));
+	assert arrayOfTuple == tuple + "[]", arrayOfTuple;
+	const grid = typeDisplayName(annotated("[string, int32][][]"));
+	assert grid == tuple + "[][]", grid;
+	const tupleOfArray = typeDisplayName(annotated("[int32[], string]"));
+	assert tupleOfArray == "[int32[], string]", tupleOfArray;
+}
+
+test "tuple-annotation: the empty tuple is still refused" {
+	const ctx = checkOnly("const probe = 1;").ctx;
+	const before = ctx.errors.length;
+	resolveAnnotation("[]", ctx, 1, 1);
+	assert ctx.errors.length == before + 1;
+}

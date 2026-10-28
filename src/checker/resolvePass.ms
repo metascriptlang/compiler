@@ -960,6 +960,20 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	}
 }
 
+// `[A, B]` is a tuple only when its first `[` closes at the last `]`; `[A, B][]` is an array of one.
+function openingBracketClosesAtEnd(text: string): boolean {
+	let depth = 0;
+	for (let i = 0; i < text.length; i += 1) {
+		const c = text.charAt(i);
+		if (c == "[") depth += 1;
+		if (c == "]") {
+			depth -= 1;
+			if (depth == 0) return i == text.length - 1;
+		}
+	}
+	return false;
+}
+
 function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32, layers: AnnotationLayer[]): Type | null {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -1239,7 +1253,7 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 
 	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
 	// This is checked BEFORE array suffixes because those forms have a base type before the `[`.
-	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]")) {
+	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]") && openingBracketClosesAtEnd(trimmed)) {
 		const tupleInner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (tupleInner == "" && line > 0) {
 			addError(ctx, "the empty tuple type '[]' has no value representation: drop the parameter or give the tuple an element", line, col);
