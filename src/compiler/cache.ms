@@ -210,7 +210,8 @@ let _queryRecordDepSet: HashSet<string> = new HashSet<string>();
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
-export function initCache(mode: number, forceRebuild: boolean): void {
+export function initCache(mode: number, forceRebuild: boolean, trimRoots: string[] = []): void {
+	_stemRoots = stemRootsOf(trimRoots);
 	_projectInputKey = "";
 	_projectInputHashes = [];
 	_cacheDir = localCacheDir(mode >= 1);
@@ -276,7 +277,29 @@ function sanitizePath(path: string): string {
 
 const CACHE_STEM_MAX = 64;
 
-function cacheStem(path: string): string {
+let _stemRoots: string[][] = [];
+
+const STEM_ROOT_MARKS = ["@p", "@s", "@k"];
+
+function stemRootsOf(roots: string[]): string[][] {
+	const pairs: string[][] = [];
+	for (let i = 0; i < roots.length; i++) {
+		if (roots[i] != "") pairs.push([roots[i].replaceAll("\\", "/"), STEM_ROOT_MARKS[i]]);
+	}
+	pairs.sort((a: string[], b: string[]): number => b[0].length - a[0].length);
+	return pairs;
+}
+
+function stemPath(path: string): string {
+	const slashed = path.replaceAll("\\", "/");
+	for (const pair of _stemRoots) {
+		if (slashed.startsWith(`${pair[0]}/`)) return `${pair[1]}/${slashed.slice(pair[0].length + 1, slashed.length)}`;
+	}
+	return path;
+}
+
+function cacheStem(fullPath: string): string {
+	const path = stemPath(fullPath);
 	const safe = sanitizePath(path);
 	if (safe.length <= CACHE_STEM_MAX) return safe;
 	const key = hashContent(path);
@@ -598,7 +621,7 @@ export function objectStoreKey(source: string, ccOption: number, ccBinary: strin
 }
 
 export function nativeStoreSource(srcPath: string): string {
-	return `${absoluteSlashed(srcPath)}\n${hashFile(srcPath)}`;
+	return `${stemPath(absoluteSlashed(srcPath))}\n${hashFile(srcPath)}`;
 }
 
 export function moduleStoreSource(cCode: string): string {
@@ -1235,7 +1258,23 @@ function storeManifest(dependencyFile: string, source: string, search: HeaderSea
 		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
-	return `${text}${presenceText(record, [])}`;
+	return tokensOfRoots(`${text}${presenceText(record, [])}`);
+}
+
+function tokensOfRoots(text: string): string {
+	let result = text;
+	for (const pair of _stemRoots) result = swapFieldPrefix(result, pair[0], pair[1]);
+	return result;
+}
+
+function rootsOfTokens(text: string): string {
+	let result = text;
+	for (const pair of _stemRoots) result = swapFieldPrefix(result, pair[1], pair[0]);
+	return result;
+}
+
+function swapFieldPrefix(text: string, from: string, to: string): string {
+	return text.replaceAll(`\t${from}/`, `\t${to}/`).replaceAll(`\t${from}\t`, `\t${to}\t`).replaceAll(`\t${from}\n`, `\t${to}\n`);
 }
 
 function readStoreManifest(text: string, argDirs: string[], includers: string[]): StoreManifest | null {
@@ -1293,7 +1332,7 @@ function storeHit(key: string, search: HeaderSearch, includers: string[]): Store
 		const object = `${dir}/${entry.slice(0, entry.length - 2)}.o`;
 		if (!exists(object)) continue;
 		const text = try readFile(`${dir}/${entry}`) catch "";
-		const manifest = readStoreManifest(text, search.dirs, includers);
+		const manifest = readStoreManifest(rootsOfTokens(text), search.dirs, includers);
 		if (manifest != null) {
 			markUsed(`${dir}/${entry}`, nowSeconds());
 			return { object, deps: manifest.deps, queries: manifest.queries };
@@ -3033,4 +3072,35 @@ test "a version file name is recognised only in the shapes the compiler writes" 
 	assert !isVersionFileOf(stem, `${stem}.versions`);
 	assert !isVersionFileOf(stem, `${stem}.${key}.o.fp`);
 	assert !isVersionFileOf("a_d_b", `${stem}.${key}.c`);
+}
+
+test "with trim roots a module's cache name is the same under every checkout path" {
+	const saved = _stemRoots;
+	_stemRoots = stemRootsOf(["/work/a", "/work/a/msc", "/home/u/.metascript/cache/extracted"]);
+	const first = cacheStem("/work/a/src/main.ms");
+	const std = cacheStem("/work/a/msc/std/core/index.ms");
+	const pkg = cacheStem("/home/u/.metascript/cache/extracted/lib/x.ms");
+	_stemRoots = stemRootsOf(["/other/b", "/other/b/msc", "/home/v/.metascript/cache/extracted"]);
+	assert cacheStem("/other/b/src/main.ms") == first;
+	assert cacheStem("/other/b/msc/std/core/index.ms") == std;
+	assert cacheStem("/home/v/.metascript/cache/extracted/lib/x.ms") == pkg;
+	assert std != cacheStem("/other/b/msc_std_core_index.ms");
+	assert cacheStem("/elsewhere/y.ms") == sanitizePath("/elsewhere/y.ms");
+	_stemRoots = [];
+	assert cacheStem("/work/a/src/main.ms") == sanitizePath("/work/a/src/main.ms");
+	_stemRoots = saved;
+}
+
+test "a trimmed manifest names roots by token and reads back against the reading checkout's roots" {
+	const saved = _stemRoots;
+	const manifest = (root: string): string => `${STORE_FORMAT}\nq\t${root}/src\nd\t${root}/msc/runtime/core.h\tabc\ns\t${root}\tcore.h\ne\t/usr/include/x.h\t1\n`;
+	_stemRoots = stemRootsOf(["/work/a", "/work/a/msc", ""]);
+	const written = tokensOfRoots(manifest("/work/a"));
+	assert written == `${STORE_FORMAT}\nq\t@p/src\nd\t@s/runtime/core.h\tabc\ns\t@p\tcore.h\ne\t/usr/include/x.h\t1\n`;
+	_stemRoots = stemRootsOf(["/other/b", "/other/b/msc", ""]);
+	assert tokensOfRoots(manifest("/other/b")) == written;
+	assert rootsOfTokens(written) == manifest("/other/b");
+	_stemRoots = [];
+	assert tokensOfRoots(manifest("/work/a")) == manifest("/work/a");
+	_stemRoots = saved;
 }

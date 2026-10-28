@@ -719,12 +719,18 @@ export function cliCompileFlags(opts: CliOptions): string {
 	flags = appendFlag(flags, ltoFlags(opts.lto, getCompilerName(opts.ccCompiler, opts.ccBinary)));
 	if (opts.isHcr || opts.appMode == "lib" || opts.appMode == "staticlib") flags = appendFlag(flags, "-fPIC");
 	if (opts.isHcr && !isGnuGcc(getCompilerName(opts.ccCompiler, opts.ccBinary))) flags = appendFlag(flags, "-fdebug-compilation-dir=.");
-	if (opts.trimpath) {
-		const packages = cacheRoot();
-		for (const f of trimPrefixMapFlags(getCompilerName(opts.ccCompiler, opts.ccBinary), opts.projectRoot, resolveRuntimeDir(), packages != "" ? `${packages}/extracted` : "")) flags = appendFlag(flags, f);
+	const roots = trimRootList(opts);
+	if (roots.length > 0) {
+		for (const f of trimPrefixMapFlags(getCompilerName(opts.ccCompiler, opts.ccBinary), roots[0], roots[1], roots[2])) flags = appendFlag(flags, f);
 	}
 	flags = appendFlag(flags, opts.passC);
 	return flags;
+}
+
+export function trimRootList(opts: CliOptions): string[] {
+	if (!opts.trimpath) return [];
+	const packages = cacheRoot();
+	return [opts.projectRoot, resolveRuntimeDir(), packages != "" ? `${packages}/extracted` : ""];
 }
 
 // Build link-phase flags (adds passL + strip on top of compile flags).
