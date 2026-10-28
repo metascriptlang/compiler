@@ -6213,7 +6213,12 @@ test "a readonly mapped formal infers its type parameter through the reverse map
 	const obj = createUnifyBindings();
 	unifyType(formal, createReadonlyView(createRef(createStruct("Sym", ["id"], [int32Type()], false))), obj);
 	const reversed = peelToStruct(obj.types[0]);
-	assert reversed != null && reversed.typeName == "" && reversed.typeNames[0] == "id" && !isReadonlyView(obj.types[0]);
+	assert reversed != null && reversed.typeName == "Sym" && reversed.typeNames[0] == "id" && !isReadonlyView(obj.types[0]);
+	const plain = createMappedType(key, createKeyOfType(t), createIndexedAccessType(t, key), null, t, (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared));
+	const unnamed = createUnifyBindings();
+	unifyType(plain, createReadonlyView(createRef(createStruct("Sym", ["id"], [int32Type()], false))), unnamed);
+	const record = peelToStruct(unnamed.types[0]);
+	assert record != null && record.typeName == "" && record.typeNames[0] == "id" && isReadonlyView(unnamed.types[0]);
 	const arr = createUnifyBindings();
 	unifyType(formal, createRef(createArray(int32Type())), arr);
 	assert arrayOf(arr.types[0]) != null && arrayOf(arr.types[0])!.typeReturn!.kind == TypeKind.Int32;
