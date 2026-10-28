@@ -509,7 +509,8 @@ function runCacheLocalPreservation(): void {
 function runCacheSymlink(): void {
 	if (windows) {
 		console.log("UNSUPPORTED cache-symlink: requires POSIX ln, touch and test -L");
-		exit(2);
+		if (group == "cache-symlink") exit(2);
+		return;
 	}
 	for (const mode of ["old-directory", "old-child"]) {
 		withCacheRootFixture(`cache-symlink-${mode}`, (dir: string): void => {
