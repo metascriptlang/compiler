@@ -3141,7 +3141,8 @@ function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: 
 function dispatcherForward(g: CGen, ft: Readonly<Type>, nrvo: boolean, baseMut: int32, callee: string, calleeType: Readonly<Type>, calleeMut: int32): string {
 	let args = nrvo ? "__result, " : "";
 	args = args + `(${getTypeDesc(g, calleeType.typeChildren[0])})${paramCName("p", 0)}`;
-	for (let i = 1; i < ft.typeChildren.length; i += 1) {
+	const forwarded = calleeType.typeChildren.length < ft.typeChildren.length ? calleeType.typeChildren.length : ft.typeChildren.length;
+	for (let i = 1; i < forwarded; i += 1) {
 		const bt = ft.typeChildren[i];
 		if (hasNoRuntimeRepr(bt)) continue;
 		const name = paramCName("p", i);
@@ -3150,7 +3151,7 @@ function dispatcherForward(g: CGen, ft: Readonly<Type>, nrvo: boolean, baseMut: 
 			continue;
 		}
 		const baseInd = isPromotedParam(g, bt, (baseMut & (1 << (i as int32))) != 0, false, false);
-		const ovInd = i < calleeType.typeChildren.length && isPromotedParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0, false, false);
+		const ovInd = isPromotedParam(g, calleeType.typeChildren[i], (calleeMut & (1 << (i as int32))) != 0, false, false);
 		args = args + ", " + (baseInd == ovInd ? name : baseInd ? `*${name}` : `&${name}`);
 	}
 	return `${callee}(${args})`;
