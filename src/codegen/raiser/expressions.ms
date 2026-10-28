@@ -1692,7 +1692,7 @@ function isClosureLiteral(node: Node): boolean {
 	return closureLiteralOf(node) != null;
 }
 
-interface ClosureArgs { held: int32[]; route: int32; tryAt: int32; }
+interface ClosureArgs { held: int32[]; callee: int32; route: int32; tryAt: int32; }
 
 function mayRaiseAcross(call: Node, args: Node[]): boolean {
 	if (!call.flags.has(NodeFlag.NonRaisingCall)) return true;
@@ -1706,9 +1706,9 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 // as a scope's final destroys a temporary on every exit. The callee's registers overlap the
 // registers allocated after the call block, so the registers that keep the pairs across the
 // call are reserved before the block.
-function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[]): ClosureArgs {
+function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee: int32 = -1): ClosureArgs {
 	const held: int32[] = [];
-	let any = false;
+	let any = callee >= 0;
 	for (const a of args) {
 		const reg = isClosureLiteral(a) ? allocRef(s) : -1;
 		held.push(reg);
@@ -1717,11 +1717,11 @@ function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[]): Closu
 			any = true;
 		}
 	}
-	if (!any || !mayRaiseAcross(call, args)) return { held, route: -1, tryAt: -1 };
+	if (!any || !mayRaiseAcross(call, args)) return { held, callee, route: -1, tryAt: -1 };
 	const route = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryAt = emitAbxPlaceholder(s, RaiserOpcode.Try);
 	s.tries.push({ finallyBody: null, routeReg: route });
-	return { held, route, tryAt };
+	return { held, callee, route, tryAt };
 }
 
 function compileClosureArg(s: RaiserCompState, arg: Node, slot: int32, held: int32): void {
@@ -1745,6 +1745,7 @@ function releaseClosureArgs(s: RaiserCompState, c: ClosureArgs): void {
 		patchAbxTo(s, c.tryAt, RaiserOpcode.Try, 0, fin);
 	}
 	for (const pair of c.held) if (pair >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, pair, 0, 0));
+	if (c.callee >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, c.callee, 0, 0));
 	if (c.route >= 0) emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, c.route, 0, 0));
 }
 
@@ -2312,7 +2313,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	}
 	const plain = calleeType != null && isPlainFunctionPointer(calleeType);
 	if (!plain) closureClasses.push(RaiserRegClass.Ref);
-	const closures = reserveClosureArgs(s, node, d.arguments);
+	const closures = reserveClosureArgs(s, node, d.arguments, calleeHeld);
 	const dest = allocBlock(s, closureClasses);
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
@@ -2326,12 +2327,10 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	if (plain) {
 		emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, closureReg, argCount));
 		releaseClosureArgs(s, closures);
-		if (calleeHeld >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, calleeHeld, 0, 0));
 		return dest;
 	}
 	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	releaseClosureArgs(s, closures);
-	if (calleeHeld >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, calleeHeld, 0, 0));
 	return dest;
 }
 
