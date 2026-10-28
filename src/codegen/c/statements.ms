@@ -1108,10 +1108,10 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				// Store in temp first, then run cleanup, then return temp.
 				const retType = p.returnDesc != "" ? p.returnDesc : (d.argument.nodeType != null ? getTypeDesc(g, d.argument.nodeType) : "");
 				if (retType != "" && retType != "void") {
-					const tmp = getTemp(p, retType);
-					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
+					if (p.resultSlot == "") p.resultSlot = getTemp(p, retType).snippet;
+					emitStmtsLine(p, `${p.resultSlot} = ${snippet};`);
 					blockLeaveActions(g, p, p.nestedTryStmts.length);
-					emitStmtsLine(p, `return ${tmp.snippet};`);
+					emitStmtsLine(p, `return ${p.resultSlot};`);
 				} else {
 					blockLeaveActions(g, p, p.nestedTryStmts.length);
 					emitStmtsLine(p, `return ${snippet};`);

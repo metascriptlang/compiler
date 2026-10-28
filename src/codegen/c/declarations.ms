@@ -189,13 +189,15 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			}
 		}
 		genStmt(g, p, d.fnBody);
+		const zero = `(${actualRetType})${zeroInit(fnType.typeReturn)}`;
+		if (p.resultSlot != "") emitProcLocalsLine(p, `${p.resultSlot} = ${zero};`);
 		const procs = sec(g, CSection.Procs);
 		addLine(procs, proto + " {");
 		emitProcBody(p, procs);
-		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
-		// to satisfy C compiler's control flow analysis for non-void functions.
+		// Reference parity (BeforeRet_ returns result): a raise that leaves after a return
+		// parked its value hands that value to the caller, which destroys it.
 		if (!nrvo && actualRetType != "void") {
-			addLine(procs, `  return (${actualRetType})${zeroInit(fnType.typeReturn)};`);
+			addLine(procs, `  return ${p.resultSlot != "" ? p.resultSlot : zero};`);
 		}
 		addLine(procs, "}");
 		addNewline(procs);

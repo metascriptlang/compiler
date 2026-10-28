@@ -187,6 +187,7 @@ export class CProc {
 	indirectItems: int32[];
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
+	resultSlot: string;    // the local a return through a finally parks its value in; BeforeRet_ returns it ("" = none)
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
 	localItemModules: int32[];  // parallel to localSymNames: each local's (itemModule, item)
@@ -248,6 +249,7 @@ export function createProc(name: string, returnDesc: string = "", returnsVoid: b
 		indirectItems: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
+		resultSlot: "",
 		suppressRaiseCheck: false,
 		sigConflicts: [],
 		localItemModules: [],
