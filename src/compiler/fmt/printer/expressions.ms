@@ -4,19 +4,19 @@ import {
 	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
-	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
+	ConditionalExprData, SpreadExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, takeOwnLineTrailing } from "./commentDocs";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, takeOwnLineTrailing, commentsOfRun } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
-	docCommaSepList,
+	docCommaSepList, docWithoutSoftLines,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
@@ -119,7 +119,7 @@ function bindsInsideUnary(op: string, operand: Node): boolean {
 	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
 }
 
-function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions): string {
+export function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions): string {
 	if (node.typeArg == "") return "";
 	let raw = "";
 	if (callee != null && callee.location != null && callee.kind == NodeKind.Identifier) {
@@ -130,20 +130,7 @@ function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions): stri
 	return raw != "" ? raw : "<" + node.typeArg + ">";
 }
 
-export function printCallExpr(node: Node, options: FormatOptions): Doc {
-	const d = node.data as CallExprData;
-	const args: Doc[] = [];
-	for (const arg of d.arguments) {
-		args.push(callPrintNode(arg, options));
-	}
-
-	const callParts: Doc[] = [printAtom(d.callee, options), docText((node.flags.has(NodeFlag.OptionalLink) ? "?." : "") + writtenTypeArgs(node, d.callee, options) + "(")];
-	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), danglingOf(node))) callParts.push(p);
-	callParts.push(docText(")"));
-	return docGroup(callParts);
-}
-
-function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[]): Doc[] {
+export function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[]): Doc[] {
 	if (items.length == 0 && endComments.length == 0) return [];
 	const body = docCommaSepList(items, trailing);
 	for (const c of endComments) {
@@ -184,14 +171,14 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 //
 // This list grows test-by-test; only kinds proven needed by a roundtrip
 // test go in. See src/test/fmt/cases/.
-function printAtom(node: Node, options: FormatOptions): Doc {
+export function printAtom(node: Node, options: FormatOptions): Doc {
 	if (node != null && needsAtomParens(node.kind) && !isNonNullAssertion(node) && !node.flags.has(NodeFlag.Parenthesized) && rawTemplateAt(node, options) == "") {
 		return docGroup([docText("("), callPrintNode(node, options), docText(")")]);
 	}
 	return callPrintNode(node, options);
 }
 
-function isNonNullAssertion(node: Node): boolean {
+export function isNonNullAssertion(node: Node): boolean {
 	return node.kind == NodeKind.TypeAssertion && (node.data as TypeAssertionData).asType == "!";
 }
 
@@ -363,7 +350,7 @@ export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
-function writtenArrowBody(body: Node, options: FormatOptions): Node {
+export function writtenArrowBody(body: Node, options: FormatOptions): Node {
 	if (body.kind != NodeKind.BlockStmt) return body;
 	const at = sourceByteAt(options.source, body.location.line, body.location.column);
 	if (at == "{".code || at == -1) return body;
@@ -377,26 +364,100 @@ function writtenArrowBody(body: Node, options: FormatOptions): Node {
 	return arg != null ? arg : body;
 }
 
-export function printArrowFunction(node: Node, options: FormatOptions): Doc {
+export interface FunctionPieces {
+	head: Doc[];
+	body: Doc;
+	verbatimHead: boolean;
+	inlineBody: boolean;
+	conditionalBody: boolean;
+	hasComments: boolean;
+}
+
+function ownLineLeading(node: Node): boolean {
+	for (const c of commentsOfRun().leading(node)) {
+		if (!c.formatted && c.linesBefore > 0) return true;
+	}
+	return false;
+}
+
+function leftmostIsObjectOrFunction(node: Node): boolean {
+	let cur: Node | null = node;
+	while (cur != null) {
+		if (cur.flags.has(NodeFlag.Parenthesized)) return false;
+		if (cur.kind == NodeKind.ObjectLiteral || cur.kind == NodeKind.FunctionExpr) return true;
+		cur = match (cur.kind) {
+			NodeKind.ConditionalExpr => (cur.data as ConditionalExprData).ternaryCondition,
+			NodeKind.BinaryExpr => (cur.data as BinaryExprData).left,
+			NodeKind.MemberExpr => (cur.data as MemberExprData).object,
+			NodeKind.CallExpr => (cur.data as CallExprData).callee,
+			NodeKind.ArrayAccess => (cur.data as ArrayAccessData).array,
+			NodeKind.TypeAssertion => (cur.data as TypeAssertionData).asExpr,
+			_ => null,
+		};
+	}
+	return false;
+}
+
+export function arrowPieces(node: Node, options: FormatOptions): FunctionPieces {
 	const d = node.data as ArrowFunctionData;
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
-	const blockBody = sourceByteAt(options.source, d.arrowBody.location.line, d.arrowBody.location.column) == "{".code;
-	const asWritten = blockBody ? headerAsWritten(node, d.arrowBody, options, null) : null;
-	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, printCollapsibleBody(writtenArrowBody(d.arrowBody, options), options)]);
-	const parts: Doc[] = isAsync ? [docText("async ")] : [];
+	const body = writtenArrowBody(d.arrowBody, options);
+	const isBlock = body.kind == NodeKind.BlockStmt;
+	const hasComments = hasCommentsOutside(node) || danglingOf(node).length > 0;
+	const conditionalBody = body.kind == NodeKind.ConditionalExpr && !body.flags.has(NodeFlag.Parenthesized) && !leftmostIsObjectOrFunction(body);
+	const inlineBody = !ownLineLeading(body) && (isBlock
+		|| body.kind == NodeKind.ArrowFunction || body.kind == NodeKind.ArrayLiteral || body.kind == NodeKind.ObjectLiteral
+		|| body.kind == NodeKind.JSXElement || body.kind == NodeKind.JSXFragment
+		|| rawTemplateAt(body, options).includes("\n"));
+	const writtenBlock = sourceByteAt(options.source, d.arrowBody.location.line, d.arrowBody.location.column) == "{".code;
+	const asWritten = writtenBlock ? headerAsWritten(node, d.arrowBody, options, null) : null;
+	if (asWritten != null) {
+		return { head: [docText(isAsync ? "async " : ""), asWritten], body: printCollapsibleBody(body, options), verbatimHead: true, inlineBody, conditionalBody, hasComments };
+	}
+	const head: Doc[] = isAsync ? [docText("async ")] : [];
 	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
 	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
 	if (typed != "") {
-		parts.push(docText(typed));
+		head.push(docText(typed));
 	} else {
-		for (const p of paramListInParens(params, options)) parts.push(p);
+		for (const part of paramListInParens(params, options)) head.push(part);
 	}
 	if (typed == "" && d.arrowReturnType != "") {
-		parts.push(docText(": " + d.arrowReturnType));
+		head.push(docText(": " + d.arrowReturnType));
 	}
-	parts.push(docText(" => "));
-	parts.push(printCollapsibleBody(writtenArrowBody(d.arrowBody, options), options));
-	return docGroup(parts);
+	const printed = isBlock ? printCollapsibleBody(body, options) : callPrintNode(body, options);
+	return { head, body: printed, verbatimHead: false, inlineBody, conditionalBody, hasComments };
+}
+
+export enum ArgHug {
+	None,
+	First,
+	Last,
+}
+
+export function assembleArrow(p: FunctionPieces, hug: ArgHug, options: FormatOptions): Doc {
+	const head = hug == ArgHug.None ? p.head : headWithoutSoftLines(p.head);
+	if (p.verbatimHead) return docGroup([...head, p.body]);
+	if (p.inlineBody) return docGroup([...head, docText(" => "), p.body]);
+	const lastArg = hug == ArgHug.Last;
+	const inner: Doc[] = [docLine()];
+	if (p.conditionalBody) inner.push(docIfBreak(docNil(), docText("(")));
+	inner.push(p.body);
+	if (p.conditionalBody) inner.push(docIfBreak(docNil(), docText(")")));
+	const parts: Doc[] = [docIndent(inner)];
+	if (lastArg && wantsTrailingComma(options, CommaContext.Params)) parts.push(docIfBreak(docText(","), docNil()));
+	if (lastArg && !p.hasComments) parts.push(docSoftLine());
+	return docGroup([...head, docText(" =>"), docGroup(parts)]);
+}
+
+export function headWithoutSoftLines(head: Doc[]): Doc[] {
+	const out: Doc[] = [];
+	for (const doc of head) out.push(docWithoutSoftLines(doc));
+	return out;
+}
+
+export function printArrowFunction(node: Node, options: FormatOptions): Doc {
+	return assembleArrow(arrowPieces(node, options), ArgHug.None, options);
 }
 
 export function printConditionalExpr(node: Node, options: FormatOptions): Doc {
@@ -422,18 +483,6 @@ export function printSpreadExpr(node: Node, options: FormatOptions): Doc {
 export function printComputedProperty(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ComputedPropertyData;
 	return docGroup([docText("["), callPrintNode(d.computedKey, options), docText("]: "), callPrintNode(d.computedValue, options)]);
-}
-
-export function printNewExpr(node: Node, options: FormatOptions): Doc {
-	const d = node.data as NewExprData;
-	const args: Doc[] = [];
-	for (const arg of d.newArguments) {
-		args.push(callPrintNode(arg, options));
-	}
-	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(writtenTypeArgs(node, d.newCallee, options) + "(")];
-	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), danglingOf(node))) newParts.push(p);
-	newParts.push(docText(")"));
-	return docGroup(newParts);
 }
 
 function isUnaryLevel(node: Node): boolean {
@@ -586,23 +635,30 @@ export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
-export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
+export function functionExprPieces(node: Node, options: FormatOptions): FunctionPieces {
 	const d = node.data as FunctionExprData;
+	const hasComments = hasCommentsOutside(node) || danglingOf(node).length > 0;
 	const asWritten = headerAsWritten(node, d.funcExprBody, options, null);
-	if (asWritten != null) return docGroup([asWritten, printCollapsibleBody(d.funcExprBody, options)]);
-	// `async`, `generator`, and `async_generator` are encoded in funcExprFlags.
+	if (asWritten != null) {
+		return { head: [asWritten], body: printCollapsibleBody(d.funcExprBody, options), verbatimHead: true, inlineBody: true, conditionalBody: false, hasComments };
+	}
 	const isAsync = flagHas(d.funcExprFlags, "async") || flagHas(d.funcExprFlags, "async_generator");
 	const isGen = flagHas(d.funcExprFlags, "generator") || flagHas(d.funcExprFlags, "async_generator");
-	const head = (isAsync ? "async " : "") + "function" + (isGen ? "*" : "") + " ";
-	const parts: Doc[] = [docText(head)];
-	// FunctionExprData has no defaults field — pass empty array.
+	const head: Doc[] = [docText((isAsync ? "async " : "") + "function" + (isGen ? "*" : "") + " ")];
 	const noDefaults: Node[] = [];
 	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	for (const part of paramListInParens(params, options)) head.push(part);
 	if (d.funcExprReturnType != "") {
-		parts.push(docText(": " + d.funcExprReturnType));
+		head.push(docText(": " + d.funcExprReturnType));
 	}
-	parts.push(docText(" "));
-	parts.push(printCollapsibleBody(d.funcExprBody, options));
-	return docGroup(parts);
+	head.push(docText(" "));
+	return { head, body: printCollapsibleBody(d.funcExprBody, options), verbatimHead: false, inlineBody: true, conditionalBody: false, hasComments };
+}
+
+export function assembleFunctionExpr(p: FunctionPieces, hug: ArgHug): Doc {
+	return docGroup([...(hug == ArgHug.None ? p.head : headWithoutSoftLines(p.head)), p.body]);
+}
+
+export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
+	return assembleFunctionExpr(functionExprPieces(node, options), ArgHug.None);
 }

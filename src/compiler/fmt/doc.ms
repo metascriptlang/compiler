@@ -140,6 +140,60 @@ export function docJoin(docs: Doc[], sep: Doc): Doc {
 	return docGroup(result);
 }
 
+function childDocs(doc: Doc): Doc[] {
+	return (doc.data as { children: Doc[] }).children;
+}
+
+export function docWillBreak(doc: Doc): boolean {
+	return match (doc.kind) {
+		DocKind.HardLine | DocKind.BreakParent => true,
+		DocKind.Text | DocKind.SourceText => (doc.data as { text: string }).text.includes("\n"),
+		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+			if (doc.kind == DocKind.Group && doc.shouldBreak) return true;
+			for (const child of childDocs(doc)) {
+				if (docWillBreak(child)) return true;
+			}
+			return false;
+		},
+		DocKind.IfBreak => {
+			const branches = doc.data as { broken: Doc, flat: Doc };
+			return docWillBreak(branches.broken) || docWillBreak(branches.flat);
+		},
+		DocKind.BestFitting => {
+			for (const child of (doc.data as { variants: Doc[][] }).variants[0]) {
+				if (docWillBreak(child)) return true;
+			}
+			return false;
+		},
+		DocKind.Nil | DocKind.Line => false,
+	};
+}
+
+function copyDocs(docs: Doc[]): Doc[] {
+	const out: Doc[] = [];
+	for (const d of docs) out.push(docWithoutSoftLines(d));
+	return out;
+}
+
+export function docWithoutSoftLines(doc: Doc): Doc {
+	return match (doc.kind) {
+		DocKind.Nil | DocKind.Text | DocKind.SourceText | DocKind.HardLine | DocKind.BreakParent => doc,
+		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? docNil() : docText(" "),
+		DocKind.IfBreak => docWithoutSoftLines((doc.data as { broken: Doc, flat: Doc }).flat),
+		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+			const copy = createDoc(doc.kind, { children: copyDocs(childDocs(doc)) } as DocData);
+			copy.shouldBreak = doc.shouldBreak;
+			copy.groupId = doc.groupId;
+			return copy;
+		},
+		DocKind.BestFitting => {
+			const variants: Doc[][] = [];
+			for (const v of (doc.data as { variants: Doc[][] }).variants) variants.push(copyDocs(v));
+			return docBestFitting(variants);
+		},
+	};
+}
+
 // A trailing comma appears only when the list breaks and `trailing` is set.
 export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
 	if (items.length == 0) return [];

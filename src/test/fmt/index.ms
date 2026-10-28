@@ -135,3 +135,4 @@ import "./cases/externFromEscapes";
 import "./cases/defaultIndent";
 import "./cases/emptyBlocks";
 import "./cases/stringQuotes";
+import "./cases/callArguments";

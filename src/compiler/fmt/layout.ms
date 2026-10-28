@@ -2,7 +2,7 @@
 // the current line.
 
 import { FormatOptions, TrailingComma } from "./options";
-import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText, docGroupWithId, docIfGroupBreaks, docIndentIfGroupBreaks, docBestFitting, docFill, newGroupId, noGroupId } from "./doc";
+import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText, docGroupWithId, docIfGroupBreaks, docIndentIfGroupBreaks, docBestFitting, docFill, newGroupId, noGroupId, docWillBreak, docWithoutSoftLines } from "./doc";
 
 enum Mode {
 	Flat,
@@ -715,4 +715,27 @@ test "layout: a best fitting doc needs at least two variants" {
 		threw = true;
 	}
 	assert threw;
+}
+
+test "layout: docWillBreak sees a forced break, a broken group, a multi-line text and the flat variant of a best fitting doc" {
+	assert docWillBreak(docGroup([docText("a"), docHardLine()]));
+	assert docWillBreak(docIndent([docBreakParent()]));
+	assert docWillBreak(docGroupBreak([docText("a")]));
+	assert docWillBreak(docText("`a\nb`"));
+	assert !docWillBreak(docGroup([docText("a"), docLine(), docSoftLine()]));
+	assert docWillBreak(docBestFitting([[docHardLine()], [docText("b")]]));
+	assert !docWillBreak(docBestFitting([[docText("a")], [docHardLine()]]));
+}
+
+test "layout: docWithoutSoftLines drops width-dependent breaks and keeps the forced ones" {
+	const list = (): Doc => docGroup([
+		docText("("),
+		docIndent([docSoftLine(), docText("aaaaaa,"), docLine(), docText("bbbbbb"), docIfBreak(docText(","), docNil())]),
+		docSoftLine(),
+		docText(")"),
+	]);
+	assert formatDoc(list(), narrow) == "(\n  aaaaaa,\n  bbbbbb,\n)\n";
+	assert formatDoc(docWithoutSoftLines(list()), narrow) == "(aaaaaa, bbbbbb)\n";
+	assert docWillBreak(docWithoutSoftLines(docGroup([docText("a"), docHardLine()])));
+	assert !docWillBreak(docWithoutSoftLines(list()));
 }
