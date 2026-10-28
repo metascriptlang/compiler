@@ -338,31 +338,24 @@ void msActorWakeEventLoop(void) {
 	msWakeEngineIocps();
 }
 
-/* A serve thread's io engine port: a loop parked in msIoEnginePoll waits there, not on the
- * dispatcher port completions are posted to, so a completion also posts a wake packet here.
- * Kept apart from gWakeIocps, whose slot 0 must be the dispatcher. A full table returns false
- * and that engine keeps its poll timeout as the bound. */
-#define MS_ENGINE_IOCP_MAX 64
-static HANDLE volatile gEngineIocps[MS_ENGINE_IOCP_MAX];
+/* The io engine port of the main loop (scheduler 0, the one thread that is no pool worker): it parks in msIoEnginePoll, which waits
+ * on this port and not on the dispatcher port a completion is posted to, so the completion
+ * and every msActorWakeEventLoop (which only ever means scheduler 0's loop) also post one
+ * wake packet here. A serve thread on another scheduler is woken by msPoolWakeWorker through
+ * its engine registered with msSchedWakeRegister. */
+static HANDLE volatile gLoopEngineIocp = NULL;
 
-bool msWakeIocpRegister(void* port) {
-	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
-		if (InterlockedCompareExchangePointer((PVOID volatile*)&gEngineIocps[i], port, NULL) == NULL) return true;
-	}
-	return false;
+void msWakeIocpRegister(void* port) {
+	if (!msIsPoolWorker) gLoopEngineIocp = port;
 }
 
 void msWakeIocpUnregister(void* port) {
-	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
-		InterlockedCompareExchangePointer((PVOID volatile*)&gEngineIocps[i], NULL, port);
-	}
+	InterlockedCompareExchangePointer((PVOID volatile*)&gLoopEngineIocp, NULL, port);
 }
 
 static void msWakeEngineIocps(void) {
-	for (int i = 0; i < MS_ENGINE_IOCP_MAX; i++) {
-		HANDLE h = gEngineIocps[i];
-		if (h != NULL) PostQueuedCompletionStatus(h, 0, 0, NULL);
-	}
+	HANDLE h = gLoopEngineIocp;
+	if (h != NULL) PostQueuedCompletionStatus(h, 0, 0, NULL);
 }
 
 /* No wake FD exists on Windows — the loop is woken through the IOCP above, not
