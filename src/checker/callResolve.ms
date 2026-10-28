@@ -624,7 +624,6 @@ function cloneDefaultNode(node: Node): Node {
 	return clone;
 }
 
-const defaultsAwaitingInstance: HashSet<Node> = new HashSet<Node>();
 
 function readEarlierParams(ctx: CheckerContext, cloned: Node, paramNames: string[], defIdx: number, args: Node[],
 	defaultOffset: number, paramTypes: Type[], receiverSlot: Node | null, reads: Node[]): Node {
@@ -743,7 +742,7 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 		callCheckExpr(defCtx, cloned, expectedType);
 		const awaitsInstance = expectedType != null && hasGenericParams(expectedType);
 		const fitted = expectedType != null && !awaitsInstance ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
-		if (awaitsInstance) defaultsAwaitingInstance.add(fitted);
+		if (awaitsInstance) fitted.flags = fitted.flags.incl(NodeFlag.DefaultAwaitsInstance);
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
 		args.push(fitted);
 		argIdx = argIdx + 1;
@@ -3844,8 +3843,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const rawFormal = deferredTuple != null && pi >= restIdx ? deferredTuple.typeChildren[pi - restIdx] : calleeType.typeChildren[pi];
 		const substituted = applySubstitutions(rawFormal, eb);
 		if (substituted == null) continue;
-		if (defaultsAwaitingInstance.has(arg) && !hasGenericParams(substituted)) {
-			defaultsAwaitingInstance.delete(arg);
+		if (arg.flags.has(NodeFlag.DefaultAwaitsInstance) && !hasGenericParams(substituted)) {
+			arg.flags = arg.flags.excl(NodeFlag.DefaultAwaitsInstance);
 			cd.arguments[pi] = fitDefaultToInstance(ctx, node, sym, pi < calleeType.typeNames.length ? calleeType.typeNames[pi] : String(pi), arg, substituted);
 			continue;
 		}
