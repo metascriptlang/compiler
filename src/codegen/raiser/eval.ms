@@ -892,8 +892,7 @@ test "engine: a new Array of a literal union is refused while the engine cannot 
 	assert filled.error.includes("cannot evaluate 'msFilledArray' at comptime"), filled.error;
 	const plain = evalOrcVM("const ns = new Array<number>(2); console.log(`${ns.length} ${ns[1]}`);");
 	assert plain.error == "", plain.error;
-	assert plain.output == "2 0
-", plain.output;
+	assert plain.output == "2 0\n", plain.output;
 }
 
 function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {
