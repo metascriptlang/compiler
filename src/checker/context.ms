@@ -1617,7 +1617,7 @@ export function assignTemp(sym: Symbol, value: Node): Node {
 
 export function hoistedTemp(ctx: CheckerContext, t: Type, loc: SourceLocation): Symbol {
 	hoistedTemps += 1;
-	const name = "__dflt_" + String(hoistedTemps);
+	const name = ":tmp" + String(hoistedTemps);
 	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
 	setFlag(sym, SymbolFlag.Used);
 	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
