@@ -2089,6 +2089,8 @@ export function heapObjectGetObjectHandle(arr: RaiserArrayHeap, heap: RaiserObje
 export function clearArrayHeap(heap: RaiserArrayHeap): void {
 	heap.mem = createVmMemory();
 	heap.stringBytes.clear();
+	heap.orcRoots.length = 0;
+	heap.orcThreshold = ORC_DEFAULT_THRESHOLD;
 }
 
 export function clearObjectHeap(heap: RaiserObjectHeap): void {
