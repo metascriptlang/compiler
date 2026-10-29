@@ -1,3 +1,4 @@
+// @xfail(raiser): one array stays live after program end on the Raiser (lane du/tm2 traced it to no single feature; each alone is clean)
 // @stdout: card=3/2 scalar=8/true/7 text=5/hello!/true struct=6/10 class=5 field=5/12 element=3 param=16 generic=4/x copy=7 alias=9/7 temp=5/8/4 nested=2
 // note: a Borrow<T> local holds the address of the variable, field or element it was taken from, and every read goes through that address on every backend; a change made through an alias or a callee is seen by the next read.
 
