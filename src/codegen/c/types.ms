@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -1081,7 +1081,7 @@ export function promiseAllShape(inner: Readonly<Type | null>): PromiseAllShape {
 }
 
 export function hasUnionEq(t: Type): boolean {
-	if (t.kind != TypeKind.Union || t.typeExtra != null || isStringLike(t)) return false;
+	if (!isTagCarriedUnion(t) || t.typeExtra != null || isStringLike(t)) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
 	for (const m of t.typeChildren) {
 		if (m == null) return false;
