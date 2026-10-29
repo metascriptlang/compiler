@@ -621,7 +621,7 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 			if (isComputedGotoMark(node) && !isRegisteredMark(ctx, node)) {
 				addError(ctx, "@computedGoto must be a statement of a while loop body", d.expr.location.line, d.expr.location.column);
 			}
-			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr)) {
+			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr) && !isWasmPlacementStmt(node)) {
 				addError(ctx, "invalid directive '@" + (d.expr.data as MacroInvocationData).macroName + "': no macro or compiler directive has this name", d.expr.location.line, d.expr.location.column);
 			}
 			if (d.expr.kind == NodeKind.SpliceMany) {
