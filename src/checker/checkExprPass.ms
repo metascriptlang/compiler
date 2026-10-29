@@ -1859,9 +1859,11 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 	const beforeLeft = d.left;
 	const beforeRight = d.right;
+	const beforeLeftType = d.left.nodeType;
+	const beforeRightType = d.right.nodeType;
 	widenEqualityOperand(ctx, d);
-	if (d.left != beforeLeft) effLeft = d.left.nodeType;
-	if (d.right != beforeRight) effRight = d.right.nodeType;
+	if (d.left != beforeLeft || d.left.nodeType != beforeLeftType) effLeft = d.left.nodeType;
+	if (d.right != beforeRight || d.right.nodeType != beforeRightType) effRight = d.right.nodeType;
 			if (effLeft != null && effRight != null && synthValueEquality(ctx, node, d, effLeft, effRight)) return;
 	if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
 	if (isComparisonOp(d.operator)) refuseMixedSignedCompare(ctx, d.operator, effLeft, effRight, node);
