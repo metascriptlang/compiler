@@ -1,7 +1,6 @@
 // The last read of a class static or a namespace member, taken before a raising call later in
 // the same argument list, copies the value: the static still holds it on the next call.
 // @stdout: v1 3 w1 s1|v2 3 w2 s2|done
-// @xfail(san): a managed class static field is never destroyed at exit (msStringArrayRefCell); card 2026-10-16-class-static-managed-field-never-destroyed-at-exit.md
 import * as lib from "./lib";
 
 function plain(n: number): string { return "v" + n.toString(); }
