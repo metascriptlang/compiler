@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: saved 1
 // @stdout: terminate saved=1
 // note: the entry module ends while save() is suspended on its timer; the method finishes before program exit runs onTerminate (ULTRALOCK A7, A8).

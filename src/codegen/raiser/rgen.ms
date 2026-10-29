@@ -29,7 +29,7 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
-	isScalarClass
+	isScalarClass, allocBool, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen
 } from "./context";
 import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
 import { bodyIsErrorBlind } from "../../checker/raises";
@@ -420,6 +420,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	const noNodes: Node[] = [];
 	const noSyms: Symbol[] = [];
 	const nullNode = null as unknown as Node;
+	let actorExitStop = -1;
 
 	// Pass 1a: Collect functions + enums (must match Phase 2 compilation order)
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -431,6 +432,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
 				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
 				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode, routine: fnNode.resolvedSym });
+				if (fd.fnName == ACTOR_EXIT_STOP && modules[mi].modulePath.endsWith(ACTOR_RUNTIME_MODULE)) actorExitStop = funcIdx;
 				funcIdx += 1;
 			}
 		}
@@ -583,7 +585,17 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	if (initIndices.length == 0) {
 		emitLoadConst(entryS, allocRef(entryS), raiserNil());
 	}
-	if (deinitIndices.length > 0) emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
+	if (deinitIndices.length > 0 || actorExitStop >= 0) emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
+	if (actorExitStop >= 0) {
+		demandBody(actorExitStop);
+		const round = codeLen(entryS);
+		const stopped = allocBool(entryS);
+		emitInst(entryS, raiserABC(RaiserOpcode.Call, stopped, actorExitStop, 0));
+		emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
+		const done = emitBranchIfFalsy(entryS, stopped);
+		patchJumpTo(entryS, emitJumpPlaceholder(entryS), round);
+		patchJumpTo(entryS, done, codeLen(entryS));
+	}
 	for (let di = deinitIndices.length - 1; di >= 0; di -= 1) {
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, allocDyn(entryS), deinitIndices[di], 0));
 	}
@@ -615,6 +627,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	}
 	return compiled;
 }
+
+const ACTOR_EXIT_STOP = "msActorStopLive";
+const ACTOR_RUNTIME_MODULE = "std/core/promise/index.rms";
 
 function runProgram(program: Node): RaiserContext {
 	const mod = generateRaiser(program);
