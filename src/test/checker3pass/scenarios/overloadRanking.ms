@@ -111,3 +111,25 @@ function size(this b: Readonly<Box>): string { return "s"; }
 `).errors.join("\n");
 	assert twice.contains("overloaded 'size' leads to ambiguous calls"), "same receiver view-ness and parameters: " + twice;
 }
+
+test "a struct widened into a nullable and an array literal into a tuple rank below the exact overload" {
+	const errors = checkOnly(`
+struct Pos { x: int32; y: int32; }
+function find(key: Pos | null): string { return "nullable"; }
+function find(key: Pos): int32 { return 1; }
+function pair(key: [int32, int32 | null]): string { return "nullable"; }
+function pair(key: [int32, int32]): int32 { return 1; }
+function only(key: Pos | null): string { return "nullable"; }
+function only(key: string): int32 { return 1; }
+const p: Pos = { x: 1, y: 2 };
+const a: int32 = find(p);
+const b: string = find(null);
+const c: int32 = pair([1, 0]);
+const d: string = pair([1, null]);
+const e: string = only(p);
+const f = pair([1, 0, 2]);
+`).errors;
+	const text = errors.join("\n");
+	assert text.startsWith("No matching overload for 'pair'"), "a literal of another length fits no tuple: " + text;
+	assert errors.length == 1, "every other call picks the overload its declared result needs: " + text;
+}
