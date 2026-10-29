@@ -43,6 +43,18 @@ test "@wasm() with an argument is an error naming the directive" {
 	assert text.contains("@wasm() takes no arguments");
 }
 
+test "a wasm-placed export that stores its callback is refused, one that calls it is not" {
+	const stored = checkErrorText("@wasm();\nlet saved: ((x: int32) => int32) | null = null;\nexport function keep(cb: (x: int32) => int32): int32 { saved = cb; return 0; }\n");
+	assert stored.contains("wasm-placed function 'keep' keeps its callback parameter 'cb': it stores it in 'saved'");
+	assert checkErrorText("@wasm();\nexport function use(cb: (x: int32) => int32): int32 { return cb(2) + 1; }\n") == "";
+	assert checkErrorText("let saved: ((x: int32) => int32) | null = null;\nexport function keep(cb: (x: int32) => int32): int32 { saved = cb; return 0; }\n") == "";
+}
+
+test "a wasm-placed export that keeps its callback through a helper is refused" {
+	const src = "@wasm();\nconst all: ((x: int32) => int32)[] = [];\nfunction remember(f: (x: int32) => int32): void { all.push(f); }\nexport function keep(cb: (x: int32) => int32): int32 { remember(cb); return 0; }\n";
+	assert checkErrorText(src).contains("wasm-placed function 'keep' keeps its callback parameter 'cb': it passes it to 'remember'");
+}
+
 test "@wasm() on a function stays refused" {
 	const c = compileToCWithStd("@wasm()\nexport function f(): int32 { return 1; }\nconsole.log(f());\n");
 	assert !c.ok;

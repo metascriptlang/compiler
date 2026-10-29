@@ -46,7 +46,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
-import { checkActorMethodModuleState, checkActorNonisolatedField, checkActorStoredClosures, checkActorReplies, checkActorStaticField } from "./sendable";
+import { checkActorMethodModuleState, checkActorNonisolatedField, checkActorStoredClosures, checkActorReplies, checkActorStaticField, refuseKeptWasmCallbacks } from "./sendable";
 import { DispatchRegistry, createDispatchRegistry, copyDispatchRegistry } from "./dispatchRegistry";
 import { replayDispatchRecords } from "./context";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
@@ -3932,6 +3932,7 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 				if (md.macroArgs.length > 0) {
 					addError(ctx, "@wasm() takes no arguments: it places the whole module in wasm", d.expr.location.line, d.expr.location.column);
 				}
+				refuseKeptWasmCallbacks(ctx, program);
 				continue;
 			}
 			collectOneDirective(ctx, d.expr);
