@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: terminate n=2 shutdown=true
 // note: the actor is never stopped; program exit stops it with ExitReason.Shutdown, so its onTerminate runs after the entry module's last line (ULTRALOCK A8).
 import { ExitReason } from "std/actor";
