@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -4058,7 +4058,7 @@ function literalRelations(paramTypes: Type[], args: Node[], argTypes: Type[]): i
 function literalRelation(arg: Node, argType: Type | null, slot: Type | null): int32 {
 	const formal = skipModifier(slot);
 	if (formal == null) return -1;
-	if (arg.kind == NodeKind.ArrayLiteral) return isLiteralTree(arg) ? elementsRelation((arg.data as ArrayLiteralData).elements, formal) : -1;
+	if (arg.kind == NodeKind.ArrayLiteral) return elementsRelation(arg, formal);
 	if (arg.kind == NodeKind.StringLiteral) return stringLiteralRelation((arg.data as StringLiteralData).value, formal);
 	const lit = intLiteralArg(arg);
 	const floatFormal = formal.kind == TypeKind.Float32 || formal.kind == TypeKind.Float64 || formal.kind == TypeKind.Number;
@@ -4078,14 +4078,37 @@ function holdsOnlyStrings(formal: Type): boolean {
 	return formal.kind == TypeKind.StringLiteral || (base != null && base.kind == TypeKind.String);
 }
 
-function elementsRelation(elements: Node[], formal: Type): int32 {
+function elementsRelation(literal: Node, formal: Type): int32 {
 	const arr = withoutArrayEnvelope(peelTransparentInstance(formal));
+	const elements = (literal.data as ArrayLiteralData).elements;
+	if (arr.kind == TypeKind.Tuple) return tupleRelation(elements.map(beforeElementJoin), arr.typeChildren);
+	if (!isLiteralTree(literal)) return -1;
 	const elemFormal = arr.kind == TypeKind.Array || arr.kind == TypeKind.SizedArray || arr.kind == TypeKind.Span ? arr.typeReturn : null;
 	if (elements.length == 0 || elemFormal == null) return -1;
-	let weakest = TypeRelation.Exact;
+	const formals: Type[] = [];
+	for (const _ of elements) formals.push(elemFormal);
+	return weakestElementRelation(elements, formals);
+}
+
+function beforeElementJoin(element: Node): Node {
+	let own = element;
+	while (own.kind == NodeKind.HiddenStdConv || own.kind == NodeKind.HiddenSubConv) own = (own.data as HiddenStdConvData).convExpr;
+	return own;
+}
+
+function tupleRelation(elements: Node[], formals: Type[]): int32 {
 	for (const e of elements) {
-		const lit = literalRelation(e, e.nodeType, elemFormal);
-		const rel = lit >= 0 ? lit as TypeRelation : typeRelation(elemFormal, e.nodeType);
+		if (!isLiteralTree(e)) return -1;
+	}
+	return elements.length == formals.length ? weakestElementRelation(elements, formals) : TypeRelation.None as int32;
+}
+
+function weakestElementRelation(elements: Node[], formals: Type[]): int32 {
+	let weakest = TypeRelation.Exact;
+	for (let i = 0; i < elements.length; i += 1) {
+		const e = elements[i];
+		const lit = literalRelation(e, e.nodeType, formals[i]);
+		const rel = lit >= 0 ? lit as TypeRelation : typeRelation(formals[i], e.nodeType);
 		if (rel < weakest) weakest = rel;
 	}
 	return weakest as int32;
