@@ -354,7 +354,7 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [
 		docText("do"),
 		bodyGap(d.doBody, options),
-		printCollapsibleBody(d.doBody, options),
+		printBody(d.doBody, options, true),
 		docText(" while "),
 		...parenthesizedHeader(callPrintNode(d.doCondition, options)),
 	];
