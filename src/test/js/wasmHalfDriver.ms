@@ -38,7 +38,7 @@ console.log(evaluate(1, x => evaluate(x, y => y - 6)));
 
 test "the wasm half of a hand-written entry builds and runs under node" {
 	const dir = `${cwd()}/out/wasmHalfDriver`;
-	const built = buildWasmHalf(calcSource, ["_calc_add64", "_calc_evaluate", "_MsMain"], hostLibrary, `${dir}/calc`, newCliOptions());
+	const built = buildWasmHalf(calcSource, ["_calc_add64", "_calc_evaluate", "_MsMain"], [], hostLibrary, `${dir}/calc`, newCliOptions());
 	if (!built.ok) assert built.error == "";
 	assert exists(`${dir}/calc.wasm.mjs`);
 	assert exists(`${dir}/calc.wasm`);

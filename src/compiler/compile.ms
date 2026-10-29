@@ -84,7 +84,7 @@ import { buildWasmHalf } from "./wasmBoundary/placementBuild";
 import { manifestFor, BoundaryFunction } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
-import { stringBoundaryErrors, placedModuleErrors, placedImportErrors } from "./wasmBoundary/refusals";
+import { placedModuleErrors, placedImportErrors } from "./wasmBoundary/refusals";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -1626,14 +1626,13 @@ function placeWasmModules(placed: string[], graph: ModuleGraph, entryPath: strin
 		for (const e of manifest.errors) errors.push(e);
 		for (const f of manifest.functions) functions.push(f);
 	}
-	for (const e of stringBoundaryErrors(functions)) errors.push(e);
 	if (errors.length == 0 && functions.length == 0) errors.push(`the wasm-placed module(s) ${placed.join(", ")} export no function, so nothing crosses the JS/wasm boundary`);
 	if (errors.length > 0) {
 		for (const e of errors) printDiag(`${error("error")}: ${e}`);
 		stopBuild();
 	}
 	const entry = wasmEntrySource(functions, (path: string): string => path.replaceAll("\\", "/"));
-	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.jsLibrary, outStem, opts);
+	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.runtimeMethods, entry.jsLibrary, outStem, opts);
 	if (!built.ok) {
 		printDiag(`${error("error")}: ${built.error}`);
 		stopBuild();
