@@ -1730,7 +1730,7 @@ function releaseEntryRefs(vm: RaiserVM): void {
 	for (let i = 0; i < own.length; i += 1) {
 		const r = vm.base + own[i];
 		const h = vm.regs.slots[r];
-		if (h != 0) {
+		if (h != 0 && isShell(h)) {
 			vm.regs.slots[r] = 0;
 			releaseShell(vm, h);
 		}
@@ -5397,7 +5397,7 @@ test "Unbox reads a box into a word register and Box leaves nil and a box as the
 	));
 	assert again.error == "", again.error;
 	assert again.exitValue.intVal == 4;
-	assert heapBoxLive(again.arrayHeap) == 1;
+	assert heapBoxLive(again.arrayHeap) == 0, `${heapBoxLive(again.arrayHeap)}`;
 }
 
 test "Unbox of nil into a word register names the register" {
