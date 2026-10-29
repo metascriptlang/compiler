@@ -146,3 +146,4 @@ import "./cases/functionSignature";
 import "./cases/objectExpansion";
 import "./cases/binaryChains";
 import "./cases/staticMembers";
+import "./cases/assignmentExpr";

@@ -19,6 +19,7 @@ import {
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
 import { callPrintNode, printedAncestor } from "./callbacks";
+import { AssignmentShape, printAssignmentLike } from "./assignment";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 
@@ -26,6 +27,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
 	if (template != "") return docText(template);
 	const d = node.data as BinaryExprData;
+	if (isAssignOp(d.operator)) return printAssignmentExpr(node, options);
 	if (!isBinaryLikeOp(d.operator)) {
 		return docGroup([
 			printBinaryOperand(d.left, d.operator, false, options),
@@ -55,6 +57,27 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 		&& (writtenArrowBody((parent.data as ArrowFunctionData).arrowBody, options) == node || (parent.data as ArrowFunctionData).arrowBody == node);
 	if (arrowBody || (inlinesLogicalOperand(node) && spine.length == 1)) return docGroup([first, ...tail]);
 	return docGroup([first, docIndent(tail)]);
+}
+
+function isAssignmentNode(node: Node | null): boolean {
+	return node != null && node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator);
+}
+
+function assignmentChainEligible(node: Node, rightIsTail: boolean): boolean {
+	const parent = printedAncestor(1);
+	if (parent == null) return false;
+	if (parent.kind == NodeKind.VariableDecl || parent.kind == NodeKind.DestructuringDecl) return !rightIsTail;
+	if (parent.kind == NodeKind.PropertyDecl) return true;
+	if (!isAssignmentNode(parent)) return false;
+	const great = printedAncestor(2);
+	return !rightIsTail || great == null || (great.kind != NodeKind.ExprStmt && great.kind != NodeKind.VariableDecl && great.kind != NodeKind.DestructuringDecl);
+}
+
+function printAssignmentExpr(node: Node, options: FormatOptions): Doc {
+	const d = node.data as BinaryExprData;
+	const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: false, inChain: assignmentChainEligible(node, !isAssignmentNode(d.right)) };
+	const left = printBinaryOperand(d.left, d.operator, false, options);
+	return printAssignmentLike([left], " " + d.operator, d.right, printBinaryOperand(d.right, d.operator, true, options), shape, options);
 }
 
 function isBinaryLikeOp(op: string): boolean {
