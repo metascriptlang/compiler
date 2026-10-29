@@ -2702,7 +2702,7 @@ export function destrObjectRestType(srcType: Type | null, taken: string[]): Type
 		if (ft == null) return null;
 		types.push(ft);
 	}
-	return spelled(createStruct(anonStructName(names, types), names, types, false));
+	return createRef(spelled(createStruct(anonStructName(names, types), names, types, false)));
 }
 
 // StringLiteral: a specific string value as a type (TypeScript parity).
