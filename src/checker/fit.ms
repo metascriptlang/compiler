@@ -2744,10 +2744,11 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 	const declared = declaredTagUnionOf(expr);
 	if (declared != null) {
 		if (!isSlotUnion(formal)) return null as unknown as Node;
-		if (sameType(declared, formal) || sameType(declaredInstanceOf(expr), formalSlot)) {
+		if (sameCarrier(declared, formal) || sameCarrier(declaredInstanceOf(expr), formalSlot)) {
 			expr.nodeType = formalSlot;
 			return expr;
 		}
+		if (sameType(declared, formal)) return convertUnionToUnion(expr, declared, formalSlot);
 		const projected = projectTagUnionMember(expr, declared, exprType);
 		if (projected == null as unknown as Node) return null as unknown as Node;
 		return widenVariantToUnion(projected, formalSlot, exprType, ctx);
@@ -2852,6 +2853,10 @@ export function convertsBetweenUnions(source: Type | null, target: Type | null):
 	if (source == null || target == null || source.kind != TypeKind.Union || target.kind != TypeKind.Union) return false;
 	if (hasGenericParams(source) || hasGenericParams(target)) return false;
 	return isSlotUnion(source) && isSlotUnion(target) && (!sameType(source, target) || source.typeName != target.typeName);
+}
+
+function sameCarrier(held: Type | null, slot: Type | null): boolean {
+	return sameType(held, slot) && !convertsBetweenUnions(held, slot);
 }
 
 function unionMembers(t: Type): Type[] {
@@ -3006,7 +3011,7 @@ export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type)
 
 export function convertUnionToUnion(expr: Node, source: Type, target: Type): Node {
 	const declared = declaredTagUnionOf(expr);
-	if (declared != null && sameType(declared, target)) {
+	if (declared != null && sameCarrier(declared, target)) {
 		expr.nodeType = target;
 		return expr;
 	}
