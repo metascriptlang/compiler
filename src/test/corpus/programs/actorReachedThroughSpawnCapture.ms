@@ -1,7 +1,5 @@
 // @stdout: sum 7 read 7
 // @serial
-// @ledger-slack(Tally) 1
-// ledger-slack reason: its actor is never stopped, so it and what it owns are still live at exit
 actor Tally {
 	n: int32 = 0;
 	add(x: int32): void {

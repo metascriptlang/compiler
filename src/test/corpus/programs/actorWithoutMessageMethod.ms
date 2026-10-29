@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/actor'
 // @serial
 // @stdout: holder spawned true
 // @stdout: local spawned 1
