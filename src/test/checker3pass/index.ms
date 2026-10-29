@@ -58,6 +58,7 @@ import "./scenarios/voidInUnion";
 import "./scenarios/bareReturnInValueFunction";
 import "./scenarios/textOfVoid";
 import "./scenarios/methodOverrideSignature";
+import "./scenarios/exhaustiveNarrowing";
 import "./scenarios/classRoutineMembers";
 import "./scenarios/classLineage";
 import "./scenarios/functionReturnRepr";

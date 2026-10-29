@@ -1410,7 +1410,7 @@ function peelTransparentFrom(t: Readonly<Type>, depth: int32): Readonly<Type> {
 // `typeName`; an EnumLiteral's `typeName` is the ENUM's name (shared by every
 // variant) with the member in `typeNames[0]`, so comparing `typeName` there
 // would read every variant as the same value.
-function literalDiscValue(t: Readonly<Type | null>): string {
+export function literalDiscValue(t: Readonly<Type | null>): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.EnumLiteral) {
 		return t.typeNames != null && t.typeNames.length > 0 ? t.typeName + "." + t.typeNames[0] : t.typeName;
