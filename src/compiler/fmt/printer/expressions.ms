@@ -234,27 +234,6 @@ export function listBody(items: Doc[], trailing: boolean, endComments: SourceCom
 	return [docIndent(body), docSoftLine()];
 }
 
-export function printMemberExpr(node: Node, options: FormatOptions): Doc {
-	const d = node.data as MemberExprData;
-	let op = ".";
-	if (d.isOptional) { op = "?."; }
-	const ownLine = takeOwnLineTrailing(d.object);
-	if (ownLine.length > 0) {
-		const lines: Doc[] = [];
-		for (const c of ownLine) {
-			lines.push(docHardLine());
-			lines.push(docSourceText(c.text));
-		}
-		lines.push(docHardLine());
-		lines.push(docText(op + d.property));
-		return docGroup([printAtom(d.object, options), docIndent(lines)]);
-	}
-	return docGroup([
-		printAtom(d.object, options),
-		docText(op + d.property),
-	]);
-}
-
 // printAtom: print a sub-expression that the parent needs to bind tighter
 // than. For positions where the source grammar requires the child to be a
 // PrimaryExpression/MemberExpression (e.g. .field object, call callee,

@@ -20,14 +20,14 @@ import {
 } from "./literals";
 import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr,
-	printMemberExpr, printArrayAccess, printDerefExpr, printObjectLiteral, printArrayLiteral,
+	printArrayAccess, printDerefExpr, printObjectLiteral, printArrayLiteral,
 	printArrowFunction, printConditionalExpr, printSpreadExpr, printComputedProperty,
 	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
 	printOutExpr, printSizeofExpr, printArrayPattern, printObjectPattern,
 	printObjectPatternProp, printMacroInvocation, printFunctionExpr,
 	printAwaitExpr, printYieldExpr,
 } from "./expressions";
-import { printCallExpr, printNewExpr } from "./calls";
+import { printCallExpr, printNewExpr, printMemberExpr } from "./calls";
 import {
 	printProgram, printBlock, printExprStmt,
 	printReturnStmt, printIfStmt, printWhileStmt, printForStmt,

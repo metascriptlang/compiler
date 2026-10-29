@@ -145,3 +145,5 @@ import "./cases/unionAlign";
 import "./cases/functionSignature";
 import "./cases/objectExpansion";
 import "./cases/binaryChains";
+import "./cases/objectExpansion";
+import "./cases/staticMembers";

@@ -8,10 +8,11 @@ import { SourceComment } from "../comments";
 import { commentsOfRun, commentLeading, commentTrailing, danglingOf, hasCommentsOutside, leadingDocs, takeOwnLineTrailing } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
-	Doc, docText, docGroup, docGroupBreak, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil,
+	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil,
 	docBreakParent, docBestFitting, docWillBreak,
 } from "../doc";
-import { callPrintNode, isStatementExpression } from "./callbacks";
+import { isAssignOp } from "../../../ast/operators";
+import { callPrintNode, isStatementExpression, printedAncestor } from "./callbacks";
 import { rawTemplateAt, blankLineBefore, sourceSpan } from "./literals";
 import {
 	printAtom, writtenTypeArgs, listBody, writtenArrowBody,
@@ -547,6 +548,60 @@ interface ChainMember {
 
 function newMember(kind: ChainKind, node: Node, position: CallPosition): ChainMember {
 	return { kind, node, position, leading: hasLeadingComments(node), trailing: hasTrailingComments(node), moved: [] };
+}
+
+export function printMemberExpr(node: Node, options: FormatOptions): Doc {
+	const d = node.data as MemberExprData;
+	const op = d.isOptional ? "?." : ".";
+	const ownLine = takeOwnLineTrailing(d.object);
+	if (ownLine.length > 0) {
+		const lines: Doc[] = [];
+		for (const c of ownLine) {
+			lines.push(docHardLine());
+			lines.push(docSourceText(c.text));
+		}
+		lines.push(docHardLine());
+		lines.push(docText(op + d.property));
+		return docGroup([printAtom(d.object, options), docIndent(lines)]);
+	}
+	if (!staticMemberBreaksAfterObject(node, d.object, options)) return docGroup([printAtom(d.object, options), docText(op + d.property)]);
+	return docGroup([printAtom(d.object, options), docGroup([docIndent([docSoftLine(), docText(op + d.property)])])]);
+}
+
+function isMemberLike(node: Node): boolean {
+	return node.kind == NodeKind.MemberExpr || node.kind == NodeKind.ArrayAccess;
+}
+
+function callsWithArguments(node: Node): boolean {
+	if (node.kind == NodeKind.TypeAssertion && isNonNull(node)) return callsWithArguments((node.data as TypeAssertionData).asExpr);
+	return node.kind == NodeKind.CallExpr && (node.data as CallExprData).arguments.length > 0;
+}
+
+function isLabelledMemberChain(node: Node): boolean {
+	if (node.kind != NodeKind.CallExpr) return false;
+	const callee = (node.data as CallExprData).callee;
+	return isChainStep(callee) && callee.kind != NodeKind.CallExpr && isMemberCallChain(node);
+}
+
+function staticMemberBreaksAfterObject(node: Node, object: Node, options: FormatOptions): boolean {
+	const parent = printedAncestor(1);
+	const bindsValue = parent != null && (parent.kind == NodeKind.VariableDecl || parent.kind == NodeKind.DestructuringDecl
+		|| (parent.kind == NodeKind.BinaryExpr && isAssignOp((parent.data as BinaryExprData).operator)));
+	if (bindsValue && (callsWithArguments(object) || isLabelledMemberChain(object))) return false;
+	const nested = parent != null && isMemberLike(parent);
+	if (!nested && object.kind == NodeKind.Identifier && (object.data as IdentifierData).name != "this") return false;
+	let levels = 1;
+	let ancestor = parent;
+	while (ancestor != null && isMemberLike(ancestor)) {
+		levels += 1;
+		ancestor = printedAncestor(levels);
+	}
+	if (ancestor == null) return true;
+	if (ancestor.kind == NodeKind.NewExpr) return false;
+	if (ancestor.kind == NodeKind.BinaryExpr && isAssignOp((ancestor.data as BinaryExprData).operator)) {
+		return (ancestor.data as BinaryExprData).left.kind == NodeKind.Identifier;
+	}
+	return true;
 }
 
 function isChainStep(node: Node): boolean {
