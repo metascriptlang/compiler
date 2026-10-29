@@ -5,7 +5,7 @@ import { CliOptions, MODE_RELEASE, MODE_DANGER } from "../options";
 
 // Builds the wasm half of a placed program as its own `--os=emcc --app=lib` build, in a child of the
 // running binary because a build keeps its link flags and object lists in process-wide state.
-// `exportedSymbols` are the `@exportName` names without the leading underscore emcc adds.
+// `exportedSymbols` are the emcc export names as `-sEXPORTED_FUNCTIONS` spells them, leading underscore included.
 // Writes `<outStem>.wasm.mjs` and `<outStem>.wasm`.
 export function buildWasmHalf(entrySource: string, exportedSymbols: string[], jsLibrary: string, outStem: string, opts: CliOptions): Result<void, string> {
 	if (exportedSymbols.length == 0) return Result.err("internal: buildWasmHalf got no exported symbols");
@@ -23,7 +23,7 @@ export function buildWasmHalf(entrySource: string, exportedSymbols: string[], js
 	if (!wroteLibrary.ok) return Result.err(`cannot write ${library}: ${wroteLibrary.error.message}`);
 
 	let exports = "";
-	for (const symbol of exportedSymbols) exports = exports == "" ? `_${symbol}` : `${exports},_${symbol}`;
+	for (const symbol of exportedSymbols) exports = exports == "" ? symbol : `${exports},${symbol}`;
 	const args = ["build", entry, "--target=c", "--os=emcc", "--app=lib", `--output=${mjs}`,
 		`--passL=-sWASM_BIGINT=1 -sEXPORTED_FUNCTIONS=${exports} -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node,web --js-library=${library}`];
 	if (opts.mode == MODE_RELEASE) args.push("--release");
