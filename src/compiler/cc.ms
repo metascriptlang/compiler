@@ -1930,8 +1930,7 @@ test "compiling the same C twice leaves byte-identical objects" {
 	ensureDir(dir);
 	const source = `${dir}/a.c`;
 	const object = `${dir}/a.o`;
-	writeFile(source, "int answer(void) { return 42; }
-");
+	writeFile(source, "int answer(void) { return 42; }\n");
 	const parts = objectCompileArgs(0, "", false, 0, "");
 	assert parts.ok;
 	assert compileCFile(source, object, `${dir}/a.d`, parts.value, NO_PLAN).ok;
