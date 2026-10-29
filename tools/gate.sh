@@ -163,6 +163,16 @@ cap_jobs() {
   done
   printf '%s\n' "$((10#$jobs))"
 }
+# A gate host rebalances lanes among its running gates; each phase starts with the share last written for this gate,
+# because a share fixed at the gate's start kept a gate admitted beside five waiting slices at 6 lanes for its whole run.
+reread_share() {
+  local file_par file_workers
+  if [ -n "${GATE_PAR_FILE:-}" ] && file_par=$(cat "$GATE_PAR_FILE" 2>/dev/null) && [ "$file_par" -ge 1 ] 2>/dev/null && [ "$file_par" != "${GATE_PAR:-}" ]; then
+    say "gate: $file_par lanes from $GATE_PAR_FILE (was ${GATE_PAR:-unset})"; GATE_PAR=$file_par; PAR=$(cap_jobs "$GATE_PAR") || return
+  fi
+  if [ -n "${GATE_WORKERS_FILE:-}" ] && file_workers=$(cat "$GATE_WORKERS_FILE" 2>/dev/null) && [ "$file_workers" -ge 1 ] 2>/dev/null; then corpus_build_limit=$file_workers; fi
+}
+
 slow_starts() {
   local n=$1 slow=0 t
   shift
@@ -2326,16 +2336,6 @@ take_slot() {
     for ((i = 0; i < PAR; i++)); do mkdir "$SLOTS_DIR/$i" 2>/dev/null && { echo "$i"; return; }; done
     sleep 1
   done
-}
-
-# A gate host rebalances lanes among its running gates; each phase starts with the share last written for this gate,
-# because a share fixed at the gate's start kept a gate admitted beside five waiting slices at 6 lanes for its whole run.
-reread_share() {
-  local file_par file_workers
-  if [ -n "${GATE_PAR_FILE:-}" ] && file_par=$(cat "$GATE_PAR_FILE" 2>/dev/null) && [ "$file_par" -ge 1 ] 2>/dev/null && [ "$file_par" != "${GATE_PAR:-}" ]; then
-    say "gate: $file_par lanes from $GATE_PAR_FILE (was ${GATE_PAR:-unset})"; GATE_PAR=$file_par; PAR=$(cap_jobs "$GATE_PAR") || return
-  fi
-  if [ -n "${GATE_WORKERS_FILE:-}" ] && file_workers=$(cat "$GATE_WORKERS_FILE" 2>/dev/null) && [ "$file_workers" -ge 1 ] 2>/dev/null; then corpus_build_limit=$file_workers; fi
 }
 
 with_slot() {
