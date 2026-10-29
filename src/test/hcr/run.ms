@@ -70,6 +70,7 @@ const PARKED: { name: string, card: string }[] = [
 ];
 
 const SAN = env.get("MSHCR_SAN") == "1";
+const BUNDLE_COMPILES_SAN = env.get("MSC_NATIVE_TOOLCHAIN") != "" && platform != "windows";
 const SAN_DLL = "clang_rt.asan_dynamic-x86_64.dll";
 let sanFlags = "";
 
@@ -138,7 +139,7 @@ function msc(dir: string, args: string[], capMs: int32 = RUN_CAP_MS): ExecFileRe
 	sanSetup();
 	const full: string[] = [];
 	for (const arg of args) full.push(arg);
-	full.push("--cc=clang");
+	if (!BUNDLE_COMPILES_SAN) full.push("--cc=clang");
 	full.push(`--passC=-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -Wno-error=incompatible-pointer-types${sanFlags}`);
 	full.push(`--passL=-fsanitize=address -pthread${sanFlags}`);
 	return execFileResult(MSC, full, dir);
