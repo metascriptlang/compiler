@@ -203,6 +203,11 @@ export function rootModulePath(modulePath: string, roots: Readonly<ModuleNameRoo
 	return { mark: "", path: relative(roots.project, modulePath) };
 }
 
+export function rootedModuleKey(roots: Readonly<ModuleNameRoots>, modulePath: string): string {
+	const rooted = rootModulePath(modulePath, roots);
+	return rooted.mark == "" ? rooted.path : `//${rooted.mark}/${rooted.path}`;
+}
+
 export function moduleDisplayPath(modulePath: string): string {
 	return rootModulePath(modulePath, moduleNameRoots).path;
 }
@@ -713,6 +718,16 @@ test "two paths never share a module name" {
 	assert mangleModuleName(buildModuleNameRoots(), "Z") != mangleModuleName(buildModuleNameRoots(), "/");
 	assert mangleModuleName(buildModuleNameRoots(), "U41") != mangleModuleName(buildModuleNameRoots(), "A");
 	assert mangleModuleName(buildModuleNameRoots(), "é") != mangleModuleName(buildModuleNameRoots(), "?");
+}
+
+test "a module key is its path under its root, apart from a project path that spells the root's mark" {
+	const near: ModuleNameRoots = { compiler: "/a/msc", packages: "/a/pkgs", project: "/a/proj", uniqueNames: new HashMap<string, string>() };
+	const far: ModuleNameRoots = { compiler: "/b/c/msc", packages: "/b/c/pkgs", project: "/b/c/proj", uniqueNames: new HashMap<string, string>() };
+	assert rootedModuleKey(near, "/a/msc/std/x.ms") == rootedModuleKey(far, "/b/c/msc/std/x.ms");
+	assert rootedModuleKey(near, "/a/pkgs/p/x.ms") == rootedModuleKey(far, "/b/c/pkgs/p/x.ms");
+	assert rootedModuleKey(near, "/a/proj/x.ms") == rootedModuleKey(far, "/b/c/proj/x.ms");
+	assert rootedModuleKey(near, "/a/msc/x.ms") != rootedModuleKey(near, "/a/proj/S/x.ms");
+	assert rootedModuleKey(near, "/a/msc/x.ms") != rootedModuleKey(near, "/a/pkgs/x.ms");
 }
 
 test "a module name is spelled from its root, so a std module and a same-named project module stay apart" {

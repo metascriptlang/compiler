@@ -4,9 +4,9 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
-import { monoInstanceName } from "../../monomorphize/registry";
+import { monoInstanceName, monoInstanceNameIn } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
@@ -23,9 +23,9 @@ function namingSym(t: Readonly<Type>): Readonly<Symbol | null> {
 
 export function resolvedTypeCNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, hasCheckerCtx: boolean): string {
 	const owner = namingSym(t);
-	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(roots, owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
+	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(roots, owner, t.typeName) + "_" + hashToBase36(nominalTypeKeyIn(roots, t));
 	if (owner != null) return mangledTypeName(roots, owner, t.typeName);
-	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
+	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKeyIn(roots, t);
 	return mangledTypeName(roots, null, t.typeName);
 }
 
@@ -390,7 +390,7 @@ function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | nul
 			return structKeyIdentityIn(roots, t);
 		},
 		TypeKind.Enum => "enum:" + mangledTypeName(roots, t.sym, t.typeName),
-		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
+		TypeKind.GenericInstance => "ginst:" + monoInstanceNameIn(roots, t),
 		TypeKind.Array => "arr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
@@ -566,7 +566,7 @@ function structKeyIdentityIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>
 	const owner = namingSym(t);
 	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(roots, null, t.typeName);
 	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(roots, owner, t.typeName);
-	return mangledTypeName(roots, null, nominalTypeKey(t));
+	return mangledTypeName(roots, null, nominalTypeKeyIn(roots, t));
 }
 
 function structKeyIdentity(t: Readonly<Type>): string {
@@ -652,12 +652,12 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 		TypeKind.GenericInstance => {
 			const seen = peelTransparentInstance(t);
 			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKeyIn(roots, seen);
-			let giKey = `ginst:${monoInstanceName(t)}`;
+			let giKey = `ginst:${monoInstanceNameIn(roots, t)}`;
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKeyIn(roots, arg)}`;
 			return giKey;
 		},
-		TypeKind.TypeReference => { return "typeref:" + nominalTypeKey(t); },
-		TypeKind.Distinct => { return "distinct:" + nominalTypeKey(t); },
+		TypeKind.TypeReference => { return "typeref:" + nominalTypeKeyIn(roots, t); },
+		TypeKind.Distinct => { return "distinct:" + nominalTypeKeyIn(roots, t); },
 		TypeKind.Union => {
 			if (t.typeInst != null) return typeKeyIn(roots, t.typeInst);
 			if (t.typeName.length > 0) {
@@ -1042,7 +1042,7 @@ function subjectBody(t: Readonly<Type>): Readonly<Type | null> {
 }
 
 export function typeInfoCNameIn(roots: Readonly<ModuleNameRoots>, subject: Readonly<Type>): string {
-	if (subject.kind == TypeKind.GenericInstance) return mangle(monoInstanceName(subject));
+	if (subject.kind == TypeKind.GenericInstance) return mangle(monoInstanceNameIn(roots, subject));
 	if (subject.kind == TypeKind.Union && subject.typeName == "") return anonUnionCNameIn(roots, subject);
 	if (isAnonTypeName(subject.typeName)) return anonTypeNameIn(roots, subject);
 	return resolvedTypeCNameIn(roots, subject, true);
@@ -1457,7 +1457,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 			const declBody: Readonly<Type | null> = peelToStructOrUnion(t.typeExtra);
 			const sharedBody = t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
 			if (sharedBody != null && sharedBody.kind == TypeKind.Union && sharedBody == declBody) return getTypeDesc(g, sharedBody);
-			const instName = monoInstanceName(t);
+			const instName = monoInstanceNameIn(g.emissionFacts.moduleNameRoots!, t);
 			const cacheKey = `object:${instName}`;
 			const cached = typeCacheGet(g.typeCache, cacheKey);
 			if (cached != "") return cached;
@@ -1626,7 +1626,7 @@ export function assertExternLayout(g: CGen, t: Readonly<Type>): void {
 // The `as` cast maps to .vN member access at the codegen level.
 
 function genInstanceUnion(g: CGen, gi: Readonly<Type>, body: Readonly<Type>): string {
-	const instName = monoInstanceName(gi);
+	const instName = monoInstanceNameIn(g.emissionFacts.moduleNameRoots!, gi);
 	const cacheKey = `object:${instName}`;
 	const cached = typeCacheGet(g.typeCache, cacheKey);
 	if (cached != "") return cached;
@@ -1905,7 +1905,7 @@ function elemArrayCNameIn(roots: Readonly<ModuleNameRoots>, elem: Readonly<Type>
 	}
 	if (elem.kind == TypeKind.Enum) return resolvedTypeCNameIn(roots, elem, true);
 	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCNameIn(roots, elem.typeReturn, true) : "int32_t";
-	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
+	if (elem.kind == TypeKind.Tuple) return tupleTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeNameIn(roots, elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeNameIn(roots, elem);
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCNameIn(roots, elem.typeReturn) + "*";
@@ -1915,7 +1915,7 @@ function elemArrayCNameIn(roots: Readonly<ModuleNameRoots>, elem: Readonly<Type>
 		if (rm != null) return elemArrayCNameIn(roots, rm);
 		return isAnonTypeName(elem.typeName) ? anonUnionCNameIn(roots, elem) : resolvedTypeCNameIn(roots, elem, true);
 	}
-	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
+	if (elem.kind == TypeKind.GenericInstance) return monoInstanceNameIn(roots, elem);
 	if (elem.kind == TypeKind.Struct) {
 		return isAnonTypeName(elem.typeName) ? anonTypeNameIn(roots, elem) : resolvedTypeCNameIn(roots, elem, true);
 	}
@@ -2303,7 +2303,7 @@ function genTupleType(g: CGen, t: Readonly<Type>): string {
 	// tupleTypeName is the single source of the msTuple_<hash> name (analyzer, lifted
 	// hooks and array-element refs all derive from it). A second name computed here from
 	// codegen's own typeKey drifted for non-primitive elements → "unknown type name" at link.
-	const name = tupleTypeName(t);
+	const name = tupleTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
 	typeCacheSet(g.typeCache, key, name);
 	ensureForwardDecl(g, name);
 
@@ -2329,6 +2329,12 @@ function genTupleType(g: CGen, t: Readonly<Type>): string {
 }
 
 // ===== Tests =====
+
+function rootedFacts(): CEmissionFacts {
+	const facts = new CEmissionFacts();
+	facts.moduleNameRoots = buildModuleNameRoots();
+	return facts;
+}
 
 test "the pointer threshold follows the target float width" {
 	const pair = createStruct("Pair", ["a", "b"], [createPrimitive(TypeKind.Float64), createPrimitive(TypeKind.Float64)], true);
@@ -2440,7 +2446,7 @@ test "interface no RC" { assert !needsRC(createStruct("Bar", [], [], true)); }
 test "number no RC" { assert !needsRC(createPrimitive(TypeKind.Number)); }
 
 test "primitive type desc" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	assert getTypeDesc(g, createPrimitive(TypeKind.Number)) == "double";
@@ -2449,7 +2455,7 @@ test "primitive type desc" {
 }
 
 test "enum emits typedef and defines" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"]));
@@ -2468,7 +2474,7 @@ test "interface emits struct" {
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.Int32));
 	propTypes.push(createPrimitive(TypeKind.Int32));
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, declaredHere(createStruct("Point", propNames, propTypes, true)));
@@ -2482,7 +2488,7 @@ test "class (Ref<Object>) emits struct with pointer" {
 	propNames.push("name");
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.String));
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, createRef(declaredHere(createStruct("Person", propNames, propTypes, true))));
@@ -2492,7 +2498,7 @@ test "class (Ref<Object>) emits struct with pointer" {
 }
 
 test "array type" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	assert getTypeDesc(g, createArray(createPrimitive(TypeKind.Number))) == "msNumberArray";
@@ -2500,7 +2506,7 @@ test "array type" {
 }
 
 test "forward decl emitted" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	getTypeDesc(g, declaredHere(createStruct("Widget", [], [], true)));
@@ -2509,7 +2515,7 @@ test "forward decl emitted" {
 }
 
 test "cached second call" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const t = createEnum("Dir", ["Up", "Down"]);
@@ -2605,7 +2611,7 @@ test "tuple type key" {
 }
 
 test "tuple type desc emits struct" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
@@ -2617,7 +2623,7 @@ test "tuple type desc emits struct" {
 }
 
 test "a tuple's element types are defined before the tuple struct opens" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const face = createEnum("Face", ["None", "Back"]);
@@ -2651,7 +2657,7 @@ test "anonymous type emits struct with hash name" {
 	types1.push(createPrimitive(TypeKind.Number));
 	types1.push(createPrimitive(TypeKind.Number));
 	const anon = createStruct("", names1, types1, true);
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, anon);
@@ -2702,7 +2708,7 @@ test "a sealed op table serves known ops and refuses a new one" {
 }
 
 test "a TypeInfo demanded without a reachability edge is an error naming the type" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "consumer.ms", alive, facts);
 	const t = declaredHere(createStruct("Undemanded", ["v"], [createPrimitive(TypeKind.String)], true));
@@ -2712,7 +2718,7 @@ test "a TypeInfo demanded without a reachability edge is an error naming the typ
 }
 
 test "a TypeInfo requested for a type that has none is an error" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "consumer.ms", alive, facts);
 	typeInfoRef(g, createPrimitive(TypeKind.String));
@@ -2743,7 +2749,7 @@ test "a hook base name comes from the type's own symbol, not from a table lookup
 }
 
 test "enum typedef follows the largest ordinal and a negative member" {
-	const facts = new CEmissionFacts();
+	const facts = rootedFacts();
 	const alive = createAliveSet();
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	getTypeDesc(g, createEnum("Wide", ["Low", "High"], [0, 300]));

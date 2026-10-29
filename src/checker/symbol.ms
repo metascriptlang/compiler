@@ -3,6 +3,7 @@ export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, findIdentId, getIdentId, identName } from "./idents";
 import { splitTopLevel } from "../utils/string";
+import { ModuleNameRoots, buildModuleNameRoots, rootedModuleKey, setModuleNameRoots } from "../codegen/c/names";
 
 // A bindSym identifier and a checked enum member cross the macro wire as their
 // Symbol: the enum member's checked form is an identifier spelled with a mangled
@@ -511,13 +512,17 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 }
 
 export function symbolKey(sym: Readonly<Symbol>): string {
-	if (sym.typeParamOwner != null) return `${symbolKey(sym.typeParamOwner)}#${sym.disamb}`;
+	return symbolKeyIn(buildModuleNameRoots(), sym);
+}
+
+export function symbolKeyIn(roots: Readonly<ModuleNameRoots>, sym: Readonly<Symbol>): string {
+	if (sym.typeParamOwner != null) return `${symbolKeyIn(roots, sym.typeParamOwner)}#${sym.disamb}`;
 	const local = hasFlag(sym, SymbolFlag.Anon) || hasFlag(sym, SymbolFlag.StaticLocal)
 		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Temp
 		|| (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global) && !hasFlag(sym, SymbolFlag.ImportC))
 		|| (sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam);
 	if (local || sym.modulePath == "") throw new Error(`internal: ${sym.symbolKind} '${sym.name}' of '${sym.modulePath}' is local to its module and has no key another module can name`);
-	return `${sym.name}.${sym.instantiatedFrom != null ? 0 : sym.disamb}.${sym.modulePath}`;
+	return `${sym.name}.${sym.instantiatedFrom != null ? 0 : sym.disamb}.${rootedModuleKey(roots, sym.modulePath)}`;
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for
@@ -742,4 +747,22 @@ test "an imported C variable is keyed by its module and name, and a function's l
 		message = (e as Error).message;
 	}
 	assert message.startsWith("internal: "), message;
+}
+
+test "a declaration's key is the same under every install root and apart between roots" {
+	const saved = buildModuleNameRoots();
+	const keys: string[] = [];
+	for (const root of ["/home/gate/recompiler", "/tmp/other-checkout/deeper"]) {
+		setModuleNameRoots({ compiler: `${root}/msc`, packages: "", project: `${root}/app`, uniqueNames: new HashMap<string, string>() });
+		const fromStd = makeSymbol("limit", SymbolKind.Variable, null, false);
+		fromStd.modulePath = `${root}/msc/std/lib.ms`;
+		setFlag(fromStd, SymbolFlag.ImportC);
+		const fromApp = makeSymbol("limit", SymbolKind.Variable, null, false);
+		fromApp.modulePath = `${root}/app/std/lib.ms`;
+		setFlag(fromApp, SymbolFlag.ImportC);
+		keys.push(`${symbolKey(fromStd)} ${symbolKey(fromApp)}`);
+	}
+	setModuleNameRoots(saved);
+	assert keys[0] == keys[1], `${keys[0]} vs ${keys[1]}`;
+	assert keys[0] == "limit.0.//S/std/lib.ms limit.0.std/lib.ms", keys[0];
 }
