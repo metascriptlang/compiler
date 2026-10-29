@@ -22,7 +22,7 @@ import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
+import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 import { printTypeAnnotation } from "./types";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -517,7 +517,7 @@ export function arrowPieces(node: Node, options: FormatOptions): FunctionPieces 
 	}
 	const head: Doc[] = isAsync ? [docText("async ")] : [];
 	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
-	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations, node.typeExprs);
+	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.arrowBody, d.arrowParams));
 	if (typed != "") {
 		head.push(docText(typed));
 	} else {
@@ -755,12 +755,16 @@ export function functionExprPieces(node: Node, options: FormatOptions): Function
 	const isGen = flagHas(d.funcExprFlags, "generator") || flagHas(d.funcExprFlags, "async_generator");
 	const head: Doc[] = [docText((isAsync ? "async " : "") + "function" + (isGen ? "*" : "") + " ")];
 	const noDefaults: Node[] = [];
-	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations, node.typeExprs);
-	for (const part of paramListInParens(params, options, hugsObjectParam(d.funcExprParams, d.funcExprParamTypes, noDefaults, node.typeExprs, options))) head.push(part);
+	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.funcExprBody, d.funcExprParams));
+	const returnType: Doc[] = [];
 	if (d.funcExprReturnType != "") {
-		head.push(docText(": "));
-		head.push(printTypeAnnotation(node.typeExpr, d.funcExprReturnType, options));
+		returnType.push(docText(": "));
+		returnType.push(printTypeAnnotation(node.typeExpr, d.funcExprReturnType, options));
 	}
+	const groupParams = groupsParameters(flagGet(d.funcExprFlags, "gen"), params.length, node.typeExpr, d.funcExprReturnType, returnType, options);
+	const signature = paramListInParens(params, options, hugsObjectParam(d.funcExprParams, d.funcExprParamTypes, noDefaults, node.typeExprs, options), groupParams);
+	for (const part of returnType) signature.push(part);
+	head.push(docGroup(signature));
 	head.push(docText(" "));
 	return { head, body: printCollapsibleBody(d.funcExprBody, options), verbatimHead: false, inlineBody: true, conditionalBody: false, hasComments };
 }
