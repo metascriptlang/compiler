@@ -7,7 +7,8 @@
 The engine is the verified component from prepareEngine.py. The bundle keeps its contents at the
 root (bin/, lib/, notices/) and adds `runtime/`, the payload prepareRuntime.py writes with the
 engine reached by `..`; the x86_64-windows-gnu and aarch64-windows-gnu runtimes are `runtime/windows/`, from
-prepareWindowsRuntime.py, with the engine reached by `../..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
+prepareWindowsRuntime.py, with the engine reached by `../..`; the aarch64-macos and x86_64-macos runtimes are `runtime/darwin/`, from
+prepareDarwinRuntime.py, with the engine reached by `../..` too. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
 the bundle, and the source engine's identity is recorded in notices/bundle-provenance.json.
 
 The x86_64-linux-gnu.2.31 and x86_64-windows-gnu runtimes also get the C++ overlay of prepareCppRuntime.py merged
@@ -29,6 +30,7 @@ import sys
 import tempfile
 
 import prepareCppRuntime as pc
+import prepareDarwinRuntime as pd
 import prepareEngine as pe
 import prepareRuntime as pr
 import prepareWindowsRuntime as pw
@@ -42,10 +44,12 @@ SHARED_RECEIPT_COMMON = ("kind", "statement", "redistributionCertified", "zig", 
 
 
 def splitTargets(targets):
-    """(targets prepareRuntime.py makes, Windows targets prepareWindowsRuntime.py makes; none when no Windows
-    target is named and others are). No target selects every target."""
+    """(targets prepareRuntime.py makes, Windows targets prepareWindowsRuntime.py makes, macOS targets
+    prepareDarwinRuntime.py makes; the last two are the ones named, so none when only others are). No target
+    selects every target."""
     windows = [t for t in targets if t in pw.TARGETS]
-    return [t for t in targets if t not in pw.TARGETS], windows if windows or not targets else []
+    darwin = [t for t in targets if t in pd.TARGETS]
+    return [t for t in targets if t not in pw.TARGETS and t not in pd.TARGETS], windows, darwin
 
 
 def addTargetRuntimeDirectories(root, host, version, runtime):
@@ -82,7 +86,7 @@ def addTargetRuntimeDirectories(root, host, version, runtime):
 
 
 def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWindows, cppTargets=(), cOnlyTargets=(),
-                          targetRuntimeDirectories=()):
+                          targetRuntimeDirectories=(), hasDarwin=False):
     receipt = {
         "kind": "local-bundle-assembly",
         "statement": "Engine copied unchanged, runtime prepared by prepareRuntime.py; the contract files "
@@ -97,6 +101,8 @@ def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWi
         receipt["runtimeProvenance"] = "runtime/notices/runtime-provenance.json"
     if hasWindows:
         receipt["windowsRuntimeProvenance"] = "runtime/windows/notices/" + pw.PROVENANCE
+    if hasDarwin:
+        receipt["darwinRuntimeProvenance"] = "runtime/darwin/notices/" + pd.PROVENANCE
     if cppTargets:
         receipt["cppRuntimeProvenance"] = "runtime/" + pc.PROVENANCE
         receipt["cppTargets"] = list(cppTargets)
@@ -262,7 +268,7 @@ def prepareBundle(engine, zig, output, targets):
     clone = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
     try:
         shutil.copytree(engine, clone, symlinks=True, dirs_exist_ok=True)
-        others, windows = splitTargets(targets)
+        others, windows, darwin = splitTargets(targets)
         runtime = os.path.join(clone, "runtime")
         hasRuntime = bool(others) or not targets
         if hasRuntime:
@@ -272,13 +278,17 @@ def prepareBundle(engine, zig, output, targets):
         hasWindows = bool(windows) or not targets
         if hasWindows:
             pw.prepareWindowsRuntime(zig, engine, os.path.join(runtime, "windows"), windows or None)
+        hasDarwin = bool(darwin) or not targets
+        if hasDarwin:
+            pd.prepareDarwinRuntime(zig, engine, os.path.join(runtime, "darwin"), darwin or None)
         targetDirectories = addTargetRuntimeDirectories(clone, host, version, runtime) if hasRuntime else []
         prepared = ((others or list(pr.TARGETS)) if hasRuntime else []) + ((windows or list(pw.TARGETS)) if hasWindows else [])
+        prepared += (darwin or list(pd.TARGETS)) if hasDarwin else []
         cppTargets = [t for t in pc.TARGETS if t in prepared]
         if cppTargets:
             pc.addCppRuntime(zig, engine, runtime, cppTargets)
         writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, hasWindows, cppTargets,
-                              [t for t in prepared if t not in cppTargets], targetDirectories)
+                              [t for t in prepared if t not in cppTargets], targetDirectories, hasDarwin)
         pe.writeContract(clone, host, version)
         pe.verifyEngine(clone)
         os.chmod(clone, 0o755)
