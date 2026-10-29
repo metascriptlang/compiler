@@ -3291,9 +3291,13 @@ export function tryStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: T
 	if (refUpcast != null) return refUpcast;
 	const neverPromise = neverPromiseUpcast(expr, formal, exprType);
 	if (neverPromise != null) return neverPromise;
-	if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
-	if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
-	if (valueStructBaseDepth(exprType, formal) == 0) return null as unknown as Node;
+	if (formal.kind == TypeKind.GenericInstance || exprType.kind == TypeKind.GenericInstance) {
+		if (classBodyOf(exprType) != null || !derivesByValue(exprType, formal)) return null as unknown as Node;
+	} else {
+		if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
+		if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
+		if (valueStructBaseDepth(exprType, formal) == 0) return null as unknown as Node;
+	}
 	const conv = createNode(NodeKind.TypeAssertion, { asExpr: expr, asType: formal.typeName } as NodeData, createToken(TokenKind.Ident, "", expr.location.line));
 	conv.nodeType = formal;
 	conv.flags = conv.flags.incl(NodeFlag.Sem);
@@ -3308,6 +3312,19 @@ function neverPromiseUpcast(expr: Node, formal: Type, exprType: Type): Node | nu
 	const to = awaitedType(formal);
 	if (from == null || to == null || from.kind != TypeKind.Never || to.kind == TypeKind.Never || to.kind == TypeKind.Void) return null;
 	return classUpcast(expr, formal);
+}
+
+function derivesByValue(from: Type, to: Type): boolean {
+	let level = declaredBasesOf(from);
+	for (let depth = 0; level.length > 0 && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const next: Type[] = [];
+		for (const base of level) {
+			if (sameType(base, to)) return true;
+			for (const parent of declaredBasesOf(base)) next.push(parent);
+		}
+		level = next;
+	}
+	return false;
 }
 
 function nominalBodyOf(t: Type | null): Type | null {
@@ -4014,7 +4031,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral, layoutFromC, unwrapRefBase } from "./types";
+import { createNumberLiteral, layoutFromC, unwrapRefBase, classBodyOf, declaredBasesOf } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);

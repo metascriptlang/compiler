@@ -2394,6 +2394,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			const recvBindings = extRecvBindings.names.length > 0 ? extRecvBindings : classReceiverBindings(node.resolvedSym, d.callee);
 			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, recvBindings);
 			if (extInst != null) {
+				upcastReceiver(node, extInst);
 				calleeType = stripReceiverParam(extInst);
 				d.callee.nodeType = calleeType;
 				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
@@ -4984,6 +4985,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.params, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
 				callNode.resolvedSym = instSym;
+				upcastReceiver(callNode, instSym.symbolType);
 				winnerType = stripReceiverParam(instSym.symbolType);
 			}
 		}
@@ -5007,12 +5009,24 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const recvBindings = createUnifyBindings();
 		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
 		const inst = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, getGenericDeclFlags(extWinnerSym.declNode), null, recvBindings);
-		if (inst != null) winnerType = stripReceiverParam(inst);
+		if (inst != null) {
+			upcastReceiver(callNode, inst);
+			winnerType = stripReceiverParam(inst);
+		}
 	}
 	const callee = (callNode.data as CallExprData).callee;
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+}
+
+function upcastReceiver(callNode: Node, instType: Type | null): void {
+	const d = callNode.data as CallExprData;
+	if (instType == null || instType.typeChildren.length == 0 || d.callee.kind != NodeKind.MemberExpr) return;
+	const me = d.callee.data as MemberExprData;
+	if (me.object.nodeType == null) return;
+	const upcast = tryStructUpcast(me.object, instType.typeChildren[0], me.object.nodeType);
+	if (upcast != null as unknown as Node) me.object = upcast;
 }
 
 function typedContextArgs(args: Node[], argTypes: Type[], skipMask: boolean[]): Type[] {
