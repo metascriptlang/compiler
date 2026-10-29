@@ -7,8 +7,8 @@ import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
-import { RaiserHostFn, RaiserHostValue, copyToHost, copyToVm } from "../raiser/marshal";
-import { registerHostFn, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
+import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
+import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { vmCallFunction, vmDumpStack } from "../raiser/vm";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -145,7 +145,14 @@ export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserH
 }
 
 export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
-	registerHostFn(nativeName, impl);
+	registerHostFn(nativeName, (args: RaiserValue[]): RaiserValue => {
+		try {
+			return impl(args);
+		} catch (e) {
+			raiseFromHost(e.message, false);
+			return boxVoid();
+		}
+	});
 }
 
 export function unboxValue(v: RaiserValue): RaiserHostValue {
@@ -452,6 +459,33 @@ test "a script calls a function the host implements" {
 	assert seen.length == 2;
 	assert seen[0] == 1;
 	assert seen[1] == 40;
+	removeAll(dir);
+}
+
+test "a host routine that throws raises into the script's catch" {
+	implementRoutine("embedTest.fail", (args: RaiserValue[]): RaiserValue => {
+		throw new Error("host refused");
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function fail(): void from "embedTest.fail";\nexport function guarded(): string { try { fail(); } catch (e) { return "caught: " + e.message; } return "missed"; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const r = callRoutine(interp, routineOf(interp, "guarded"), []);
+	assert r.ok, r.ok ? "" : r.error;
+	if (r.ok) assert r.value.text() == "caught: host refused";
+	removeAll(dir);
+}
+
+test "a host routine's throw, uncaught two script frames deep, comes back as Result.err and the host keeps calling" {
+	implementRoutine("embedTest.failDeep", (args: RaiserValue[]): RaiserValue => {
+		throw new Error("deep refusal");
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function failDeep(): void from "embedTest.failDeep";\nfunction inner(): void { failDeep(); }\nfunction outer(): void { inner(); }\nexport function run(): void { outer(); }\nexport function ok(): int32 { return 7; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const bad = callRoutine(interp, routineOf(interp, "run"), []);
+	assert !bad.ok;
+	if (!bad.ok) assert bad.error.includes("deep refusal"), bad.error;
+	assert intCall(interp, routineOf(interp, "ok"), []) == 7;
 	removeAll(dir);
 }
 
