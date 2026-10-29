@@ -107,6 +107,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 	if (expr.kind == NodeKind.UpdateExpr) return hoistUpdate(expr, hoisted, ctx);
 	if (expr.kind == NodeKind.MoveExpr) {
 		const md = expr.data as MoveExprData;
+		markMovePath(md.moveArg);
 		md.moveArg = hoistTernaries(md.moveArg, hoisted, ctx);
 		return expr;
 	}
@@ -345,7 +346,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
 	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOperand(child, pre, ctx);
-	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess ? arrayHandleRead(child) : null;
+	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess && !movePathAccesses.has(parent) ? arrayHandleRead(child) : null;
 	if (handle != null && (calls || readsAnyOf(child, writes))) {
 		const bound = bindOperand(handle, pre, ctx);
 		if (handle === child) return bound;
@@ -897,6 +898,26 @@ let functionDepth = 0;
 let tdzFlags = new HashMap<Symbol, Symbol>();
 let tdzGuards = new HashSet<Node>();
 
+// The indexed accesses on the path a move empties: that path names a location, so a temp holding
+// the array handle would make the reset land on the handle's array instead of the element path.
+let movePathAccesses = new HashSet<Node>();
+
+function markMovePath(path: Node): void {
+	let cur = path;
+	while (cur != null) {
+		if (cur.kind == NodeKind.ArrayAccess) {
+			movePathAccesses.add(cur);
+			cur = (cur.data as ArrayAccessData).array;
+		} else if (cur.kind == NodeKind.MemberExpr) {
+			cur = (cur.data as MemberExprData).object;
+		} else if (cur.kind == NodeKind.HiddenDeref || cur.kind == NodeKind.HiddenAddr) {
+			cur = (cur.data as HiddenDerefData).expr;
+		} else {
+			return;
+		}
+	}
+}
+
 function tdzFlagOf(n: Node): Symbol | null {
 	const read = functionDepth == 0 ? null : moduleBindingRead(n);
 	return read == null ? null : tdzFlags.get(tdzBindingOf(read));
@@ -927,6 +948,7 @@ export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node
 	functionDepth = 0;
 	tdzFlags = ctx.tdzFlags;
 	tdzGuards = new HashSet<Node>();
+	movePathAccesses = new HashSet<Node>();
 	walkExpandBlocksHooked(
 		program,
 		expandConditionalStmt,
