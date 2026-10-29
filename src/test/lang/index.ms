@@ -29,6 +29,7 @@ import "./brandedStringIdentity";
 import "./byteArrayValueFit";
 import "./carrierEquality";
 import "./classCalls";
+import "./contextualMemberNames";
 import "./closureCalling";
 import "./closureStorage";
 import "./compilerRaisedErrors";

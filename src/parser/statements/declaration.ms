@@ -1235,6 +1235,15 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	return Result.ok(actorNode);
 }
 
+function classModifierAhead(state: ParserState): boolean {
+	const modifier = current(state);
+	const next = peek(state, 1);
+	return (modifier.kind == TokenKind.Static || next.line == modifier.line) &&
+		(isPropertyName(next) || next.kind == TokenKind.Star ||
+			next.kind == TokenKind.LBrace || next.kind == TokenKind.LBracket ||
+			next.kind == TokenKind.String || next.kind == TokenKind.Number);
+}
+
 function parseClassMember(state: ParserState): NodeResult {
 	const memberToken = current(state);
 
@@ -1254,20 +1263,20 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Capture access modifiers: public, private, protected
 	let memberVisibility = "";
-	if (current(state).kind == TokenKind.Public) {
+	if (current(state).kind == TokenKind.Public && classModifierAhead(state)) {
 		memberVisibility = "public";
 		advance(state);
-	} else if (current(state).kind == TokenKind.Private) {
+	} else if (current(state).kind == TokenKind.Private && classModifierAhead(state)) {
 		memberVisibility = "private";
 		advance(state);
-	} else if (current(state).kind == TokenKind.Protected) {
+	} else if (current(state).kind == TokenKind.Protected && classModifierAhead(state)) {
 		memberVisibility = "protected";
 		advance(state);
 	}
 
 	// Check for static
 	let memberIsStatic = false;
-	if (current(state).kind == TokenKind.Static) {
+	if (current(state).kind == TokenKind.Static && classModifierAhead(state)) {
 		memberIsStatic = true;
 		advance(state);
 	}
@@ -1278,12 +1287,13 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for readonly
 	let memberIsReadonly = false;
-	if (current(state).kind == TokenKind.Readonly) {
+	if (current(state).kind == TokenKind.Readonly && classModifierAhead(state)) {
 		memberIsReadonly = true;
 		advance(state);
 	}
 
-	const memberIsAbstract = current(state).kind == TokenKind.Abstract;
+	const memberIsAbstract = current(state).kind == TokenKind.Abstract &&
+		classModifierAhead(state);
 	if (memberIsAbstract) advance(state);
 
 	const modifier = current(state);
@@ -1305,13 +1315,13 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for extern modifier on methods
 	let memberFlags = "";
-	if (current(state).kind == TokenKind.Extern) {
+	if (current(state).kind == TokenKind.Extern && classModifierAhead(state)) {
 		memberFlags = "extern";
 		advance(state);
 	}
 
 	// Check for async modifier on methods
-	if (current(state).kind == TokenKind.Async) {
+	if (current(state).kind == TokenKind.Async && classModifierAhead(state)) {
 		if (memberFlags != "") { memberFlags = `${memberFlags}_async`; }
 		else { memberFlags = "async"; }
 		advance(state);
@@ -2598,6 +2608,93 @@ function parsedMethod(source: string, index: int32 = 0): MethodDeclData {
 	if (!programOk(source)) throw new Error("Invalid method fixture: " + source);
 	const cls = stmtAt(source, 0).data as ClassDeclData;
 	return cls.classBody[index].data as MethodDeclData;
+}
+
+test "modifier words retain ordinary property identity" {
+	const names = [
+		"async", "static", "readonly", "abstract",
+		"public", "private", "protected", "extern",
+	];
+	for (const name of names) {
+		const source = "class C { " + name + ": int32 = 1; }";
+		assert programOk(source);
+		const cls = stmtAt(source, 0).data as ClassDeclData;
+		const member = cls.classBody[0];
+		assert member.kind == NodeKind.PropertyDecl;
+		const property = member.data as PropertyDeclData;
+		assert property.propName == name;
+		assert !property.propIsStatic && !property.propIsReadonly;
+		assert property.propVisibility == "";
+		assert !member.flags.has(NodeFlag.Abstract);
+	}
+}
+
+test "modifier words retain ordinary method identity" {
+	const names = [
+		"async", "static", "readonly", "abstract",
+		"public", "private", "protected", "extern", "get", "set",
+	];
+	for (const name of names) {
+		const source = "class C { " + name + "(): int32 { return 1; } }";
+		const method = parsedMethod(source);
+		assert method.methodName == name;
+		assert method.methodFlags == "" && !method.methodIsStatic;
+		assert method.methodVisibility == "";
+	}
+}
+
+test "a generic keyword method is not a modifier" {
+	const method = parsedMethod(
+		"class C { async<T>(value: T): T { return value; } }",
+	);
+	assert method.methodName == "async" && method.methodFlags == "gen:T";
+}
+
+test "real class modifiers keep existing flags" {
+	assert parsedMethod("class C { async work() {} }").methodFlags == "async";
+	assert parsedMethod("class C { async *items() {} }").methodFlags ==
+		"async_generator";
+	assert parsedMethod("class C { static *items() {} }").methodIsStatic;
+	assert parsedMethod("class C { public work() {} }").methodVisibility ==
+		"public";
+	assert parsedMethod("class C { extern work(): void; }").methodFlags ==
+		"extern";
+	const source = "abstract class C { private readonly value: int32 = 1; " +
+		"abstract work(): int32; }";
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	const property = cls.classBody[0].data as PropertyDeclData;
+	assert property.propIsReadonly && property.propVisibility == "private";
+	assert cls.classBody[1].flags.has(NodeFlag.Abstract);
+}
+
+test "static can continue across a line break" {
+	const method = parsedMethod("class C { static\nwork() {} }");
+	assert method.methodIsStatic;
+	const repeated = parsedMethod("class C { static static() {} }");
+	assert repeated.methodName == "static" && repeated.methodIsStatic;
+}
+
+test "other modifiers stop at a line break" {
+	for (const name of ["async", "readonly", "abstract", "private"]) {
+		const source = "class C { " + name + "\nwork() {} }";
+		const cls = stmtAt(source, 0).data as ClassDeclData;
+		assert cls.classBody.length == 2;
+		assert cls.classBody[0].kind == NodeKind.PropertyDecl;
+		assert parsedMethod(source, 1).methodFlags == "";
+	}
+	const source = "class C { async /*\n*/ work() {} }";
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	assert cls.classBody.length == 2;
+	assert parsedMethod("class C { async /*same line*/ work() {} }").methodFlags ==
+		"async";
+}
+
+test "optional keyword property keeps its optional flag" {
+	const cls = stmtAt("class C { async?: int32; }", 0).data as ClassDeclData;
+	const member = cls.classBody[0];
+	assert member.kind == NodeKind.PropertyDecl;
+	assert member.flags.has(NodeFlag.Optional);
+	assert (member.data as PropertyDeclData).propName == "async";
 }
 
 test "override modifier reaches the existing method flags on instance and static methods" {
