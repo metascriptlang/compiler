@@ -39,7 +39,7 @@ import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/def
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
-import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
+import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
 const PACK_MAGIC = "MSPK8";
@@ -1052,6 +1052,7 @@ export function tryLoadPreludePack(key: string, stamp: string): CheckerContext |
 		return null;
 	}
 	const loaded = tryLoadPreludePackBody(body);
+	if (loaded != null) markUsed(`${root}/${key}.pk`, nowSeconds());
 	_loadMs = _loadMs + (performance.now() - _l0);
 	_lastHit = loaded != null;
 	return loaded;
