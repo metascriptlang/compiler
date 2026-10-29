@@ -73,6 +73,7 @@ import "./importedBindingShadow";
 import "./staticReceiver";
 import "./overloadedSubscript";
 import "./stringRepresentation";
+import "./stringByteSliceEdges";
 import "./suspendedBindings";
 import "./suspensionControl";
 import "./suspensionEvaluation";
