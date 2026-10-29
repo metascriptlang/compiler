@@ -150,6 +150,7 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining != null) return defining;
 	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx.preludeCtx, definingModulePath);
+	if (ctx.preludeModuleScopes.has(definingModulePath)) return preludeBodyCtx(ctx, definingModulePath);
 	return ctx;
 }
 
