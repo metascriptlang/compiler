@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -625,7 +625,7 @@ export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | n
 			return key;
 		},
 		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
-		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
+		TypeKind.Ptr => { return (isReadonlyView(t) ? "cptr:" : "ptr:") + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.Cursor => { return typeKeyIn(roots, t.typeReturn); },
 		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn) + importedScalarName(t.typeReturn); },
@@ -1382,7 +1382,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 				return ptrType;
 			}
 			const inner = getTypeDesc(g, innerType);
-			const ptrType = inner + "*";
+			const ptrType = isReadonlyView(t) ? "const " + inner + "*" : inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
 		},
