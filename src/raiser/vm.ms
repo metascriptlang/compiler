@@ -1444,11 +1444,13 @@ function unwindFrame(vm: RaiserVM): void {
 function unhandledException(vm: RaiserVM): void {
 	const body = moduleBodyOf(vm, vm.current);
 	if (body >= 0) {
+		releaseEntryRefs(vm);
 		moduleBodyFinish(vm, body, RaiserModuleJobKind.Rejected, vm.currentException);
 		return;
 	}
 	const ev = vm.sched.modules;
 	if (vm.current == ev.strand) {
+		releaseEntryRefs(vm);
 		if (ev.execBody >= 0) {
 			const at = ev.execBody;
 			ev.execBody = -1;
