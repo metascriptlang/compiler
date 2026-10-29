@@ -7,17 +7,17 @@ import {
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData,
-	ArrowFunctionData, FunctionExprData,
+	ArrowFunctionData, FunctionExprData, FunctionDeclData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
+import { mangleProcName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
+import { isExtensionRoutine, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
@@ -289,7 +289,20 @@ function multiFileHomeName(gen: JSGenerator, sym: Symbol, name: string, declared
 		return jsEnumMemberName(gen, owner.sym, owner.typeName, sym.name);
 	}
 	if (sym.symbolKind == SymbolKind.Function) {
-		if (moduleExportsName(gen, effPath, baseName) && !isStaticExtensionSym(sym)) {
+		const decl = sym.declNode;
+		const extension = decl != null && decl.kind == NodeKind.FunctionDecl &&
+			isExtensionRoutine((decl.data as FunctionDeclData).fnFlags);
+		if (extension) {
+			if (hasModule || sym.exportName != "") {
+				return mangledFunctionName(
+					buildModuleNameRoots(), sym, declared, sym.overloadIdx,
+				);
+			}
+			return mangleProcName(
+				baseName, mangleModuleName(buildModuleNameRoots(), effPath), sym.disamb,
+			);
+		}
+		if (moduleExportsName(gen, effPath, baseName)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads != null && sym.overloads.length > 0);
 			let slot = sym.overloadIdx;
 			let suffixed = inSet;

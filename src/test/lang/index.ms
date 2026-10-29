@@ -37,6 +37,7 @@ import "./compilerRaisedErrors";
 import "./enumConstantEvaluation";
 import "./errorPropagation";
 import "./exportSymbols";
+import "./extensionExportNames";
 import "./fsRemoveAll";
 import "./fsCopyFile";
 import "./functionCarriers";
