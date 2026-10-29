@@ -1670,13 +1670,13 @@ test "a fresh check computes each query of the file and its import once" {
 	assert checkedType(db, "/fresh/test.ms", "y") == "number";
 	const recomputed = recomputedSince(db, 0).join(",");
 	const expected = "Preprocess /fresh/test.ms,Parse /fresh/test.ms,Preprocess /fresh/dep.ms,Parse /fresh/dep.ms"
-		+ ",TypeCheck /fresh/test.ms";
+		+ ",TypeCheck /fresh/test.ms,Impl /fresh/test.ms";
 	assert recomputed == expected, recomputed;
-	assert recomputeCount(db) == 5;
+	assert recomputeCount(db) == 6;
 	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
 }
 
-test "re-checking a body edit recomputes only the edited file's parse and check" {
+test "re-checking a body edit recomputes only the edited file's parse, check and implementation digest" {
 	const path = "/body/test.ms";
 	const db = recheckDb("/body");
 	assert checkedType(db, path, "y") == "number";
@@ -1688,16 +1688,16 @@ test "re-checking a body edit recomputes only the edited file's parse and check"
 	const before = recomputeCount(db);
 	assert checkedType(db, path, "y") == "number";
 	const recomputed = recomputedSince(db, revision);
-	const expected = `Preprocess ${path},Parse ${path},TypeCheck ${path}`;
+	const expected = `Preprocess ${path},Parse ${path},TypeCheck ${path},Impl ${path}`;
 	assert recomputed.join(",") == expected, recomputed.join(",");
-	assert recomputeCount(db) - before == 3;
+	assert recomputeCount(db) - before == 4;
 	assert db.cache.entries.length == entries;
 	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
 	const hits = db.cache.hits;
 	const ctx = dbTypeCheck(db, path);
 	assert dbTypeCheck(db, path) == ctx;
 	assert db.cache.hits - hits == 2;
-	assert recomputeCount(db) - before == 3;
+	assert recomputeCount(db) - before == 4;
 	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
 }
 
@@ -1788,15 +1788,15 @@ test "re-checking an importer after a dependency body edit reuses the importer's
 	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
 	const marked = db.cache.marked;
 	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
-	assert db.cache.marked - marked == 5;
+	assert db.cache.marked - marked == 6;
 	const revision = db.revision.value;
 	const before = recomputeCount(db);
 	dbParse(db, dep);
 	assert checkedType(db, user, "n") == "int32";
 	const recomputed = recomputedSince(db, revision);
-	const expected = `Preprocess ${dep},Parse ${dep},TypeCheck ${user}`;
+	const expected = `Preprocess ${dep},Parse ${dep},TypeCheck ${user},Impl ${user}`;
 	assert recomputed.join(",") == expected, recomputed.join(",");
-	assert recomputeCount(db) - before == 3;
+	assert recomputeCount(db) - before == 4;
 	const parseKey = createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, user));
 	const userParse = cacheGet(db.cache, parseKey);
 	assert userParse.computedAt < revision && userParse.verifiedAt == db.revision.value;
