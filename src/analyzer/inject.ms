@@ -39,7 +39,9 @@ import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutin
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { cloneIfPure } from "../transform/place";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
-import { checkSource } from "../checker/checkPass";
+import { checkSource, checkProgram } from "../checker/checkPass";
+import { parseSource } from "../parser/statements/validation";
+import { liftDestructors } from "../transform/lowering/destructorLifting";
 import { checkedCtx, bindCStd } from "../transform/testUtil";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
@@ -3280,7 +3282,11 @@ test "finally-protected var blocks move in isLastReadSafe" {
 }
 
 test "finally-protected root blocks field move in isLastReadFieldSafe" {
-	const dctx = testDrcContext("struct Obj { f: string; } const exemplar: Obj = { f: \"\" };");
+	const parsed = parseSource("struct Obj { f: string; } const exemplar: Obj = { f: \"\" };");
+	assert parsed.ok;
+	const tctx = checkedCtx(checkProgram(parsed.value));
+	liftDestructors(parsed.value, tctx, true);
+	const dctx = createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), []));
 	const exemplar = lookupSymbol(dctx.ctx.checkerCtx.table, "exemplar");
 	assert exemplar != null;
 	assert exemplar.symbolType != null;
