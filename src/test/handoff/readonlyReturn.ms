@@ -95,6 +95,19 @@ test "readonlyReturn: a view stored into a literal in spawned code names the sto
 	assert errors(inField, "'shared.kids' is a view the task does not own") == 1;
 }
 
+test "readonlyReturn: a spread element stores what it spreads, so a view array of references is refused naming the view" {
+	const inSpread = lent + "const parts = [...shared.kids]; h.n = parts.length;" + done;
+	assert errors(inSpread, "stores the view 'shared' into an array literal at 7:") == 1;
+	assert errors(inSpread, "checker cannot follow") == 0;
+	assert errors(lent + "const parts = [new Node(), ...shared.kids]; h.n = parts.length;" + done, "stores the view 'shared' into an array literal") == 1;
+}
+
+test "readonlyReturn: a spread of values that carry no view compiles beside a view in scope" {
+	const names = "function opts(): string[] { return [\"-o\"]; }\nfunction use(xs: string[], v: Readonly<Node>): int32 { return xs.length + v.n; }\n";
+	assert errors(node + names + "function f(v: Readonly<Node>): int32 { return use([...opts(), \"t\"], v); }\nconst shared: Readonly<Node> = new Node();\nconst w = spawn(() => f(shared));", "stores") == 0;
+	assert errors(node + names + "function f(v: Readonly<Node>, xs: Readonly<string[]>): int32 { return use([...xs, \"t\"], v); }\nconst shared: Readonly<Node> = new Node();\nconst ys = [\"a\"];\nconst w = spawn(() => f(shared, ys));", "stores") == 0;
+}
+
 test "readonlyReturn: a view kept in the task, a scalar or a copy of a borrowed view compiles" {
 	assert errors(lent + "h.n = shared.n; const c = new Node(); c.n = shared.n; h.f = c;" + done, "stores the view") == 0;
 	assert errors(lent + "const r = shared.kids; const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); return r.length + xs.length;" + done, "stores the view") == 0;
