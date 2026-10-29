@@ -156,10 +156,12 @@ function referencePrefix(data: Readonly<Span<uint8>>, from: int64, surrogates: b
 	return i;
 }
 
-const PROBE_BYTES: number[] = [
-	0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF,
-	0xE0, 0xE1, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xFF,
-];
+function probeBytes(): number[] {
+	return [
+		0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF,
+		0xE0, 0xE1, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xFF,
+	];
+}
 
 function bytesOf(size: int32): uint8[] {
 	return new Array<uint8>(size as int64);
@@ -175,14 +177,14 @@ function sameBothModes(bytes: uint8[]): boolean {
 	return true;
 }
 
-function probeSequence(picks: number[]): boolean {
+function probeSequence(probes: Readonly<number[]>, picks: number[]): boolean {
 	const size = picks.length;
 	const plain = bytesOf(size);
 	const padded = bytesOf(size + 4);
 	const framed = bytesOf(size + 5);
 	framed[0] = 0x61;
 	for (let k = 0; k < size; k++) {
-		const byte = PROBE_BYTES[picks[k]] as uint8;
+		const byte = probes[picks[k]] as uint8;
 		plain[k] = byte;
 		padded[k] = byte;
 		framed[k + 1] = byte;
@@ -195,20 +197,22 @@ function probeSequence(picks: number[]): boolean {
 }
 
 test "wellFormedPrefix matches the byte-at-a-time scan on every short sequence of probe bytes" {
-	const count = PROBE_BYTES.length;
+	const probes = probeBytes();
+	const count = probes.length;
 	for (let a = 0; a < count; a++) {
-		assert probeSequence([a]);
+		assert probeSequence(probes, [a]);
 		for (let b = 0; b < count; b++) {
-			assert probeSequence([a, b]);
+			assert probeSequence(probes, [a, b]);
 			for (let c = 0; c < count; c++) {
-				assert probeSequence([a, b, c]);
-				for (let d = 0; d < count; d++) assert probeSequence([a, b, c, d]);
+				assert probeSequence(probes, [a, b, c]);
+				for (let d = 0; d < count; d++) assert probeSequence(probes, [a, b, c, d]);
 			}
 		}
 	}
 }
 
 test "wellFormedPrefix matches the byte-at-a-time scan on seeded random strings" {
+	const probes = probeBytes();
 	let state: uint32 = 12345;
 	for (let round = 0; round < 6000; round++) {
 		state = state * 1664525 + 1013904223;
@@ -219,7 +223,7 @@ test "wellFormedPrefix matches the byte-at-a-time scan on seeded random strings"
 			const pick = (state >> 16) as int32;
 			const kind = pick % 10;
 			if (kind < 4) {
-				bytes[k] = PROBE_BYTES[(pick >> 4) % PROBE_BYTES.length] as uint8;
+				bytes[k] = probes[(pick >> 4) % probes.length] as uint8;
 			} else if (kind < 6) {
 				bytes[k] = (0x80 + ((pick >> 4) % 0x40)) as uint8;
 			} else if (kind < 8) {
