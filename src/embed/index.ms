@@ -382,6 +382,23 @@ test "selectRoutine finds only an exported function of the evaluated module" {
 	removeAll(dir);
 }
 
+test "selectRoutine finds a function the evaluated module re-exports" {
+	const dir = scratchDir();
+	writeFile(`${dir}/user.ms`, `export function onKey(code: int32): int32 { return code + 1; }\n`);
+	writeFile(`${dir}/named.ms`, `export { onKey } from "./user";\nexport function own(): int32 { return 7; }\n`);
+	writeFile(`${dir}/star.ms`, `export * from "./user";\n`);
+	writeFile(`${dir}/renamed.ms`, `export { onKey as press } from "./user";\n`);
+	writeFile(`${dir}/chain.ms`, `export * from "./star";\n`);
+	for (const entry of ["named", "star", "chain"]) {
+		const interp = evaluatedInterpreter(`${dir}/${entry}.ms`);
+		assert intCall(interp, routineOf(interp, "onKey"), [hostValue(boxInt(4))]) == 5, entry;
+	}
+	const renamed = evaluatedInterpreter(`${dir}/renamed.ms`);
+	assert intCall(renamed, routineOf(renamed, "press"), [hostValue(boxInt(1))]) == 2;
+	assert !selectRoutine(renamed, "onKey").ok;
+	removeAll(dir);
+}
+
 test "selectRoutine refuses an overloaded name" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `export function f(a: int32): int32 { return a; }\nexport function f(a: string): string { return a; }\n`);
