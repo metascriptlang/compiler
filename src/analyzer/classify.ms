@@ -504,7 +504,7 @@ export function isFreshExpr(kind: NodeKind): boolean {
 		| NodeKind.StringLiteral | NodeKind.NumberLiteral
 		| NodeKind.BooleanLiteral | NodeKind.NullLiteral
 		| NodeKind.ArrowFunction | NodeKind.FunctionExpr
-		| NodeKind.MoveExpr | NodeKind.ConditionalExpr => true,
+		| NodeKind.MoveExpr | NodeKind.ConditionalExpr | NodeKind.AwaitExpr => true,
 		_ => false,
 	};
 }
@@ -750,6 +750,8 @@ test "isCountedRef agrees with classifyType's Ref arms" {
 }
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
+
+test "await is fresh, as the call it stands for" { assert isFreshExpr(NodeKind.AwaitExpr); }
 
 test "new is fresh" { assert isFreshExpr(NodeKind.NewExpr); }
 

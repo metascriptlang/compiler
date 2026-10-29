@@ -695,7 +695,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const futReg = compileExpr(s, d.awaitArg);
 			const dest = allocFor(s, node.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
-			if (d.awaitArg.kind == NodeKind.CallExpr && isAwaitable(d.awaitArg.nodeType)) emitInst(s, raiserABC(RaiserOpcode.RcDec, futReg, 0, 0));
+			if (d.awaitArg.kind == NodeKind.CallExpr && isAwaitable(d.awaitArg.nodeType) && inRefFile(classOfReg(s, futReg))) emitInst(s, raiserABC(RaiserOpcode.RcDec, futReg, 0, 0));
 			return dest;
 		},
 		// Hidden* nodes are checker-inserted markers (deref point for Ref<Struct>,

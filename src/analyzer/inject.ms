@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
@@ -176,6 +176,7 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx),
 		NodeKind.OutExpr => processOutArg(node, dctx),
 		NodeKind.UpdateExpr => processUpdate(node, dctx),
+		NodeKind.AwaitExpr => processAwait(node, dctx),
 		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
 			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.SizeofExpr | NodeKind.MacroInvocation => node,
 		_ => { throw new Error("internal: processNode: unhandled kind " + NodeKind[node.kind]); },
@@ -189,6 +190,13 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// dumb (process children, return the node); the capture decision lives here, not scattered.
 	if (mode == DrcMode.Normal) return ensureDestructionIfNeeded(result, dctx);
 	return result;
+}
+
+function processAwait(node: Node, dctx: DrcContext): Node {
+	const d = node.data as AwaitExprData;
+	const releasedByAwait = d.awaitArg.kind == NodeKind.CallExpr && d.awaitArg.nodeType != null && isAwaitable(d.awaitArg.nodeType);
+	d.awaitArg = processNode(d.awaitArg, dctx, releasedByAwait ? DrcMode.Consumed : DrcMode.Normal);
+	return node;
 }
 
 function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -330,7 +338,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Reference: ensureDestruction for call/constructor nodes, NOT literals.
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
-	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
+	if (k != NodeKind.CallExpr && k != NodeKind.AwaitExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
 	if (isViewCall(node) || node.flags.has(NodeFlag.Closure) || readsMemberInPlace(node)) return node;
 	const exprType = node.nodeType;
 	if (exprType == null) return node;
@@ -1453,7 +1461,7 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 	// Rule 3: dispatch on RHS kind (Reference: case ri2.kind)
 	return match (rhs.kind) {
 		// Fresh values → sink (ownership transfer, no copy needed)
-		NodeKind.CallExpr => {
+		NodeKind.CallExpr | NodeKind.AwaitExpr => {
 			if ((flags & MOC_IS_DECL) != 0) {
 				return stmt;
 			}
@@ -2455,7 +2463,6 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	if (dctx.ctx.checkerCtx == null) return false;
 	// Fresh expressions produce owned values — no incref needed
 	if (isFreshExpr(expr.kind)) return false;
-	if (expr.kind == NodeKind.CallExpr || expr.kind == NodeKind.AwaitExpr) return false;
 	if (expr.kind == NodeKind.MoveExpr) return false;
 
 	// Identifier: function-local RC vars are moved (not borrowed) — no incref
