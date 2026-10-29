@@ -2810,6 +2810,15 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
+export function nullConstantOfRead(expr: Node, exprType: Type, formal: Type): Node {
+	if (exprType.kind != TypeKind.Null || expr.kind != NodeKind.Identifier || !isNullableShape([formal])) return expr;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || stored.kind != TypeKind.Null) return expr;
+	const literal = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, expr.location);
+	literal.nodeType = exprType;
+	return literal;
+}
+
 export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): Type {
 	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || !isNullableShape([formal])) return exprType;
 	const stored = declaredTypeOfLocation(expr);
@@ -3479,6 +3488,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (isEngineCheckMode() && formal.kind == TypeKind.Array && exprType.kind == TypeKind.Ref && exprType.typeReturn != null && exprType.typeReturn.kind == TypeKind.Array) return fitSlot(ctx, expr, formal, exprType.typeReturn);
 	if (isEngineCheckMode() && isOwnedElementArray(exprType)) return fitSlot(ctx, expr, formal, createArray(withoutOwned(exprType.typeReturn!)));
 	if (isEngineCheckMode() && exprType.kind == TypeKind.Array && formal.kind == TypeKind.Ref && formal.typeReturn != null && formal.typeReturn.kind == TypeKind.Array) return fitSlot(ctx, expr, formal.typeReturn, exprType);
+	const nullRead = nullConstantOfRead(expr, exprType, formal);
+	if (nullRead != expr) return fitSlot(ctx, nullRead, formal, nullRead.nodeType);
 	const stored = storedTypeOfNullRead(expr, exprType, formal);
 	if (stored != exprType) return fitSlot(ctx, expr, formal, stored);
 	if (!holdsNumberLiteral(formal) && widenNumberLiteralType(exprType) != exprType) {
