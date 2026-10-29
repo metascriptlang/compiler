@@ -1,5 +1,9 @@
 import { Token, TokenKind, tokenKindToString, isIdentLikeKind, isIdentOrKeyword } from "../../lexer/token";
 import { lex } from "../../lexer/lexer";
+import { parseSource } from "../../parser/statements/validation";
+import "../../parser/statements/core";
+import { Node, NodeKind, NodeFlag, Type, SourceLocation, MemberExprData, CallExprData, ArrayAccessData } from "../../ast/node";
+import { FieldSink, nodeFields } from "../../ast/fieldspec";
 
 function isCloser(kind: TokenKind): boolean {
 	return match (kind) {
@@ -190,6 +194,82 @@ function unquotesKey(a: Token[], i: int32, b: Token[], j: int32): boolean {
 		&& j + 1 < b.length && b[j + 1].kind == TokenKind.Colon;
 }
 
+function isParen(kind: TokenKind): boolean {
+	return kind == TokenKind.LParen || kind == TokenKind.RParen;
+}
+
+let shapeText: string[] = [];
+
+const shapeSink: FieldSink = {
+	node: (name: string, n: Node | null): void => { shapeNode(n); },
+	nodes: (name: string, a: Node[] | null): void => { shapeNodes(a); },
+	nodesNested: (name: string, a: Node[][] | null): void => {
+		if (a != null) for (const row of a) { shapeText.push("["); shapeNodes(row); shapeText.push("]"); }
+	},
+	typ: (name: string, t: Type | null): void => {},
+	str: (name: string, s: string): void => { shapeText.push(name + "=" + s.length.toString() + ":" + s); },
+	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapeText.push(name + "=" + v.length.toString() + ":" + v); },
+	integer: (name: string, v: int64): void => { shapeText.push(name + "=" + v.toString()); },
+	float: (name: string, v: float64): void => { shapeText.push(name + "=" + v.toString()); },
+	bool: (name: string, b: boolean): void => { shapeText.push(name + (b ? "+" : "-")); },
+	loc: (name: string, l: SourceLocation | null): void => {},
+	locs: (name: string, l: SourceLocation[] | null): void => {},
+	floats: (name: string, a: number[] | null): void => { if (a != null) for (const v of a) shapeText.push(v.toString()); },
+};
+
+function shapeNodes(a: Node[] | null): void {
+	shapeText.push("(");
+	if (a != null) for (const n of a) shapeNode(n);
+	shapeText.push(")");
+}
+
+function groupsOptionalChain(n: Node): boolean {
+	let cur = n;
+	while (true) {
+		if (cur.flags.has(NodeFlag.OptionalLink)) return true;
+		if (cur.kind == NodeKind.MemberExpr) {
+			const m = cur.data as MemberExprData;
+			if (m.isOptional) return true;
+			cur = m.object;
+		} else if (cur.kind == NodeKind.CallExpr) cur = (cur.data as CallExprData).callee;
+		else if (cur.kind == NodeKind.ArrayAccess) cur = (cur.data as ArrayAccessData).array;
+		else return false;
+	}
+}
+
+// Every payload field and flag of a parsed node but locations and the grouping-parentheses flag.
+function shapeNode(n: Node | null): void {
+	if (n == null) {
+		shapeText.push("null");
+		return;
+	}
+	let flags = n.flags as uint32;
+	if (n.flags.has(NodeFlag.Parenthesized)) {
+		flags -= 1 << (NodeFlag.Parenthesized as uint32);
+		if (groupsOptionalChain(n)) shapeText.push("(optional chain)");
+	}
+	shapeText.push("k" + (n.kind as int32).toString() + "f" + flags.toString() + "ta=" + n.typeArg + "{");
+	shapeNode(n.typeExpr);
+	shapeNodes(n.typeExprs);
+	shapeNodes(n.baseExprs);
+	nodeFields(n, shapeSink);
+	shapeText.push("}");
+}
+
+function treeShape(root: Node): string {
+	shapeText = [];
+	shapeNode(root);
+	return shapeText.join("");
+}
+
+function sameTreesIgnoringParens(source: string, formatted: string, first: string): Result<void, string> {
+	const x = parseSource(source);
+	const y = parseSource(formatted);
+	if (!x.ok || !y.ok) return Result.err("fmt changes parentheses, " + first + ", and the source or the output does not parse");
+	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of parentheses, " + first);
+	return Result.ok(null);
+}
+
 export function checkLossless(source: string, formatted: string): Result<void, string> {
 	const before = lex(source);
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
@@ -203,6 +283,7 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	let i = 0;
 	let j = 0;
 	const addedClosers: int32[] = [];
+	let firstParen = "";
 	while (i < a.length && j < b.length) {
 		if (addedClosers.length > 0 && addedClosers[addedClosers.length - 1] == j) {
 			addedClosers.pop();
@@ -237,6 +318,12 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 			i += 1;
 			continue;
 		}
+		if (!sameToken(a[i], b[j]) && (isParen(a[i].kind) || isParen(b[j].kind))) {
+			if (firstParen == "") firstParen = describe(isParen(a[i].kind) ? a[i] : b[j], false);
+			if (isParen(a[i].kind)) i += 1;
+			else j += 1;
+			continue;
+		}
 		if (!sameToken(a[i], b[j])) {
 			const kind = a[i].value == b[j].value;
 			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
@@ -244,8 +331,17 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 		i += 1;
 		j += 1;
 	}
+	while (i < a.length && isParen(a[i].kind)) {
+		if (firstParen == "") firstParen = describe(a[i], false);
+		i += 1;
+	}
+	while (j < b.length && isParen(b[j].kind)) {
+		if (firstParen == "") firstParen = describe(b[j], false);
+		j += 1;
+	}
 	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
 	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
+	if (firstParen != "") return sameTreesIgnoringParens(source, formatted, firstParen);
 	return Result.ok(null);
 }
 
@@ -302,8 +398,6 @@ test "lossless: parentheses added around a lone arrow parameter are free" {
 }
 
 test "lossless: other added or removed parentheses stay refused" {
-	assert !checkLossless("f(c);", "f((c));\n").ok;
-	assert !checkLossless("set((c) => c);", "set(c => c);\n").ok;
 	assert !checkLossless("const f = c => c;", "const f = (c, d) => c;\n").ok;
 	assert !checkLossless("const f = c => c;", "const f = c => c();\n").ok;
 }
@@ -317,7 +411,6 @@ test "lossless: parentheses added around a whole expression body of an arrow are
 test "lossless: parentheses that would change an arrow body stay refused" {
 	assert !checkLossless("g(x => a, b);", "g((x) => (a, b));\n").ok;
 	assert !checkLossless("const f = x => {};", "const f = (x) => ({});\n").ok;
-	assert !checkLossless("const f = x => a + b;", "const f = (x) => (a) + b;\n").ok;
 }
 
 test "lossless: a string token whose decoded value is unchanged may change quotes" {
@@ -348,4 +441,47 @@ test "lossless: a broken union may gain a leading bar and a hugged one lose it" 
 	assert checkLossless("type T = A | B;", "type T =\n\t| A\n\t| B;\n").ok;
 	assert checkLossless("let x: | A | null;", "let x: A | null;\n").ok;
 	assert !checkLossless("const v = a | b;", "const v = a | | b;\n").ok;
+}
+
+test "lossless: parentheses that bind nothing may be dropped or added" {
+	assert checkLossless("const a = a < b ? -1 : (a > b ? 1 : 0);", "const a = a < b ? -1 : a > b ? 1 : 0;\n").ok;
+	assert checkLossless("const d = (a + b) + c;", "const d = a + b + c;\n").ok;
+	assert checkLossless("const e = a + (b * c);", "const e = a + b * c;\n").ok;
+	assert checkLossless("const j = (a && b) && c;", "const j = a && b && c;\n").ok;
+	assert checkLossless("const n = f((a));", "const n = f(a);\n").ok;
+	assert checkLossless("const o = !(a);", "const o = !a;\n").ok;
+	assert checkLossless("const q = (a.b).c;", "const q = a.b.c;\n").ok;
+	assert checkLossless("f(c);", "f((c));\n").ok;
+	assert checkLossless("set((c) => c);", "set(c => c);\n").ok;
+	assert checkLossless("const f = x => a + b;", "const f = (x) => (a) + b;\n").ok;
+	assert checkLossless("const v = (a.b()).c;", "const v = a.b().c;\n").ok;
+}
+
+test "lossless: parentheses around a mixed operator pair may be added" {
+	assert checkLossless("const c = a && b || c && d;", "const c = (a && b) || (c && d);\n").ok;
+	assert checkLossless("const f = a * b % c;", "const f = (a * b) % c;\n").ok;
+	assert checkLossless("const g = a == b == c;", "const g = (a == b) == c;\n").ok;
+	assert checkLossless("const h = a ** b ** c;", "const h = a ** (b ** c);\n").ok;
+	assert checkLossless("const s = a & b | c;", "const s = (a & b) | c;\n").ok;
+	assert checkLossless("const t = a << b + c;", "const t = a << (b + c);\n").ok;
+}
+
+test "lossless: parentheses that move a binding stay refused" {
+	assert !checkLossless("const v = (a + b) * c;", "const v = a + b * c;\n").ok;
+	assert !checkLossless("const v = a + b * c;", "const v = (a + b) * c;\n").ok;
+	assert !checkLossless("const v = a - (b - c);", "const v = a - b - c;\n").ok;
+	assert !checkLossless("const v = (a && b) || c;", "const v = a && (b || c);\n").ok;
+	assert !checkLossless("const v = (a ** b) ** c;", "const v = a ** b ** c;\n").ok;
+	assert !checkLossless("const v = !(a && b);", "const v = !a && b;\n").ok;
+	assert !checkLossless("const v = (a ? b : c) + d;", "const v = a ? b : c + d;\n").ok;
+	assert !checkLossless("f((a, b));", "f(a, b);\n").ok;
+	assert !checkLossless("const v = (a?.b).c;", "const v = a?.b.c;\n").ok;
+	assert !checkLossless("const v = (a?.()).b;", "const v = a?.().b;\n").ok;
+	assert !checkLossless("const v = (a?.b()).c;", "const v = a?.b().c;\n").ok;
+	assert !checkLossless("const v = (a as T).b;", "const v = a as T.b;\n").ok;
+}
+
+test "lossless: parentheses in a type annotation stay part of the type" {
+	assert !checkLossless("let x: (A | B)[];", "let x: A | B[];\n").ok;
+	assert !checkLossless("type T = (A | B) & C;", "type T = A | B & C;\n").ok;
 }
