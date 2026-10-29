@@ -110,6 +110,38 @@ test "a read-only array view refuses a receiver declared T[] or Span<T>" {
 	assert !js.startsWith("ERROR:"), js;
 }
 
+test "a read-only Map view refuses its mutators and a write through any value it reads" {
+	const head = "class Tally { n: int32 = 0; }\n";
+	const refused = [
+		["m.set(\"k\", new Tally());", "cannot call 'set'"],
+		["m.delete(\"k\");", "cannot call 'delete'"],
+		["m.clear();", "cannot call 'clear'"],
+		["const t = m.get(\"k\"); if (t != null) t.n = 1;", "cannot write through Readonly<Tally>"],
+		["for (const t of m.values()) t.n = 1;", "cannot write through Readonly<Tally>"],
+		["for (const [k, t] of m) t.n = 1;", "cannot write through Readonly<Tally>"],
+		["m.forEach((t: Readonly<Tally>, k: string) => { t.n = 1; });", "cannot write through Readonly<Tally>"],
+	];
+	for (const [body, message] of refused) {
+		const source = head + `function run(m: Readonly<Map<string, Tally>>): void { ${body} }\nrun(new Map<string, Tally>());`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/mapView.ms", entrySource: source }], "test/mapView.ms");
+		assert !c.ok && c.error.contains(message) && c.error.contains("PARALOCK E24"), body + ": " + (c.ok ? "accepted" : c.error);
+		assert js.startsWith("ERROR:") && js.contains(message), body + ": " + js;
+	}
+	const writable = head + `function run(m: Map<string, Tally>): void {
+	const t = m.get("k");
+	if (t != null) t.n = 1;
+	for (const v of m.values()) v.n = 2;
+	for (const [k, v] of m) v.n = 3;
+	m.forEach((v: Tally, k: string) => { v.n = 4; });
+}
+run(new Map<string, Tally>());`;
+	const c = compileToCWithStd(writable);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/mapView.ms", entrySource: writable }], "test/mapView.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "a writable Span over a value container writes that container" {
 	const head = "type Row = int32[2];\nstruct Holder { t: int32[4]; }\nfunction poke(s: Span<int32>, i: int32): void { s[i] = 42; }\nfunction peek(s: Readonly<Span<int32>>, i: int32): int32 { return s[i]; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nconst MODT: int32[4] = [3, 5, 7, 9];\n";
 	const refused = [
