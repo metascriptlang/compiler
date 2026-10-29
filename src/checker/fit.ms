@@ -3292,7 +3292,7 @@ export function tryStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: T
 	const neverPromise = neverPromiseUpcast(expr, formal, exprType);
 	if (neverPromise != null) return neverPromise;
 	if (formal.kind == TypeKind.GenericInstance || exprType.kind == TypeKind.GenericInstance) {
-		if (classBodyOf(exprType) != null || !derivesByValue(exprType, formal)) return null as unknown as Node;
+		if (hasGenericParams(exprType) || hasGenericParams(formal) || classBodyOf(exprType) != null || !derivesByValue(exprType, formal)) return null as unknown as Node;
 	} else {
 		if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
 		if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
@@ -3335,7 +3335,7 @@ function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null 
 	const target = formal.kind == TypeKind.Union ? nonNullMemberOfNullable(formal) : formal;
 	const source = exprType.kind == TypeKind.Union ? nonNullMemberOfNullable(exprType) : exprType;
 	if (target == null || source == null || target.kind != TypeKind.Ref || source.kind != TypeKind.Ref) return null;
-	if (hasGenericParams(target)) return null;
+	if (hasGenericParams(target) || hasGenericParams(source)) return null;
 	const to = nominalBodyOf(target.typeReturn);
 	const from = nominalBodyOf(source.typeReturn);
 	if (to == null || from == null || to.kind != TypeKind.Struct || from.kind != TypeKind.Struct || sameType(to, from)) return null;
