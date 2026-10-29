@@ -46,6 +46,18 @@ function findCRLF(data: string, pos: int32): int32 {
 	return -1;
 }
 
+function joinPieces(pieces: Readonly<Buffer[]>): Buffer {
+	let total = 0;
+	for (const piece of pieces) total += piece.length;
+	const out = new Array<uint8>(total as int64);
+	let at = 0;
+	for (const piece of pieces) {
+		for (let i = 0; i < piece.length; i++) out[at + i] = piece[i];
+		at += piece.length;
+	}
+	return out;
+}
+
 function findCrlfIn(data: Readonly<Span<uint8>>, pos: int32): int32 {
 	const last = (data.length as int32) - 1;
 	for (let i = pos; i < last; i = i + 1) {
@@ -259,7 +271,7 @@ export function decodeChunked(data: Readonly<Span<uint8>>): Result<Buffer, HttpE
 
 		const chunkSize = parseHex(data[pos..sizeEnd]);
 		if (chunkSize < 0) return Result.err(invalidResponse("invalid chunk size"));
-		if (chunkSize == 0) return Result.ok(Buffer.concatList(pieces));
+		if (chunkSize == 0) return Result.ok(joinPieces(pieces));
 
 		const dataStart = sizeEnd + 2;
 		const dataEnd = dataStart + chunkSize;
@@ -329,7 +341,7 @@ export function tryDecodeChunked(data: Readonly<Span<uint8>>): ChunkedDecodeResu
 			// Final chunk — expect trailing CRLF (no trailers support in v1).
 			if (dataStart + 1 >= len) return chunkedNeedMore();
 			if (!isCRLFAt(data, dataStart as int32)) return chunkedMalformed();
-			return chunkedReady(Buffer.concatList(pieces), (dataStart + 2) as int32);
+			return chunkedReady(joinPieces(pieces), (dataStart + 2) as int32);
 		}
 
 		const dataEnd = dataStart + chunkSize;
