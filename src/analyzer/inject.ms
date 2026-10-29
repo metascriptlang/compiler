@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
@@ -2884,6 +2884,33 @@ function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): No
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
+function destroyClassStatics(stmts: Node[], loc: SourceLocation, dctx: DrcContext): Node[] {
+	const out: Node[] = [];
+	for (let i = stmts.length - 1; i >= 0; i -= 1) {
+		const decl = stmts[i].kind == NodeKind.ExportDecl ? (stmts[i].data as ExportDeclData).exportedDecl : stmts[i];
+		const classSym = decl != null && decl.kind == NodeKind.ClassDecl && declGenericParams(decl) == "" ? decl.resolvedSym : null;
+		if (classSym == null) continue;
+		for (const member of (decl.data as ClassDeclData).classBody) {
+			if (member.kind != NodeKind.PropertyDecl || !(member.data as PropertyDeclData).propIsStatic) continue;
+			const fieldSym = member.resolvedSym;
+			const valueType = member.nodeType != null ? member.nodeType : fieldSym != null ? fieldSym.symbolType : null;
+			if (fieldSym == null || valueType == null) throw new Error(`internal: static field '${(member.data as PropertyDeclData).propName}' reached the analyzer without its symbol or type`);
+			const rcInfo = classifyRc(valueType, dctx);
+			if (!rcInfo.needsCleanup) continue;
+			const value = makeMember(makeIdentResolved(classSym, loc), (member.data as PropertyDeclData).propName, loc);
+			value.resolvedSym = fieldSym;
+			value.nodeType = valueType;
+			const tmpSym = freshTempSym(dctx.ctx, "staticExit", valueType);
+			const tmp = makeVarDecl(tmpSym.name, value, DeclKind.Const, loc);
+			tmp.nodeType = valueType;
+			tmp.resolvedSym = tmpSym;
+			out.push(tmp);
+			out.push(makeDestroyCall(tmpSym, rcInfo, loc));
+		}
+	}
+	return out;
+}
+
 function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
 	const valueType = cell.symbolType!.typeReturn!;
 	const rcInfo = classifyRc(valueType, dctx);
@@ -2966,6 +2993,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
 	const exits: Node[] = tearDownGlobals(dctx, baked, program.location);
+	for (const s of destroyClassStatics(d.programStmts, program.location, dctx)) exits.push(s);
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
 	}
