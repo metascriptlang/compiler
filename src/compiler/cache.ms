@@ -904,9 +904,20 @@ function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode
 	let found = parseImplicitSearch(readSealed(memo).join("\n"), key);
 	if (!found.complete) {
 		const devNull = platform == "windows" ? "NUL" : "/dev/null";
-		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", devNull, "-o", devNull]) args.push(arg);
+		let input = devNull;
+		let output = devNull;
+		if (platform == "windows") {
+			input = absoluteSlashed(`${getCacheDir()}/search.empty.${performance.now()}.${isCpp ? "cpp" : "c"}`);
+			output = `${input}.i`;
+			atomicWriteFile(input, "");
+		}
+		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", input, "-o", output]) args.push(arg);
 		const run = execFileResult(probe.path, args);
 		found = parseImplicitSearch(run.started && run.pipeOk && run.exitCode == 0 ? run.errorOutput : "", key);
+		if (input != devNull) {
+			tryRemoveFile(input);
+			tryRemoveFile(output);
+		}
 		if (found.complete) writeSealed(memo, searchLines(found));
 	}
 	_implicitByKey.set(key, found);
