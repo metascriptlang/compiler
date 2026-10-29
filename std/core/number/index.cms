@@ -55,6 +55,10 @@ when (!bare && !solana) {
 	}
 }
 
+export function toFixed(this n: float64, digits: int32 = 0): string {
+	return float64FixedText(n, digits);
+}
+
 export function isNaN(this typeof Number, x: float64): boolean {
 	return x != x;
 }
@@ -119,3 +123,4 @@ export class Number {
 
 import { stringToNumber } from "./parse";
 import "./digits";
+import { float64FixedText } from "./fixed";

@@ -12,6 +12,12 @@ export extern function Number(v: uint64): float64 from "Number";
 export extern function Number(v: char): float64 from "Number";
 export extern function Number(v: bigint): float64 from "Number";
 
+export function toFixed(this n: float64, digits: int32 = 0): string {
+	if (digits < 0 || digits > 100) throw new RangeError("toFixed() digits argument must be between 0 and 100");
+	@emit(`return ${n}.toFixed(${digits});`);
+	unreachable;
+}
+
 export extern function isNaN(this typeof Number, x: float64): boolean from "Number.isNaN";
 export extern function isFinite(this typeof Number, x: float64): boolean from "Number.isFinite";
 export extern function isInteger(this typeof Number, x: float64): boolean from "Number.isInteger";
