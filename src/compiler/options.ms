@@ -79,6 +79,7 @@ export interface CliOptions {
 	eventsPath: string;        // msc run --hcr --events=<path>|-: JSON Lines of the watch session
 	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
+	wasmPlacement: boolean;    // --wasm-placement=on|off: a js build sends `@wasm();` modules to wasm; off builds them as js
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
@@ -185,6 +186,7 @@ export function newCliOptions(): CliOptions {
 		eventsPath: "",
 		emitSubdir: "",
 		appMode: "console",
+		wasmPlacement: true,
 		strictNullChecks: false,
 		testsInDir: false,
 		testsShard: 0,
@@ -472,6 +474,12 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 				console.log(error("error") + ": unknown --app mode '" + bold(appVal) + "'. Valid: " + cyan("console") + ", " + cyan("lib") + ", " + cyan("staticlib"));
 				exit(1);
 			}
+		} else if (arg.startsWith("--wasm-placement=")) {
+			const placement = arg.slice(17, arg.length);
+			if (placement != "on" && placement != "off") {
+				return Result.err(`unknown --wasm-placement value: "${placement}"; valid values: on, off`);
+			}
+			opts.wasmPlacement = placement == "on";
 		} else if (arg == "--strict-nil") {
 			opts.strictNullChecks = true;
 		} else if (arg == "--tests-in-dir") {
@@ -745,6 +753,17 @@ test "an unknown --os target is an error result, not a silent stop" {
 	const opts = newCliOptions();
 	const r = applyArgs(opts, ["build", "a.ms", "--os=plan9"], 0);
 	assert !r.ok;
+}
+
+test "--wasm-placement takes on or off and refuses anything else" {
+	assert newCliOptions().wasmPlacement;
+	const off = newCliOptions();
+	assert applyArgs(off, ["build", "a.ms", "--target=js", "--wasm-placement=off"], 0).ok;
+	assert !off.wasmPlacement;
+	const on = newCliOptions();
+	assert applyArgs(on, ["build", "a.ms", "--wasm-placement=off", "--wasm-placement=on"], 0).ok;
+	assert on.wasmPlacement;
+	assert !applyArgs(newCliOptions(), ["build", "a.ms", "--wasm-placement=maybe"], 0).ok;
 }
 
 test "cache directory switches accept equals and separate path forms" {
