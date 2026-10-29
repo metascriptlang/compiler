@@ -24,6 +24,7 @@ function main(): void {
 }
 
 test "a macro helper the build checked for another target is checked again for the engine" {
+	const before = engineRecheckCount();
 	const result = compileToJSWithStd(`
 interface Person {
 	name: string;
@@ -34,6 +35,7 @@ const p: Person = { name: "Alice", age: 30 };
 console.log(JSON.stringify(p));
 `);
 	assert result.ok, result.ok ? "" : result.error;
+	assert engineRecheckCount() > before, "the helpers the JS build checked were not checked again for the engine";
 }
 
 test "a macro helper the C build checked is checked again for the engine" {

@@ -498,6 +498,13 @@ function buildBodyCtx(sym: Symbol): CheckerContext | null {
 	return engineBodyCtx(sym.modulePath, sym);
 }
 
+function declaresEngineProcs(bodyCtx: CheckerContext): boolean {
+	for (const name of raiserPreludeCtx().compilerFuncs.keys()) {
+		if (!bodyCtx.compilerFuncs.has(name)) return false;
+	}
+	return true;
+}
+
 function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	if (sym.symbolKind == SymbolKind.Class || !isCheckedRoutineDecl(sym.declNode)) {
 		_buildLoweringBlockedBy = sym.symbolKind == SymbolKind.Class ? "class" : "not checked";
@@ -510,6 +517,10 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	const bodyCtx = buildBodyCtx(sym);
 	if (bodyCtx == null) {
 		_buildLoweringBlockedBy = "no build context";
+		return BUILD_LOWERING_BLOCKED;
+	}
+	if (!declaresEngineProcs(bodyCtx)) {
+		_buildLoweringBlockedBy = "build std lacks engine procs";
 		return BUILD_LOWERING_BLOCKED;
 	}
 	const blocked = blockedForm(sym.declNode, false);
