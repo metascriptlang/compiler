@@ -110,6 +110,30 @@ REMOVED_DISABLED_FEATURES += [{
      + FIELD_DEFAULT),
 )]
 
+X86_23 = llvmSource("23.1.0", "lib/Target/X86/X86.td")
+AARCH64_23 = aarch64Source("23.1.0", "AArch64Features.td")
+REMOVED_DISABLED_FEATURES += [dict(e, engineMajor="23", sources=e["sources"] + [X86_23 if e["cpu"] == "x86-64" else AARCH64_23])
+                              for e in REMOVED_DISABLED_FEATURES]
+REMOVED_DISABLED_FEATURES += [{
+    "feature": "-amx-tf32", "zig": "0.16.0", "engineMajor": "23", "target": target, "cpu": "x86-64",
+    "absentMacroPrefix": "__AMX_",
+    "reason": "defined by LLVM 22 and without a definition in LLVM 23; x86-64 enables no AMX feature in either",
+    "sources": [llvmSource("22.1.1", "lib/Target/X86/X86.td"), X86_23],
+} for target in ("x86_64-linux-gnu.2.31", "x86_64-windows-gnu")] + [{
+    "feature": "-false-deps-lzcnt-tzcnt", "zig": "0.16.0", "engineMajor": "23", "target": target, "cpu": "x86-64",
+    "absentMacroPrefix": "__LZCNT__",
+    "reason": "LLVM 23 splits the tuning feature into false-deps-lzcnt and false-deps-tzcnt; the x86-64 tuning list "
+              "enables neither, so their fields keep the generated default false",
+    "sources": [llvmSource("23.1.0", "lib/Target/X86/X86.td", 595), llvmSource("23.1.0", "lib/Target/X86/X86.td", 600),
+                llvmSource("23.1.0", "lib/Target/X86/X86.td", 953)],
+} for target in ("x86_64-linux-gnu.2.31", "x86_64-windows-gnu")] + [{
+    "feature": feature, "zig": "0.16.0", "engineMajor": "23", "target": "aarch64-windows-gnu", "cpu": "generic",
+    "absentMacroPrefix": None,
+    "reason": "defined by LLVM 22 and without a definition in LLVM 23; generic enables it in neither, so ignoring "
+              "the disabled feature leaves the same state",
+    "sources": [aarch64Source("22.1.1", "AArch64Features.td"), AARCH64_23],
+} for feature in ("-hcx", "-pcdphint")]
+
 # The aarch64 GNU Linux production records the same four disabled features of the same generic cpu
 # (checked against the Zig 0.16.0 compile line), and every source above is target independent, so each
 # entry holds for it. The list is apart from REMOVED_DISABLED_FEATURES, whose entries each name one
