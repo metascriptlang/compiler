@@ -145,6 +145,12 @@ export function getRootSym(node: Node): Symbol | null {
 // Walk from a node to its root, collecting path components.
 // Result: path[0] = leaf (deepest access), path[len-1] = root (Identifier).
 
+function readsArrayPayload(member: Node): boolean {
+	const md = member.data as MemberExprData;
+	const t = md.object.nodeType;
+	return md.property == "p" && t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.String);
+}
+
 function decomposePath(n: Node): Node[] {
 	const path: Node[] = [];
 	let cur = skipConvDfa(n);
@@ -155,7 +161,7 @@ function decomposePath(n: Node): Node[] {
 				return path;
 			},
 			NodeKind.MemberExpr => {
-				path.push(cur);
+				if (!readsArrayPayload(cur)) path.push(cur);
 				cur = skipConvDfa((cur.data as MemberExprData).object);
 			},
 			NodeKind.ArrayAccess => {
