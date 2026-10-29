@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: raiser runs no user lifecycle hooks (destroyed 0)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // note: a tree held through Vec<Owned<N>> is acyclic, so dropping its root runs onDestroy once per node without the cycle collector; the same tree through N[] is cyclic and drops the same way.
 let destroyed = 0;

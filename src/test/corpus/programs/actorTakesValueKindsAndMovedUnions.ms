@@ -1,5 +1,4 @@
 // @stdout: key 7 {Shift, Alt}|mask 2|wide true 3|cells 321|meters 5|msg key 9|msg click 4,5
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 import { stop, ExitReason } from "std/actor";
 
 enum Mod { Shift, Ctrl, Alt }

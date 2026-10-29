@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: pid kept true | call noproc | other actor sends 2 | stale equals fresh false | fresh pid differs true
 import { stop, ExitReason } from "std/actor";
 

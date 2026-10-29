@@ -1,5 +1,4 @@
 // @stdout: catch handed | thrown raw | try boom | after done
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a .catch handler on a rejected new Promise receives the Error it rejected with, and an
 // Error carrying a string the executor throws, on every backend.
 

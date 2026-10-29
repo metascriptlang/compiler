@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 40
 // @stdout: sends 100000 ints 100000 strs 100000 pts 100000
 // @serial

@@ -1,5 +1,4 @@
 // @stdout: name a|tag b2|name c|wrapped d
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // An actor method takes a value-layout argument by address through its generated proxy, so
 // inferring sink there would turn `move m` into a refused copy. A union with a string payload,
 // moved at the top of a routine and one block deeper, and a struct holding one.

@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msSetInterval
 // @serial
 
 import { sleepAsync } from "std/core/promise";
