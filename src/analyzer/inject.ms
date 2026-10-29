@@ -211,12 +211,21 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 	// Reference parity: a cast between a managed and an unmanaged representation is nkCast,
 	// copied whole into a sink (injectdestructors p sinkArg → passCopyToSink); a conversion
 	// between managed types forwards the mode to its operand like nkConv/nkObjUpConv.
-	if (mode == DrcMode.SinkArg && isReprCast(node, dctx)) {
+	if (mode == DrcMode.SinkArg && (isReprCast(node, dctx) || isValueUpcast(node))) {
 		ta.asExpr = processNode(ta.asExpr, dctx, DrcMode.Normal);
 		return passCopyToSink(node, dctx, true);
 	}
 	ta.asExpr = processNode(ta.asExpr, dctx, mode);
 	return node;
+}
+
+function isValueUpcast(node: Node): boolean {
+	const operand = (node.data as TypeAssertionData).asExpr;
+	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
+	const from = operand.nodeType;
+	const to = node.nodeType;
+	const byValue = (t: Type): boolean => t.kind == TypeKind.Struct || t.kind == TypeKind.GenericInstance;
+	return byValue(from) && byValue(to) && from.typeName != to.typeName;
 }
 
 function isReprCast(node: Node, dctx: DrcContext): boolean {
