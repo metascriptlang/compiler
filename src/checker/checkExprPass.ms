@@ -619,6 +619,7 @@ function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): bool
 	const nameId = getIdentId(ctx.table.identCache, name);
 	let scope = ctx.table.current;
 	while (scope != null) {
+		if (scope.scopeKind == ScopeKind.Module || scope.scopeKind == ScopeKind.Global) return false;
 		if (scope.symbols.get(nameId) == sym) return true;
 		if (scope.scopeKind == ScopeKind.Function) return false;
 		scope = scope.parent;
