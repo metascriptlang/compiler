@@ -10,6 +10,7 @@ cp "$subject" "$w/tools/gate.sh"
 printf '#!/bin/sh\nexit 0\n' >"$w/msc"
 chmod +x "$w/msc"
 cp "$w/msc" "$w/out/gate/msc"
+cp "$w/msc" "$w/out/gate/msc.exe"
 printf 'out/\nmsc*\n' >"$w/.gitignore"
 printf '{}\n' >"$w/src/test/known-red.json"
 git -C "$w" init -q -b main
