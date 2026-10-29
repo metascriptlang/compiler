@@ -8,6 +8,7 @@ from unittest import mock
 
 import prepareBundle as pb
 import prepareCppRuntime as pc
+import prepareDarwinRuntime as pd
 import prepareEngine as pe
 import prepareRuntime as pr
 import prepareWindowsRuntime as pw
@@ -40,10 +41,12 @@ class BundleCase(unittest.TestCase):
         self.verified = []
         self.runtimeCalls = []
         self.windowsCalls = []
+        self.darwinCalls = []
         self.cppCalls = []
         for patcher in (mock.patch.object(pe, "verifyEngine", side_effect=self.verify),
                         mock.patch.object(pr, "prepareRuntime", side_effect=self.prepareRuntime),
                         mock.patch.object(pw, "prepareWindowsRuntime", side_effect=self.prepareWindows),
+                        mock.patch.object(pd, "prepareDarwinRuntime", side_effect=self.prepareDarwin),
                         mock.patch.object(pc, "addCppRuntime", side_effect=self.addCpp)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -69,6 +72,12 @@ class BundleCase(unittest.TestCase):
         write(os.path.join(windows, "x86_64-windows-gnu.cfg"), "-target w\n")
         write(os.path.join(windows, "notices", pw.PROVENANCE), '{"kind": "windows"}\n')
         return windows, []
+
+    def prepareDarwin(self, zig, engine, darwin, targets=None):
+        self.darwinCalls.append((zig, engine, darwin, targets))
+        write(os.path.join(darwin, "aarch64-macos.cfg"), "--target=aarch64-apple-macos11.0\n")
+        write(os.path.join(darwin, "notices", pd.PROVENANCE), '{"kind": "darwin"}\n')
+        return darwin, []
 
     def addCpp(self, zig, engine, runtime, targets=None, seed=None):
         self.cppCalls.append((zig, engine, runtime, targets, sorted(os.listdir(runtime))))
@@ -110,12 +119,13 @@ class BundleTest(BundleCase):
         pb.prepareBundle(self.engine, "/z/zig", out, [])
         zig, source, runtime, targets, present = self.cppCalls[0]
         self.assertEqual((zig, source, targets), ("/z/zig", self.engine, ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"]))
-        self.assertEqual((os.path.basename(runtime), present), ("runtime", ["notices", "wasm32-wasi", "windows", "x86_64-linux-gnu.2.31",
+        self.assertEqual((os.path.basename(runtime), present), ("runtime", ["darwin", "notices", "wasm32-wasi", "windows", "x86_64-linux-gnu.2.31",
                                                                            "x86_64-linux-gnu.2.31.cfg"]))
         receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
         self.assertEqual(receipt["cppRuntimeProvenance"], "runtime/notices/cpp-provenance.json")
         self.assertEqual(receipt["cppTargets"], ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"])
-        self.assertEqual(receipt["cOnlyTargets"], ["wasm32-wasi", "aarch64-linux-gnu.2.31", "aarch64-windows-gnu"])
+        self.assertEqual(receipt["cOnlyTargets"], ["wasm32-wasi", "aarch64-linux-gnu.2.31", "aarch64-windows-gnu",
+                                                   "aarch64-macos", "x86_64-macos"])
         listed = [l.split("  ", 1)[1] for l in read(os.path.join(out, "FILES.sha256")).splitlines()]
         for rel in ("runtime/x86_64-linux-gnu.2.31.cxx.cfg", "runtime/notices/cpp-provenance.json"):
             self.assertIn(rel, listed)
