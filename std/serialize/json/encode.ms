@@ -345,6 +345,13 @@ export macro jsonValueOf(t: Node): Node {
 			error("jsonValueOf: unsupported field type (kind=" + tt.kind + ")", t);
 		}
 		const tn: string = tt.name;
+		if (tn == "null") {
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonNull" },
+				arguments: [],
+			};
+		}
 		// bigint has no JSON representation — silently wrapping through the
 		// jsonInt int64 carrier corrupts values >= 2^63. JSON.stringify(1n)
 		// throws in Node; the macro knows the static type, so refuse here at
