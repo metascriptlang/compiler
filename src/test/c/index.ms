@@ -110,3 +110,4 @@ import "./numberVecFieldCopy";
 import "./forOfConstArrayBorrow";
 import "./instanceofNullableUnion";
 import "./nullableDeclaredUnionJoin";
+import "./declaredUnionIntoAnonymousCarrier";
