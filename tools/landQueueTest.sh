@@ -57,8 +57,8 @@ printf '%s head=%s files=%s par=%s jobs=%s\n' "$name" "$(git rev-parse --short H
 v=$(cat verdict 2>/dev/null || echo green)
 n=$(( $(cat "$LQ_TEST/count.${name#wt/}" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$LQ_TEST/count.${name#wt/}"
 case "$v" in
-  busy3) [ "$n" -gt 3 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; exit 0 ;;
-  busyred) [ "$n" -gt 1 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; echo "gate: RED (tests) 0m01s"; exit 1 ;;
+  busy3) [ "$n" -gt 3 ] || { echo "gate: BUSY 3 free cores < 14 after 1800s"; exit 75; }; exit 0 ;;
+  busyred) [ "$n" -gt 1 ] || { echo "gate: BUSY 3 free cores < 14 after 1800s"; exit 75; }; echo "gate: RED (tests) 0m01s"; exit 1 ;;
   green) exit 0 ;;
   prune) mkdir -p out/gate; printf '{"kept":{}}\n' >out/gate/known-red.pruned.json; exit 0 ;;
   red) echo "gate: RED (tests) 0m01s"; exit 1 ;;
@@ -402,7 +402,7 @@ check "S27 initial BUSY then RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.histo
 enqueue history
 rr=$(waitfor history)
 check "S27 old BUSY cannot retry the new RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.history")" = 3 ]'
-check "S27 prior BUSY evidence survives" 'grep -q "^gate: BUSY load" "$MSC_LAND_QUEUE/history.land.log"'
+check "S27 prior BUSY evidence survives" 'grep -q "^gate: BUSY " "$MSC_LAND_QUEUE/history.land.log"'
 check "S27 both RED attempts survive" '[ "$(grep -c "^gate: RED" "$MSC_LAND_QUEUE/history.land.log")" = 2 ]'
 setverdict history green
 enqueue history

@@ -87,7 +87,7 @@ run_item() {
     return
   fi
   this_try=$(awk '/^===== /{t=""} {t=t $0 ORS} END{printf "%s", t}' "$Q/$name.land.log")
-  if grep -q 'gate: BUSY load' <<<"$this_try"; then
+  if grep -qE '^gate: BUSY ' <<<"$this_try"; then
     log "$name: machine busy, queued again with its green lanes kept; try $tries not counted"
     { printf 'name=%s\nworktree=%s\ntries=%s\n' "$name" "$worktree" "$((tries - 1))"; } >"$running.tmp"
     mv "$running.tmp" "$item"
