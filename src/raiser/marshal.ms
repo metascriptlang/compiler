@@ -291,13 +291,13 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	assert back.field("absent").root.kind == RaiserValueKind.Nil;
 }
 
-test "a boxed string a host value takes leaves no string live on the strand's heap" {
+test "a host string leaves no string live on the strand's heap until it is copied in" {
 	const strandArrays = createArrayHeap();
 	setActiveHostHeaps(createStructHeap(), strandArrays);
-	const taken = hostValue(boxString("hello"));
+	const taken = hostString("hello");
 	assert taken.text() == "hello";
 	assert heapStringHandles(strandArrays).length == 0;
-	const failure = hostObject(["path", "message"], [hostValue(boxString("a.txt")), hostValue(boxString("no such file"))]);
+	const failure = hostObject(["path", "message"], [hostString("a.txt"), hostString("no such file")]);
 	copyToVm(strandArrays, createStructHeap(), failure);
 	assert heapStringHandles(strandArrays).length == 2;
 }
