@@ -4594,7 +4594,7 @@ test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
 	assert d.outOfRangeText === "0xFF";
 }
 
-test "every object the node wire builds is laid out by its class" {
+test "the node wire lays out its symbols and locations by class and leaves each node to be read by name" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(2, 1);
@@ -4604,11 +4604,17 @@ test "every object the node wire builds is laid out by its class" {
 	const call = createNodeAt(NodeKind.CallExpr, { callee, arguments: [arg], isDirectCall: true, resolvedOverloadIdx: 0 }, loc);
 	nodeToValue(call, objH, arrH);
 	assert objH.objects.length == 6;
+	let laid = 0;
 	for (const obj of objH.objects) {
+		if (obj.classType.fields.length == 0) {
+			assert obj.slots.length == 0 && obj.added[0] == "kind";
+			continue;
+		}
 		assert obj.added.length == 0, `wire field '${obj.added.length > 0 ? obj.added[0] : ""}' sits past the layout`;
 		assert obj.slots.length == obj.classType.fields.length;
-		assert obj.classType.fields.length > 0;
+		laid += 1;
 	}
+	assert laid == 2;
 }
 
 test "a wire node whose kind a macro rewrote is read by name" {
@@ -4618,7 +4624,7 @@ test "a wire node whose kind a macro rewrote is read by name" {
 	const v = nodeToValue(createNodeAt(NodeKind.Identifier, { name: "x" }, loc), objH, arrH);
 	wireSet(arrH, objH, v.intVal, "kind", raiserInt(NodeKind.StringLiteral as int64));
 	wireSet(arrH, objH, v.intVal, "value", heapAllocStoredString(arrH, "s"));
-	assert objH.objects[handleIndex(v.intVal)].added.length == 1;
+	assert objH.objects[handleIndex(v.intVal)].slots.length == 0;
 	const back = valueToNode(v, objH, arrH, loc);
 	assert back.kind == NodeKind.StringLiteral;
 	assert (back.data as StringLiteralData).value == "s";
