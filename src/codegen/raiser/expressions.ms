@@ -26,7 +26,7 @@ import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAss
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
-import { isSlotUnion, storesUnionTag } from "../../checker/fit";
+import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
@@ -675,7 +675,11 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const reg = compileExpr(s, d.asExpr);
 			if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, reg);
 			if (node.flags.has(NodeFlag.ConvCheck)) {
-				if (d.asExpr.kind != NodeKind.HiddenSubConv) emitUnionConv(s, reg, d.asExpr.nodeType, node.nodeType);
+				if (d.asExpr.kind != NodeKind.HiddenSubConv) {
+					const viaObject = holdsTargetObject(d.asExpr.nodeType, node.nodeType);
+					emitUnionConv(s, reg, d.asExpr.nodeType, node.nodeType, viaObject);
+					if (viaObject) emitObjConv(s, node, reg);
+				}
 				emitLitConv(s, node, reg);
 			}
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
@@ -988,7 +992,19 @@ function classDepthOf(t: Type): int32 {
 
 // A checked `as` out of a union whose members the VM tells apart by the held value, as C tells them
 // apart by the stored tag: the members the target does not keep refuse the conversion.
-function emitUnionConv(s: RaiserCompState, reg: int32, source: Type | null, target: Type | null): void {
+function targetPayload(target: Type): Type | null {
+	if (isMaybeType(target)) return target.typeReturn;
+	return target.kind == TypeKind.Union ? unwrapRefNullUnion(target) : target;
+}
+
+function holdsTargetObject(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null) return false;
+	const union = peelTransparentInstance(isMaybeType(source) && source.typeReturn != null ? source.typeReturn : source);
+	const payload = targetPayload(target);
+	return union.kind == TypeKind.Union && !storesUnionTag(union) && payload != null && classTargetKey(target) != "" && objectPathHolders(union, payload).length > 0;
+}
+
+function emitUnionConv(s: RaiserCompState, reg: int32, source: Type | null, target: Type | null, keepsObjectHolders: boolean = false): void {
 	if (source == null || target == null) return;
 	const nullable = isMaybeType(source) && source.typeReturn != null;
 	const union = peelTransparentInstance(nullable ? source.typeReturn! : source);
@@ -999,6 +1015,9 @@ function emitUnionConv(s: RaiserCompState, reg: int32, source: Type | null, targ
 	const aimed = isMaybeType(target) && target.typeReturn != null ? target.typeReturn : target;
 	for (const m of aimed.kind == TypeKind.Union ? aimed.typeChildren : [aimed]) kept.push(unionMemberToken(m));
 	if (isMaybeType(target)) kept.push("n");
+	if (keepsObjectHolders) {
+		for (const h of objectHolderSlots(union, targetPayload(target)!)) kept.push(unionMemberToken(union.typeChildren[h]));
+	}
 	const classes: Type[] = [];
 	const rest: Type[] = [];
 	for (const m of members) {
