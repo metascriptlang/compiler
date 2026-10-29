@@ -693,10 +693,10 @@ known_file_of() {
 known_unapproved() {
   local mb
   mb=$(git merge-base "$1" HEAD) || return
-  jq -r --slurpfile was <(git show "${mb}:src/test/known-red.json" 2>/dev/null || echo '{}') '
-    ($was[0] // {}) as $w | to_entries[] | .key as $l | .value | to_entries[] | .key as $n
+  { git show "${mb}:src/test/known-red.json" 2>/dev/null || echo '{}'; cat "$KNOWN"; } | jq -rs '
+    (.[0] // {}) as $w | .[1] | to_entries[] | .key as $l | .value | to_entries[] | .key as $n
     | select((($w[$l] // {}) | has($n)) | not) | select((.value.approved // "") == "")
-    | "  needs approval: \($l) · \($n)"' "$KNOWN"
+    | "  needs approval: \($l) · \($n)"'
 }
 
 known_format() {
