@@ -24,12 +24,18 @@ export interface LspProbe {
 	character: int32;
 }
 
+export interface LspPublication {
+	afterDrain: int32;
+	uri: string;
+}
+
 // After each drain index in afterDrains the open documents are a checkpoint: a process
 // driver compares the session there with a fresh server and with batch checking,
 // asking hover and definition at every probe.
 export interface LspCheckpoints {
 	afterDrains: int32[];
 	probes: LspProbe[];
+	publications?: LspPublication[];
 }
 
 export interface LspProjectFile {
@@ -1752,6 +1758,72 @@ function insignificantEditsKeepAnswers(): LspScenario {
 	};
 }
 
+function rewiredImportsFollowEdits(): LspScenario {
+	const left = PROJECT_URI + "rewire/left.ms";
+	const right = PROJECT_URI + "rewire/right.ms";
+	const user = PROJECT_URI + "rewire/user.ms";
+	const good = "export const value: int32 = 1;\n";
+	const bad = "export const value: string = \"wrong\";\n";
+	const fromLeft = "import { value } from \"./left\";\nconst answer: int32 = value;\n";
+	const fromRight = fromLeft.replaceAll("./left", "./right");
+	return {
+		name: "a rewired import follows dependency edits through undo and redo",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(left, good))]),
+			frames([notification("textDocument/didOpen", openParams(right, bad))]),
+			frames([notification("textDocument/didOpen", openParams(user, fromLeft))]),
+			frames([notification("textDocument/didChange", changeParams(user, 2, fromRight))]),
+			frames([notification("textDocument/didChange", changeParams(left, 2, bad))]),
+			frames([notification("textDocument/didChange", changeParams(user, 3, fromLeft))]),
+			frames([notification("textDocument/didChange", changeParams(left, 3, good))]),
+			frames([notification("textDocument/didChange", changeParams(user, 4, fromRight))]),
+		],
+		check: (r: LspReplay) => sameText("the final importer diagnoses the right module", "1", finalDiagnosticCount(r, user)),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [3, 4, 5, 6, 7, 8],
+			probes: [{ uri: user, line: 1, character: 23 }],
+		},
+		project: [
+			{ path: "rewire/left.ms", text: good },
+			{ path: "rewire/right.ms", text: bad },
+			{ path: "rewire/user.ms", text: fromLeft },
+		],
+	};
+}
+
+function closingAnOverlayRestoresDisk(): LspScenario {
+	const dep = PROJECT_URI + "overlay/dep.ms";
+	const user = PROJECT_URI + "overlay/user.ms";
+	const disk = "export const value: int32 = 1;\n";
+	const overlay = "export const value: string = \"wrong\";\n";
+	const source = "import { value } from \"./dep\";\nconst answer: int32 = value;\n";
+	return {
+		name: "closing an unsaved dependency restores disk text after a differential checkpoint",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(user, source))]),
+			frames([notification("textDocument/didOpen", openParams(dep, disk))]),
+			frames([notification("textDocument/didChange", changeParams(dep, 2, overlay))]),
+			frames([notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(dep)}}}`)]),
+		],
+		check: (r: LspReplay) => sameText("the importer returns to its disk dependency", "0", finalDiagnosticCount(r, user)),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [3, 4],
+			probes: [{ uri: user, line: 1, character: 23 }],
+			publications: [{ afterDrain: 4, uri: user }],
+		},
+		project: [
+			{ path: "overlay/dep.ms", text: disk },
+			{ path: "overlay/user.ms", text: source },
+		],
+	};
+}
+
 export function scenarioSlug(name: string): string {
 	let out = "";
 	for (let i = 0; i < name.byteLength; i++) {
@@ -1815,6 +1887,8 @@ export function lspScenarios(): LspScenario[] {
 		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
+		rewiredImportsFollowEdits(),
+		closingAnOverlayRestoresDisk(),
 	];
 }
 

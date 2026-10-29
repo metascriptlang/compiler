@@ -50,7 +50,7 @@ import {
 	execFileCapture,
 	findOnPath,
 } from "std/process";
-import { writeFile, readFile, exists, ensureDir, realpath } from "std/fs";
+import { writeFile, readFile, exists, ensureDir, realpath, remove } from "std/fs";
 import { basename, dirname } from "std/fs/path";
 import { stringify } from "std/serialize/json/stringify";
 import { parseJson } from "std/serialize/json/parser";
@@ -62,6 +62,7 @@ import {
 	LspReplay,
 	LspCheckpoints,
 	LspProbe,
+	LspPublication,
 	lspScenarios,
 	lspTranscript,
 	idKey,
@@ -386,6 +387,13 @@ function drive(
 	let taken = 0;
 	for (let i = 0; i < drains.length; i++) {
 		const plan = planDrain(drains[i], shutdownSent);
+		if (checkpoints != null) {
+			for (const publication of checkpoints.publications ?? []) {
+				if (publication.afterDrain == i && plan.documents.indexOf(publication.uri) < 0) {
+					plan.documents.push(publication.uri);
+				}
+			}
+		}
 		shutdownSent = plan.shutdownSent;
 		const before = publishCounts(s, plan.documents);
 		const bytes = drains[i].join("");
@@ -630,16 +638,33 @@ function compareCheckpoint(
 	const dir = `${NEUTRAL}/${name}`;
 	ensureDir(dir);
 	const files: string[] = [];
+	const originalTexts: (string | null)[] = [];
 	const checks: Result<ChildProcess, ProcessError>[] = [];
 	for (let i = 0; i < snap.uris.length; i++) {
 		const file = inProject ? lspUriToPath(snap.uris[i]) : `${slashes(realpath(dir))}/${basename(lspUriToPath(snap.uris[i]))}`;
-		writeFile(file, snap.texts[i]);
+		if (inProject && exists(file)) {
+			const original = readFile(file);
+			if (!original.ok) return `cannot preserve disk text of ${file}`;
+			originalTexts.push(original.value);
+		} else {
+			originalTexts.push(null);
+		}
 		files.push(file);
 	}
+	for (let i = 0; i < files.length; i++) writeFile(files[i], snap.texts[i]);
 	for (const file of files) checks.push(spawnChild(MSC, ["check", "--colors=off", file], { cwd: NEUTRAL, mergeStderr: true }));
 	const outputs: Result<string, string>[] = [];
 	const fresh = freshAnswers(snap, query, name);
 	for (let i = 0; i < files.length; i++) outputs.push(finishCheck(checks[i], files[i], name));
+	let restoreFailure = "";
+	if (inProject) {
+		for (let i = 0; i < files.length; i++) {
+			const original = originalTexts[i];
+			const restored = original != null ? writeFile(files[i], original) : remove(files[i]);
+			if (!restored.ok) restoreFailure = `cannot restore disk text of ${files[i]}`;
+		}
+	}
+	if (restoreFailure != "") return restoreFailure;
 	if (!fresh.ok) return fresh.error;
 	const fromFresh = firstDifference("fresh server", warm, fresh.value);
 	if (fromFresh != "") return fromFresh;
@@ -673,7 +698,11 @@ function movedCheckpoints(
 		const uri = p.uri.replaceAll(PROJECT_URI, projectUri(projectDir));
 		probes.push({ uri, line: p.line, character: p.character });
 	}
-	return { afterDrains: checkpoints.afterDrains, probes };
+	const publications: LspPublication[] = [];
+	for (const p of checkpoints.publications ?? []) {
+		publications.push({ afterDrain: p.afterDrain, uri: p.uri.replaceAll(PROJECT_URI, projectUri(projectDir)) });
+	}
+	return { afterDrains: checkpoints.afterDrains, probes, publications };
 }
 
 function replayOnProcess(s: Session, scenario: LspScenario, drains: string[][], projectDir: string): string {
