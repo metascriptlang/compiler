@@ -28,6 +28,14 @@ export function printedAncestor(levels: int32): Node | null {
 	return at >= 0 ? printing[at] : null;
 }
 
+export function pushPrinted(node: Node): void {
+	printing.push(node);
+}
+
+export function popPrinted(): void {
+	printing.pop();
+}
+
 export function callPrintNode(node: Node, options: FormatOptions): Doc {
 	if (node == null) return nodePrinterFn(node, options);
 	if (node.kind == NodeKind.ExprStmt) statementExpression = (node.data as ExprStmtData).expr;

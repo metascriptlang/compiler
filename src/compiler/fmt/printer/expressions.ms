@@ -20,6 +20,7 @@ import {
 } from "../doc";
 import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
+export { printConditionalExpr } from "./conditional";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 
@@ -60,9 +61,15 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	return docGroup([first, docIndent(tail)]);
 }
 
+function conditionalParentIndents(): boolean {
+	const great = printedAncestor(2);
+	return great != null && great.kind != NodeKind.ReturnStmt && great.kind != NodeKind.ThrowStmt && great.kind != NodeKind.CallExpr && great.kind != NodeKind.NewExpr;
+}
+
 function indentsItsValue(parent: Node | null): boolean {
 	if (parent == null) return false;
 	return match (parent.kind) {
+		NodeKind.ConditionalExpr => conditionalParentIndents(),
 		NodeKind.ObjectLiteral | NodeKind.ComputedProperty | NodeKind.VariableDecl | NodeKind.DestructuringDecl | NodeKind.PropertyDecl => true,
 		_ => isAssignmentNode(parent),
 	};
@@ -551,21 +558,6 @@ export function headWithoutSoftLines(head: Doc[]): Doc[] {
 
 export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	return assembleArrow(arrowPieces(node, options), ArgHug.None, options);
-}
-
-export function printConditionalExpr(node: Node, options: FormatOptions): Doc {
-	const d = node.data as ConditionalExprData;
-	return docGroup([
-		callPrintNode(d.ternaryCondition, options),
-		docIndent([
-			docLine(),
-			docText("? "),
-			callPrintNode(d.ternaryConsequent, options),
-			docLine(),
-			docText(": "),
-			callPrintNode(d.ternaryAlternate, options),
-		]),
-	]);
 }
 
 export function printSpreadExpr(node: Node, options: FormatOptions): Doc {
