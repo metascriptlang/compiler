@@ -132,3 +132,34 @@ test "sendableFunction: a callback a routine calls is judged where it is passed"
 		"async function g(): Promise<int32> { const h = pick(); return await spawn(() => apply(h, 1)); }";
 	assert hasError(opaque, "passes a function value") && strictErrorCount(opaque) > 0, "a function value whose body is not visible";
 }
+
+test "sendableFunction: a message to an actor charges the caller only its operands, not the receiver's body" {
+	const ACTORS = HANDLER + "interface Box { f: (n: int32) => int32; }\n" +
+		"let hits: int32 = 0;\n" +
+		"actor Worker {\n" +
+		"\trun(n: int32): int32 {\n\t\tconst box: Box = { f: (k: int32): int32 => k * 2 };\n\t\treturn box.f(n);\n\t}\n" +
+		"\tpost(n: int32): void {\n\t\tconst box: Box = { f: (k: int32): int32 => k * 2 };\n\t\tbox.f(n);\n\t}\n" +
+		"\tnested(n: int32): int32 {\n\t\tconst box: Box = { f: (k: int32): int32 => k * 2 };\n\t\treturn await spawn(() => n) + box.f(n);\n\t}\n" +
+		"\ttake(f: Sendable<Handler>): int32 { return f(1); }\n" +
+		"\ttakePlain(f: Handler): int32 { return f(1); }\n" +
+		"}\n" +
+		"type Job = Sendable<(n: int32) => Promise<int32>>;\n" +
+		"async function runJob(j: Job): Promise<int32> { return await j(3); }\n";
+	const accepted = [
+		{ name: "a Sendable function calls a method that calls a function value", body: "const job = async (n: int32): Promise<int32> => await new Worker().run(n);\nconst r = runJob(job);" },
+		{ name: "a Sendable function sends to a void method", body: "const job = async (n: int32): Promise<int32> => { new Worker().post(n); return n; };\nconst r = runJob(job);" },
+		{ name: "a method that spawns and awaits", body: "const job = async (n: int32): Promise<int32> => await new Worker().nested(n);\nconst r = runJob(job);" },
+		{ name: "a spawn thunk messages the actor", body: "async function f(w: Worker): Promise<int32> { return await spawn(() => await w.run(1)); }" },
+		{ name: "a Sendable operand", body: "const job = async (n: int32): Promise<int32> => await new Worker().take(twice);\nconst r = runJob(job);" },
+	];
+	for (const row of accepted) {
+		assert strictErrorCount(ACTORS + row.body) == 0, row.name;
+	}
+	const plainOperand = ACTORS + "const plain: Handler = twice;\nconst job = async (n: int32): Promise<int32> => await new Worker().takePlain(plain);\nconst r = runJob(job);";
+	assert hasError(plainOperand, "take a Sendable<F> instead"), "a plain function operand";
+	const stateOperand = ACTORS + "function bump(n: int32): int32 { hits = hits + n; return hits; }\n" +
+		"const job = async (n: int32): Promise<int32> => await new Worker().run(bump(n));\nconst r = runJob(job);";
+	assert hasError(stateOperand, "a Sendable function may run on another thread, but it calls 'bump'"), "an operand that reaches module state";
+	const ownCall = ACTORS + "const cb: Handler = twice;\nconst job = async (n: int32): Promise<int32> => cb(n);\nconst r = runJob(job);";
+	assert strictErrorCount(ownCall) > 0, "the Sendable function itself calls a function value";
+}
