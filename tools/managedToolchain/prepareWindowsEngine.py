@@ -37,7 +37,7 @@ MAGIC_PE32_PLUS = 0x20B
 IMAGE_EXECUTABLE = 0x2
 IMAGE_DLL = 0x2000
 INSPECTOR = "llvm-readobj.exe"
-TOOLS = ("clang.exe", "clang++.exe", "lld.exe", "ld.lld.exe", "lld-link.exe", "wasm-ld.exe", "llvm-ar.exe",
+TOOLS = ("clang.exe", "clang++.exe", "lld.exe", "ld.lld.exe", "ld64.lld.exe", "lld-link.exe", "wasm-ld.exe", "llvm-ar.exe",
          "llvm-ranlib.exe", "llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", INSPECTOR)
 SYSTEM_DLLS = frozenset(("advapi32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll", "shell32.dll",
                          "user32.dll", "version.dll"))
