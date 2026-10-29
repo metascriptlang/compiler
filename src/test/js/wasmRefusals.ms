@@ -3,7 +3,7 @@ import { lookupSymbol } from "../../checker/symbol";
 import { ImportEntry } from "../../module/graph";
 import { checkSource } from "../handoff/helpers";
 import { manifestFor } from "../../compiler/wasmBoundary/manifest";
-import { stringBoundaryErrors, placedModuleErrors, placedImportErrors } from "../../compiler/wasmBoundary/refusals";
+import { placedModuleErrors, placedImportErrors } from "../../compiler/wasmBoundary/refusals";
 
 const SOURCE = `
 export class Counter { value: int32 = 0; }
@@ -28,17 +28,10 @@ function importOf(names: string[]): ImportEntry {
 	return { names, aliases: names, sourcePath: "/p/calc.ms", sourceSpecifier: "./calc", dynamic: false, typeOnly: false };
 }
 
-test "a string parameter and a string result are refused with the function and the symbol named" {
+test "a string parameter and a string result cross without a manifest error" {
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["greet", "label", "add"]));
 	assert m.errors.length == 0;
-	const errors = stringBoundaryErrors(m.functions);
-	assert errors.length == 2;
-	assert errors[0].includes("'greet' in '/p/calc.ms'");
-	assert errors[0].includes("parameter 'name' is a string");
-	assert errors[0].includes("string crossing the wasm boundary is not supported yet");
-	assert errors[1].includes("'label' in '/p/calc.ms'");
-	assert errors[1].includes("its result is a string");
-	assert stringBoundaryErrors(manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["add"])).functions).length == 0;
+	assert m.functions.length == 3;
 }
 
 test "the entry module and a lazily imported module cannot be placed" {

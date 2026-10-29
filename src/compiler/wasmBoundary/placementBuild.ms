@@ -7,7 +7,7 @@ import { CliOptions, MODE_RELEASE, MODE_DANGER } from "../options";
 // running binary because a build keeps its link flags and object lists in process-wide state.
 // `exportedSymbols` are the emcc export names as `-sEXPORTED_FUNCTIONS` spells them, leading underscore included.
 // Writes `<outStem>.wasm.mjs` and `<outStem>.wasm`.
-export function buildWasmHalf(entrySource: string, exportedSymbols: string[], jsLibrary: string, outStem: string, opts: CliOptions): Result<void, string> {
+export function buildWasmHalf(entrySource: string, exportedSymbols: string[], runtimeMethods: string[], jsLibrary: string, outStem: string, opts: CliOptions): Result<void, string> {
 	if (exportedSymbols.length == 0) return Result.err("internal: buildWasmHalf got no exported symbols");
 	const stem = isAbsolute(outStem) ? normalize(outStem) : normalize(join(cwd(), outStem));
 	const base = basename(stem);
@@ -24,8 +24,9 @@ export function buildWasmHalf(entrySource: string, exportedSymbols: string[], js
 
 	let exports = "";
 	for (const symbol of exportedSymbols) exports = exports == "" ? symbol : `${exports},${symbol}`;
+	const runtime = runtimeMethods.length == 0 ? "" : ` -sEXPORTED_RUNTIME_METHODS=${runtimeMethods.join(",")}`;
 	const args = ["build", entry, "--target=c", "--os=emcc", "--app=lib", `--output=${mjs}`,
-		`--passL=-sWASM_BIGINT=1 -sEXPORTED_FUNCTIONS=${exports} -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node,web --js-library=${library}`];
+		`--passL=-sWASM_BIGINT=1 -sEXPORTED_FUNCTIONS=${exports}${runtime} -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node,web --js-library=${library}`];
 	if (opts.mode == MODE_RELEASE) args.push("--release");
 	if (opts.mode == MODE_DANGER) args.push("--danger");
 	const run = execFileResult(execPath, args, stage);
