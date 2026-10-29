@@ -5839,7 +5839,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => 8,
 		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => alignTo(8 + ps, lenPtrAlign(tg)),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Null => ps,
-		TypeKind.Function => ps * 2,
+		TypeKind.Function => isPlainFunctionPointer(t) ? ps : ps * 2,
 		TypeKind.BigInt => ps,
 		_ => SIZE_NOT_COMPUTABLE,
 	};
@@ -6492,7 +6492,8 @@ test "sizeOfType primitives 32-bit" {
 	assert sizeOfType(tg, stringType()) == 16;
 	assert sizeOfType(tg, createArray(numberType())) == 16;
 	assert alignOfType(tg, stringType()) == 8;
-	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
+	assert sizeOfType(tg, createClosureType([], [], numberType())) == 8;
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Int64)) == 8;
@@ -6518,9 +6519,12 @@ test "sizeOfType object tail padding" {
 	assert sizeOfType(tg, obj) == 16;
 }
 
-test "sizeOfType function closure" {
+test "sizeOfType of a closure is its fn and env pair, of a plain function pointer one pointer" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createFunction([], [], numberType())) == 16;
+	assert sizeOfType(tg, createClosureType([], [], numberType())) == 16;
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
+	const holder = createStruct("FnPair", ["f", "g"], [createFunction([], [], numberType()), createClosureType([], [], numberType())], true);
+	assert sizeOfType(tg, holder) == 24;
 }
 
 test "sizeOfType bigint is a pointer" {
