@@ -17,7 +17,7 @@ import {
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
-import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
+import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
@@ -2571,7 +2571,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 				return;
 			}
 		} else if (!reportedErrorSince(ctx, operandMark)) {
-			const reason = disjointCastReason(srcType, targetType);
+			const reason = disjointCastReason(srcType, targetType, d.asExpr);
 			if (reason != "") {
 				addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — " + reason, asLoc.line, asLoc.column);
 				node.nodeType = targetType;
@@ -4456,7 +4456,7 @@ function viewsAsInterface(source: Type, target: Type): boolean {
 
 // The kinds whose overlap is certain: a cast between two of them that share none is refused
 // as TS refuses it, and any other kind leaves the decision to the conversions below.
-enum PlainKind { Unknown, Number, Text, Truth, List, Null }
+enum PlainKind { Unknown, Number, Text, Truth, List, Routine, Null }
 
 function plainKind(t: Type): PlainKind {
 	const k = t.kind;
@@ -4465,10 +4465,11 @@ function plainKind(t: Type): PlainKind {
 	if (k == TypeKind.String || k == TypeKind.StringLiteral) return PlainKind.Text;
 	if (k == TypeKind.Boolean || k == TypeKind.BooleanLiteral) return PlainKind.Truth;
 	if (isArrayShaped(t)) return PlainKind.List;
+	if (isFunctionKind(t)) return PlainKind.Routine;
 	return PlainKind.Unknown;
 }
 
-function disjointCastReason(src: Type, target: Type): string {
+function disjointCastReason(src: Type, target: Type, operand: Node): string {
 	const from: Type[] = [];
 	const to: Type[] = [];
 	castLeaves(src, from, 0);
@@ -4490,6 +4491,12 @@ function disjointCastReason(src: Type, target: Type): string {
 	if (fromValue == null || toValue == null) return "";
 	const scalar = scalarConversionReason(fromValue, toValue);
 	if (scalar != "") return scalar;
+	if (plainKind(fromValue) == PlainKind.Routine) {
+		const name = lvalueText(operand);
+		return name == "…" ? "a function is not a " + typeDisplayName(toValue) + "; call it to use its result"
+			: "'" + name + "' is a function, not a " + typeDisplayName(toValue) + "; call it (" + name + "()) to use its result";
+	}
+	if (plainKind(toValue) == PlainKind.Routine) return "only a function converts to a function type";
 	if (plainKind(fromValue) == PlainKind.List) return "an array is not a " + typeDisplayName(toValue) + "; read an element or its length";
 	if (plainKind(toValue) == PlainKind.List) return "only an array converts to an array; build one ([x])";
 	return "neither type overlaps the other";
