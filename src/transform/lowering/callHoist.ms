@@ -318,8 +318,19 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 // walks, while the test of a loop is never walked and its temps would be written over each iteration.
 function loopCondLowered(cond: Node, ctx: TransformContext): CondLower | null {
 	const lowered = lowerBoolCond(cond, ctx);
-	if (lowered != null || !ctx.raiserBackend || !containsFreshRcCall(cond)) return lowered;
-	return { pre: [], expr: cond };
+	if (lowered != null) return lowered;
+	const holdsFresh = buildsString(cond) || (ctx.raiserBackend && containsFreshRcCall(cond));
+	return holdsFresh ? { pre: [], expr: cond } : null;
+}
+
+function buildsString(expr: Node): boolean {
+	let found = false;
+	replaceInExpr(expr, (node: Node): Node => {
+		if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "+"
+			&& node.nodeType != null && node.nodeType.kind == TypeKind.String) found = true;
+		return node;
+	});
+	return found;
 }
 
 function expandDoWhile(stmt: Node, ctx: TransformContext): Node[] {
