@@ -39,6 +39,7 @@ import {
 } from "./context";
 import { raiserStructSlotUnion } from "../../analyzer/classify";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
+import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
@@ -3063,7 +3064,7 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	const uncounted = slotUncountedOf(classSym.symbolType);
 	for (let i = 0; i < uncounted.length && i < classType.uncounted.length; i += 1) classType.uncounted[i] = uncounted[i];
 	const destroyOp = getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedDestructor);
-	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
+	if (destroyOp != null && !isMetaWireSym(classSym)) classType.destroyFn = resolveRoutine(s, destroyOp);
 	s.classTypes.push(classType);
 	return s.classTypes.length;
 }
