@@ -263,8 +263,10 @@ function sanWindowsClang(): string {
 }
 
 
-const HAS_CLANG = ccUsable("clang");
-const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
+const NATIVE_BUNDLE = env.get("MSC_NATIVE_TOOLCHAIN") != "";
+const BUNDLE_COMPILES_SAN = NATIVE_BUNDLE && !IS_WIN;
+const HAS_CLANG = NATIVE_BUNDLE || ccUsable("clang");
+const DANGER_CC = NATIVE_BUNDLE ? "" : HAS_CLANG ? " --cc=clang" : "";
 // Same winpthreads gap as SAN_PASSL (see above): a mingw-targeting clang
 // needs -pthread spelled out on the link line, zig cc bundles it implicitly.
 // Only when clang actually drives the lane — the zig fallback path is fine.
@@ -293,7 +295,7 @@ function rssPassC(spec: Readonly<Spec>, platform: string): string {
 // gcc (stock Linux), and only then go driverless (managed zig), which is
 // correct on the hosts where that combination is known to work.
 const SAN_WIN = SAN ? sanWindowsClang() : "";
-const SAN_CC = !SAN ? "" : SAN_WIN != "" ? " --cc=clang" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
+const SAN_CC = !SAN || BUNDLE_COMPILES_SAN ? "" : SAN_WIN != "" ? " --cc=clang" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
 
 const EXIT_SAN_HOST_BLOCKED = 77;
 
@@ -1247,7 +1249,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 	for (const spec of specs) {
 		if (TSAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".tsan";
-			jobs.push({ spec, lane: "tsan", cmd: MSC_CMD + " build " + spec.entry + " --sanitize=thread --cc=clang --output=" + bin, cell: makeCell(spec, "tsan", bin) });
+			jobs.push({ spec, lane: "tsan", cmd: MSC_CMD + " build " + spec.entry + " --sanitize=thread" + (NATIVE_BUNDLE ? "" : " --cc=clang") + " --output=" + bin, cell: makeCell(spec, "tsan", bin) });
 			continue;
 		}
 		if (SAN) {
@@ -1499,6 +1501,9 @@ function main(): void {
 	// the host rather than to a directive).
 	if (!HAS_CLANG) {
 		progress("  !! clang missing, or present but unable to compile a hello world here — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
+	}
+	if (NATIVE_BUNDLE) {
+		progress("  toolchain: prepared bundle " + env.get("MSC_NATIVE_TOOLCHAIN") + " compiles the cells, no --cc pin");
 	}
 	if (!HAS_NODE && !SOLO) {
 		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (c/danger), so C↔JS backend divergence is not covered");
