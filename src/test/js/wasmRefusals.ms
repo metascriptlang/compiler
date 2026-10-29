@@ -1,0 +1,67 @@
+import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
+import { lookupSymbol } from "../../checker/symbol";
+import { ImportEntry } from "../../module/graph";
+import { checkSource } from "../handoff/helpers";
+import { manifestFor } from "../../compiler/wasmBoundary/manifest";
+import { stringBoundaryErrors, placedModuleErrors, placedImportErrors } from "../../compiler/wasmBoundary/refusals";
+
+const SOURCE = `
+export class Counter { value: int32 = 0; }
+export function greet(name: string): int32 { return 1; }
+export function label(n: int32): string { return "x"; }
+export function add(a: int32, b: int32): int32 { return a + b; }
+`;
+
+function exportsOf(names: string[]): ExportedSymInfo[] {
+	const ctx = checkSource(SOURCE);
+	if (ctx == null) throw new Error("internal: test source did not check");
+	const exps: ExportedSymInfo[] = [];
+	for (const n of names) {
+		const sym = lookupSymbol(ctx.table, n);
+		if (sym == null) throw new Error("internal: test source lacks " + n);
+		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
+	}
+	return exps;
+}
+
+function importOf(names: string[]): ImportEntry {
+	return { names, aliases: names, sourcePath: "/p/calc.ms", sourceSpecifier: "./calc", dynamic: false, typeOnly: false };
+}
+
+test "a string parameter and a string result are refused with the function and the symbol named" {
+	const m = manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["greet", "label", "add"]));
+	assert m.errors.length == 0;
+	const errors = stringBoundaryErrors(m.functions);
+	assert errors.length == 2;
+	assert errors[0].includes("'greet' in '/p/calc.ms'");
+	assert errors[0].includes("parameter 'name' is a string");
+	assert errors[0].includes("string crossing the wasm boundary is not supported yet");
+	assert errors[1].includes("'label' in '/p/calc.ms'");
+	assert errors[1].includes("its result is a string");
+	assert stringBoundaryErrors(manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["add"])).functions).length == 0;
+}
+
+test "the entry module and a lazily imported module cannot be placed" {
+	const lazy = new HashSet<string>();
+	assert placedModuleErrors(["/p/calc.ms"], "/p/app.ms", lazy).length == 0;
+	const entry = placedModuleErrors(["/p/app.ms"], "/p/app.ms", lazy);
+	assert entry.length == 1;
+	assert entry[0].includes("'/p/app.ms' is the entry module");
+	lazy.add("/p/calc.ms");
+	const lazyErrors = placedModuleErrors(["/p/calc.ms"], "/p/app.ms", lazy);
+	assert lazyErrors.length == 1;
+	assert lazyErrors[0].includes("'/p/calc.ms' carries @wasm(); but is loaded lazily");
+}
+
+test "an importer of a placed module may import functions and nothing else" {
+	const exps = exportsOf(["Counter", "add"]);
+	const lookup = (path: string): ExportedSymInfo[] => exps;
+	assert placedImportErrors("/p/app.ms", [importOf(["add"])], ["/p/calc.ms"], lookup).length == 0;
+	const klass = placedImportErrors("/p/app.ms", [importOf(["add", "Counter"])], ["/p/calc.ms"], lookup);
+	assert klass.length == 1;
+	assert klass[0].includes("'/p/app.ms' imports 'Counter' from the wasm-placed module '/p/calc.ms'");
+	const ns = placedImportErrors("/p/app.ms", [importOf(["*"])], ["/p/calc.ms"], lookup);
+	assert ns.length == 1;
+	assert ns[0].includes("namespace import");
+	assert placedImportErrors("/p/app.ms", [importOf(["Counter"])], ["/p/other.ms"], lookup).length == 0;
+}
