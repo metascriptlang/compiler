@@ -12,6 +12,7 @@ import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
 
 import { HttpResponse, RequestOptions } from "./types";
 import { HttpError, connectionFailed } from "./errors";
+import { Bytes } from "../buffer/bytes";
 import { doRequestOver, requestWithRedirectsOver } from "./client";
 
 // ===== TLS transport =====
@@ -24,7 +25,7 @@ function doRequestTls(options: RequestOptions): Result<HttpResponse, HttpError> 
 	const tlsCtx = ctx.value;
 	return doRequestOver(
 		options,
-		(data: string) => tlsWrite(tlsCtx, data),
+		(data: Bytes) => tlsWrite(tlsCtx, data),
 		(maxBytes: int32) => tlsRead(tlsCtx, maxBytes),
 		() => tlsClose(tlsCtx),
 	);

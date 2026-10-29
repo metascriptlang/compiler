@@ -113,6 +113,7 @@
 // the PSA drivers here call into. psa_util.c is no longer among them; this
 // module compiles it directly (see above).
 import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 
 // C bindings
 extern function msTlsConnect(hostname: string, port: int32, caPath: string): int64;
@@ -131,12 +132,12 @@ export function tlsConnect(hostname: string, port: int32, caPath: string = ""): 
 	return Result.ok(ctx);
 }
 
-export function tlsRead(ctx: int64, maxBytes: int32 = 4096): string {
-	return msTlsRead(ctx, maxBytes);
+export function tlsRead(ctx: int64, maxBytes: int32 = 4096): Buffer {
+	return rawBuffer(msTlsRead(ctx, maxBytes));
 }
 
-export function tlsWrite(ctx: int64, data: string): int32 {
-	return msTlsWrite(ctx, data);
+export function tlsWrite(ctx: int64, data: Bytes): int32 {
+	return msTlsWrite(ctx, rawString(data));
 }
 
 export function tlsClose(ctx: int64): void {

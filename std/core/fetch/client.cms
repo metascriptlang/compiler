@@ -33,7 +33,8 @@ import {
 	getContentLength, isChunked,
 } from "./headers";
 import { parseResponse, parseUrl, decodeChunked } from "./parser";
-import { utf8String, wellFormedString } from "../string/bytes";
+import { utf8String } from "../string/bytes";
+import { Bytes, rawString, rawBuffer } from "../buffer/bytes";
 
 // ===== Constants =====
 
@@ -111,8 +112,8 @@ export function urlPath(u: ParsedUrl): string {
 // tlsRead/tlsWrite/tlsClose. The HTTP/1.1 logic itself lives only here.
 export function doRequestOver(
 	options: RequestOptions,
-	sendFn: (data: string) => int32,
-	recvFn: (maxBytes: int32) => string,
+	sendFn: (data: Bytes) => int32,
+	recvFn: (maxBytes: int32) => Buffer,
 	closeFn: () => void,
 ): Result<HttpResponse, HttpError> {
 	// Build request line + headers + body.
@@ -131,49 +132,52 @@ export function doRequestOver(
 		return Result.err(socketError("send failed"));
 	}
 
-	// Read response headers — loop until \r\n\r\n. Buffer may also contain
-	// the start of a binary body once headers terminate, so length checks
-	// here must be byte-accurate (UTF-16 .length undercounts binary bytes).
-	let data = "";
-	while (!data.contains("\r\n\r\n")) {
+	// Read response headers — loop until \r\n\r\n. The buffer may also hold the
+	// start of the body once headers terminate.
+	let data: Buffer = [];
+	let headEnd = -1;
+	while (headEnd < 0) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.byteLength == 0) break;
-		data = data + chunk;
-		if (data.byteLength > MAX_HEADER_BYTES) break;
+		if (chunk.length == 0) break;
+		data = Buffer.concat(data, chunk);
+		headEnd = indexOfText(data, "\r\n\r\n");
+		if (data.length > MAX_HEADER_BYTES) break;
 	}
-	if (data.byteLength == 0) {
+	if (data.length == 0) {
 		closeFn();
 		return Result.err(invalidResponse("empty response"));
 	}
 
-	const parsed = parseResponse(data);
+	const parsed = parseResponse(utf8String(data, false));
 	if (!parsed.ok) {
 		closeFn();
 		return Result.err(parsed.error);
 	}
+	if (headEnd < 0) {
+		closeFn();
+		return Result.err(invalidResponse("response headers not terminated"));
+	}
+	const bodyStart = (headEnd + 4) as int32;
 
 	const contentLength = getContentLength(parsed.value.headers);
-	let body = "";
+	let body: Buffer = [];
 
 	if (isChunked(parsed.value.headers)) {
-		// bodyStart is a byte offset (header bytes are always ASCII so the
-		// parser's codepoint-based scan coincides with byte positions). Use
-		// byteSlice/byteLength so binary body content is preserved.
-		let chunkedData = data.byteSlice(parsed.value.bodyStart, data.byteLength);
-		while (!chunkedData.startsWith("0\r\n") && !chunkedData.contains("\r\n0\r\n")) {
+		let chunkedData = [...data[bodyStart..data.length]];
+		while (indexOfText(chunkedData, "0\r\n") != 0 && indexOfText(chunkedData, "\r\n0\r\n") < 0) {
 			const more = recvFn(RECV_CHUNK_SIZE);
-			if (more.byteLength == 0) break;
-			chunkedData = chunkedData + more;
+			if (more.length == 0) break;
+			chunkedData = Buffer.concat(chunkedData, more);
 		}
 		closeFn();
 		const decoded = decodeChunked(chunkedData);
 		if (!decoded.ok) return Result.err(decoded.error);
 		body = decoded.value;
 	} else if (contentLength > 0) {
-		body = readFullBodyOver(recvFn, data, parsed.value.bodyStart, contentLength);
+		body = readFullBodyOver(recvFn, data, bodyStart, contentLength);
 		closeFn();
 	} else if (contentLength < 0) {
-		body = readUntilCloseOver(recvFn, data, parsed.value.bodyStart);
+		body = readUntilCloseOver(recvFn, data, bodyStart);
 		closeFn();
 	} else {
 		closeFn();
@@ -183,39 +187,38 @@ export function doRequestOver(
 		status: parsed.value.status,
 		statusText: parsed.value.statusText,
 		headers: parsed.value.headers,
-		bytes: Buffer.fromString(body, "utf8"),
+		bytes: body,
 	});
 }
 
-// Body content may be binary (e.g. .dmg / .zip download). All offsets and
-// lengths below are BYTE-based — codepoint-counting via .length / .slice
-// undercounts non-ASCII bytes and truncates the body.
-function readFullBodyOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32, contentLength: int32): string {
-	const initialBytes = initialData.byteLength as int32;
-	const available    = initialBytes - bodyStart;
+function indexOfText(data: Buffer, needle: string): int32 {
+	return data.indexOfBuffer(Buffer.fromString(needle, "utf8"), 0) as int32;
+}
+
+function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32, contentLength: int32): Buffer {
+	const available = (initialData.length as int32) - bodyStart;
 	if (available >= contentLength) {
-		return initialData.byteSlice(bodyStart, bodyStart + contentLength);
+		return [...initialData[bodyStart..(bodyStart + contentLength)]];
 	}
-	let body = initialData.byteSlice(bodyStart, initialBytes);
+	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]]];
 	let remaining = contentLength - available;
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
-		const chunkBytes = chunk.byteLength as int32;
-		if (chunkBytes == 0) break;
-		body = body + chunk;
-		remaining = remaining - chunkBytes;
+		if (chunk.length == 0) break;
+		pieces.push(chunk);
+		remaining = remaining - (chunk.length as int32);
 	}
-	return body;
+	return Buffer.concatList(pieces);
 }
 
-function readUntilCloseOver(recvFn: (maxBytes: int32) => string, initialData: string, bodyStart: int32): string {
-	let body = initialData.byteSlice(bodyStart, initialData.byteLength as int32);
+function readUntilCloseOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32): Buffer {
+	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]]];
 	while (true) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.byteLength == 0) break;
-		body = body + chunk;
+		if (chunk.length == 0) break;
+		pieces.push(chunk);
 	}
-	return body;
+	return Buffer.concatList(pieces);
 }
 
 // Redirect-following loop, parameterized over a per-attempt request fn.
@@ -298,8 +301,8 @@ function doRequestPlain(options: RequestOptions): Result<HttpResponse, HttpError
 
 	return doRequestOver(
 		options,
-		(data: string) => msNetSend(fd, data),
-		(maxBytes: int32) => msNetRecv(fd, maxBytes),
+		(data: Bytes) => msNetSend(fd, rawString(data)),
+		(maxBytes: int32) => rawBuffer(msNetRecv(fd, maxBytes)),
 		() => msNetClose(fd),
 	);
 }
@@ -322,19 +325,8 @@ export function requestWithRedirects(options: RequestOptions, maxRedirects: int3
 	return requestWithRedirectsOver(options, maxRedirects, doRequestPlain);
 }
 
-// Binary-body regression: verified natively
-// ----------------------------------------------------------
-// JS-runtime tests can't observe the byte-vs-codepoint distinction this
-// fix targets. The fix is verified:
-//   1. Native MS probe — byteSlice preserves all 4 bytes of "AéZ"
-//      (4 UTF-8 bytes, 3 codepoints).
-//   2. End-to-end against live OTA — Lightcube's ion update.check() flow
-//      downloads a real .dmg artifact and hash-matches sha256 exactly.
-// Both live in lightcube vendor probes; revisit when the test shim grows
-// native-buffer support.
-
-function wireOf(head: string, body: number[]): string {
-	return head + wellFormedString(Buffer.fromArray(body));
+function wireOf(head: string, body: number[]): Buffer {
+	return Buffer.concat(Buffer.fromString(head, "utf8"), Buffer.fromArray(body));
 }
 
 function unitsOf(value: string): string {
@@ -343,23 +335,28 @@ function unitsOf(value: string): string {
 	return out.join(",");
 }
 
-test "a response keeps every body byte and reads as valid text" {
-	const wire = wireOf("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", [0x61, 0xFF, 0x62, 0x00]);
-	let served = false;
-	const options: RequestOptions = {
+function options(): RequestOptions {
+	return {
 		method: HttpMethod.GET, hostname: "h", port: 80, path: "/",
 		headers: createHeaders(), body: "", timeout: 1000, tls: false,
 	};
-	const response = doRequestOver(
-		options,
-		(data: string) => 0,
-		(maxBytes: int32) => {
-			if (served) return "";
-			served = true;
-			return wire;
-		},
-		() => {},
-	);
+}
+
+function serve(pieces: Buffer[]): (maxBytes: int32) => Buffer {
+	let next = 0;
+	return (maxBytes: int32) => {
+		if (next >= pieces.length) return [];
+		next += 1;
+		return pieces[next - 1];
+	};
+}
+
+function fetchOver(pieces: Buffer[]): Result<HttpResponse, HttpError> {
+	return doRequestOver(options(), (data: Bytes) => 0, serve(pieces), () => {});
+}
+
+test "a response keeps every body byte and reads as valid text" {
+	const response = fetchOver([wireOf("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", [0x61, 0xFF, 0x62, 0x00])]);
 	assert response.ok;
 	if (response.ok) {
 		assert response.value.bytes.length == 4;
@@ -367,4 +364,36 @@ test "a response keeps every body byte and reads as valid text" {
 		assert response.value.text().length == 4;
 		assert unitsOf(response.value.text()) == "61,fffd,62,0";
 	}
+}
+
+test "a content-length body that starts on continuation bytes and is split across reads arrives exact" {
+	const head = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\n";
+	const response = fetchOver([
+		wireOf(head, [0x80, 0xC3]),
+		Buffer.fromArray([0xA9, 0xFF, 0xE2, 0x82]),
+	]);
+	assert response.ok;
+	if (response.ok) {
+		assert response.value.bytes.length == 6;
+		assert response.value.bytes.toHex() == "80c3a9ffe282";
+	}
+}
+
+test "a chunked body keeps a character split across the chunk boundary" {
+	const head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+	const wire = Buffer.concatList([
+		wireOf(head, []),
+		Buffer.fromString("2\r\n", "utf8"), Buffer.fromArray([0xC3, 0x80]),
+		Buffer.fromString("\r\n2\r\n", "utf8"), Buffer.fromArray([0xFF, 0x41]),
+		Buffer.fromString("\r\n0\r\n\r\n", "utf8"),
+	]);
+	const response = fetchOver([wire]);
+	assert response.ok;
+	if (response.ok) assert response.value.bytes.toHex() == "c380ff41";
+}
+
+test "a body read until close keeps every byte" {
+	const response = fetchOver([wireOf("HTTP/1.1 200 OK\r\n\r\n", [0xE2, 0x82]), Buffer.fromArray([0xAC, 0x80])]);
+	assert response.ok;
+	if (response.ok) assert response.value.bytes.toHex() == "e282ac80";
 }

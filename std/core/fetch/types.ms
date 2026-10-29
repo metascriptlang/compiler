@@ -29,7 +29,7 @@ export interface HttpRequest {
 	path: string;
 	version: string;
 	headers: HttpHeaders;
-	body: string;
+	bytes: Buffer;
 	clientFd: int32;
 }
 

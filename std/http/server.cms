@@ -79,11 +79,10 @@ import {
 } from "./types";
 import { HttpError, socketError } from "./errors";
 import * as hdrs from "./headers";
-import { frameRequest, FrameResult } from "./parser";
+import { frameRequest, FrameResult, decodeChunked, tryDecodeChunked } from "./parser";
 import { acceptAsync, sendAsync } from "std/net";
 import { Buffer } from "std/core/buffer";
-import { rawBuffer } from "std/core/buffer/bytes";
-import { asBytes, utf8String } from "std/core/string/bytes";
+import { utf8String, wellFormedString } from "std/core/string/bytes";
 import { lockedUpdate, lockedRead } from "std/core/promise";
 extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoEngineCancelFd_ms(fd: int32): void;
@@ -468,14 +467,60 @@ export function writeHead(this res: ServerResponse, status: int32, headers: Http
 	}
 }
 
-// The request body's bytes as received, whatever their encoding.
-export function bodyBytes(this req: HttpRequest): Buffer {
-	return rawBuffer(req.body);
-}
-
 // The request body decoded as UTF-8 text; an ill-formed sequence becomes U+FFFD.
 export function bodyText(this req: HttpRequest): string {
-	return utf8String(req.body.asBytes(), false);
+	return utf8String(req.bytes, false);
+}
+
+test "a request keeps its body bytes and bodyText decodes them as valid text" {
+	const req: HttpRequest = {
+		method: HttpMethod.POST, path: "/", version: "HTTP/1.1", headers: hdrs.createHeaders(),
+		bytes: [0x61, 0xC3, 0xA9, 0xFF, 0x80], clientFd: -1,
+	};
+	assert req.bytes.length == 5;
+	assert req.bytes[3] == 0xFF;
+	assert req.bodyText().length == 4;
+	assert req.bodyText().charCodeAt(2) == 0xFFFD;
+}
+
+function wireBytes(parts: number[]): string {
+	return wellFormedString(Buffer.fromArray(parts));
+}
+
+test "decodeChunked keeps bytes 0x80..0xFF and a character split across chunks" {
+	const head = [0x32, 13, 10, 0xC3, 0x80, 13, 10, 0x32, 13, 10, 0x80, 0xFF, 13, 10, 0x32, 13, 10, 0xE2, 0x82, 13, 10];
+	const wire = wireBytes([...head, 0x31, 13, 10, 0xAC, 13, 10, 0x30, 13, 10, 13, 10]);
+	const r = decodeChunked(wire.asBytes());
+	assert r.ok;
+	assert r.value.toHex() == "c38080ffe282ac";
+}
+
+test "tryDecodeChunked keeps a body that starts and ends on continuation bytes" {
+	const wire = wireBytes([0x33, 13, 10, 0x80, 0xBF, 0xC3, 13, 10, 0x30, 13, 10, 13, 10]);
+	const r = tryDecodeChunked(wire.asBytes());
+	assert r.kind == "ready";
+	assert r.body.toHex() == "80bfc3";
+	assert r.bytesConsumed == 13;
+}
+
+test "frameRequest keeps a content-length body of every byte value and ignores the next request" {
+	const all: number[] = [];
+	for (let i = 0; i < 256; i++) all.push(i);
+	const h = hdrs.createHeaders();
+	hdrs.addHeader(h, "content-length", "256");
+	const r = frameRequest(h, HttpMethod.POST, wireBytes([...all, 0x47, 0x45, 0x54]), 1024 as int32);
+	assert r.kind == "ready";
+	assert r.body.length == 256;
+	for (let i = 0; i < 256; i++) assert r.body[i] == i;
+}
+
+test "frameRequest keeps a chunked body cut inside a character" {
+	const h = hdrs.createHeaders();
+	hdrs.addHeader(h, "transfer-encoding", "chunked");
+	const wire = wireBytes([0x31, 13, 10, 0xE2, 13, 10, 0x32, 13, 10, 0x82, 0xAC, 13, 10, 0x30, 13, 10, 13, 10]);
+	const r = frameRequest(h, HttpMethod.POST, wire, 1024 as int32);
+	assert r.kind == "ready";
+	assert r.body.toHex() == "e282ac";
 }
 
 // End the response with optional body. Honors all res.headers set so far.
@@ -556,7 +601,7 @@ function initClient(fd: int32, keepAliveSeconds: int32): ClientState {
 		lastActivityMs: 0 as int64,
 		request: {
 			method: HttpMethod.GET, path: msStringNewCap(0), version: "1.1",
-			headers: hdrs.createHeaders(), body: "", clientFd: fd,
+			headers: hdrs.createHeaders(), bytes: [], clientFd: fd,
 		},
 		response: {
 			fd: fd, status: 200,
@@ -578,7 +623,7 @@ function resetClient(client: ClientState, fd: int32): void {
 	client.lastActivityMs = msMonoTimeMs();
 	client.request.method = HttpMethod.GET;
 	client.request.clientFd = fd;
-	client.request.body = "";
+	client.request.bytes = [];
 	client.request.headers._names.length = 0;
 	client.request.headers._values.length = 0;
 	client.response.fd = fd;
@@ -596,7 +641,7 @@ function resetRequest(client: ClientState, fd: int32, method: int32): void {
 	client.request.method = method as HttpMethod;
 	// path is set by parsePathInto (zero-alloc) — not reset here
 	client.request.clientFd = fd;
-	client.request.body = "";
+	client.request.bytes = [];
 	// Headers MUST be cleared — frameRequest reads CL/TE from this struct.
 	// Stale headers from a previous pipelined request would mislead framing
 	// (e.g. a GET reusing a POST connection sees Content-Length=5 → needMore).
@@ -898,7 +943,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 		}
 
 		// 4) Dispatch handler (sync)
-		client.request.body = frame.body;
+		client.request.bytes = frame.body;
 		handler(client.request, client.response);
 
 		// 5) Send response
@@ -1033,7 +1078,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		}
 
 		// 4. Dispatch.
-		client.request.body = frame.body;
+		client.request.bytes = frame.body;
 		server.handler(client.request, client.response);
 		if (client.response._responseData.length > 0) msNetSend(fd, client.response._responseData);
 
@@ -1110,7 +1155,7 @@ function dispatchUringRecv(cfg: Readonly<LoopConfig>, client: ClientState, fd: i
 		return CONN_CLOSED;
 	}
 
-	client.request.body = frame.body;
+	client.request.bytes = frame.body;
 	handler(client.request, client.response);
 
 	const totalConsumed = (client.headersEndPos + frame.bytesConsumed) as int32;
@@ -1341,7 +1386,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 		}
 
 		// 4) Dispatch async handler (THE KEY DIFFERENCE FROM SYNC)
-		client.request.body = frame.body;
+		client.request.bytes = frame.body;
 		await handler(client.request, client.response);
 
 		// 5) Send response

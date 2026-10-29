@@ -4,6 +4,7 @@
 import { HttpMethod, HttpHeaders, ParsedUrl, parseMethod } from "./types";
 import { HttpError, invalidRequest, invalidResponse, invalidHeader } from "./errors";
 import { createHeaders, addHeader, getContentLength, getHeaderValues } from "./headers";
+import { wellFormedString } from "../string/bytes";
 
 // ===== Parsed Results =====
 
@@ -41,6 +42,14 @@ function findCRLF(data: string, pos: int32): int32 {
 		if (data.byteAt(i) == "\r".code && data.byteAt(i + 1) == "\n".code) {
 			return i;
 		}
+	}
+	return -1;
+}
+
+function findCrlfIn(data: Readonly<Span<uint8>>, pos: int32): int32 {
+	const last = (data.length as int32) - 1;
+	for (let i = pos; i < last; i = i + 1) {
+		if (data[i] == 13 && data[i + 1] == 10) return i;
 	}
 	return -1;
 }
@@ -239,27 +248,24 @@ export function parseUrl(url: string): Result<ParsedUrl, HttpError> {
 
 // Decode chunked transfer-encoding body.
 // Format: hex-size\r\ndata\r\n... 0\r\n\r\n
-// Body bytes may be arbitrary binary — all offsets/slices are byte-based.
-export function decodeChunked(data: string): Result<string, HttpError> {
-	let result = "";
+// The body is arbitrary binary, so it is read and returned as bytes.
+export function decodeChunked(data: Readonly<Span<uint8>>): Result<Buffer, HttpError> {
+	const pieces: Buffer[] = [];
 	let pos = 0;
-	const len = data.byteLength as int32;
+	const len = data.length as int32;
 	while (pos < len) {
-		// Read chunk size (hex)
-		const sizeEnd = findCRLF(data, pos);
+		const sizeEnd = findCrlfIn(data, pos);
 		if (sizeEnd < 0) return Result.err(invalidResponse("unterminated chunk size"));
 
-		const sizeStr = data.byteSlice(pos, sizeEnd);
-		const chunkSize = parseHex(sizeStr);
-		if (chunkSize < 0) return Result.err(invalidResponse("invalid chunk size: " + sizeStr));
-		if (chunkSize == 0) return Result.ok(result);
+		const chunkSize = parseHex(data[pos..sizeEnd]);
+		if (chunkSize < 0) return Result.err(invalidResponse("invalid chunk size"));
+		if (chunkSize == 0) return Result.ok(Buffer.concatList(pieces));
 
-		// Read chunk data
 		const dataStart = sizeEnd + 2;
 		const dataEnd = dataStart + chunkSize;
 		if (dataEnd + 2 > len) return Result.err(invalidResponse("truncated chunk data"));
 
-		result = result + data.byteSlice(dataStart, dataEnd);
+		pieces.push([...data[dataStart..dataEnd]]);
 		pos = dataEnd + 2; // skip trailing \r\n
 	}
 	return Result.err(invalidResponse("chunked body not terminated"));
@@ -286,36 +292,36 @@ export function encodeLastChunk(): string {
 // the common case, not an error.
 export interface ChunkedDecodeResult {
 	kind: string;          // "ready" | "needMore" | "malformed"
-	body: string;
+	body: Buffer;
 	bytesConsumed: int32;  // valid when ready
 }
 
-function chunkedReady(body: string, bytesConsumed: int32): ChunkedDecodeResult {
+function chunkedReady(body: Buffer, bytesConsumed: int32): ChunkedDecodeResult {
 	return { kind: "ready", body: body, bytesConsumed: bytesConsumed };
 }
 
 function chunkedNeedMore(): ChunkedDecodeResult {
-	return { kind: "needMore", body: "", bytesConsumed: 0 };
+	return { kind: "needMore", body: [], bytesConsumed: 0 };
 }
 
 function chunkedMalformed(): ChunkedDecodeResult {
-	return { kind: "malformed", body: "", bytesConsumed: 0 };
+	return { kind: "malformed", body: [], bytesConsumed: 0 };
 }
 
 // Verify two bytes at `pos` form a CRLF separator.
-function isCRLFAt(data: string, pos: int32): boolean {
-	return data.byteAt(pos) == 13 && data.byteAt(pos + 1) == 10;
+function isCRLFAt(data: Readonly<Span<uint8>>, pos: int32): boolean {
+	return data[pos] == 13 && data[pos + 1] == 10;
 }
 
-export function tryDecodeChunked(data: string): ChunkedDecodeResult {
-	let result = "";
+export function tryDecodeChunked(data: Readonly<Span<uint8>>): ChunkedDecodeResult {
+	const pieces: Buffer[] = [];
 	let pos: int32 = 0;
-	const len = data.byteLength as int32;
+	const len = data.length as int32;
 	while (pos < len) {
-		const sizeEnd = findCRLF(data, pos);
+		const sizeEnd = findCrlfIn(data, pos);
 		if (sizeEnd < 0) return chunkedNeedMore();
 
-		const chunkSize = parseHex(data.byteSlice(pos, sizeEnd));
+		const chunkSize = parseHex(data[pos..sizeEnd]);
 		if (chunkSize < 0) return chunkedMalformed();
 
 		const dataStart = sizeEnd + 2;
@@ -323,14 +329,14 @@ export function tryDecodeChunked(data: string): ChunkedDecodeResult {
 			// Final chunk — expect trailing CRLF (no trailers support in v1).
 			if (dataStart + 1 >= len) return chunkedNeedMore();
 			if (!isCRLFAt(data, dataStart as int32)) return chunkedMalformed();
-			return chunkedReady(result, (dataStart + 2) as int32);
+			return chunkedReady(Buffer.concatList(pieces), (dataStart + 2) as int32);
 		}
 
 		const dataEnd = dataStart + chunkSize;
 		if (dataEnd + 2 > len) return chunkedNeedMore();
 		if (!isCRLFAt(data, dataEnd as int32)) return chunkedMalformed();
 
-		result = result + data.byteSlice(dataStart, dataEnd);
+		pieces.push([...data[dataStart..dataEnd]]);
 		pos = (dataEnd + 2) as int32;
 	}
 	return chunkedNeedMore();
@@ -342,21 +348,21 @@ export function tryDecodeChunked(data: string): ChunkedDecodeResult {
 //   reject   — protocol violation; send rejectStatus + close. (400 / 411 / 413)
 export interface FrameResult {
 	kind: string;          // "ready" | "needMore" | "reject"
-	body: string;
+	body: Buffer;
 	bytesConsumed: int32;  // bytes consumed from bufferAfterHeaders
 	rejectStatus: int32;
 }
 
-function frameReady(body: string, bytesConsumed: int32): FrameResult {
+function frameReady(body: Buffer, bytesConsumed: int32): FrameResult {
 	return { kind: "ready", body: body, bytesConsumed: bytesConsumed, rejectStatus: 0 };
 }
 
 function frameNeedMore(): FrameResult {
-	return { kind: "needMore", body: "", bytesConsumed: 0, rejectStatus: 0 };
+	return { kind: "needMore", body: [], bytesConsumed: 0, rejectStatus: 0 };
 }
 
 function frameReject(status: int32): FrameResult {
-	return { kind: "reject", body: "", bytesConsumed: 0, rejectStatus: status };
+	return { kind: "reject", body: [], bytesConsumed: 0, rejectStatus: status };
 }
 
 // Frame a request body from the bytes already buffered after the header block.
@@ -392,10 +398,10 @@ export function frameRequest(
 	if (hasCL && te) return frameReject(400);
 
 	if (te) {
-		const r = tryDecodeChunked(bufferAfterHeaders);
+		const r = tryDecodeChunked(bufferAfterHeaders.asBytes());
 		if (r.kind == "ready") {
 			// HTTP byte-oriented: cap by byte length, not UTF-16 unit count.
-			if ((r.body.byteLength() as int32) > maxBodySize) return frameReject(413);
+			if ((r.body.length as int32) > maxBodySize) return frameReject(413);
 			return frameReady(r.body, r.bytesConsumed);
 		}
 		if (r.kind == "needMore") return frameNeedMore();
@@ -407,25 +413,24 @@ export function frameRequest(
 		// Content-Length is byte count per RFC 7230; compare against byteLength,
 		// not .length (UTF-16 code units), or UTF-8 bodies loop forever.
 		if ((bufferAfterHeaders.byteLength() as int32) < cl) return frameNeedMore();
-		// Use byteSlice so the cut respects byte boundaries on UTF-8 bodies.
-		return frameReady(bufferAfterHeaders.byteSlice(0, cl), cl);
+		return frameReady([...bufferAfterHeaders.asBytes()[0..cl]], cl);
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.
 	if (method == HttpMethod.POST || method == HttpMethod.PUT || method == HttpMethod.PATCH) {
 		return frameReject(411);
 	}
-	return frameReady("", 0);
+	return frameReady([], 0);
 }
 
 // ===== Hex Helpers =====
 
-function parseHex(s: string): int32 {
+function parseHex(s: Readonly<Span<uint8>>): int32 {
 	if (s.length == 0) return -1;
 	let result: int32 = 0;
 	let i = 0;
 	while (i < s.length) {
-		const ch = s.charCodeAt(i);
+		const ch = s[i];
 		let digit: int32 = -1;
 		if (ch >= "0".code && ch <= "9".code) {
 			digit = ch - "0".code;
@@ -590,23 +595,23 @@ test "parseUrl bad protocol" {
 
 test "decodeChunked simple" {
 	const data = "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
-	const r = decodeChunked(data);
+	const r = decodeChunked(data.asBytes());
 	assert r.ok;
-	assert r.value == "Hello World";
+	assert wellFormedString(r.value) == "Hello World";
 }
 
 test "decodeChunked single chunk" {
 	const data = "3\r\nabc\r\n0\r\n\r\n";
-	const r = decodeChunked(data);
+	const r = decodeChunked(data.asBytes());
 	assert r.ok;
-	assert r.value == "abc";
+	assert wellFormedString(r.value) == "abc";
 }
 
 test "decodeChunked empty" {
 	const data = "0\r\n\r\n";
-	const r = decodeChunked(data);
+	const r = decodeChunked(data.asBytes());
 	assert r.ok;
-	assert r.value == "";
+	assert wellFormedString(r.value) == "";
 }
 
 test "encodeChunk" {
@@ -626,13 +631,13 @@ test "toHex values" {
 }
 
 test "parseHex values" {
-	assert parseHex("0") == 0;
-	assert parseHex("a") == 10;
-	assert parseHex("ff") == 255;
-	assert parseHex("10") == 16;
-	assert parseHex("FF") == 255;
-	assert parseHex("xyz") == -1;
-	assert parseHex("") == -1;
+	assert parseHex("0".asBytes()) == 0;
+	assert parseHex("a".asBytes()) == 10;
+	assert parseHex("ff".asBytes()) == 255;
+	assert parseHex("10".asBytes()) == 16;
+	assert parseHex("FF".asBytes()) == 255;
+	assert parseHex("xyz".asBytes()) == -1;
+	assert parseHex("".asBytes()) == -1;
 }
 
 test "header value with tab whitespace" {
@@ -678,7 +683,7 @@ test "frameRequest CL exact match" {
 	addHeader(h, "Content-Length", "5");
 	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "hello";
+	assert wellFormedString(r.body) == "hello";
 	assert r.bytesConsumed == 5;
 }
 
@@ -702,7 +707,7 @@ test "frameRequest CL=0" {
 	addHeader(h, "Content-Length", "0");
 	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "";
+	assert wellFormedString(r.body) == "";
 	assert r.bytesConsumed == 0;
 }
 
@@ -712,7 +717,7 @@ test "frameRequest pipelined POST extra bytes ignored" {
 	addHeader(h, "Content-Length", "5");
 	const r = frameRequest(h, HttpMethod.POST, "helloGET /next HTTP/1.1\r\n\r\n", 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "hello";
+	assert wellFormedString(r.body) == "hello";
 	assert r.bytesConsumed == 5;
 }
 
@@ -720,7 +725,7 @@ test "frameRequest GET no body → ready empty" {
 	const h = createHeaders();
 	const r = frameRequest(h, HttpMethod.GET, "", 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "";
+	assert wellFormedString(r.body) == "";
 }
 
 test "frameRequest POST without CL or TE → 411" {
@@ -778,7 +783,7 @@ test "frameRequest TE chunked uppercase → ready (case-insensitive)" {
 	const data = "5\r\nhello\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "hello";
+	assert wellFormedString(r.body) == "hello";
 }
 
 test "frameRequest TE chunked with whitespace → ready" {
@@ -787,7 +792,7 @@ test "frameRequest TE chunked with whitespace → ready" {
 	const data = "5\r\nhello\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "hello";
+	assert wellFormedString(r.body) == "hello";
 }
 
 test "frameRequest multiple TE headers → 400" {
@@ -805,7 +810,7 @@ test "frameRequest chunked basic" {
 	const data = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
 	assert r.kind == "ready";
-	assert r.body == "hello world";
+	assert wellFormedString(r.body) == "hello world";
 	assert r.bytesConsumed == data.length as int32;
 }
 
@@ -825,15 +830,15 @@ test "frameRequest chunked malformed hex → 400" {
 }
 
 test "tryDecodeChunked truncated mid-data" {
-	const r = tryDecodeChunked("5\r\nhel");
+	const r = tryDecodeChunked("5\r\nhel".asBytes());
 	assert r.kind == "needMore";
 }
 
 test "tryDecodeChunked complete with bytesConsumed" {
 	const data = "5\r\nhello\r\n0\r\n\r\n";
-	const r = tryDecodeChunked(data);
+	const r = tryDecodeChunked(data.asBytes());
 	assert r.kind == "ready";
-	assert r.body == "hello";
+	assert wellFormedString(r.body) == "hello";
 	assert r.bytesConsumed == data.length as int32;
 }
 
