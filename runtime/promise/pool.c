@@ -598,6 +598,10 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	/* Under lock: only check queue capacity and shutdown.
 	 * busyCount authority is the lock-free atomic (adjusted by Change 2 dec/inc in wait). */
 	if (msPoolQueueLen(pool) >= pool->cap - 1) msPoolDropClaimed(pool);
+	while (!msIsPoolWorker && msPoolQueueLen(pool) >= pool->cap - 1 && !pool->shutdown) {
+		MS_WAIT(pool->space, pool);
+		msPoolDropClaimed(pool);
+	}
 	if (msPoolQueueLen(pool) >= pool->cap - 1 || pool->shutdown) {
 		MS_UNLOCK(pool);
 		msSpawnWorkerRun(ctx);
@@ -733,6 +737,7 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 		task = *queued;
 		queued->claimed = true;
 		msPoolSkipClaimed(pool);
+		MS_SIGNAL(pool->space);
 		found = true;
 	}
 	MS_UNLOCK(pool);
