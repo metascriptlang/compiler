@@ -5821,8 +5821,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		return narrowed != null ? narrowed : propType;
 	}
 
+	if (d.property == "byteLength" && node != ctx.calleeExpr && isUint8Array(resolvedObjType)) d.property = "length";
 	// Builtin properties: .length on array/string
-	if (d.property == "length" && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || isStringLike(resolvedObjType) || resolvedObjType.kind == TypeKind.CString)) {
+	if (d.property == "length" &&(resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || isStringLike(resolvedObjType) || resolvedObjType.kind == TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
@@ -6165,6 +6166,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	return propType;
+}
+
+function isUint8Array(t: Type): boolean {
+	const elem = t.kind == TypeKind.Array ? skipModifier(t.typeReturn) : null;
+	return elem != null && elem.kind == TypeKind.Uint8;
 }
 
 function callGetter(ctx: CheckerContext, node: Node, d: MemberExprData): Type {
