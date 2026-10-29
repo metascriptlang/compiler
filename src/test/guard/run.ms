@@ -17,7 +17,7 @@
 //                                        warning. A probe whose errors sit on two or more lines must mark them;
 //                                        GUARD_RECORD_SITES=1 prints the lines each build reports
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
-//   // GUARD-TSAN                        also build --sanitize=thread --cc=clang + run; pass = exit 0 +
+//   // GUARD-TSAN                        also build --sanitize=thread (--cc=clang unless MSC_NATIVE_TOOLCHAIN is set) + run; pass = exit 0 +
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
@@ -550,11 +550,18 @@ function runJsLane(probe: Probe): void {
 	ok(tag);
 }
 
+function tsanBuildArgs(entry: string, bin: string): string[] {
+	const args = ["build", entry, "--sanitize=thread"];
+	if (env.get("MSC_NATIVE_TOOLCHAIN") == "") args.push("--cc=clang");
+	args.push(`--output=${bin}`);
+	return args;
+}
+
 function tsanToolchain(): boolean {
 	if (tsanProbed == 0) {
 		const src = `${WORK}/tsanHello.ms`;
 		writeFile(src, `console.log("hi");\n`);
-		const r = execFileResult(MSC, ["build", src, "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
+		const r = execFileResult(MSC, tsanBuildArgs(src, `${BIN_DIR}/tsanHello`), WORK);
 		tsanProbed = succeeded(r) ? 1 : 2;
 	}
 	return tsanProbed == 1;
@@ -563,7 +570,7 @@ function tsanToolchain(): boolean {
 function runTsanLane(probe: Probe): void {
 	const tag = `${probe.name} [tsan]`;
 	const bin = `${BIN_DIR}/${probe.name}.tsan`;
-	const b = buildProbe(probe, "tsan", ["build", probe.path, "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
+	const b = buildProbe(probe, "tsan", tsanBuildArgs(probe.path, bin), `${LOG_DIR}/${probe.name}.tsan.build`);
 	if (!succeeded(b)) {
 		if (!tsanToolchain()) {
 			unscoredTsan.push(tag);
