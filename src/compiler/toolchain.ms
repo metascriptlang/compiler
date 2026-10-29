@@ -2,7 +2,7 @@
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, rename, changeStamp, changedTime, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { sha256, toHex } from "std/crypto/sha256";
 import { nowSeconds, markUsed } from "../utils/stampDirs";
@@ -24,10 +24,14 @@ function managedZigDir(): string {
 	return join(home, "zig");
 }
 
+function zigBinaryIn(dir: string): string {
+	return join(dir, platform == "windows" ? "zig.exe" : "zig");
+}
+
 function managedZigBinary(): string {
 	const dir = managedZigDir();
 	if (dir == "") return "";
-	return join(dir, platform == "windows" ? "zig.exe" : "zig");
+	return zigBinaryIn(dir);
 }
 
 function hasManagedZig(): boolean {
@@ -128,13 +132,15 @@ function ensureZig(assumeYes: boolean): string {
 		return "";
 	}
 
-	ensureDir(dir);
+	ensureDir(metascriptHome());
 	const url = `${ZIG_BASE}${tarball}`;
-	const archive = join(dir, tarball);
+	const stage = `${dir}.install.${performance.now()}`;
+	const archive = `${stage}.${tarball}`;
 
 	eprintln(`Downloading Zig ${ZIG_VERSION} (${key})…`);
 	const dl = exec(`curl -fL --retry 3 -o "${archive}" "${url}"`);
 	if (!dl.ok) {
+		remove(archive);
 		eprintln(`error: failed to download Zig from ${url}`);
 		return "";
 	}
@@ -143,13 +149,74 @@ function ensureZig(assumeYes: boolean): string {
 		remove(archive);
 		return "";
 	}
-	const ex = exec(`tar xf "${archive}" -C "${dir}" --strip-components=1`);
+	if (!ensureDir(stage).ok) {
+		remove(archive);
+		eprintln(`error: cannot create ${stage}.`);
+		return "";
+	}
+	const ex = exec(`tar xf "${archive}" -C "${stage}" --strip-components=1`);
 	remove(archive);
-	if (!ex.ok || !hasManagedZig()) {
+	if (!ex.ok || !exists(zigBinaryIn(stage))) {
+		removeAll(stage);
 		eprintln(`error: failed to extract Zig archive.`);
 		return "";
 	}
+	if (!publishZig(stage, dir) && !hasManagedZig()) {
+		eprintln(`error: cannot install Zig at ${dir}; it exists without a zig binary.`);
+		eprintln(`  → remove ${dir} and re-run.`);
+		return "";
+	}
 	return managedZigBinary();
+}
+
+// Moving a directory onto a non-empty one fails on every OS, so a published
+// install is never replaced; an empty leftover from an earlier failed run goes.
+function publishZig(staged: string, dir: string): boolean {
+	rmdir(dir);
+	if (rename(staged, dir).ok) return true;
+	removeAll(staged);
+	return false;
+}
+
+function zigProbe(): string {
+	const root = join(cwd(), `out/zigPublishProbe-${performance.now()}`);
+	return ensureDir(root).ok ? root : "";
+}
+
+function zigStage(root: string, name: string, tag: string): string {
+	const stage = join(root, name);
+	if (!ensureDir(join(stage, "lib")).ok) return "";
+	if (!writeFile(zigBinaryIn(stage), tag).ok || !writeFile(join(stage, "lib/std"), tag).ok) return "";
+	return stage;
+}
+
+test "two zig installs publish one winner and the loser discards its copy" {
+	const root = zigProbe();
+	assert root != "";
+	const final = join(root, "zig");
+	const first = zigStage(root, "zig.install.1", "first");
+	const second = zigStage(root, "zig.install.2", "second");
+	assert first != "" && second != "";
+	assert !exists(zigBinaryIn(final));
+	assert publishZig(first, final);
+	assert !exists(first);
+	assert !publishZig(second, final);
+	assert !exists(second);
+	assert (try readFile(zigBinaryIn(final)) catch "") == "first";
+	assert (try readFile(join(final, "lib/std")) catch "") == "first";
+	assert removeAll(root).ok;
+}
+
+test "an empty leftover zig directory gives way to a published install" {
+	const root = zigProbe();
+	assert root != "";
+	const final = join(root, "zig");
+	assert ensureDir(final).ok;
+	const staged = zigStage(root, "zig.install.1", "only");
+	assert staged != "";
+	assert publishZig(staged, final);
+	assert (try readFile(zigBinaryIn(final)) catch "") == "only";
+	assert removeAll(root).ok;
 }
 
 struct NativeToolchain {
