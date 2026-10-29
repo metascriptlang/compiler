@@ -257,6 +257,7 @@ function noteCall(node: Node, info: RoutineInfo | null): void {
 
 function walkTry(node: Node, info: RoutineInfo): void {
 	const d = node.data as TryCatchStmtData;
+	info.readsErrorFlag = true;
 	const caught = _walkCaught;
 	_walkCaught = caught || d.hasCatchClause;
 	walkProgram(d.tryBody);
@@ -329,7 +330,7 @@ function noteDestroyCaller(reached: Readonly<Symbol | null>, owner: int32): void
 function spreadErrorFlagReads(): void {
 	const pending: RoutineInfo[] = [];
 	for (const info of _order) {
-		if (info.raises) {
+		if (info.raises || info.readsErrorFlag) {
 			info.readsErrorFlag = true;
 			pending.push(info);
 		}

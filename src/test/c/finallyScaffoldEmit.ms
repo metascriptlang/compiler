@@ -55,3 +55,34 @@ test "E2E C: a finally that returns keeps the error scaffold that drops the exce
 	assert c != "";
 	assert c.contains("__oldErr_");
 }
+
+const HOOKS = `
+class Plain { n: int32 = 1; }
+function onDestroy(this p: Plain): void { console.log(String(p.n)); }
+class Guarded { n: int32 = 1; }
+function onDestroy(this p: Guarded): void { try { console.log(String(p.n)); } catch (e) { console.log("c"); } }
+class Nested { n: int32 = 1; }
+function quietTry(n: int32): void { try { console.log(String(n)); } finally { console.log("f"); } }
+function onDestroy(this p: Nested): void { quietTry(p.n); }
+`;
+
+function unwindingRelease(type: string): string {
+	return emit(RAISER + HOOKS + `
+		function main(): void {
+			const v = new ${type}();
+			boom();
+		}
+		main();
+	`);
+}
+
+test "E2E C: unwinding through a release whose hook has neither a throw nor a try emits no error scaffold" {
+	const c = unwindingRelease("Plain");
+	assert c.contains("__finally_");
+	assert !c.contains("__oldErr_");
+}
+
+test "E2E C: unwinding through a release whose hook holds a try, or calls a routine that does, keeps the error scaffold" {
+	assert unwindingRelease("Guarded").contains("__oldErr_");
+	assert unwindingRelease("Nested").contains("__oldErr_");
+}
