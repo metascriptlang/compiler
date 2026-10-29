@@ -325,6 +325,12 @@ export function nullIsZeroValue(valueType: Type | null): boolean {
 	return t != null && (t.kind == TypeKind.Tuple || t.kind == TypeKind.SizedArray || isValueStruct(t));
 }
 
+export function zeroIsNil(valueType: Type | null): boolean {
+	const t = isAwaitable(valueType) ? null : zeroShape(valueType);
+	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || isValueStruct(t))) return false;
+	return zeroScalar(t).kind == RaiserValueKind.Nil;
+}
+
 export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32 {
 	return emitZeroOf(s, valueType, []);
 }
