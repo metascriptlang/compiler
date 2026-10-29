@@ -24,6 +24,7 @@ import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArg
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
+import { selectedNativeToolchain } from "./toolchain";
 
 // ===== Hash Functions =====
 
@@ -2102,6 +2103,12 @@ export function invalidateCompileCache(modPath: string, fp: string): void {
 const PRE_LINKCMD = "linkcmd:";
 const PRE_OFILES = "ofiles:";
 const PRE_LINKINPUTS = "linkInputs:";
+const PRE_TOOLCHAIN = "toolchain:";
+
+function linkToolchainKey(ccOption: number, ccBinary: string): string {
+	const bundle = selectedNativeToolchain();
+	return `${getCompilerHash(ccOption, ccBinary)}:${bundle == null ? "" : bundle.identity}`;
+}
 
 function linkCacheFile(image: string = ""): string {
 	if (image != "") return `${getCacheDir()}/link.${hashContent(image)}.cache`;
@@ -2131,7 +2138,7 @@ function externalInputKey(paths: string[]): string {
 }
 
 // Check if link step can be skipped.
-export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): boolean {
+export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, ccOption: number, ccBinary: string, image: string = ""): boolean {
 	if (_forceRebuild) return false;
 	const cFile = linkCacheFile(image);
 	if (!exists(cFile) || !exists(outputFile)) return false;
@@ -2144,10 +2151,13 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	let storedOFiles = "";
 	let storedOutputHash = "";
 	let storedInputs = "";
+	let storedToolchain = "";
 
 	for (const line of lines) {
 		let val = parseLineValue(line, PRE_LINKCMD);
 		if (val != "") { storedCmd = val; continue; }
+		val = parseLineValue(line, PRE_TOOLCHAIN);
+		if (val != "") { storedToolchain = val; continue; }
 		val = parseLineValue(line, PRE_OFILES);
 		if (val != "") { storedOFiles = val; continue; }
 		val = parseLineValue(line, PRE_LINKINPUTS);
@@ -2157,6 +2167,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	}
 
 	if (storedCmd != linkFlags) return false;
+	if (storedToolchain != linkToolchainKey(ccOption, ccBinary)) return false;
 	if (storedOFiles != linkObjectsKey(oFiles, image)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
 	if (!outputMatches(storedOutputHash, outputFile)) return false;
@@ -2165,8 +2176,9 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 }
 
 // Write link cache after successful link step.
-export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): void {
+export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, ccOption: number, ccBinary: string, image: string = ""): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
+	content = content + `${PRE_TOOLCHAIN}${linkToolchainKey(ccOption, ccBinary)}\n`;
 	content = content + `${PRE_OFILES}${linkObjectsKey(oFiles, image)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
@@ -2472,10 +2484,10 @@ test "a link output rewritten to the same size at once is not taken as cached" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const output = `${base}/msc-link-output-${performance.now()}.bin`;
 	writeFile(output, "first");
-	writeLinkCache([], [], "-flags", output, output);
-	assert isLinkCached([], [], "-flags", output, output);
+	writeLinkCache([], [], "-flags", output, 0, "", output);
+	assert isLinkCached([], [], "-flags", output, 0, "", output);
 	writeFile(output, "other");
-	assert !isLinkCached([], [], "-flags", output, output);
+	assert !isLinkCached([], [], "-flags", output, 0, "", output);
 	remove(output);
 	remove(linkCacheFile(output));
 }
@@ -2487,12 +2499,30 @@ test "an HCR image link is keyed by its objects' bytes, not their paths" {
 	writeFile(image, "image");
 	writeFile(`${stem}.a.o`, "object");
 	writeFile(`${stem}.b.o`, "object");
-	writeLinkCache([`${stem}.a.o`], [], "-flags", image, image);
-	assert isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	writeLinkCache([`${stem}.a.o`], [], "-flags", image, 0, "", image);
+	assert isLinkCached([`${stem}.b.o`], [], "-flags", image, 0, "", image);
 	writeFile(`${stem}.b.o`, "changed");
-	assert !isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	assert !isLinkCached([`${stem}.b.o`], [], "-flags", image, 0, "", image);
 	for (const path of [image, `${stem}.a.o`, `${stem}.b.o`]) remove(path);
 	remove(linkCacheFile(image));
+}
+
+test "a link record made by one C compiler misses under another, though the objects keep their bytes" {
+	if (platform == "windows") return;
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const stem = `${base}/msc-link-toolchain-${performance.now()}`;
+	const image = `${stem}.dylib`;
+	writeFile(image, "image");
+	writeFile(`${stem}.o`, "object");
+	writeLinkCache([`${stem}.o`], [], "-flags", image, 0, "cc", image);
+	assert isLinkCached([`${stem}.o`], [], "-flags", image, 0, "cc", image);
+	assert !isLinkCached([`${stem}.o`], [], "-flags", image, 0, "clang", image);
+	const output = `${stem}.bin`;
+	writeFile(output, "binary");
+	writeLinkCache([`${stem}.o`], [], "-flags", output, 0, "cc");
+	assert isLinkCached([`${stem}.o`], [], "-flags", output, 0, "cc");
+	assert !isLinkCached([`${stem}.o`], [], "-flags", output, 0, "clang");
+	for (const path of [image, output, `${stem}.o`, linkCacheFile(image), linkCacheFile()]) tryRemoveFile(path);
 }
 
 test "a link output recorded inside the settle window is identified by its content" {
@@ -2502,9 +2532,9 @@ test "a link output recorded inside the settle window is identified by its conte
 	assert outputIdentity(output).startsWith("content:");
 	for (let i: int32 = 0; i < 50; i += 1) {
 		writeFile(output, "first");
-		writeLinkCache([], [], "-flags", output, output);
+		writeLinkCache([], [], "-flags", output, 0, "", output);
 		writeFile(output, "other");
-		assert !isLinkCached([], [], "-flags", output, output);
+		assert !isLinkCached([], [], "-flags", output, 0, "", output);
 	}
 	remove(output);
 	remove(linkCacheFile(output));
@@ -2514,17 +2544,17 @@ test "a settled link output is trusted by its stamp and its record is upgraded o
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const output = `${base}/msc-link-settled-${performance.now()}.bin`;
 	writeFile(output, "first");
-	writeLinkCache([], [], "-flags", output, output);
+	writeLinkCache([], [], "-flags", output, 0, "", output);
 	const contentRecord = try readFile(linkCacheFile(output)) catch "";
 	assert contentRecord.includes(`${PRE_OUTHASH}content:`);
 	const until = performance.now() + (SETTLED_SECONDS + 1) * 1000;
 	while (performance.now() < until) {}
-	assert isLinkCached([], [], "-flags", output, output);
+	assert isLinkCached([], [], "-flags", output, 0, "", output);
 	const settledRecord = try readFile(linkCacheFile(output)) catch "";
 	assert settledRecord.includes(`${PRE_OUTHASH}settled:`);
-	assert isLinkCached([], [], "-flags", output, output);
+	assert isLinkCached([], [], "-flags", output, 0, "", output);
 	writeFile(output, "other");
-	assert !isLinkCached([], [], "-flags", output, output);
+	assert !isLinkCached([], [], "-flags", output, 0, "", output);
 	remove(output);
 	remove(linkCacheFile(output));
 }

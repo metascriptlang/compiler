@@ -2147,7 +2147,7 @@ test "HCR core image takes the target's shared-library extension, not the output
 }
 
 function linkHcrImage(objects: string[], coreInput: string, externalInputs: string[], image: string, flags: string, opts: CliOptions): boolean {
-	if (isLinkCached(objects, externalInputs, flags, image, image)) {
+	if (isLinkCached(objects, externalInputs, flags, image, opts.ccCompiler, opts.ccBinary, image)) {
 		_hcrWarmLinks.push({ image, flags });
 		return false;
 	}
@@ -2161,7 +2161,7 @@ function linkHcrImage(objects: string[], coreInput: string, externalInputs: stri
 		if (linked.error.errorOutput != "") console.log(linked.error.errorOutput);
 		throw new Error(BUILD_STOPPED);
 	}
-	writeLinkCache(objects, externalInputs, flags, image, image);
+	writeLinkCache(objects, externalInputs, flags, image, opts.ccCompiler, opts.ccBinary, image);
 	return true;
 }
 
@@ -3937,7 +3937,7 @@ resetLiftedOps();
 	let linkFlags = allLink;
 
 	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
-	if (modulesRecompiled == 0 && isLinkCached(oFiles, externalLinkInputs, linkFlags, outBinary)) {
+	if (modulesRecompiled == 0 && isLinkCached(oFiles, externalLinkInputs, linkFlags, outBinary, opts.ccCompiler, opts.ccBinary)) {
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
@@ -4011,7 +4011,7 @@ resetLiftedOps();
 	if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 
 	// Persist link cache after successful link
-	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary);
+	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary, opts.ccCompiler, opts.ccBinary);
 
 	if (opts.genDeps) {
 		const depsDir = outDirForMode(opts.mode);
