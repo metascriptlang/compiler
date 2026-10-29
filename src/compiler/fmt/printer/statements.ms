@@ -1,7 +1,7 @@
 // Statement Printers — blocks, declarations, loops, etc.
 
 import {
-	Node, NodeKind, NodeFlag, DeclKind, ProgramData, BlockStmtData, VariableDeclData,
+	Node, NodeKind, NodeFlag, ProgramData, BlockStmtData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
@@ -10,7 +10,7 @@ import {
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docSourceText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
@@ -98,7 +98,7 @@ export function takeStructAccessors(): Node[] {
 	return taken;
 }
 
-function takeListDeclarators(): Node[] {
+export function takeListDeclarators(): Node[] {
 	const taken = _listDeclarators;
 	_listDeclarators = [];
 	return taken;
@@ -173,50 +173,6 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 		docHardLine(),
 		docText("}"),
 	]);
-}
-
-export function printVariableDecl(node: Node, options: FormatOptions): Doc {
-	const d = node.data as VariableDeclData;
-	const kind = match (d.declKind) {
-		DeclKind.Const => "const",
-		DeclKind.Let => "let",
-		DeclKind.Var => "var",
-		_ => "let",
-	};
-
-	const storage = node.flags.has(NodeFlag.StaticStorage) ? "static " : "";
-	const rest = takeListDeclarators();
-	const parts: Doc[] = [docText(storage + kind + " ")];
-	pushDeclarator(parts, node, options);
-	for (const r of rest) {
-		parts.push(docText(", "));
-		pushDeclarator(parts, r, options);
-	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
-
-	return docGroup(parts);
-}
-
-function pushDeclarator(parts: Doc[], node: Node, options: FormatOptions): void {
-	if (node.kind == NodeKind.DestructuringDecl) {
-		const dd = node.data as DestructuringDeclData;
-		parts.push(callPrintNode(dd.destrPattern, options));
-		parts.push(docText(" = "));
-		parts.push(callPrintNode(dd.destrInit, options));
-		return;
-	}
-	const d = node.data as VariableDeclData;
-	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
-	parts.push(docText(d.declName + typed));
-	if (d.declType != "" && typed == "") {
-		parts.push(docText(": " + d.declType));
-	}
-	if (d.initializer != null) {
-		parts.push(docText(" = "));
-		parts.push(callPrintNode(d.initializer, options));
-	}
 }
 
 export function printExprStmt(node: Node, options: FormatOptions): Doc {
@@ -354,20 +310,6 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 		docText(") "),
 		printBody(d.forInBody, options, true),
 	]);
-}
-
-export function printDestructuringDecl(node: Node, options: FormatOptions): Doc {
-	const d = node.data as DestructuringDeclData;
-	const kind = d.destrIsConst ? "const" : "let";
-	const rest = takeListDeclarators();
-	const parts: Doc[] = [docText(kind + " ")];
-	pushDeclarator(parts, node, options);
-	for (const r of rest) {
-		parts.push(docText(", "));
-		pushDeclarator(parts, r, options);
-	}
-	if (options.semi) parts.push(docText(";"));
-	return docGroup(parts);
 }
 
 export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {

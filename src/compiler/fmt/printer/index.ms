@@ -29,17 +29,17 @@ import {
 } from "./expressions";
 import { printCallExpr, printNewExpr } from "./calls";
 import {
-	printProgram, printBlock, printVariableDecl, printExprStmt,
+	printProgram, printBlock, printExprStmt,
 	printReturnStmt, printIfStmt, printWhileStmt, printForStmt,
 	printForOfStmt, printForInStmt, printDoWhileStmt, printSwitchStmt, printMatchStmt,
 	printFunctionDecl, printThrowStmt, printTryCatchStmt, printDeferStmt,
-	printBreakStmt, printContinueStmt, printDestructuringDecl,
+	printBreakStmt, printContinueStmt,
 } from "./statements";
 import {
 	printImportDecl, printExportDecl, printTypeAliasDecl, printEnumDecl,
 	printInterfaceDecl, printStructDecl, printClassDecl, printActorDecl, printExternDecl, printDecoratedDecl,
 	printTestDecl, printAssertStmt, printPropertyDecl, printMethodDecl, printConstructorDecl,
-	printMacroDecl,
+	printMacroDecl, printVariableDecl, printDestructuringDecl,
 } from "./declarations";
 
 let unprintedKinds: string[] = [];
