@@ -252,7 +252,7 @@ export class AbortSignal {
 	}
 
 	addEventListener(type: string, listener: () => void): void {
-		if (type != "abort") return;
+		if (msStringCompare(type, "abort") != 0) return;
 		if (this.abortListeners == null) {
 			this.abortListeners = new AbortListener(listener);
 			return;
@@ -267,7 +267,7 @@ export class AbortSignal {
 	}
 
 	removeEventListener(type: string, listener: () => void): void {
-		if (type != "abort" || this.abortListeners == null) return;
+		if (msStringCompare(type, "abort") != 0 || this.abortListeners == null) return;
 		if (this.abortListeners!.fn === listener) {
 			this.abortListeners = this.abortListeners!.next;
 			return;
@@ -408,8 +408,6 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
-
-	@compilerFunc
 
 	@compilerFunc
 	extern function msStringConcat(a: string, b: string): string;
