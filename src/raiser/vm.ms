@@ -1941,7 +1941,7 @@ function vmHandleFutureRead(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	const source = getDyn(vm, func.blocks[ic + 3] as int32);
 	if (source.kind != RaiserValueKind.Future) {
 		if (ib == 2) setRegBool(vm, ia, true);
-		else if (ib == 0) {
+		else if (ib == 0 || ib == 3) {
 			rcIncref(vm.arrayHeap, vm.objectHeap, source);
 			setRegConform(vm, ia, source);
 		}
@@ -1962,6 +1962,11 @@ function vmHandleFutureRead(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	}
 	if (ib == 1) {
 		if (f.failed) raiseFromFuture(vm, f);
+		return;
+	}
+	if (ib == 3) {
+		setRegConform(vm, ia, f.value);
+		f.value = raiserNil();
 		return;
 	}
 	readSettledFuture(vm, ia, f);

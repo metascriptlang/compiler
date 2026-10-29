@@ -423,7 +423,9 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 			} else {
 				// Boxed types (struct/tuple/GI/array) — read the void* then copy out via
 				// msUnboxStruct. String never reaches here (typedFutureReadFn handles it).
-				const rawRead = makeCall(runtimeRef("msFutureRead", loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc);
+				const takes = soleRead[prevIdx];
+				if (takes) stateStmts.push(makeExprStmt(makeCall(runtimeRef("msFutureCheckErr", loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc), loc));
+				const rawRead = makeCall(runtimeRef(takes ? "msFutureTakeRaw" : "msFutureRead", loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc);
 				if (boxedInFuture(varType, ctx.raiserBackend)) {
 					readExpr = makeCall(runtimeRef("msUnboxStruct", loc), [rawRead], loc);
 					readExpr.nodeType = varType;
