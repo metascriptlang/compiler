@@ -8,7 +8,7 @@ import {
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
-	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
+	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docBreakParent, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
 } from "../doc";
 import { commentsWithin } from "./commentDocs";
 import { sourceSpan, sourceByteAt, blankLineBefore, normalizeStringToken } from "./literals";
@@ -291,6 +291,15 @@ export function structuralType(expr: Node | null, text: string, options: FormatO
 export function printTypeAnnotation(expr: Node | null, text: string, options: FormatOptions): Doc {
 	const doc = structuralType(expr, text, options);
 	return doc != null ? doc : docText(text);
+}
+
+export function inlineObjectType(expr: Node | null, text: string, options: FormatOptions): Doc[] | null {
+	if (expr == null || expr.kind != NodeKind.TypeObject) return null;
+	const doc = structuralType(expr, text, options);
+	if (doc == null || doc.kind != DocKind.Group) return null;
+	const parts: Doc[] = [...(doc.data as { children: Doc[] }).children];
+	if (doc.shouldBreak) parts.push(docBreakParent());
+	return parts;
 }
 
 export function isObjectTypeAnnotation(expr: Node | null, text: string, options: FormatOptions): boolean {

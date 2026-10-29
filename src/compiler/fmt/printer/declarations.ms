@@ -18,7 +18,7 @@ import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin,
 import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
+import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
 	isBreakableTypeAnnotation, isComplexTypeAliasGenerics, isUnbreakableTypeText,
@@ -554,17 +554,22 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	const asWritten = headerAsWritten(node, d.methodBody, options, node.paramLocations);
 	if (asWritten != null) return docGroup([docText(modifiers), asWritten, printCollapsibleBody(d.methodBody, options)]);
 	const parts: Doc[] = [docText(head)];
-	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations, node.typeExprs);
+	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.methodBody, d.methodParams));
 	const paramComments = paramListComments(node, d.methodBody);
-	if (paramComments.length > 0 && node.paramLocations != null) {
-		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
-	} else {
-		for (const p of paramListInParens(params, options, hugsObjectParam(d.methodParams, d.methodParamTypes, d.methodDefaults, node.typeExprs, options))) parts.push(p);
-	}
+	const returnType: Doc[] = [];
 	if (d.methodReturnType != "") {
-		parts.push(docText(": "));
-		parts.push(printTypeAnnotation(node.typeExpr, d.methodReturnType, options));
+		returnType.push(docText(": "));
+		returnType.push(printTypeAnnotation(node.typeExpr, d.methodReturnType, options));
 	}
+	const signature: Doc[] = [];
+	if (paramComments.length > 0 && node.paramLocations != null) {
+		signature.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
+	} else {
+		const groupParams = groupsParameters(flagGet(d.methodFlags, "gen"), params.length, node.typeExpr, d.methodReturnType, returnType, options);
+		for (const p of paramListInParens(params, options, hugsObjectParam(d.methodParams, d.methodParamTypes, d.methodDefaults, node.typeExprs, options), groupParams)) signature.push(p);
+	}
+	for (const p of returnType) signature.push(p);
+	parts.push(docGroup(signature));
 	if (isSynthesized(node, d.methodBody)) {
 		if (d.nativeName != "") parts.push(docText(nativeFrom(d.nativeName)));
 		parts.push(docText(";"));

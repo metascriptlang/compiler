@@ -5,15 +5,15 @@ import {
 	ExprStmtData, BinaryExprData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
+	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
 } from "../../../ast/node";
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList, docIfBreak, docNil } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docLine, docCommaSepList, docIfBreak, docNil, docWillBreak } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { isAssignOp } from "../../../ast/operators";
-import { printTypeAnnotation, isObjectTypeAnnotation } from "./types";
+import { printTypeAnnotation, isObjectTypeAnnotation, inlineObjectType } from "./types";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
 class ListItem {
@@ -473,9 +473,32 @@ export function printContinueStmt(node: Node): Doc {
 // `defaults` may be shorter than `names`/`types` (or contain null entries) —
 // missing defaults emit just the bare param. Pass an empty array to suppress
 // defaults entirely (e.g. macro decls don't have defaults).
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null): Doc[] {
+function inlineObjectPattern(pattern: Node, options: FormatOptions): Doc[] {
+	const d = pattern.data as ObjectPatternData;
+	const body: Doc[] = [docLine()];
+	for (let i = 0; i < d.patternProps.length; i += 1) {
+		if (i > 0) {
+			body.push(docText(","));
+			body.push(docLine());
+		}
+		body.push(callPrintNode(d.patternProps[i], options));
+	}
+	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) body.push(docIfBreak(docText(","), docNil()));
+	return [docText("{"), docIndent(body), docLine(), docText("}")];
+}
+
+export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null, patterns: (Node | null)[] | null = null): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
+		const pattern = patterns != null && i < patterns.length ? patterns[i] : null;
+		const typeExpr = typeExprs != null && i < typeExprs.length ? typeExprs[i] : null;
+		if (pattern != null && i < types.length && types[i] != "" && (defaults.length <= i || defaults[i] == null)) {
+			const inlineType = inlineObjectType(typeExpr, types[i], options);
+			if (inlineType != null) {
+				out.push(docGroup([...inlineObjectPattern(pattern, options), docText(": "), ...inlineType]));
+				continue;
+			}
+		}
 		let p = spellParamModifiers(names[i]);
 		let written = p.startsWith("...") ? p.byteSlice(3, p.byteLength) : p;
 		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
@@ -505,13 +528,15 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 
 // Wrap a built param list in `( ... )` with the standard
 // indent/softline group; returns the Doc fragments to push.
-export function paramListInParens(params: Doc[], options: FormatOptions, hug: boolean = false): Doc[] {
+export function paramListInParens(params: Doc[], options: FormatOptions, hug: boolean = false, grouped: boolean = true): Doc[] {
 	const parts: Doc[] = [docText("(")];
 	if (hug && params.length == 1) {
 		parts.push(params[0]);
 	} else if (params.length > 0) {
 		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
-		parts.push(docGroup([docIndent(paramParts), docSoftLine()]));
+		const list: Doc[] = [docIndent(paramParts), docSoftLine()];
+		if (grouped) parts.push(docGroup(list));
+		else for (const x of list) parts.push(x);
 	}
 	parts.push(docText(")"));
 	return parts;
@@ -692,6 +717,29 @@ export function isSynthesized(decl: Node, body: Node): boolean {
 	return body.location.line == decl.location.line && body.location.column == decl.location.column;
 }
 
+export function parameterPatterns(body: Node, names: string[]): (Node | null)[] {
+	const out: (Node | null)[] = [];
+	for (const name of names) out.push(null);
+	if (body.kind != NodeKind.BlockStmt) return out;
+	for (const s of (body.data as BlockStmtData).statements) {
+		if (!isParamPatternDecl(s)) continue;
+		const d = s.data as DestructuringDeclData;
+		const at = names.indexOf((d.destrInit.data as IdentifierData).name);
+		if (at >= 0 && d.destrPattern.kind == NodeKind.ObjectPattern && (d.destrPattern.data as ObjectPatternData).patternProps.length > 0) out[at] = d.destrPattern;
+	}
+	return out;
+}
+
+export function groupsParameters(generics: string, count: number, returnExpr: Node | null, returnText: string, returnType: Doc[], options: FormatOptions): boolean {
+	if (returnText == "" || count != 1) return false;
+	if (generics.contains(",") || generics.contains(" extends ") || generics.contains("=")) return false;
+	if (isObjectTypeAnnotation(returnExpr, returnText, options)) return true;
+	for (const part of returnType) {
+		if (docWillBreak(part)) return true;
+	}
+	return false;
+}
+
 export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as FunctionDeclData;
 	// fnFlags carries: "async", "generator", "async_generator", "extern",
@@ -723,18 +771,22 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const asWritten = headerAsWritten(node, d.fnBody, options, staticType == "" ? node.paramLocations : null);
 	if (asWritten != null) return docGroup([asWritten, printCollapsibleBody(d.fnBody, options)]);
 	if (staticType != "") params.push(docText("this typeof " + staticType));
-	for (const p of buildParamList(names, types, defaults, options, node.paramLocations, node.typeExprs)) params.push(p);
+	for (const p of buildParamList(names, types, defaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.fnBody, names))) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);
-	if (paramComments.length > 0 && node.paramLocations != null && staticType == "") {
-		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
-	} else {
-		for (const p of paramListInParens(params, options, hugsObjectParam(names, types, defaults, node.typeExprs, options))) parts.push(p);
-	}
-
+	const returnType: Doc[] = [];
 	if (d.fnReturnType != "") {
-		parts.push(docText(": "));
-		parts.push(printTypeAnnotation(node.typeExpr, d.fnReturnType, options));
+		returnType.push(docText(": "));
+		returnType.push(printTypeAnnotation(node.typeExpr, d.fnReturnType, options));
 	}
+	const signature: Doc[] = [];
+	if (paramComments.length > 0 && node.paramLocations != null && staticType == "") {
+		signature.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
+	} else {
+		const groupParams = groupsParameters(flagGet(d.fnFlags, "gen"), params.length, node.typeExpr, d.fnReturnType, returnType, options);
+		for (const p of paramListInParens(params, options, hugsObjectParam(names, types, defaults, node.typeExprs, options), groupParams)) signature.push(p);
+	}
+	for (const p of returnType) signature.push(p);
+	parts.push(docGroup(signature));
 
 	if (isSynthesized(node, d.fnBody)) {
 		if (d.nativeName != "") {
