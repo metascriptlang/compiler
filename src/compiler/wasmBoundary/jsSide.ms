@@ -52,6 +52,8 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	const cleanup: string[] = [];
 	const lines: string[] = [];
+	const encoded: string[] = [];
+	const encodes: string[] = [];
 	let sig = "";
 	let args = "";
 	for (let i = 0; i < f.params.length; i += 1) {
@@ -59,8 +61,9 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 		if (i > 0) { sig += ", "; args += ", "; }
 		sig += `a${i}`;
 		if (p.kind == BoundaryKind.String) {
-			lines.push(`	const e${i} = __msbEnc(a${i});`);
-			cleanup.push(`__msbMod._free(e${i}[0]);`);
+			encoded.push(`e${i}`);
+			encodes.push(`		e${i} = __msbEnc(a${i});`);
+			cleanup.push(`if (e${i}) __msbMod._free(e${i}[0]);`);
 			args += `e${i}[0], e${i}[1]`;
 		} else if (p.kind == BoundaryKind.Callback) {
 			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`)});`);
@@ -79,7 +82,9 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 		out.push(`	${ret}`);
 	} else {
 		for (const l of lines) out.push(l);
+		if (encoded.length > 0) out.push(`	let ${encoded.join(", ")};`);
 		out.push("	try {");
+		for (const l of encodes) out.push(l);
 		out.push(`		${ret}`);
 		out.push("	} finally {");
 		for (const c of cleanup) out.push(`		${c}`);
@@ -96,16 +101,21 @@ function quoted(s: string): string {
 const GLUE = [
 	"const __msbTe = new TextEncoder();",
 	"const __msbTd = new TextDecoder();",
+	"function __msbAlloc(n) {",
+	"\tconst p = __msbMod._malloc(n);",
+	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy a string of \" + n + \" bytes into wasm memory\");",
+	"\treturn p;",
+	"}",
 	"function __msbEnc(s) {",
 	"\tconst n = s.length;",
 	"\tlet i = 0;",
 	"\twhile (i < n && s.charCodeAt(i) < 128) i++;",
 	"\tif (i === n) {",
-	"\t\tconst p = __msbMod._malloc(n || 1);",
+	"\t\tconst p = __msbAlloc(n || 1);",
 	"\t\t__msbTe.encodeInto(s, __msbMod.HEAPU8.subarray(p, p + n));",
 	"\t\treturn [p, n];",
 	"\t}",
-	"\tconst p = __msbMod._malloc(n * 3);",
+	"\tconst p = __msbAlloc(n * 3);",
 	"\tconst h = __msbMod.HEAPU8;",
 	"\tlet o = p;",
 	"\tfor (i = 0; i < n; i++) {",

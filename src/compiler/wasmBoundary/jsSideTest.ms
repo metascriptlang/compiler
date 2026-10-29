@@ -59,12 +59,12 @@ test "js side: one prelude awaits the wasm module once and a stale callback id t
 
 test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
 	const code = bindingsFor(["both"]).modules[0].code;
-	assert code.includes("function bundled_both(a0, a1, a2) {\n\tconst e0 = __msbEnc(a0);\n\tconst e2 = __msbEnc(a2);\n\ttry {\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\t__msbMod._free(e0[0]);\n\t\t__msbMod._free(e2[0]);\n\t}\n}");
+	assert code.includes("function bundled_both(a0, a1, a2) {\n\tlet e0, e2;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e2) __msbMod._free(e2[0]);\n\t}\n}");
 }
 
 test "js side: a string result is decoded with the length read right after the call" {
 	const code = bindingsFor(["twice"]).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {\n\tconst e0 = __msbEnc(a0);\n\ttry {\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\t__msbMod._free(e0[0]);\n\t}\n}");
+	assert code.includes("function bundled_twice(a0) {\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t}\n}");
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
@@ -87,4 +87,10 @@ test "js side: the prelude carries the string glue once and reads the heap fresh
 	assert p.includes("function __msbDec(p, len)");
 	assert p.includes("__msbMod.HEAPU8");
 	assert !p.includes("wasmMemory");
+}
+
+test "js side: a failed wasm allocation throws instead of writing at address 0" {
+	const p = bindingsFor(["twice"]).prelude;
+	assert p.includes("if (p === 0) throw new RangeError(");
+	assert !p.includes("const p = __msbMod._malloc(n || 1);") && !p.includes("const p = __msbMod._malloc(n * 3);");
 }
