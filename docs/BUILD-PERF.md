@@ -57,6 +57,34 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-10-29 — the native toolchain bundle against managed zig
+
+Self-host `msc build src/index.ms` (450 modules) on RTX (WSL2, 24 threads, pinned to 16 CPUs,
+load 3–11, quiet window 18:03–18:42Z), main `02a74bee6d`, candidate built `--danger --lto=off`.
+Bundle `bundle-san` (IDENTITY `1d44338580b1`, clang 22.1.8, lld) against managed zig 0.16.0
+(clang 21.1.0). A fresh `MSC_GLOBAL_CACHE_DIR` and `MSC_CACHE_DIR` per cell; cold = both empty,
+warm store = a new local cache over the cold run's store. Three reps, zig and bundle order
+alternated, median [min–max] in seconds, phases from `-t`:
+
+| mode | cell | zig wall | bundle wall | zig cc phase | bundle cc phase | zig link | bundle link |
+|---|---|---|---|---|---|---|---|
+| debug | cold | 83.6 [82.5–101.2] | 60.8 [56.2–69.4] | 36.8 | 12.0 | 3.0 | 0.34 |
+| debug | warm store | 54.4 [42.4–68.6] | 47.7 [42.7–53.6] | 4.7 | 2.2 | 3.4 | 0.39 |
+| danger | cold | 119.5 [114.8–146.9] | 101.5 [96.6–104.1] | 82.7 | 50.5 | 0.52 | 0.24 |
+| danger | warm store | 47.6 [42.9–48.7] | 49.6 [44.1–49.6] | 3.2 | 2.6 | 0.52 | 0.24 |
+
+A build with nothing changed takes 0.1–0.6 s on either. The front end (parse, check, transform)
+is 21–38 s in every cell, so a warm build is bound by it: the bundle cuts a cold build by 27%
+(debug) and 15% (danger) and saves 2–3 s of compile and link on a warm one. Seconds are this
+desktop's; only the ratios carry to the gate hosts. Store hits were not counted.
+
+The edit loop of the compiler itself, measured the next day on oci-u (load 85–110 on 96 cores, so
+a direction, not a figure), candidate on managed zig, `MSC_FLOWS`: a one-line edit to
+`src/utils/string.ms`, `src/compiler/usage.ms` or `src/checker/types.ms` rebuilt in 64–73 s, of
+which `phase.A` was 44–52 s with every one of 449 modules transformed and analyzed again,
+`phase.graph` 13–16 s, and compile plus link about 3 s. The lever left for that loop is reusing
+each module's front-end output across builds, not the C compiler.
+
 ## Measured 2026-10-27 — the check stops cloning the parse tree
 
 Mac `sample` of `check src/index.ms` on `e5c088569`: the per-file parse tree clone was 15.4%
