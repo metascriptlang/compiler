@@ -19,6 +19,7 @@ import {
 	outputOverflow,
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
+import { utf8Text } from "../core/string/bytes";
 
 extern function msProcChildSpawn(
 	path: string,
@@ -73,13 +74,13 @@ export class ChildProcess {
 	private handle: int64;
 	pid: int32;
 	command: string;
-	private held: string[];
+	private held: uint8[][];
 
 	constructor(handle: int64, command: string) {
 		this.handle = handle;
 		this.pid = msProcChildPid(handle);
 		this.command = command;
-		this.held = ["", ""];
+		this.held = [[], []];
 	}
 
 	// All bytes of `data`, or Timeout / PipeClosed naming how many were sent.
@@ -115,24 +116,39 @@ export class ChildProcess {
 
 	// Whatever stderr the pump has drained so far, decoded in full; does not wait.
 	takeStderr(): string {
-		const raw = this.held[1] + msProcChildTake(this.handle, ChildStream.Stderr as int32);
-		this.held[1] = "";
-		return raw.asBytes().asString();
+		const text = this.takeText(1);
+		const rest = this.held[1];
+		this.held[1] = [];
+		return text + rest.asString();
 	}
 
+	// The held bytes take the continuation bytes the chunk starts with; the chunk's own cut tail is held next.
 	private takeText(which: int32): string {
-		const raw = this.held[which] + msProcChildTake(this.handle, which);
-		const kept = incompleteTail(raw.asBytes());
-		const length = raw.byteLength;
-		this.held[which] = raw.byteSlice(length - kept, length);
-		return raw.byteSlice(0, length - kept).asBytes().asString();
+		const raw = msProcChildTake(this.handle, which);
+		const bytes = raw.asBytes();
+		const length = bytes.length as int32;
+		const joined = this.held[which];
+		let start: int32 = 0;
+		while (joined.length > 0 && start < length && (bytes[start] & 0xC0) == 0x80 && incompleteTail(joined) == joined.length) {
+			joined.push(bytes[start]);
+			start += 1;
+		}
+		if (start == length && joined.length > 0 && incompleteTail(joined) == joined.length) {
+			this.held[which] = joined;
+			return "";
+		}
+		const kept = incompleteTail(bytes);
+		const tail: uint8[] = [];
+		for (let i = length - kept; i < length; i++) tail.push(bytes[i]);
+		this.held[which] = tail;
+		return joined.asString() + utf8Text(raw.byteSlice(start, length - kept), false);
 	}
 
 	// At end of stream a held partial sequence is ill-formed: it reads as U+FFFD.
 	private endText(which: int32): ReadChunk {
-		const raw = this.held[which];
-		this.held[which] = "";
-		return { data: raw.asBytes().asString(), ended: raw == "" };
+		const bytes = this.held[which];
+		this.held[which] = [];
+		return { data: bytes.asString(), ended: bytes.length == 0 };
 	}
 
 	// The exit status, or Timeout with the child still running.

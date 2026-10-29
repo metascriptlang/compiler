@@ -22,6 +22,7 @@ import {
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
 import { utf8Text } from "../core/string/bytes";
+import { rawString } from "../core/buffer/bytes";
 
 extern function msProcChildSpawn(
 	path: string,
@@ -137,7 +138,7 @@ export class ChildProcess {
 		const raw = this.held[which] + msProcChildTake(this.handle, which);
 		const kept = incompleteTail(raw.asBytes());
 		const length = raw.byteLength;
-		this.held[which] = raw.byteSlice(length - kept, length);
+		this.held[which] = rawString([...raw.asBytes()[(length - kept)..length]]);
 		return utf8Text(raw.byteSlice(0, length - kept), false);
 	}
 
