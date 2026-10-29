@@ -138,3 +138,4 @@ import "./cases/stringQuotes";
 import "./cases/callArguments";
 import "./cases/memberChain";
 import "./cases/assignmentLayout";
+import "./cases/typeLayout";

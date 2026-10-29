@@ -12,6 +12,7 @@ import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, co
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
+import { printTypeAnnotation, isObjectTypeAnnotation } from "./types";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
 class ListItem {
@@ -455,7 +456,7 @@ export function printContinueStmt(node: Node): Doc {
 // `defaults` may be shorter than `names`/`types` (or contain null entries) —
 // missing defaults emit just the bare param. Pass an empty array to suppress
 // defaults entirely (e.g. macro decls don't have defaults).
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null): Doc[] {
+export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		let p = spellParamModifiers(names[i]);
@@ -467,15 +468,19 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 		const optional = locs != null && i < locs.length && writtenOptional(options.source, locs[i].line, locs[i].column, written);
 		const type = i < types.length ? types[i] : "";
 		if (optional) p = p + "?";
+		const head: Doc[] = [];
 		if (type != "") {
 			const keptType = optional && writtenTypeAfterOptional(options.source, locs![i].line, locs![i].column, written, type);
-			p = p + ": " + (optional && !keptType ? unoptionalized(type) : type);
+			head.push(docText(p + ": "));
+			head.push(printTypeAnnotation(typeExprs != null && i < typeExprs.length ? typeExprs[i] : null, optional && !keptType ? unoptionalized(type) : type, options));
+		} else {
+			head.push(docText(p));
 		}
 		const def = i < defaults.length ? defaults[i] : null;
 		if (def != null && !optional) {
-			out.push(docGroup([docText(p + " = "), callPrintNode(def, options)]));
+			out.push(docGroup([...head, docText(" = "), callPrintNode(def, options)]));
 		} else {
-			out.push(docText(p));
+			out.push(docGroup(head));
 		}
 	}
 	return out;
@@ -483,14 +488,23 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 
 // Wrap a built param list in `( ... )` with the standard
 // indent/softline group; returns the Doc fragments to push.
-export function paramListInParens(params: Doc[], options: FormatOptions): Doc[] {
+export function paramListInParens(params: Doc[], options: FormatOptions, hug: boolean = false): Doc[] {
 	const parts: Doc[] = [docText("(")];
-	if (params.length > 0) {
+	if (hug && params.length == 1) {
+		parts.push(params[0]);
+	} else if (params.length > 0) {
 		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
 		parts.push(docGroup([docIndent(paramParts), docSoftLine()]));
 	}
 	parts.push(docText(")"));
 	return parts;
+}
+
+// A sole parameter typed as an object type stays on the parenthesis line, so the type's braces break instead.
+export function hugsObjectParam(names: string[], types: string[], defaults: Node[], typeExprs: Node[] | null, options: FormatOptions): boolean {
+	if (names.length != 1 || types.length != 1 || typeExprs == null || typeExprs.length != 1) return false;
+	if (defaults.length > 0 && defaults[0] != null) return false;
+	return isObjectTypeAnnotation(typeExprs[0], types[0], options);
 }
 
 // `<T, U>` if non-empty, else `""`. Centralises the generic-clause emit
@@ -692,16 +706,17 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const asWritten = headerAsWritten(node, d.fnBody, options, staticType == "" ? node.paramLocations : null);
 	if (asWritten != null) return docGroup([asWritten, printCollapsibleBody(d.fnBody, options)]);
 	if (staticType != "") params.push(docText("this typeof " + staticType));
-	for (const p of buildParamList(names, types, defaults, options, node.paramLocations)) params.push(p);
+	for (const p of buildParamList(names, types, defaults, options, node.paramLocations, node.typeExprs)) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);
 	if (paramComments.length > 0 && node.paramLocations != null && staticType == "") {
 		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
 	} else {
-		for (const p of paramListInParens(params, options)) parts.push(p);
+		for (const p of paramListInParens(params, options, hugsObjectParam(names, types, defaults, node.typeExprs, options))) parts.push(p);
 	}
 
 	if (d.fnReturnType != "") {
-		parts.push(docText(": " + d.fnReturnType));
+		parts.push(docText(": "));
+		parts.push(printTypeAnnotation(node.typeExpr, d.fnReturnType, options));
 	}
 
 	if (isSynthesized(node, d.fnBody)) {

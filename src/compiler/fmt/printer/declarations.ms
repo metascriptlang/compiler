@@ -16,8 +16,9 @@ import {
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
+import { structuralType, printTypeAnnotation } from "./types";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
 	isBreakableTypeAnnotation, isComplexTypeAliasGenerics, isUnbreakableTypeText,
@@ -176,11 +177,13 @@ function aliasWithInnerComments(node: Node, options: FormatOptions): string {
 	return text;
 }
 
-function typeAliasAssignment(head: string, distinct: string, d: TypeAliasDeclData, options: FormatOptions): Doc {
+function typeAliasAssignment(head: string, distinct: string, d: TypeAliasDeclData, typeExpr: Node | null, options: FormatOptions): Doc {
 	const text = distinct + d.aliasType;
 	if (isComplexTypeAliasGenerics(genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams))) {
 		return assembleAssignment(docText(head), " =", AssignmentLayout.BreakLeftHandSide, docText(text));
 	}
+	const structural = distinct == "" ? structuralType(typeExpr, d.aliasType, options) : null;
+	if (structural != null) return assembleAssignment(docText(head), " =", AssignmentLayout.Fluid, structural);
 	if (distinct == "" && isUnbreakableTypeText(d.aliasType)) {
 		return assembleAssignment(docText(head), " =", AssignmentLayout.Fluid, docText(text));
 	}
@@ -214,7 +217,7 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 		if (options.semi) parts.push(docText(";"));
 		return docGroup(parts);
 	}
-	const parts: Doc[] = [typeAliasAssignment(head, distinct, d, options)];
+	const parts: Doc[] = [typeAliasAssignment(head, distinct, d, node.typeExpr, options)];
 	if (options.semi) {
 		parts.push(docText(";"));
 	}
@@ -269,9 +272,8 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
 		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field, d.interfaceFieldTypes[i]);
 		if (optional) field = field + "?";
-		if (d.interfaceFieldTypes[i] != "") {
-			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
-		}
+		const fieldTypeText = d.interfaceFieldTypes[i] != "" ? (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]) : "";
+		if (d.interfaceFieldTypes[i] != "") field = field + ": ";
 		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] != "") field = d.interfaceFieldVisibility[i] + " " + field;
 		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		const lead: Doc[] = [];
@@ -288,7 +290,8 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 				lead.push(ownLine ? docHardLine() : docLine());
 			}
 		}
-		lead.push(docText(field + sep));
+		const fieldTypeExpr = node.typeExprs != null && i < node.typeExprs.length ? node.typeExprs[i] : null;
+		lead.push(fieldTypeText != "" ? docGroup([docText(field), printTypeAnnotation(fieldTypeExpr, fieldTypeText, options), docText(sep)]) : docText(field + sep));
 		fields.push(lead.length > 1 ? docGroup(lead) : lead[0]);
 		lines.push(fieldLine);
 		starts.push(startLine);
@@ -497,7 +500,8 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
 	parts.push(docText(optional ? d.propName + "?" : d.propName));
 	if (d.propType != "") {
-		parts.push(docText(": " + (optional && !keptType ? unoptionalized(d.propType) : d.propType)));
+		parts.push(docText(": "));
+		parts.push(printTypeAnnotation(node.typeExpr, optional && !keptType ? unoptionalized(d.propType) : d.propType, options));
 	}
 	const init = d.propInitializer;
 	const printed = init != null ? printAssignmentLike(docGroup(parts), " =", init, callPrintNode(init, options), plainShape(), options) : docGroup(parts);
@@ -522,9 +526,9 @@ export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
 	if (asWritten != null) return docGroup([docText(visibility), asWritten, printCollapsibleBody(d.ctorBody, options)]);
-	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
+	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations, node.typeExprs);
 	const parts: Doc[] = [docText(visibility + "constructor")];
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	for (const p of paramListInParens(params, options, hugsObjectParam(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, node.typeExprs, options))) parts.push(p);
 	parts.push(docText(" "));
 	parts.push(printCollapsibleBody(d.ctorBody, options));
 	return docGroup(parts);
@@ -550,15 +554,16 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	const asWritten = headerAsWritten(node, d.methodBody, options, node.paramLocations);
 	if (asWritten != null) return docGroup([docText(modifiers), asWritten, printCollapsibleBody(d.methodBody, options)]);
 	const parts: Doc[] = [docText(head)];
-	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
+	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations, node.typeExprs);
 	const paramComments = paramListComments(node, d.methodBody);
 	if (paramComments.length > 0 && node.paramLocations != null) {
 		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
 	} else {
-		for (const p of paramListInParens(params, options)) parts.push(p);
+		for (const p of paramListInParens(params, options, hugsObjectParam(d.methodParams, d.methodParamTypes, d.methodDefaults, node.typeExprs, options))) parts.push(p);
 	}
 	if (d.methodReturnType != "") {
-		parts.push(docText(": " + d.methodReturnType));
+		parts.push(docText(": "));
+		parts.push(printTypeAnnotation(node.typeExpr, d.methodReturnType, options));
 	}
 	if (isSynthesized(node, d.methodBody)) {
 		if (d.nativeName != "") parts.push(docText(nativeFrom(d.nativeName)));
@@ -634,11 +639,15 @@ function declarator(node: Node, options: FormatOptions): Doc {
 	}
 	const d = node.data as VariableDeclData;
 	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
-	let left = d.declName + typed;
-	if (d.declType != "" && typed == "") left += ": " + d.declType;
+	const leftParts: Doc[] = [docText(d.declName + typed)];
+	if (d.declType != "" && typed == "") {
+		leftParts.push(docText(": "));
+		leftParts.push(printTypeAnnotation(node.typeExpr, d.declType, options));
+	}
+	const left = docGroup(leftParts);
 	const init = d.initializer;
-	if (init == null) return docText(left);
+	if (init == null) return left;
 	const breakLeft = isComplexTypeAnnotation(d.declType) || (init.kind == NodeKind.ArrowFunction && isBreakableTypeAnnotation(d.declType));
 	const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: breakLeft, inChain: false };
-	return printAssignmentLike(docText(left), " =", init, callPrintNode(init, options), shape, options);
+	return printAssignmentLike(left, " =", init, callPrintNode(init, options), shape, options);
 }

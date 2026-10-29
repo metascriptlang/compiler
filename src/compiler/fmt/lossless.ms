@@ -16,31 +16,52 @@ function nextSignificant(tokens: Token[], from: int32): Token | null {
 }
 
 export function significantTokens(tokens: Token[]): Token[] {
+	const gaps: boolean[] = [];
+	return significantTokensWithGaps(tokens, gaps);
+}
+
+// `gaps[k]` is true when a dropped semicolon directly precedes token `k` of the result.
+function significantTokensWithGaps(tokens: Token[], gaps: boolean[]): Token[] {
 	const out: Token[] = [];
 	const open: TokenKind[] = [];
+	let semicolonDropped = false;
 	for (let i = 0; i < tokens.length; i += 1) {
 		const t = tokens[i];
-		match (t.kind) {
-			TokenKind.Eof => {},
-			TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace => {
-				open.push(t.kind);
-				out.push(t);
-			},
-			TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace => {
-				if (open.length > 0) open.pop();
-				out.push(t);
-			},
-			TokenKind.Semicolon => {
-				if (open.length > 0 && open[open.length - 1] == TokenKind.LParen) out.push(t);
-			},
-			TokenKind.Comma => {
-				const next = nextSignificant(tokens, i + 1);
-				if (next != null && !isCloser(next.kind)) out.push(t);
-			},
-			_ => { out.push(t); },
+		if (t.kind != TokenKind.Eof) {
+			const before = out.length;
+			collectSignificant(tokens, i, open, out);
+			if (out.length > before) {
+				gaps.push(semicolonDropped);
+				semicolonDropped = false;
+			} else if (t.kind == TokenKind.Semicolon) {
+				semicolonDropped = true;
+			}
 		}
 	}
 	return out;
+}
+
+function collectSignificant(tokens: Token[], i: int32, open: TokenKind[], out: Token[]): void {
+	const t = tokens[i];
+	match (t.kind) {
+		TokenKind.Eof => {},
+		TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace => {
+			open.push(t.kind);
+			out.push(t);
+		},
+		TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace => {
+			if (open.length > 0) open.pop();
+			out.push(t);
+		},
+		TokenKind.Semicolon => {
+			if (open.length > 0 && open[open.length - 1] == TokenKind.LParen) out.push(t);
+		},
+		TokenKind.Comma => {
+			const next = nextSignificant(tokens, i + 1);
+			if (next != null && !isCloser(next.kind)) out.push(t);
+		},
+		_ => { out.push(t); },
+	}
 }
 
 function sameToken(a: Token, b: Token): boolean {
@@ -62,6 +83,20 @@ function greaterUnits(tokens: Token[]): Token[] {
 			const assign = t.value.byteAt(k) == "=".code;
 			out.push({ kind: assign ? TokenKind.Assign : TokenKind.Gt, value: assign ? "=" : ">", line: t.line, column: t.column + k, endLine: t.line, endColumn: t.column + k + 1, rawValue: "" });
 		}
+	}
+	return out;
+}
+
+// `greaterUnits` splits a joined `>>` into several tokens; the gap flag stays on the first.
+function gapsAfterSplit(raw: Token[], gaps: boolean[]): boolean[] {
+	const out: boolean[] = [];
+	for (let k = 0; k < raw.length; k += 1) {
+		out.push(gaps[k]);
+		const joined = match (raw[k].kind) {
+			TokenKind.GtGt | TokenKind.GtGtGt | TokenKind.GtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
+			_ => false,
+		};
+		if (joined) for (let n = 1; n < raw[k].value.byteLength; n += 1) out.push(false);
 	}
 	return out;
 }
@@ -103,6 +138,22 @@ function addedBodyCloserAt(a: Token[], i: int32, b: Token[], j: int32): int32 {
 	return -1;
 }
 
+function isTypePosition(kind: TokenKind): boolean {
+	return kind == TokenKind.Colon || kind == TokenKind.Assign || kind == TokenKind.Lt || kind == TokenKind.Comma || kind == TokenKind.LParen;
+}
+
+function isTypeSeparator(kind: TokenKind): boolean {
+	return kind == TokenKind.Pipe || kind == TokenKind.Amp;
+}
+
+function addsLeadingSeparator(b: Token[], j: int32): boolean {
+	return j > 0 && isTypeSeparator(b[j].kind) && isTypePosition(b[j - 1].kind);
+}
+
+function dropsLeadingSeparator(a: Token[], i: int32): boolean {
+	return i > 0 && isTypeSeparator(a[i].kind) && isTypePosition(a[i - 1].kind);
+}
+
 function unquotesKey(a: Token[], i: int32, b: Token[], j: int32): boolean {
 	if (a[i].kind != TokenKind.String || i == 0 || i + 1 >= a.length) return false;
 	if (a[i - 1].kind != TokenKind.LBrace && a[i - 1].kind != TokenKind.Comma) return false;
@@ -116,7 +167,10 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	const after = lex(formatted);
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
 	const a = greaterUnits(significantTokens(before.value));
-	const b = greaterUnits(significantTokens(after.value));
+	const bGaps: boolean[] = [];
+	const bRaw = significantTokensWithGaps(after.value, bGaps);
+	const b = greaterUnits(bRaw);
+	const semicolonBefore = gapsAfterSplit(bRaw, bGaps);
 	let i = 0;
 	let j = 0;
 	const addedClosers: int32[] = [];
@@ -140,6 +194,18 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 		if (unquotesKey(a, i, b, j)) {
 			i += 1;
 			j += 1;
+			continue;
+		}
+		if (!sameToken(a[i], b[j]) && a[i].kind == TokenKind.Comma && semicolonBefore[j] && i + 1 < a.length && sameToken(a[i + 1], b[j])) {
+			i += 1;
+			continue;
+		}
+		if (!sameToken(a[i], b[j]) && addsLeadingSeparator(b, j)) {
+			j += 1;
+			continue;
+		}
+		if (!sameToken(a[i], b[j]) && dropsLeadingSeparator(a, i)) {
+			i += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j])) {
@@ -235,4 +301,15 @@ test "lossless: an object key may lose the quotes it did not need" {
 	assert !checkLossless("const o = { 'a': 1 };", "const o = { b: 1 };\n").ok;
 	assert !checkLossless("const v = c ? 'a' : b;", "const v = c ? a : b;\n").ok;
 	assert !checkLossless("f('a');", "f(a);\n").ok;
+}
+
+test "lossless: an object type member separator may become a semicolon" {
+	assert checkLossless("type T = { a: number, b: string };", "type T = { a: number; b: string };\n").ok;
+	assert !checkLossless("const o = { a: 1, b: 2 };", "const o = { a: 1 b: 2 };\n").ok;
+}
+
+test "lossless: a broken union may gain a leading bar and a hugged one lose it" {
+	assert checkLossless("type T = A | B;", "type T =\n\t| A\n\t| B;\n").ok;
+	assert checkLossless("let x: | A | null;", "let x: A | null;\n").ok;
+	assert !checkLossless("const v = a | b;", "const v = a | | b;\n").ok;
 }
