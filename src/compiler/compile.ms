@@ -81,11 +81,11 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, linkObjects, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -1325,15 +1325,14 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			continue;
 		}
 		const args = parts.value;
-		const plan = NO_PLAN;
 		futures.push(spawn(() => {
-			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
+			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
 				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
 				// One retry absorbs it; a real compile error has a nonzero exitCode
 				// and is not retried.
-				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
+				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args);
 			}
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
@@ -1390,61 +1389,13 @@ interface ModuleCompileJob {
 // DISPATCH+JOIN for Phase C module compiles — same architecture as
 // processCompileDirectives: one spawn per job, number-typed futures (stderr
 // printed by the worker), join in input order on the main thread.
-const PLANNED_COMPILE_JOBS = 4;
-
-function pchFiles(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string[] {
-	const text = readFile(cFile);
-	if (!text.ok) return [];
-	const prefix = includePrefix(text.value);
-	if (prefix == "") return [];
-	const key = hashContent(`${prefix}\n${fullCompileCmd(ccOption, mode, flags, ccBinary)}\n${objectStamp()}`);
-	return [prefix, `${cacheDir()}/pch/${key}.h`, `${cacheDir()}/pch/${key}.pch`];
-}
-
-function currentPch(files: string[]): boolean {
-	return files.length == 3 && exists(files[2]) && pchManifestCurrent(`${files[2]}.deps`);
-}
-
-function existingPch(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string {
-	const files = pchFiles(cFile, flags, mode, ccOption, ccBinary);
-	return currentPch(files) ? files[2] : "";
-}
-
-interface HcrWarmLink {
-	image: string;
-	flags: string;
-}
-
-let _hcrWarmJobs: ModuleCompileJob[] = [];
-let _hcrWarmLinks: HcrWarmLink[] = [];
-
-function warmHcrSession(opts: Readonly<CliOptions>): void {
-	for (const j of _hcrWarmJobs) compilePlanFor(j.cFile, j.depFile != "", j.flags, opts.mode, opts.ccCompiler, opts.ccBinary);
-	ensurePchs(_hcrWarmJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
-	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary, opts.targetOs);
-	_hcrWarmJobs = [];
-	_hcrWarmLinks = [];
-}
-
-function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): void {
-	for (const j of jobs) {
-		if (j.modPath == "") continue;
-		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
-		if (files.length != 3 || currentPch(files)) continue;
-		ensureDir(dirname(files[1]));
-		if (!writeFile(files[1], files[0]).ok) continue;
-		const depFile = `${files[2]}.${performance.now()}.d`;
-		if (buildPch(files[1], files[2], depFile, j.flags, mode, ccOption, ccBinary)) writePchManifest(depFile, `${files[2]}.deps`);
-		remove(depFile);
-	}
-}
 
 function unresolvedCompile(e: Readonly<ProcessError>): number {
 	printDiag(`${e.command}: ${e.message}`);
 	return e.exitCode != 0 ? e.exitCode : -1;
 }
 
-function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
+function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): number[] {
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.cFile), mode, j.flags);
@@ -1453,15 +1404,13 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 			continue;
 		}
 		const args = parts.value;
-		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
-		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, args);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, args);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -2148,7 +2097,6 @@ test "HCR core image takes the target's shared-library extension, not the output
 
 function linkHcrImage(objects: string[], coreInput: string, externalInputs: string[], image: string, flags: string, opts: CliOptions): boolean {
 	if (isLinkCached(objects, externalInputs, flags, image, image)) {
-		_hcrWarmLinks.push({ image, flags });
 		return false;
 	}
 	const inputs: string[] = [];
@@ -2822,7 +2770,6 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 	const run = openWatch(entryPath, opts, resolveSection);
 	while (true) {
 		watchBuild(run);
-		if (run.step == 1) warmHcrSession(opts);
 		if (!watchNext(run, (): boolean => false)) return;
 	}
 }
@@ -2984,7 +2931,6 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	const tail: VerdictTail = { path: `${dir}/${stem}.reload.jsonl`, offset: 0, line: 0 };
 	remove(tail.path);
 	let running = spawn((): int32 => runHost(host, dir, stem, ctl, hostLabel));
-	warmHcrSession(opts);
 	const keys: string[] = [""];
 	const relayFailed = [false];
 	const idle = (): boolean => {
@@ -3062,8 +3008,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
 	const fSetup = flowStart();
 	startSessionBuild(session);
-	_hcrWarmJobs = [];
-	_hcrWarmLinks = [];
 	const lastBuilt = session.lastBuilt;
 	session.lastBuilt = false;
 	entryPath = canonicalModulePath(entryPath);
@@ -3080,10 +3024,8 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
 	resolveCC(opts, stampMemoRoot());
-	resolveSanitizerCC(opts);
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
-	useDriverPlans(session.keep && opts.isHcr);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
@@ -3116,7 +3058,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 		}
 	}
 
-	// WASM: force release mode, use zig cc with wasm32-wasi target
+	// WASM: force release mode, wasm32-wasi target
 	if (opts.targetOs == "wasm") {
 		if (opts.mode == 0) opts.mode = 1;  // Release (smaller .wasm)
 	}
@@ -3744,9 +3686,6 @@ resetLiftedOps();
 			}
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
-			if (session.keep && opts.isHcr && hcrModulePaths.includes(p.modPath)) {
-				_hcrWarmJobs.push({ cFile: stableCFileFp(p.modPath, moduleStoreSource(cCode)), oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: -1 });
-			}
 
 			const cached = isCCodeCached(p.modPath, modFp);
 			const storeKey = cached ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
@@ -3760,7 +3699,7 @@ resetLiftedOps();
 			} else {
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
-				// failed zig cc doesn't leave a false cache hit for the next run.
+				// failed cc doesn't leave a false cache hit for the next run.
 				const sourceFp = moduleStoreSource(cCode);
 				writeCSource(p.modPath, sourceFp, cCode);
 				const cFile = stableCFileFp(p.modPath, sourceFp);
@@ -3878,7 +3817,7 @@ resetLiftedOps();
 	// (as before); module failures print and fall through to the linker so the
 	// serial path's behavior is preserved.
 	const tCl = performance.now();
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	clangTime = performance.now() - tCl;
 	flowAddMs("cc", clangTime);
 	let moduleCompileFailed = false;
@@ -3890,7 +3829,7 @@ resetLiftedOps();
 			const dirs = headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
 			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.cFile, cj.oFile, cj.fp, dirs) : cj.oFile;
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
-			if (cj.storeKey != "" && !driverPlansOn()) {
+			if (cj.storeKey != "" && !(session.keep && opts.isHcr)) {
 				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
 			}
 			oSlots[cj.slot] = [published];
@@ -3917,7 +3856,6 @@ resetLiftedOps();
 		const relinkedPaths = linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, coreBaseFlags, opts);
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, relinkedPaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
-		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
 		session.lastBuilt = true;
@@ -3983,7 +3921,7 @@ resetLiftedOps();
 			const retryJobs: ModuleCompileJob[] = [];
 			const retrySlots: string[][] = [];
 			pushDispatcherJob(retryJobs, retrySlots, "_dispatch", dispatcherSource, appendFlag(allFlags, SBF_MAIN_NOINLINE_FLAG), opts);
-			const retryCodes = dispatchCompileJobs(retryJobs, opts.mode, opts.ccCompiler, opts.ccBinary, true);
+			const retryCodes = dispatchCompileJobs(retryJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 			for (const code of retryCodes) {
 				if (code != 0) {
 					printError(`compile failed for dispatcher ${dim(`(exit ${code})`)}`);
@@ -4046,7 +3984,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// binary will actually be built with.
 	resolveTargetGcMode(opts);
 	resolveCC(opts, stampMemoRoot());
-	resolveSanitizerCC(opts);
 	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	requirePreparedToolchain();
@@ -4268,7 +4205,7 @@ resetLiftedOps();
 
 	flowStop("phase.C", fC);
 	const fCc = flowStart();
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
 	let cji = 0;
 	while (cji < cJobs.length) {

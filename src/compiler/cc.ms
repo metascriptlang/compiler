@@ -26,7 +26,6 @@ import { CliOptions, CC_PREPARED, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOpt
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { cacheRoot } from "./package/cache";
-import { managedZigCompiler } from "./toolchain";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 
 // -- Runtime resolution --
@@ -38,19 +37,8 @@ function resolveRuntime(): string {
 }
 
 // -- C compiler detection --
-// 0=undetected, 1=clang, 2=gcc, 3=cc (fallback), 4=zig cc
+// 0=undetected, 1=clang, 2=gcc, 3=cc (fallback)
 let detectedCC = 0;
-let managedCC = "";
-let hasZigCC = false;
-let zigCCChecked = false;
-
-function checkZigCC(): boolean {
-	if (!zigCCChecked) {
-		zigCCChecked = true;
-		hasZigCC = cmdExists("zig");
-	}
-	return hasZigCC;
-}
 
 // -- Solana SBF toolchain detection --
 //
@@ -368,17 +356,9 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 	if (ccBinary != "") return ccBinary;
 	if (ccOption == 1) return "clang";
 	if (ccOption == 2) return "gcc";
-	// auto-detect: zig cc > clang > gcc > cc
-	// zig cc preferred: unified experience, cross-compile ready, bundled sysroots.
-	// Override with --cc=clang or --cc=gcc if needed.
+	// auto-detect: clang > gcc > cc
 	if (detectedCC == 0) {
-		const mz = managedZigCompiler();
-		if (mz != "") {
-			managedCC = mz;
-			detectedCC = 4;
-		} else if (checkZigCC()) {
-			detectedCC = 4;
-		} else if (cmdExists("clang")) {
+		if (cmdExists("clang")) {
 			detectedCC = 1;
 		} else if (cmdExists("gcc")) {
 			detectedCC = 2;
@@ -386,15 +366,11 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 			detectedCC = 3;
 		}
 	}
-	if (detectedCC == 4) return managedCC != "" ? managedCC : "zig cc";
 	if (detectedCC == 1) return "clang";
 	if (detectedCC == 2) return "gcc";
 	return "cc";
 }
 
-function isZigCC(cc: string): boolean {
-	return cc == "zig cc" || cc.endsWith(" cc");
-}
 
 // -- C++ source support: per-file extension detection drives compiler + std-flag
 // switch; a sticky flag drives the link-step driver switch so libc++ / libstdc++
@@ -431,10 +407,9 @@ export function markCppCompile(path: string): void {
 }
 
 // Map a C-compiler invocation to its C++ counterpart.
-// "zig cc" → "zig c++", "clang" → "clang++", "gcc" → "g++", "cc" → "c++".
+// "clang" → "clang++", "gcc" → "g++", "cc" → "c++".
 // Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
 function toCppCompiler(cName: string): string {
-	if (cName.endsWith(" cc")) return cName.slice(0, cName.length - 2) + "c++";
 	if (basename(cName) == "clang") return cName + "++";
 	if (basename(cName) == "clang.exe") return cName.slice(0, cName.length - 4) + "++.exe";
 	if (cName == "gcc")    return "g++";
@@ -456,24 +431,13 @@ function normalizeCpu(cpu: string): string {
 	return cpu;  // riscv64, mips64, etc. pass through
 }
 
-// Build cross-compilation target flag.
-// zig cc uses "-target x86_64-windows-gnu" (no --target= prefix, no -pc-/-unknown- infixes).
-// clang/gcc uses "--target=x86_64-pc-windows-gnu".
+// Build cross-compilation target flag, e.g. "--target=x86_64-pc-windows-gnu".
 // Caller is responsible for only invoking when actually cross-compiling
 // (targetOs !== platform || cpuTarget !== "").
-export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
+export function crossTargetFlag(targetOs: string, cpuTarget: string): string {
 	const cpu = normalizeCpu(buildCpu(targetOs, cpuTarget));
 	if (targetOs == "bare" && cpu == "wasm32") {
-		return useZig ? "-target wasm32-freestanding" : "--target=wasm32-unknown-unknown";
-	}
-	if (useZig) {
-		// zig cc target format: cpu-os[-abi]
-		let zigOs = targetOs;
-		if (targetOs == "macos" || targetOs == "darwin") zigOs = "macos";
-		if (targetOs == "windows") return `-target ${cpu}-windows-gnu`;
-		if (targetOs == "linux") return `-target ${cpu}-linux-gnu`;
-		if (targetOs == "android") return `-target ${cpu}-linux-android`;
-		return `-target ${cpu}-${zigOs}`;
+		return "--target=wasm32-unknown-unknown";
 	}
 	// Android/iOS: the toolchain owns the triple + sysroot (NDK API-specific clang
 	// wrapper, or Xcode -isysroot). Emitting our own --target shadows the wrapper's
@@ -517,7 +481,7 @@ test "every build mode lets one memory be read through another type" {
 
 function acceptsFilePrefixMap(cc: string): boolean {
 	const name = basename(cc);
-	return isZigCC(cc) || isGnuGcc(cc) || name == "clang" || name == "clang.exe" || name.endsWith("-clang");
+	return isGnuGcc(cc) || name == "clang" || name == "clang.exe" || name.endsWith("-clang");
 }
 
 export function trimPrefixMapFlags(cc: string, projectRoot: string, supportRoot: string, packagesRoot: string): string[] {
@@ -529,92 +493,36 @@ export function trimPrefixMapFlags(cc: string, projectRoot: string, supportRoot:
 	return flags;
 }
 
-// -- LTO capability + strategy --
-// One table, one place: which compiler/target pairs can link with LTO, and
-// which should reach for it by default. Both halves of the decision live with
-// the compiler, so resolveLto below must run right AFTER resolveCC — parseArgs
-// cannot decide this (it runs before the compiler is known).
+// -- LTO strategy --
+// Which compiler reaches for LTO by default. resolveLto below must run right
+// AFTER resolveCC: parseArgs cannot decide this (it runs before the compiler is known).
 
 // GNU gcc (resolved names: "gcc", "x86_64-linux-gnu-gcc", "g++", …). macOS's
 // /usr/bin/gcc is a clang shim, but auto-detection never resolves to the name
-// "gcc" unless clang and zig are both absent, so this stays accurate.
+// "gcc" unless clang is absent, so this stays accurate.
 function isGnuGcc(cc: string): boolean {
 	return cc == "gcc" || cc == "g++" || cc.endsWith("-gcc") || cc.endsWith("-g++");
 }
 
-// Proven-broken pairs — an LTO link can NEVER succeed here, so even an
-// explicit --lto= fails loud:
-// - zig → Mach-O: zig replaced LLD with its own Mach-O linker, which has no
-//   LTO path; `-fuse-ld=` is silently ignored, so there is no escape hatch.
-//   Target-scoped: the linker is picked by object format, not by host.
-// - zig → windows-gnu: the LTO link pulls in zigc.lib, whose MinGW math-shim
-//   exports (__INF, __QNAN, __SNANL, nanl, …) are weak+hidden in bitcode and
-//   get dropped during LTO internalization. A 3-line hello.c reproduces it at
-//   every opt level. (Zig 0.16.0.)
-export function ltoBroken(cc: string, targetOs: string): boolean {
-	if (!isZigCC(cc)) return false;
-	if (targetOs == "windows") return true;
-	return targetOs == "darwin" || targetOs == "macos";
-}
-
-// Practicality on top of possibility: GNU gcc links -flto, but a whole-program link of this tree ran
+// GNU gcc links -flto, but a whole-program link of this tree ran
 // 40+ minutes without finishing — never a sane default, still allowed
 // explicitly (informed choice, e.g. an overnight CI build).
-function ltoDefaultOn(cc: string, targetOs: string): boolean {
-	if (ltoBroken(cc, targetOs)) return false;
-	if (isGnuGcc(cc)) return false;
-	return true;
+function ltoDefaultOn(cc: string): boolean {
+	return !isGnuGcc(cc);
 }
 
 export function resolveLto(opts: CliOptions): void {
+	if (opts.lto != "") return;
 	const cc = opts.targetOs == "solana" ? "clang" : getCompilerName(opts.ccCompiler, opts.ccBinary);
-	const ccName = isZigCC(cc) ? "zig cc" : cc;
-	if (opts.lto == "") {
-		const wantsLto = opts.mode == MODE_DANGER || opts.mode == MODE_RELEASE;
-		if (wantsLto && ltoDefaultOn(cc, opts.targetOs)) {
-			opts.lto = "thin";
-		} else {
-			opts.lto = "off";
-			if (opts.mode == MODE_DANGER) {
-				writeStderr(`note: --danger builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
-			}
-		}
+	const wantsLto = opts.mode == MODE_DANGER || opts.mode == MODE_RELEASE;
+	if (wantsLto && ltoDefaultOn(cc)) {
+		opts.lto = "thin";
 		return;
 	}
-	if (opts.lto != "off" && ltoBroken(cc, opts.targetOs)) {
-		const mac = opts.targetOs == "darwin" || opts.targetOs == "macos";
-		const hint = mac ? "re-run with --cc=clang, or drop --lto" : "drop --lto";
-		writeStderr(`error: ${ccName} cannot link with LTO targeting ${opts.targetOs}.\n`);
-		writeStderr(`  → ${hint}.\n`);
-		stopBuild();
+	opts.lto = "off";
+	if (opts.mode == MODE_DANGER) {
+		writeStderr(`note: --danger builds without LTO for ${cc} targeting ${opts.targetOs}.\n`);
 	}
-}
-
-// -- TSan capability --
-// Same shape as LTO above. zig → Mach-O: a binary built with
-// -fsanitize=thread segfaults at startup (exit 139) even for a 5-line
-// pthread_create/join program, so no run through that pair can be trusted.
-// Measured on zig 0.16.0 / macOS arm64; other targets are not known broken.
-export function tsanBroken(cc: string, targetOs: string): boolean {
-	if (!isZigCC(cc)) return false;
-	return targetOs == "darwin" || targetOs == "macos";
-}
-
-// Runs right after resolveCC, before the header root is read from opts.ccCompiler.
-// An auto-detected compiler that cannot run TSan is swapped for clang with a
-// notice; an explicit --cc= against a proven-broken pair fails loud.
-export function resolveSanitizerCC(opts: CliOptions): void {
-	if (!opts.sanitize.split(",").includes("thread")) return;
-	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
-	if (!tsanBroken(cc, opts.targetOs)) return;
-	const explicit = opts.ccBinary != "" || opts.ccCompiler != 0;
-	if (explicit || !cmdExists("clang")) {
-		writeStderr(`error: zig cc cannot run --sanitize=thread targeting ${opts.targetOs}.\n`);
-		writeStderr(`  → ${explicit ? "re-run with --cc=clang" : "install clang"}, or drop --sanitize=thread.\n`);
-		stopBuild();
-	}
-	opts.ccCompiler = 1;
-	writeStderr(`note: --sanitize=thread builds with clang: zig cc cannot run TSan targeting ${opts.targetOs}.\n`);
 }
 
 // -- LTO strategy flags --
@@ -639,11 +547,6 @@ export function appendFlag(base: string, flag: string): string {
 }
 
 // Build compile-phase flags from CLI options (sanitize + passC + cross-compile target).
-// Is this a cross-compilation using zig cc?
-function isCrossZig(opts: CliOptions): boolean {
-	return opts.targetOs != platform && opts.ccBinary == "" && checkZigCC();
-}
-
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	// Solana/SBF: completely different flag set, skip everything else.
@@ -672,7 +575,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
-	// WASM32-WASI: zig cc handles sysroot + libc automatically
+	// WASM32-WASI: the compiler handles sysroot + libc
 	if (opts.targetOs == "wasm") {
 		flags = appendFlag(flags, "-target wasm32-wasi");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
@@ -680,8 +583,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		return flags;
 	}
 	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
-		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
-		flags = appendFlag(flags, crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig));
+		flags = appendFlag(flags, crossTargetFlag(opts.targetOs, opts.cpuTarget));
 		flags = appendFlag(flags, "-ffreestanding -fno-builtin -DMS_FREESTANDING_LIBC");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		const rtDir = resolveRuntimeDir();
@@ -692,20 +594,18 @@ export function cliCompileFlags(opts: CliOptions): string {
 		return appendFlag(flags, opts.passC);
 	}
 	// Cross-compilation target triple
-	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
-	// clang/gcc: --target=cpu-vendor-os-abi
+	// --target=cpu-vendor-os-abi
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
 	if ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "") {
-		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
-		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
+		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget);
 		if (ct != "") flags = appendFlag(flags, ct);
 	}
 	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
 	if (opts.targetOs == "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.targetOs == "windows" && opts.ccCompiler != CC_PREPARED && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+	if (opts.targetOs == "windows" && opts.ccCompiler != CC_PREPARED) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
@@ -748,7 +648,7 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 		eflags = appendFlag(eflags, opts.passL);
 		return eflags;
 	}
-	// WASM: zig cc links with -target wasm32-wasi, strip dead sections + debug info
+	// WASM: strip dead sections + debug info
 	if (opts.targetOs == "wasm") {
 		let wflags = appendFlag(base, "-target wasm32-wasi");
 		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
@@ -777,9 +677,7 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 		flags = appendFlag(flags, "-lws2_32");
 		flags = appendFlag(flags, "-lmswsock");
 		flags = appendFlag(flags, "-lbcrypt");
-		if (opts.ccCompiler != CC_PREPARED && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
-			flags = appendFlag(flags, "-Wl,-Bstatic -lpthread");
-		}
+		if (opts.ccCompiler != CC_PREPARED) flags = appendFlag(flags, "-Wl,-Bstatic -lpthread");
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
 		flags = appendFlag(flags, "-Wl,-dead_strip");
 	}
@@ -801,10 +699,7 @@ export struct ToolCommand {
 export function compilerInvocation(ccOption: number, ccBinary: string): Result<ToolCommand, ProcessError> {
 	if (ccOption == CC_PREPARED && ccBinary == "") return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, "prepared compiler invocation has no binary"));
 	const base = getCompilerName(ccOption, ccBinary);
-	if (ccBinary == "") {
-		if (isZigCC(base)) return Result.ok({ path: base.slice(0, base.length - 3), args: ["cc"] });
-		return Result.ok({ path: base, args: [] });
-	}
+	if (ccBinary == "") return Result.ok({ path: base, args: [] });
 	const words = splitCcFlags(ccBinary);
 	if (!words.ok) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, `--cc: ${words.error}`));
 	if (words.value.length == 0) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, "--cc names no compiler"));
@@ -854,10 +749,6 @@ function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): Re
 
 function compilerLanguageCommand(ccOption: number, command: ToolCommand, isCpp: boolean): Result<ToolCommand, ProcessError> {
 	if (!isCpp) return Result.ok(command);
-	if (command.args.length > 0 && command.args[0] == "cc") {
-		command.args[0] = "c++";
-		return Result.ok(command);
-	}
 	if (ccOption != CC_PREPARED) return Result.ok({ path: toCppCompiler(command.path), args: command.args });
 	const args: string[] = [];
 	for (const arg of command.args) {
@@ -914,261 +805,16 @@ function runCc(command: Readonly<ToolCommand>, args: string[]): Result<string, P
 	return Result.ok(run.output);
 }
 
-// zig cc's own cache pass costs more than clang/lld on a small input: its `-###` plan run
-// directly gives the same output faster (WSL 2026-10-03: compile 64→40 ms, link 39→10 ms).
-export struct CcPlan {
-	exe: string;
-	args: string[];
-	input: string;
-	output: string;
-	outputStem: string;
-	deps: string;
-	implib: string;
-	implibStub: string;
-}
-
-export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "", implib: "", implibStub: "" };
-
-const IMPLIB_FLAG = "-Wl,--out-implib,";
-
-const PLAN_TAG = "msc-plan-";
-let _planDir = "";
-const _plans = new HashMap<string, CcPlan>();
-let _plansOn = false;
-
-export function driverPlansOn(): boolean {
-	return _plansOn;
-}
-
-export function useDriverPlans(on: boolean): void {
-	_plansOn = on;
-}
-
-function planDir(): string {
-	if (_planDir != "") return _planDir;
-	const temp = env.get("TEMP") != "" ? env.get("TEMP") : env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
-	_planDir = join(temp, "msc-plan");
-	ensureDir(_planDir);
-	return _planDir;
-}
-
 export function toolchainHeaderRoot(ccOption: number, ccBinary: string): string {
 	const command = compilerInvocation(ccOption, ccBinary);
 	if (command.ok && ccOption == CC_PREPARED) return dirname(dirname(command.value.path));
-	if (!command.ok || !isZigDriver(command.value)) return "";
-	let path = command.value.path;
-	const found = findOnPath(path);
-	if (found != "") path = found;
-	return `${dirname(path)}/lib`;
+	return "";
 }
 
 test "a prepared bundle owns the headers under its root, an explicit clang owns none" {
 	assert toolchainHeaderRoot(CC_PREPARED, `"/prepared with spaces/bin/clang" --no-default-config --config=/prepared/target.cfg`) == "/prepared with spaces";
 	assert toolchainHeaderRoot(CC_PREPARED, "") == "";
 	assert toolchainHeaderRoot(0, "/usr/bin/clang") == "";
-}
-
-function isZigDriver(command: ToolCommand): boolean {
-	const name = basename(command.path).toLowerCase();
-	return (name == "zig" || name == "zig.exe") && command.args.length > 0 && (command.args[0] == "cc" || command.args[0] == "c++");
-}
-
-function withoutExtension(path: string): string {
-	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-	const dot = path.lastIndexOf(".");
-	return dot > slash ? path.substring(0, dot) : path;
-}
-
-function planTokens(line: string): string[] {
-	const tokens: string[] = [];
-	const n = line.length;
-	let i = 0;
-	while (i < n) {
-		while (i < n && (line.charCodeAt(i) == 32 || line.charCodeAt(i) == 9 || line.charCodeAt(i) == 13)) i += 1;
-		if (i >= n) break;
-		if (line.charCodeAt(i) != 34) {
-			const start = i;
-			while (i < n && line.charCodeAt(i) != 32 && line.charCodeAt(i) != 9 && line.charCodeAt(i) != 13) i += 1;
-			tokens.push(line.substring(start, i));
-			continue;
-		}
-		i += 1;
-		const pieces: string[] = [];
-		let start = i;
-		while (i < n && line.charCodeAt(i) != 34) {
-			if (line.charCodeAt(i) == 92 && i + 1 < n) {
-				pieces.push(line.substring(start, i));
-				start = i + 1;
-				i += 2;
-				continue;
-			}
-			i += 1;
-		}
-		pieces.push(line.substring(start, i));
-		tokens.push(pieces.join(""));
-		i += 1;
-	}
-	return tokens;
-}
-
-function adoptDriverObject(tokens: string[], input: string, output: string): void {
-	const stem = withoutExtension(basename(input));
-	for (let k = 0; k < tokens.length; k += 1) {
-		const token = tokens[k];
-		if (token == output || token.indexOf(stem, 0) < 0) continue;
-		if (token.startsWith("-object-file-name=")) tokens[k] = `-object-file-name=${output}`;
-		else if (token.endsWith(`${stem}.obj`) || token.endsWith(`${stem}.o`)) tokens[k] = output;
-	}
-}
-
-function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string, implib: string = "", implibStub: string = ""): CcPlan {
-	const r = execFileResult(command.path, argv);
-	if (!r.started || r.signal != 0) return NO_PLAN;
-	const lines: string[] = [];
-	for (const raw of `${r.errorOutput}\n${r.output}`.split("\n")) {
-		const line = raw.trim();
-		const isPlanLine = isLink
-			? line.startsWith("ld.lld ") || line.startsWith("lld-link ")
-			: line.indexOf("\"-cc1\"", 0) >= 0;
-		if (isPlanLine) lines.push(line);
-	}
-	if (lines.length != 1) return NO_PLAN;
-	const tokens = planTokens(lines[0]);
-	if (tokens.length < 2) return NO_PLAN;
-	if (!isLink) adoptDriverObject(tokens, input, output);
-	let inputs = 0;
-	let outputs = 0;
-	let depFiles = 0;
-	for (const token of tokens) {
-		if (token.indexOf(PLAN_TAG, 0) < 0) continue;
-		if (token == input) inputs += 1;
-		else if (token == output) outputs += 1;
-		else if (!isLink && token == `-object-file-name=${output}`) continue;
-		else if (deps != "" && token == deps) depFiles += 1;
-		else if (!isLink && token == basename(input)) continue;
-		else if (outputStem != "" && token.indexOf(basename(outputStem), 0) >= 0) continue;
-		else if (implibStub != "" && token.indexOf(implibStub, 0) >= 0) continue;
-		else return NO_PLAN;
-	}
-	if (inputs != 1 || (!isLink && outputs != 1) || depFiles != (deps != "" ? 1 : 0)) return NO_PLAN;
-	const args: string[] = [];
-	for (let k = isLink ? 0 : 1; k < tokens.length; k += 1) args.push(tokens[k]);
-	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps, implib, implibStub };
-}
-
-function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps: string): string[] {
-	const args: string[] = [];
-	const realStem = withoutExtension(output);
-	for (const token of plan.args) {
-		if (token == plan.input) {
-			for (const input of inputs) args.push(input);
-		} else if (token == plan.output) {
-			args.push(output);
-		} else if (plan.outputStem == "" && token == `-object-file-name=${plan.output}`) {
-			args.push(`-object-file-name=${output}`);
-		} else if (plan.deps != "" && token == plan.deps) {
-			args.push(deps);
-		} else if (plan.outputStem == "" && token == basename(plan.input)) {
-			args.push(basename(inputs[0]));
-		} else if (plan.implibStub != "" && token.indexOf(plan.implibStub, 0) >= 0) {
-			args.push(token.replaceAll(plan.implibStub, plan.implib));
-		} else if (plan.outputStem != "" && token.indexOf(basename(plan.outputStem), 0) >= 0) {
-			args.push(token.replaceAll(plan.outputStem, realStem).replaceAll(basename(plan.outputStem), basename(realStem)));
-		} else {
-			args.push(token);
-		}
-	}
-	return args;
-}
-
-export function compilePlanFor(cFile: string, hasDeps: boolean, extraFlags: string, mode: number, ccOption: number, ccBinary: string): CcPlan {
-	const isCpp = isCppFile(cFile);
-	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
-	if (!_plansOn || !parts.ok || !isZigDriver(parts.value.command)) return NO_PLAN;
-	const dir = planDir();
-	const input = join(dir, `${PLAN_TAG}input${isCpp ? ".cpp" : ".c"}`);
-	const output = join(dir, `${PLAN_TAG}output.o`);
-	const deps = hasDeps ? join(dir, `${PLAN_TAG}deps.d`) : "";
-	const argv = objectCompileArgv(parts.value, input, output, deps);
-	const key = `${parts.value.command.path}\n${argv.join("\n")}`;
-	const known = _plans.get(key);
-	if (known != null) return known;
-	writeFile(input, "");
-	argv.push("-###");
-	const plan = capturePlan(parts.value.command, argv, false, input, output, "", deps);
-	_plans.set(key, plan);
-	return plan;
-}
-
-function linkPlanFor(command: ToolCommand, prefix: string[], flagArgs: string[], outBinary: string): CcPlan {
-	if (!_plansOn || !isZigDriver(command)) return NO_PLAN;
-	const dir = planDir();
-	const input = join(dir, `${PLAN_TAG}input.o`);
-	const stem = join(dir, `${PLAN_TAG}output`);
-	const output = `${stem}${outBinary.substring(withoutExtension(outBinary).length, outBinary.length)}`;
-	const implibStub = join(dir, `${PLAN_TAG}implib.lib`);
-	let implib = "";
-	const keyArgs: string[] = [];
-	const argv: string[] = [];
-	for (const arg of prefix) argv.push(arg);
-	argv.push(input);
-	for (const arg of flagArgs) {
-		keyArgs.push(arg);
-		if (arg.startsWith(IMPLIB_FLAG)) {
-			implib = arg.substring(IMPLIB_FLAG.length, arg.length);
-			argv.push(`${IMPLIB_FLAG}${implibStub}`);
-		} else {
-			argv.push(arg);
-		}
-	}
-	argv.push("-o");
-	argv.push(output);
-	const key = `${command.path}\n${prefix.join("\n")}\n${keyArgs.join("\n")}\n${output}`;
-	const known = _plans.get(key);
-	if (known != null) return known;
-	writeFile(input, "");
-	argv.push("-###");
-	const plan = capturePlan(command, argv, true, input, output, stem, "", implib, implib != "" ? implibStub : "");
-	_plans.set(key, plan);
-	return plan;
-}
-
-export function includePrefix(source: string): string {
-	let end = 0;
-	while (source.indexOf("#include", end) == end) {
-		const next = source.indexOf("\n", end);
-		if (next < 0) return source.substring(0, source.length);
-		end = next + 1;
-	}
-	return source.substring(0, end);
-}
-
-export function buildPch(header: string, pch: string, depFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
-	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, extraFlags);
-	if (!parts.ok || !isZigDriver(parts.value.command)) return false;
-	const args: string[] = [];
-	for (const arg of parts.value.lead) args.push(arg);
-	const rtDir = resolveRuntime();
-	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
-	const tmp = `${pch}.tmp.${performance.now()}`;
-	args.push("-Xclang");
-	args.push("-fno-pch-timestamp");
-	args.push("-x");
-	args.push("c-header");
-	args.push(header);
-	args.push("-o");
-	args.push(tmp);
-	args.push("-MD");
-	args.push("-MF");
-	args.push(depFile);
-	for (const arg of parts.value.trail) args.push(arg);
-	if (!runCc(parts.value.command, args).ok) {
-		remove(tmp);
-		return false;
-	}
-	if (renameReplace(tmp, pch)) return true;
-	remove(tmp);
-	return false;
 }
 
 export struct ObjectCompileArgs {
@@ -1342,7 +988,7 @@ function objectCompileArgv(parts: Readonly<ObjectCompileArgs>, cFile: string, oF
 	return args;
 }
 
-export function compileCFile(cFile: string, oFile: string, dependencyFile: string, parts: Readonly<ObjectCompileArgs>, plan: Readonly<CcPlan>, pch: string = ""): Result<void, ProcessError> {
+export function compileCFile(cFile: string, oFile: string, dependencyFile: string, parts: Readonly<ObjectCompileArgs>): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const command = parts.command;
 	const tmp = `${oFile}.tmp.${performance.now()}`;
@@ -1352,22 +998,7 @@ export function compileCFile(cFile: string, oFile: string, dependencyFile: strin
 		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
 	}
 	const args = objectCompileArgv(parts, cFile, tmp, depTmp);
-	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
-	let planned = false;
-	if (plan.exe != "") {
-		const direct = planArgs(plan, [cFile], tmp, depTmp);
-		if (pch != "") {
-			const withPch: string[] = [direct[0], "-include-pch", pch];
-			for (let k = 1; k < direct.length; k += 1) withPch.push(direct[k]);
-			r = runCc({ path: plan.exe, args: [] }, withPch);
-			planned = r.ok;
-		}
-		if (!planned) {
-			r = runCc({ path: plan.exe, args: [] }, direct);
-			planned = r.ok;
-		}
-	}
-	if (!planned) r = runCc(command, args);
+	const r = runCc(command, args);
 	if (!r.ok) {
 		remove(tmp);
 		if (depTmp != "") remove(depTmp);
@@ -1558,11 +1189,6 @@ function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, tar
 	return Result.ok({ command, prefix, flagArgs });
 }
 
-export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): void {
-	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
-	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
-}
-
 export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, targetOs: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
 	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
@@ -1581,8 +1207,6 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 
 	let r: Result<string, ProcessError>;
 	if (commandLength(command, direct) <= LINK_CMD_LIMIT) {
-		const plan = linkPlanFor(command, prefix, flagArgs, outBinary);
-		if (plan.exe != "" && runCc({ path: plan.exe, args: [] }, planArgs(plan, oFiles, outBinary, "")).ok) return Result.ok(null);
 		r = runCc(command, direct);
 	} else {
 		const rspPath = `${outBinary}_link.rsp`;
@@ -1671,7 +1295,7 @@ test "no-default-library flags suppress implicit math linkage but preserve expli
 	}
 }
 
-test "a release build takes thin LTO where its compiler links it, and leaves it off where it cannot" {
+test "a release build takes thin LTO on every target except through GNU gcc, and an explicit --lto=off wins" {
 	const resolvedLto = (args: string[]): string => {
 		const opts = newCliOptions();
 		assert applyArgs(opts, args, 0).ok, args.join(" ");
@@ -1683,27 +1307,6 @@ test "a release build takes thin LTO where its compiler links it, and leaves it 
 	assert resolvedLto(["--release", "--cc=gcc", "--os=linux"]) == "off";
 	assert resolvedLto(["--release", "--cc=clang", "--os=linux", "--lto=off"]) == "off";
 	assert resolvedLto(["--cc=clang", "--os=linux"]) == "off";
-}
-
-test "TSan is broken for zig cc on Mach-O only" {
-	assert tsanBroken("zig cc", "darwin");
-	assert tsanBroken("zig cc", "macos");
-	assert !tsanBroken("zig cc", "linux");
-	assert !tsanBroken("clang", "darwin");
-}
-
-test "an explicit clang with --sanitize=thread on macOS is kept" {
-	const clang = newCliOptions();
-	assert applyArgs(clang, ["--sanitize=thread", "--cc=clang", "--os=macos"], 0).ok;
-	resolveSanitizerCC(clang);
-	assert clang.ccCompiler == 1;
-}
-
-test "a build without thread sanitizing keeps its auto-detected compiler" {
-	const opts = newCliOptions();
-	assert applyArgs(opts, ["--sanitize=address", "--os=macos"], 0).ok;
-	resolveSanitizerCC(opts);
-	assert opts.ccCompiler == 0;
 }
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {
@@ -1767,9 +1370,9 @@ test "an emcc link runs the build mode's optimizer, as emcc optimizes the wasm o
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {
 	const other = platform == "linux" ? "windows" : "linux";
-	const abi = other == "linux" ? "linux-gnu" : "windows-gnu";
-	assert crossTargetFlag(other, "", true) == `-target x86_64-${abi}`;
-	assert crossTargetFlag(other, "arm64", true) == `-target aarch64-${abi}`;
+	const abi = other == "linux" ? "unknown-linux-gnu" : "pc-windows-gnu";
+	assert crossTargetFlag(other, "") == `--target=x86_64-${abi}`;
+	assert crossTargetFlag(other, "arm64") == `--target=aarch64-${abi}`;
 }
 
 test "the object cache key names every argument compileCFile passes but the file names" {
@@ -1784,93 +1387,8 @@ test "the object cache key names every argument compileCFile passes but the file
 	assert key != objectCompileKey(0, "clang -fno-pie", true, 2, "-DVALUE=a b -Ivendor");
 }
 
-test "a driver plan line splits into quoted, escaped and bare arguments" {
-	const quoted = planTokens(" \"/opt/zig/zig\" \"-cc1\" \"-DQ=\\\"x y\\\"\" \"C:\\dir\\a.c\"\r");
-	assert quoted.length == 4;
-	assert quoted[0] == "/opt/zig/zig";
-	assert quoted[2] == "-DQ=\"x y\"";
-	assert quoted[3] == "C:\dir\a.c";
-	const bare = planTokens("ld.lld --eh-frame-hdr -shared -o /t/msc-plan-output.so /t/msc-plan-input.o -lc");
-	assert bare.length == 7;
-	assert bare[5] == "/t/msc-plan-input.o";
-}
-
-test "a link plan takes every object at the input's place and the output's stem in derived names" {
-	const plan: CcPlan = {
-		exe: "zig",
-		args: ["lld-link", "-OUT:/t/msc-plan-output.dll", "-PDB:/t/msc-plan-output.pdb", "-PDBALTPATH:msc-plan-output.pdb", "/t/msc-plan-input.o", "-lc"],
-		input: "/t/msc-plan-input.o",
-		output: "/t/msc-plan-output.dll",
-		outputStem: "/t/msc-plan-output",
-		deps: "",
-		implib: "",
-		implibStub: "",
-	};
-	const args = planArgs(plan, ["a.o", "b.o"], "out/app.logic.dll", "");
-	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb -PDBALTPATH:app.logic.pdb a.o b.o -lc";
-}
-
-test "a link plan writes its import library where the link asked, never where the capture did" {
-	const plan: CcPlan = {
-		exe: "zig",
-		args: ["lld-link", "-DLL", "-OUT:/t/msc-plan-output.dll", "-IMPLIB:/t/msc-plan-implib.lib", "/t/msc-plan-input.o"],
-		input: "/t/msc-plan-input.o",
-		output: "/t/msc-plan-output.dll",
-		outputStem: "/t/msc-plan-output",
-		deps: "",
-		implib: "out/app.core.lib",
-		implibStub: "/t/msc-plan-implib.lib",
-	};
-	const args = planArgs(plan, ["core.o"], "out/app.core.dll", "");
-	assert args.join(" ") == "lld-link -DLL -OUT:out/app.core.dll -IMPLIB:out/app.core.lib core.o";
-}
-
-test "a compile plan renames the input, its main-file name, the object and the dependency file" {
-	const plan: CcPlan = {
-		exe: "/opt/zig/zig",
-		args: ["-cc1", "-main-file-name", "msc-plan-input.c", "-dependency-file", "/t/msc-plan-deps.d", "-o", "/t/msc-plan-output.o", "-x", "c", "/t/msc-plan-input.c"],
-		input: "/t/msc-plan-input.c",
-		output: "/t/msc-plan-output.o",
-		outputStem: "",
-		deps: "/t/msc-plan-deps.d",
-		implib: "",
-		implibStub: "",
-	};
-	const args = planArgs(plan, ["cache/logic.c"], "cache/logic.o.tmp.1", "cache/logic.d.tmp.1");
-	assert args.join(" ") == "-cc1 -main-file-name logic.c -dependency-file cache/logic.d.tmp.1 -o cache/logic.o.tmp.1 -x c cache/logic.c";
-}
-
-test "a Windows compile plan writes the object zig would have staged in its own temp directory" {
-	const tokens = ["-cc1", "-object-file-name=C:/zig/tmp/7a1d-msc-plan-input.obj", "-o", "C:\\zig\\tmp\\7a1d-msc-plan-input.obj", "-x", "c", "C:/t/msc-plan-input.c"];
-	adoptDriverObject(tokens, "C:/t/msc-plan-input.c", "C:/t/msc-plan-output.o");
-	assert tokens.join(" ") == "-cc1 -object-file-name=C:/t/msc-plan-output.o -o C:/t/msc-plan-output.o -x c C:/t/msc-plan-input.c";
-}
-
-test "a precompiled header zig serves from its cache after the header is rewritten still loads" {
-	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
-	const dir = `${base}/msc-pch-${performance.now()}`;
-	ensureDir(dir);
-	const header = `${dir}/prefix.h`;
-	const source = `${dir}/use.c`;
-	writeFile(header, "#include <string.h>\n");
-	writeFile(source, "int size(void) { return (int)strlen(\"abc\"); }\n");
-	assert buildPch(header, `${dir}/first.pch`, `${dir}/first.pch.d`, "", 0, 0, "");
-	const nextSecond = (Math.floor(Date.now() / 1000) + 1) * 1000;
-	while (Date.now() < nextSecond) {}
-	writeFile(header, "#include <string.h>\n");
-	assert buildPch(header, `${dir}/second.pch`, `${dir}/second.pch.d`, "", 0, 0, "");
-	const parts = objectCompileArgs(0, "", false, 0, "");
-	assert parts.ok;
-	const args = objectCompileArgv(parts.value, source, `${dir}/use.o`, "");
-	args.push("-include-pch");
-	args.push(`${dir}/second.pch`);
-	assert runCc(parts.value.command, args).ok;
-	for (const name of ["prefix.h", "use.c", "first.pch", "second.pch", "use.o"]) remove(`${dir}/${name}`);
-	remove(dir);
-}
-
 test "trim mode maps the project root before the support and package roots, which win where nested" {
-	for (const cc of ["clang", "zig cc", "gcc", "/opt/llvm/bin/clang", "x86_64-linux-gnu-gcc", "arm-none-eabi-clang"]) {
+	for (const cc of ["clang", "gcc", "/opt/llvm/bin/clang", "x86_64-linux-gnu-gcc", "arm-none-eabi-clang"]) {
 		const flags = trimPrefixMapFlags(cc, "/work/app", "/opt/msc", "/cache/extracted");
 		assert flags.length == 3;
 		assert flags[0] == "-ffile-prefix-map=/work/app=.";

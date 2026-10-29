@@ -20,7 +20,7 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch, prefixMapsByToken } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, prefixMapsByToken } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
@@ -388,31 +388,6 @@ function parseDependencyFile(path: string): string[] {
 	}
 	if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, n), escaped));
 	return result;
-}
-
-export function writePchManifest(depFile: string, manifest: string): boolean {
-	const tokens = parseDependencyFile(depFile);
-	let first = 0;
-	while (first < tokens.length && !tokens[first].endsWith(":")) first += 1;
-	if (first == tokens.length) first = -1;
-	let body = "";
-	for (let i = first + 1; i < tokens.length; i += 1) {
-		const path = isAbsolute(tokens[i]) ? tokens[i] : join(cwd(), tokens[i]);
-		body = body + `${path}\t${hashFile(path)}\n`;
-	}
-	if (body == "") return false;
-	return atomicWriteFile(manifest, body);
-}
-
-export function pchManifestCurrent(manifest: string): boolean {
-	const body = try readFile(manifest) catch "";
-	if (body == "") return false;
-	for (const line of body.split("\n")) {
-		if (line == "") continue;
-		const tab = line.indexOf("\t", 0);
-		if (tab <= 0 || hashFile(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return false;
-	}
-	return true;
 }
 
 function pushDependency(result: string[], path: string): void {
@@ -2039,7 +2014,7 @@ export function writeCCodeCache(modPath: string, cCode: string, compileCmd: stri
 // Write only the .c source (fp-keyed: emitted C is config-dependent — drc vs
 // orc teardown differ — so concurrent builds of different configs must never
 // swap it under a running cc). Always safe — .c is debug-friendly (lets user
-// inspect generated C even when zig cc fails). Published atomically: a
+// inspect generated C even when cc fails). Published atomically: a
 // concurrent reader of the previous bytes is never torn.
 export function writeCSource(modPath: string, fp: string, cCode: string): void {
 	const path = stableCFileFp(modPath, fp);
@@ -2047,7 +2022,7 @@ export function writeCSource(modPath: string, fp: string, cCode: string): void {
 	// correctly written file already sitting here holds these exact bytes.
 	// Re-publishing it is not merely redundant: atomicWriteFile swaps the file
 	// with MoveFileEx(REPLACE_EXISTING) out from under a CONCURRENT build whose
-	// cc has it open, and zig then reports CacheCheckFailed.
+	// cc has it open, and the compile then fails.
 	//
 	// Compare the bytes, do not trust existence. The path only proves what was
 	// MEANT to be written: a host that dies mid-flush leaves a file of the right
@@ -2263,7 +2238,7 @@ export function cacheDir(): string {
 }
 
 // ===== Bug 6 regression tests =====
-// Compile-failure invariant: a failed `zig cc` (or any cc) must NOT leave a
+// Compile-failure invariant: a failed cc must NOT leave a
 // fingerprint behind, otherwise the next run sees a false cache hit and
 // tries to link an empty/partial .o. Symptom was a cryptic
 // "failed to parse TBD file: NotLibStub" link error masking the real
@@ -2444,14 +2419,14 @@ test "a dependency file reads escaped spaces, line continuations and CRLF as cla
 test "a dependency under the C compiler's own install is left to the compiler identity" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const path = `${base}/msc-deps-owned-${performance.now()}.d`;
-	writeFile(path, "native: C:/tools/Zig/lib/libc/include/stdio.h C:/proj/runtime/core/system.h C:/tools/zigx/lib/a.h\n");
-	setToolchainHeaderRoot("C:\\tools\\zig\\lib");
+	writeFile(path, "native: C:/tools/Llvm/lib/clang/include/stdio.h C:/proj/runtime/core/system.h C:/tools/llvmx/lib/a.h\n");
+	setToolchainHeaderRoot("C:\\tools\\llvm\\lib");
 	const owned = parseDependencyFile(path).join("|");
 	setToolchainHeaderRoot("");
 	const all = parseDependencyFile(path).join("|");
 	remove(path);
-	assert all == "C:/tools/Zig/lib/libc/include/stdio.h|C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
-	if (platform == "windows") assert owned == "C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
+	assert all == "C:/tools/Llvm/lib/clang/include/stdio.h|C:/proj/runtime/core/system.h|C:/tools/llvmx/lib/a.h";
+	if (platform == "windows") assert owned == "C:/proj/runtime/core/system.h|C:/tools/llvmx/lib/a.h";
 	else assert owned == all;
 }
 
@@ -2854,28 +2829,13 @@ test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
 }
 
 test "the C compiler identity moves with its path, size, mtime and version" {
-	const base = compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0");
-	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") == base;
-	assert compilerIdentity("zig cc", "/opt/zig2/zig", 177108480, 1700000000, "0.16.0") != base;
-	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108481, 1700000000, "0.16.0") != base;
-	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
-	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
-	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
-}
-
-test "a precompiled header goes stale when a header it includes changes in place" {
-	const dir = `out/test/pchManifest${performance.now()}`;
-	ensureDir(dir);
-	const inner = (value: string): string => `#ifndef INNER_H\n#define INNER_H\n#define INNER_VALUE ${value}\n#endif\n`;
-	writeFile(`${dir}/inner.h`, inner("41"));
-	writeFile(`${dir}/rt.h`, "#ifndef RT_H\n#define RT_H\n#include \"inner.h\"\nstatic inline int rtValue(void) { return INNER_VALUE; }\n#endif\n");
-	writeFile(`${dir}/prefix.h`, "#include \"rt.h\"\n");
-	assert buildPch(`${dir}/prefix.h`, `${dir}/prefix.pch`, `${dir}/prefix.pch.d`, `-iquote${dir}`, 0, 0, "");
-	assert writePchManifest(`${dir}/prefix.pch.d`, `${dir}/prefix.pch.deps`);
-	assert pchManifestCurrent(`${dir}/prefix.pch.deps`);
-	writeFile(`${dir}/inner.h`, inner("42"));
-	assert !pchManifestCurrent(`${dir}/prefix.pch.deps`);
-	assert !pchManifestCurrent(`${dir}/absent.pch.deps`);
+	const base = compilerIdentity("clang", "/opt/llvm/bin/clang", 177108480, 1700000000, "19.1.0");
+	assert compilerIdentity("clang", "/opt/llvm/bin/clang", 177108480, 1700000000, "19.1.0") == base;
+	assert compilerIdentity("clang", "/opt/llvm2/bin/clang", 177108480, 1700000000, "19.1.0") != base;
+	assert compilerIdentity("clang", "/opt/llvm/bin/clang", 177108481, 1700000000, "19.1.0") != base;
+	assert compilerIdentity("clang", "/opt/llvm/bin/clang", 177108480, 1700000001, "19.1.0") != base;
+	assert compilerIdentity("clang", "/opt/llvm/bin/clang", 177108480, 1700000000, "19.1.1") != base;
+	assert compilerIdentity("gcc", "/opt/llvm/bin/clang", 177108480, 1700000000, "19.1.0") != base;
 }
 
 const SAMPLE_SEARCH = [

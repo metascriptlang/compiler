@@ -1,8 +1,8 @@
-// MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
+// MetaScript Compiler — managed C toolchain: select the pinned clang/lld bundle, installing it on first use.
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, writeFile, removeAll, symlink } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, writeFile, removeAll, symlink, rename } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { sha256, toHex } from "std/crypto/sha256";
 import { nowSeconds } from "../utils/stampDirs";
@@ -13,31 +13,6 @@ import { CliOptions, CC_PREPARED, buildCpu, newCliOptions } from "./options";
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
-}
-
-const ZIG_VERSION = "0.16.0";
-const ZIG_BASE = "https://ziglang.org/download/0.16.0/";
-
-function managedZigDir(): string {
-	const home = metascriptHome();
-	if (home == "") return "";
-	return join(home, "zig");
-}
-
-function managedZigBinary(): string {
-	const dir = managedZigDir();
-	if (dir == "") return "";
-	return join(dir, platform == "windows" ? "zig.exe" : "zig");
-}
-
-function hasManagedZig(): boolean {
-	const b = managedZigBinary();
-	return b != "" && exists(b);
-}
-
-export function managedZigCompiler(): string {
-	if (!hasManagedZig()) return "";
-	return `${managedZigBinary()} cc`;
 }
 
 function hostArch(): string {
@@ -59,97 +34,25 @@ function hostKey(): string {
 	return `${hostArch()}-${os}`;
 }
 
-function zigTarball(key: string): string {
-	return match (key) {
-		"aarch64-macos" => "zig-aarch64-macos-0.16.0.tar.xz",
-		"x86_64-macos" => "zig-x86_64-macos-0.16.0.tar.xz",
-		"x86_64-linux" => "zig-x86_64-linux-0.16.0.tar.xz",
-		"aarch64-linux" => "zig-aarch64-linux-0.16.0.tar.xz",
-		"x86_64-windows" => "zig-x86_64-windows-0.16.0.zip",
-		"aarch64-windows" => "zig-aarch64-windows-0.16.0.zip",
-		_ => "",
-	};
+struct PublishedBundle {
+	host: string;
+	url: string;
+	sha256: string;
+	identity: string;
 }
 
-function zigSha256(key: string): string {
-	return match (key) {
-		"aarch64-macos" => "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
-		"x86_64-macos" => "0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7",
-		"x86_64-linux" => "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
-		"aarch64-linux" => "ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17",
-		"x86_64-windows" => "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e",
-		"aarch64-windows" => "aee38316ee4111717900f45dd3130145c39289e105541d737eb8c5ed653c78ef",
-		_ => "",
-	};
-}
-
-function verifySha256(file: string, want: string): boolean {
-	if (want == "") return true;
-	let out = "";
-	if (platform == "windows") {
-		const r = exec(`certutil -hashfile "${file}" SHA256`);
-		out = r.ok ? r.value.toLowerCase() : "";
-	} else {
-		let r = exec(`shasum -a 256 "${file}"`);
-		if (!r.ok) r = exec(`sha256sum "${file}"`);
-		out = r.ok ? r.value.toLowerCase() : "";
-	}
-	if (out == "") return false;
-	return out.indexOf(want.toLowerCase()) >= 0;
-}
+const PUBLISHED_BUNDLES: PublishedBundle[] = [];
 
 function autoInstallAllowed(assumeYes: boolean): boolean {
 	if (assumeYes) return true;
 	return env.get("MSC_AUTO_INSTALL_CC") == "1";
 }
 
-function promptInstall(dir: string): boolean {
-	writeStderr(`msc compiles C with Zig ${ZIG_VERSION} by default. Download it to ${dir}? ` +
+function promptInstall(url: string, dir: string): boolean {
+	writeStderr(`msc compiles C with its pinned toolchain bundle. Download ${url} to ${dir}? ` +
 		`(--cc=clang uses your own) [y/N] `);
 	const ans = readLine();
 	return ans == "y" || ans == "Y" || ans == "yes";
-}
-
-function ensureZig(assumeYes: boolean): string {
-	if (hasManagedZig()) return managedZigBinary();
-
-	const key = hostKey();
-	const tarball = zigTarball(key);
-	if (tarball == "") {
-		eprintln(`error: no managed Zig build for host '${key}'.`);
-		eprintln(`  → install a C compiler and pass --cc=clang.`);
-		return "";
-	}
-
-	const dir = managedZigDir();
-	if (!autoInstallAllowed(assumeYes) && !promptInstall(dir)) {
-		eprintln(`error: no C compiler available.`);
-		eprintln(`  → install one, re-run and accept the Zig download, or set MSC_AUTO_INSTALL_CC=1.`);
-		return "";
-	}
-
-	ensureDir(dir);
-	const url = `${ZIG_BASE}${tarball}`;
-	const archive = join(dir, tarball);
-
-	eprintln(`Downloading Zig ${ZIG_VERSION} (${key})…`);
-	const dl = exec(`curl -fL --retry 3 -o "${archive}" "${url}"`);
-	if (!dl.ok) {
-		eprintln(`error: failed to download Zig from ${url}`);
-		return "";
-	}
-	if (!verifySha256(archive, zigSha256(key))) {
-		eprintln(`error: Zig download checksum mismatch (corrupt or tampered) — aborting.`);
-		remove(archive);
-		return "";
-	}
-	const ex = exec(`tar xf "${archive}" -C "${dir}" --strip-components=1`);
-	remove(archive);
-	if (!ex.ok || !hasManagedZig()) {
-		eprintln(`error: failed to extract Zig archive.`);
-		return "";
-	}
-	return managedZigBinary();
 }
 
 struct NativeToolchain {
@@ -625,29 +528,83 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 	assert rmdir(root).ok;
 }
 
-// Normalize the --cc alias and resolve (installing if needed) the compiler to
-// use. Every command that emits C must call this — cmdBuildC and cmdTest both
-// do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
-// cc.ms (ltoBroken/resolveLto) and run right after this, once the compiler is
-// known.
-export function resolveCC(opts: CliOptions, stampRoot: string): void {
-	if (opts.ccBinary == "zig") opts.ccBinary = "zig cc";
+function publishedBundle(host: string): PublishedBundle | null {
+	for (const bundle of PUBLISHED_BUNDLES) {
+		if (bundle.host == host) return bundle;
+	}
+	return null;
+}
 
+function archiveTool(): string {
+	if (platform != "windows") return "tar";
+	return join(env.get("SystemRoot") || "C:/Windows", "System32/tar.exe");
+}
+
+function installBundle(bundle: PublishedBundle, dir: string): Result<void, string> {
+	const staging = `${dir}.partial`;
+	removeAll(staging);
+	if (!ensureDir(staging).ok) return Result.err(`cannot create ${staging}`);
+	const archive = join(staging, bundle.url.slice(bundle.url.lastIndexOf("/") + 1));
+	const root = join(staging, "root");
+	eprintln(`Downloading the C toolchain bundle ${bundle.identity.slice(0, 12)} (${bundle.host})…`);
+	const download = execFileCapture("curl", ["-fL", "--retry", "3", "-o", archive, bundle.url]);
+	if (!download.ok) return Result.err(`download of ${bundle.url} failed: ${download.error.message}`);
+	const digest = try fileSha256(archive);
+	if (digest != bundle.sha256) return Result.err(`${bundle.url} has SHA256 ${digest}, the pinned value is ${bundle.sha256}`);
+	if (!ensureDir(root).ok) return Result.err(`cannot create ${root}`);
+	const extract = execFileCapture(archiveTool(), ["-xf", archive, "-C", root, "--strip-components=1"]);
+	if (!extract.ok) return Result.err(`cannot extract ${archive}: ${extract.error.message}`);
+	const read = try readNativeToolchain(root);
+	if (read.identity != bundle.identity) return Result.err(`${bundle.url} carries IDENTITY ${read.identity}, the pinned value is ${bundle.identity}`);
+	const moved = rename(root, dir);
+	if (!moved.ok) return Result.err(`cannot move ${root} to ${dir}`);
+	removeAll(staging);
+	return Result.ok(null);
+}
+
+function ensureBundle(assumeYes: boolean): string {
+	const key = hostKey();
+	const bundle = publishedBundle(key);
+	if (bundle == null) {
+		eprintln(`error: no published C toolchain bundle for host '${key}'.`);
+		eprintln(`  → pass --cc=clang or --cc=gcc to use your own compiler, or set MSC_NATIVE_TOOLCHAIN to a prepared bundle.`);
+		return "";
+	}
+	const home = metascriptHome();
+	if (home == "") {
+		eprintln(`error: cannot locate ~/.metascript to install the C toolchain bundle.`);
+		return "";
+	}
+	const dir = join(home, `toolchains/${bundle.identity}`);
+	if (exists(join(dir, "IDENTITY"))) return dir;
+	if (!autoInstallAllowed(assumeYes) && !promptInstall(bundle.url, dir)) {
+		eprintln(`error: no C toolchain installed.`);
+		eprintln(`  → re-run and accept the download, pass --yes or set MSC_AUTO_INSTALL_CC=1, or pass --cc=clang.`);
+		return "";
+	}
+	const installed = installBundle(bundle, dir);
+	if (!installed.ok) {
+		eprintln(`error: C toolchain bundle install: ${installed.error}`);
+		return "";
+	}
+	return dir;
+}
+
+// Resolve (installing if needed) the C compiler to use. Every command that
+// emits C must call this — cmdBuildC and cmdTest both do; cmdRun reaches it
+// through cmdBuildC. The LTO default lives in cc.ms
+// (resolveLto) and runs right after this, once the compiler is known.
+export function resolveCC(opts: CliOptions, stampRoot: string): void {
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
 
-	const native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
-	if (native != "") {
-		const selected = selectNativeToolchain(opts, native, stampRoot);
-		if (!selected.ok) {
-			eprintln(`error: ${selected.error}`);
-			stopBuild();
-		}
-		opts.ccCompiler = CC_PREPARED;
-		return;
+	let native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
+	if (native == "") native = ensureBundle(opts.autoYes);
+	if (native == "") stopBuild();
+	const selected = selectNativeToolchain(opts, native, stampRoot);
+	if (!selected.ok) {
+		eprintln(`error: ${selected.error}`);
+		stopBuild();
 	}
-	if (ensureZig(opts.autoYes) == "") stopBuild();
-	// Leave ccBinary empty: getCompilerName resolves managed zig from its warmed
-	// global, which workers read read-only. Stuffing the heap path string into
-	// ccBinary would capture it into the parallel-compile spawn closures.
+	opts.ccCompiler = CC_PREPARED;
 }
