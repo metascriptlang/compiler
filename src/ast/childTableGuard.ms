@@ -25,7 +25,6 @@ const KNOWN_GAPS: string[] = [
 	"visitor:methodDefaults",
 	"walker:arrowDefaults", "walker:ctorDefaults", "walker:fnDefaults", "walker:interfaceFieldDecorators",
 	"walker:methodDefaults",
-	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
 	"bridge:arrowDefaults", "bridge:enumInits",
 ];
 
