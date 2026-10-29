@@ -278,6 +278,14 @@ export function msActorStop(pid: int64, reason: ExitReason): void {
 	if (hook != null && reason != ExitReason.Killed) hook(reason);
 }
 
+@compilerFunc
+export function msActorStopLive(): boolean {
+	const live: int64[] = [];
+	actorCells.forEach((cell: ActorCell, pid: int64): void => { if (cell.live) live.push(pid); });
+	for (const pid of live) msActorStop(pid, ExitReason.Shutdown);
+	return live.length > 0;
+}
+
 const timersLive: Map<int64, boolean> = new Map<int64, boolean>();
 let timerNext: int64 = 1;
 

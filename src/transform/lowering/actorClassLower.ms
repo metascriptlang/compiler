@@ -205,11 +205,13 @@ function registerTerminate(classNode: Node, ctx: TransformContext): void {
 	const thisSym = ctor.paramSyms[0];
 	const reasonType = hook.nodeType.typeChildren[1];
 	const reasonSym = newLoweredSym(ctx, SymbolKind.Parameter, "reason", reasonType);
-	const hookCall = makeCall(makeTypedIdentResolved(hook.resolvedSym, null, loc), [makeIdentResolved(thisSym, loc), makeIdentResolved(reasonSym, loc)], loc);
+	const selfSym = freshOwnedSym(ctx, "self", thisSym.symbolType);
+	const self = makeLocalDecl(selfSym, makeIdentResolved(thisSym, loc), thisSym.symbolType!, loc);
+	const hookCall = makeCall(makeTypedIdentResolved(hook.resolvedSym, null, loc), [makeIdentResolved(selfSym, loc), makeIdentResolved(reasonSym, loc)], loc);
 	hookCall.nodeType = voidType();
 	const arrow = makeArrow([reasonSym], [reasonType], makeBlock([makeExprStmt(hookCall, loc)], loc), voidType(), false, loc);
 	const register = makeExprStmt(typedCall("msActorOnTerminate", [pidOf(thisSym, loc), arrow], voidType(), loc), loc);
-	const merged: Node[] = [body.statements[0], register];
+	const merged: Node[] = [body.statements[0], self, register];
 	for (let i = 1; i < body.statements.length; i += 1) merged.push(body.statements[i]);
 	body.statements = merged;
 }

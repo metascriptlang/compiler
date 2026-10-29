@@ -1,4 +1,4 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
+// @xfail(raiser): the Raiser stops a parked actor at exit at once instead of letting its method finish, so its job closures stay live (4 [fn,env] items leaked)
 // @stdout: logger terminate 1
 // @xfail(san): Waiter stays suspended at exit on a promise nothing can settle, so its state, its method's frame and two futures of same-named types (ledger msFuture twice) are still live, which is the stop and not a leak
 // note: Waiter is suspended at exit on a promise nothing can settle and has no onTerminate to lose, so the program ends with its own exit code, as an unsettled promise does on Node; Logger is still stopped and runs its hook (ULTRALOCK A8). Sibling with a hook: actorExitStopUnreachedHookExits13.
