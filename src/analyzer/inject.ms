@@ -194,8 +194,10 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 function processAwait(node: Node, dctx: DrcContext): Node {
 	const d = node.data as AwaitExprData;
-	const releasedByAwait = d.awaitArg.kind == NodeKind.CallExpr && d.awaitArg.nodeType != null && isAwaitable(d.awaitArg.nodeType);
-	d.awaitArg = processNode(d.awaitArg, dctx, releasedByAwait ? DrcMode.Consumed : DrcMode.Normal);
+	const saved = dctx.skipAwaitableCapture;
+	dctx.skipAwaitableCapture = false;
+	d.awaitArg = processNode(d.awaitArg, dctx, DrcMode.Normal);
+	dctx.skipAwaitableCapture = saved;
 	return node;
 }
 
