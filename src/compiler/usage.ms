@@ -58,6 +58,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(--os=solana always strips the program; --strip also drops its .debug copy)"));
 	console.log("  " + cyan("--mm") + "=<mode>           Memory management " + dim("(drc|manual|none; solana defaults to manual)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
+	console.log("  " + cyan("--wasm-placement") + "=<on|off>  js: send modules marked " + cyan("@wasm();") + " to wasm " + dim("(default: on; off builds them as js)"));
 	console.log("  " + cyan("--passC") + "=<flags>      Extra C compiler flags");
 	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");
 	console.log("  " + cyan("--link") + "=<file>        Link a file as @link does " + dim("(relative to the cwd)"));
