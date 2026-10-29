@@ -1508,6 +1508,32 @@ test "prepared shared C++ keeps its config order and explicit compilers keep the
 	assert !explicit.value.command.args.includes("--config=/prepared/target.so.cfg");
 }
 
+// The sanitizer runtimes of the prepared Linux toolchain call _Unwind_Backtrace, which only its C++ runtime provides.
+function needsUnwinder(flagArgs: string[], ccOption: number, targetOs: string): boolean {
+	if (ccOption != CC_PREPARED || targetOs != "linux" || flagArgs.includes("-shared")) return false;
+	for (const arg of flagArgs) if (arg.startsWith("-fsanitize=")) return true;
+	return false;
+}
+
+test "a prepared Linux executable link that names a sanitizer takes the C++ configs and nothing else does" {
+	const invocation = "/prepared/clang --no-default-config --config=/prepared/target.cfg";
+	for (const flag of ["-fsanitize=address", "-fsanitize=undefined,thread"]) {
+		const link = linkCommand(flag, CC_PREPARED, invocation, "linux");
+		assert link.ok;
+		const args = link.value.command.args;
+		assert args.includes("--config=/prepared/target.cxx.cfg");
+		assert args.indexOf("--config=/prepared/target.cxx.cfg") < args.indexOf("--config=/prepared/target.cfg");
+	}
+	for (const other of [linkCommand("-fno-sanitize=all -O2", CC_PREPARED, invocation, "linux"),
+		linkCommand("-fsanitize=address -shared", CC_PREPARED, invocation, "linux"),
+		linkCommand("-fsanitize=address", CC_PREPARED, invocation, "windows"),
+		linkCommand("-fsanitize=address", 0, invocation, "linux")]) {
+		assert other.ok;
+		assert !other.value.command.args.includes("--config=/prepared/target.cxx.cfg");
+		assert !other.value.command.args.includes("--config=/prepared/target.so.cxx.cfg");
+	}
+}
+
 function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): Result<LinkCommand, ProcessError> {
 	const base = compilerInvocation(ccOption, ccBinary);
 	if (!base.ok) return Result.err(base.error);
@@ -1515,7 +1541,7 @@ function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, tar
 	const flags = appendParsedFlags(base.value.path, flagArgs, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
 	const cppLibraries = ccOption == CC_PREPARED && resolveCppLibraries(flagArgs, targetOs);
-	const needsCpp = _hasCppCompile || cppLibraries;
+	const needsCpp = _hasCppCompile || cppLibraries || needsUnwinder(flagArgs, ccOption, targetOs);
 	let selected = base.value;
 	if (ccOption == CC_PREPARED) {
 		const native = nativeLinkInvocation(selected, targetOs, flagArgs.includes("-shared"));
