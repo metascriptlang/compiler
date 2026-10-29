@@ -830,6 +830,14 @@ export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 	return null;
 }
 
+export function get<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): Readonly<V | null> {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	if (m.indices.length == 0) return null;
+	const slot = orderedMapRawGet(m, key, keyHash<K>(key));
+	if (slot < 0) return null;
+	return m.entries[m.indices[slot]].value;
+}
+
 export function readonlyGet<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): Readonly<V | null> {
 	if (m.writing) { msMapFatal("map read during write"); }
 	if (m.indices.length == 0) return null;
@@ -917,6 +925,48 @@ export function* toPairs<K, V>(this m: Map<K, V>): Iterator<[K, V]> {
 		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode != 0) {
 			const pair: [K, V] = [entry.key, entry.value];
+			yield pair;
+		}
+	}
+}
+
+export function keys<K, V>(this m: Readonly<Map<K, V>>): Readonly<K>[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	const result: Readonly<K>[] = [];
+	for (const entry of m.entries) {
+		if (entry.hcode != 0) result.push(entry.key);
+	}
+	return result;
+}
+
+export function values<K, V>(this m: Readonly<Map<K, V>>): Readonly<V>[] {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	const result: Readonly<V>[] = [];
+	for (const entry of m.entries) {
+		if (entry.hcode != 0) result.push(entry.value);
+	}
+	return result;
+}
+
+export function forEach<K, V>(this m: Readonly<Map<K, V>>, fn: (value: Readonly<V>, key: Readonly<K>) => void): void {
+	if (m.writing) { msMapFatal("concurrent map read and map write"); }
+	for (const entry of m.entries) {
+		if (entry.hcode != 0) fn(entry.value, entry.key);
+	}
+}
+
+export function* toItems<K, V>(this m: Readonly<Map<K, V>>): Iterator<Readonly<K>> {
+	for (const entry of m.entries) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) yield entry.key;
+	}
+}
+
+export function* toPairs<K, V>(this m: Readonly<Map<K, V>>): Iterator<[Readonly<K>, Readonly<V>]> {
+	for (const entry of m.entries) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) {
+			const pair: [Readonly<K>, Readonly<V>] = [entry.key, entry.value];
 			yield pair;
 		}
 	}
