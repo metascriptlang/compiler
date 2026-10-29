@@ -120,6 +120,13 @@ class BundleTest(BundleCase):
         for rel in ("runtime/x86_64-linux-gnu.2.31.cxx.cfg", "runtime/notices/cpp-provenance.json"):
             self.assertIn(rel, listed)
 
+    def test_an_engine_of_another_host_than_linux_gets_no_target_runtime_directory(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        self.assertFalse(os.path.exists(os.path.join(out, "lib", "clang")))
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertNotIn("targetRuntimeDirectories", receipt)
+
     def test_the_cpp_overlay_follows_the_selected_targets_only(self):
         for requested, cpp, cOnly in ((["x86_64-windows-gnu"], ["x86_64-windows-gnu"], []),
                                       (["x86_64-linux-gnu.2.31", "aarch64-windows-gnu"], ["x86_64-linux-gnu.2.31"],
@@ -310,6 +317,81 @@ class BundleTest(BundleCase):
 X64, ARM = "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"
 ZIG = {"version": "0.16.0", "sha256": "a" * 64}
 INCLUDES = {X64: "x86-linux-gnu", ARM: "aarch64-linux-gnu"}
+
+
+class LinuxTargetRuntimeCase(BundleCase):
+    triple = "x86_64-unknown-linux5.10.0-gnu2.31.0"
+    flatFiles = ("libclang_rt.asan-x86_64.a", "libclang_rt.asan-x86_64.a.syms", "libclang_rt.asan-x86_64.so",
+                 "libclang_rt.asan-preinit-x86_64.a", "libclang_rt.ubsan_standalone-x86_64.a",
+                 "libclang_rt.tsan_cxx-x86_64.a.syms", "clang_rt.crtbegin-x86_64.o", "liborc_rt-x86_64.a",
+                 "libclang_rt.asan-i386.a", "clang_rt.crtend-i386.o")
+    configs = {"x86_64-linux-gnu.2.31.cfg": "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n-fPIC\n",
+               "x86_64-linux-gnu.2.31.so.cfg": "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n-shared\n",
+               "aarch64-linux-gnu.2.31.cfg": "-target aarch64-unknown-linux5.10.0-gnu2.31.0\n",
+               "wasm32-wasi.cfg": "-target wasm32-wasip1\n"}
+
+    def setUp(self):
+        super().setUp()
+        flat = os.path.join(self.engine, "lib", "clang", "22", "lib", "linux")
+        for name in self.flatFiles:
+            write(os.path.join(flat, name), name + "\n")
+        pe.writeContract(self.engine, pe.LINUX_X64, "22.1.8")
+
+    def verify(self, root):
+        self.verified.append(root)
+        return pe.LINUX_X64, "22.1.8", 0
+
+    def prepareRuntime(self, zig, engine, output, targets, engineRelative):
+        super().prepareRuntime(zig, engine, output, targets, engineRelative)
+        for name, text in self.configs.items():
+            write(os.path.join(output, name), text)
+        return output, []
+
+    def lib(self, out):
+        return os.path.join(out, "lib", "clang", "22", "lib")
+
+
+class LinuxTargetRuntimeTest(LinuxTargetRuntimeCase):
+    def test_each_x86_64_triple_a_config_names_gets_clangs_per_target_directory_with_the_arch_dropped_from_each_name(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        directory = os.path.join(self.lib(out), self.triple)
+        self.assertEqual(sorted(os.listdir(directory)), [
+            "clang_rt.crtbegin.o", "libclang_rt.asan-preinit.a", "libclang_rt.asan.a", "libclang_rt.asan.a.syms",
+            "libclang_rt.asan.so", "libclang_rt.tsan_cxx.a.syms", "libclang_rt.ubsan_standalone.a", "liborc_rt.a"])
+        self.assertEqual(read(os.path.join(directory, "libclang_rt.asan.a.syms")), "libclang_rt.asan-x86_64.a.syms\n")
+
+    def test_the_flat_layout_stays_whole_and_only_the_target_directory_is_new(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        self.assertEqual(sorted(os.listdir(self.lib(out))), sorted(["linux", self.triple]))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.lib(out), "linux"))), sorted(self.flatFiles))
+
+    def test_the_target_directory_is_hashed_into_the_contract_and_named_by_the_receipt(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        listed = [l.split("  ", 1)[1] for l in read(os.path.join(out, "FILES.sha256")).splitlines()]
+        self.assertIn("lib/clang/22/lib/%s/libclang_rt.ubsan_standalone.a" % self.triple, listed)
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertEqual(receipt["targetRuntimeDirectories"], ["lib/clang/22/lib/" + self.triple])
+
+    def test_a_runtime_without_a_linux_config_makes_no_target_directory(self):
+        out = self.path("bundle")
+        self.configs = {"wasm32-wasi.cfg": "-target wasm32-wasip1\n"}
+        pb.prepareBundle(self.engine, "/z/zig", out, ["wasm32-wasi"])
+        self.assertEqual(os.listdir(self.lib(out)), ["linux"])
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertNotIn("targetRuntimeDirectories", receipt)
+
+    def test_a_linux_config_with_no_x86_64_runtime_in_the_engine_fails_and_publishes_nothing(self):
+        flat = os.path.join(self.engine, "lib", "clang", "22", "lib", "linux")
+        for name in self.flatFiles:
+            if "x86_64" in name:
+                os.remove(os.path.join(flat, name))
+        pe.writeContract(self.engine, pe.LINUX_X64, "22.1.8")
+        with self.assertRaisesRegex(pe.EngineError, "no x86_64 runtime files .* %s" % self.triple):
+            pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
+        self.assertEqual(os.listdir(self.dir), ["engine"])
 
 
 class AugmentCase(BundleCase):
