@@ -25,12 +25,13 @@ close(client);
 setNonBlocking(peer);
 let full = false;
 let total = 0;
-for (let i = 0; i < 100000 && total < 20000; i++) {
+// A short read waits for more bytes to arrive, because WSL2's loopback delivers the send in pieces and reading each as it
+// lands never leaves a full buffer to read.
+for (let i = 0; i < 2000 && total < 20000; i++) {
 	const got = recvNonBlock(peer, 8192);
-	if (got.length > 0) {
-		if (got.length == 8192) full = true;
-		total = total + got.length;
-	}
+	if (got.length == 8192) full = true;
+	total = total + got.length;
+	if (got.length < 8192) await sleepAsync(5);
 }
 console.log(`full read seen=${full} total ${total}`);
 close(peer);
