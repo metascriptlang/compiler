@@ -204,9 +204,15 @@ record_select_off() {
   [ -n "$select_why" ] && [ -n "$select_label" ] || return 0
   select_ledger select-off 0 "" "" "" "" ""
 }
+managed_zig() {
+  local z="${HOME:-$USERPROFILE}/.metascript/zig/zig"
+  [ -x "$z" ] || z="$z.exe"
+  [ -x "$z" ] && printf '%s' "$z"
+}
 tool_ids() {
-  local t v
+  local t v z
   for t in cc clang gcc zig node; do
+    if [ "$t" = zig ] && z=$(managed_zig); then printf 'zig managed %s\n' "$("$z" version 2>&1 | head -1)"; continue; fi
     command -v "$t" >/dev/null 2>&1 || { printf '%s absent\n' "$t"; continue; }
     if [ "$t" = zig ]; then v=$(zig version 2>&1 | head -1); else v=$("$t" --version 2>&1 | head -1); fi
     printf '%s %s %s\n' "$t" "$(command -v "$t")" "$v"
@@ -1143,7 +1149,7 @@ emit_side() {
   local jobs scrub rows
   jobs=$(emit_width) || return $?
   mkdir -p "$2"
-  mapfile -t scrub < <(compgen -e | grep '^MSC' | while read -r v; do printf -- '-u\n%s\n' "$v"; done)
+  mapfile -t scrub < <(compgen -e | grep '^MSC' | grep -vx MSC_NATIVE_TOOLCHAIN | while read -r v; do printf -- '-u\n%s\n' "$v"; done)
   mapfile -t rows < <(awk '{ print NR, $0 }')
   [ "${#rows[@]}" -gt 0 ] || return 0
   printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" GATE_WORK_ROOT="${EMIT_WORK:-}" NO_COLOR=1 \
@@ -1332,6 +1338,7 @@ stable_emit_self_test() (
 
 support_cache_self_test() (
   local d old new copied bad=0 TOP EMIT_WORK platform expected fail_copy=0 has_mode=0 has_link=0 change
+  unset MSC_NATIVE_TOOLCHAIN
   local real_os=$OSTYPE OSTYPE=$OSTYPE
   d=$(mktemp -d) || return 1
   TOP="$d/a" EMIT_WORK="$d/b"
@@ -1399,6 +1406,18 @@ CHANGES
   new=$(support_stamp "$d/a"); printf 'bb\n' >"$TOP/msc-toolchain/IDENTITY"
   [ "$(support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: another native toolchain bundle kept the stamp\n'; bad=1; }
   rm -r "$TOP/msc-toolchain"; new=$(support_stamp "$d/a")
+  mkdir -p "$d/env-bundle"; printf 'cc\n' >"$d/env-bundle/IDENTITY"
+  [ "$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: a bundle named by MSC_NATIVE_TOOLCHAIN kept the stamp\n'; bad=1; }
+  old=$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a"); printf 'dd\n' >"$d/env-bundle/IDENTITY"
+  [ "$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a")" != "$old" ] || { printf 'FAIL support stamp: another env-selected bundle kept the stamp\n'; bad=1; }
+  mkdir -p "$d/h1/.metascript/zig" "$d/h2/.metascript/zig"
+  printf '#!/bin/sh\necho 9.9.9\n' >"$d/h1/.metascript/zig/zig"; chmod +x "$d/h1/.metascript/zig/zig"
+  cp "$d/h1/.metascript/zig/zig" "$d/h2/.metascript/zig/zig"
+  old=$(HOME="$d/h1" support_stamp "$d/a")
+  [ "$old" != "$new" ] || { printf 'FAIL support stamp: a managed zig beside a different PATH zig kept the stamp\n'; bad=1; }
+  [ "$(HOME="$d/h2" support_stamp "$d/a")" = "$old" ] || { printf 'FAIL support stamp: the same managed zig version at another path changed the stamp\n'; bad=1; }
+  printf '#!/bin/sh\necho 9.9.8\n' >"$d/h2/.metascript/zig/zig"
+  [ "$(HOME="$d/h2" support_stamp "$d/a")" != "$old" ] || { printf 'FAIL support stamp: another managed zig version kept the stamp\n'; bad=1; }
   printf 'export default {};\n' >"$d/build.ms"
   [ "$(support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: an ambient build.ms above the workspace kept the stamp\n'; bad=1; }
   mkdir -p "$d/b/src/raiser" "$d/b/src/codegen/raiser"; printf 'v1\n' >"$d/b/src/raiser/vm.ms"
@@ -1603,10 +1622,10 @@ emit_env_self_test() (
   d=$(mktemp -d) || return 1
   printf '#!/usr/bin/env bash\nfor a; do case $a in --output=*) env | grep "^MSC" | sort >"${a#--output=}" ;; esac; done\nexit 0\n' >"$d/fake"
   chmod +x "$d/fake"
-  printf 'p %s/p.ms\n' "$d" | MSC_GATE_PROBE=leak emit_side "$d/fake" "$d/e" >/dev/null
+  printf 'p %s/p.ms\n' "$d" | MSC_GATE_PROBE=leak MSC_NATIVE_TOOLCHAIN=/bundle emit_side "$d/fake" "$d/e" >/dev/null
   got=$(cat "$d/e/1/out.js" 2>/dev/null)
   [ -f "$d/e/1/out.js" ] || { printf 'FAIL emit env: probe emit did not run\n'; bad=1; }
-  [ -z "$got" ] || { printf 'FAIL emit env: emits saw %s\n' "$got"; bad=1; }
+  [ "$got" = MSC_NATIVE_TOOLCHAIN=/bundle ] || { printf 'FAIL emit env: emits saw %s, want only the toolchain the lanes use\n' "$got"; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -2084,7 +2103,7 @@ if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) ||
 cand_key=""
 [ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
-[ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
+[ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
 lane_cmd() {
   case "$1" in
