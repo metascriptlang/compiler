@@ -726,8 +726,8 @@ function rootsOf(node: Node | null, out: Symbol[]): void {
 			rootsOf(d.ternaryConsequent, out);
 			rootsOf(d.ternaryAlternate, out);
 		},
-		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { rootsOf(e, out); } },
-		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { rootsOf(e, out); } },
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { if (carriesPointer(e.nodeType)) rootsOf(e, out); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { if (carriesPointer(e.nodeType)) rootsOf(e, out); } },
 		NodeKind.NewExpr => {
 			if (carriesPointer(node.nodeType)) {
 				for (const a of (node.data as NewExprData).newArguments) {

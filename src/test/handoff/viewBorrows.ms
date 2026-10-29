@@ -36,6 +36,8 @@ test "a view is refused while the storage it reads can move or be freed" {
 		`${xs} const sp: Span<S> = xs; if (sp.length > 0) { const t = xs; } return sp[0].n;`,
 		"let s = \"ab\" + String(1); const b = s.asBytes(); s = \"x\"; return b[0] as int32;",
 		"let rows: R[] = [{ items: [1, 2], k: 0 }]; const v: Span<int32> = rows[0].items; rows[0] = { items: [7], k: 1 }; return v[0];",
+		"let rows: R[] = [{ items: [1], k: 0 }]; const v: Span<R> = rows; for (let i = 0; i < v.length; i++) rows.push({ items: [], k: v[i].k }); return rows.length as int32;",
+		"let rows: R[] = [{ items: [1], k: 0 }]; const v: Span<R> = rows; for (let i = 0; i < v.length; i++) rows.push({ items: [], k: 1 }); return v[0].k;",
 	];
 	for (const body of refused) {
 		assert refusedWith(body, "is potentially changed at"), body;
@@ -54,6 +56,8 @@ test "a view stays legal when nothing can move the storage it reads" {
 		"const s = \"ab\" + String(1); const b = s.asBytes(); const t = s + \"!\"; return (b[0] as int32) + (t.length as int32);",
 		`${xs} const sp: Span<S> = xs; if (sp.length > 0) { xs.push({ n: 2, name: "b" }); } return xs.length as int32;`,
 		`${xs} const sp: Span<S> = xs; const k = take(xs); return sp[0].n + k;`,
+		"const rows: R[] = [{ items: [1], k: 0 }]; const v: Span<R> = rows; const out: S[] = []; for (let i = 0; i < v.length; i++) out.push({ n: v[i].items.length as int32, name: \"x\" }); return out.length as int32;",
+		"const rows: R[] = [{ items: [1], k: 0 }]; const v: Span<R> = rows; const out: int32[][] = []; for (let i = 0; i < v.length; i++) out.push([v[i].k, v[i].items.length as int32]); return out.length as int32;",
 		`${xs} const sp: Span<S> = xs; const kept = xs; return sp[0].n + (kept.length as int32);`,
 		"let arr: S[2] = [{ n: 1, name: \"a\" }, { n: 2, name: \"b\" }]; const sp: Span<S> = arr; arr = [{ n: 3, name: \"c\" }, { n: 4, name: \"d\" }]; return sp[0].n;",
 	];
