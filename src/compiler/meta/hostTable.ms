@@ -855,6 +855,12 @@ function _bridgeMsStringEquals(args: RaiserValue[]): RaiserValue {
 	return boxBool(unboxString(args[0]) == unboxString(args[1]));
 }
 
+function _bridgeMsStringCompare(args: RaiserValue[]): RaiserValue {
+	const x = unboxString(args[0]);
+	const y = unboxString(args[1]);
+	return boxInt(x == y ? 0 : x < y ? -1 : 1);
+}
+
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1]) as int32));
 }
@@ -1400,6 +1406,7 @@ export function ensureHostTableLoaded(): void {
 	// direct-opcode performance.
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
 	registerHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
+	registerHostFn("msStringCompare",       _bridgeMsStringCompare, HostCapability.Pure);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
 	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
 	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
