@@ -66,7 +66,7 @@ function dfltEntries(otherFirst: boolean): MapEntry[] {
 
 function dfltNamesOf(code: string, moduleTag: string): string {
 	const found: string[] = [];
-	let at = code.indexOf("__dflt");
+	let at = code.indexOf("tmp");
 	while (at >= 0) {
 		let end = at;
 		while (end < code.length) {
@@ -77,7 +77,7 @@ function dfltNamesOf(code: string, moduleTag: string): string {
 		}
 		const name = code.slice(at, end);
 		if (name.contains(moduleTag) && !found.includes(name)) found.push(name);
-		at = code.indexOf("__dflt", end);
+		at = code.indexOf("tmp", end);
 	}
 	found.sort();
 	return found.join(" ");
