@@ -12,10 +12,10 @@ export extern function Number(v: uint64): float64 from "Number(#)";
 export extern function Number(v: char): float64 from "Number(#)";
 export extern function Number(v: bigint): float64 from "Number(#)";
 
-export extern function isNaN(this typeof Number, x: float64): boolean from "Number.isNaN(#)";
-export extern function isFinite(this typeof Number, x: float64): boolean from "Number.isFinite(#)";
-export extern function isInteger(this typeof Number, x: float64): boolean from "Number.isInteger(#)";
-export extern function isSafeInteger(this typeof Number, x: float64): boolean from "Number.isSafeInteger(#)";
+export extern function isNaN(this typeof Number, x: float64): boolean from "Number.isNaN";
+export extern function isFinite(this typeof Number, x: float64): boolean from "Number.isFinite";
+export extern function isInteger(this typeof Number, x: float64): boolean from "Number.isInteger";
+export extern function isSafeInteger(this typeof Number, x: float64): boolean from "Number.isSafeInteger";
 
 // Statics-only attachment onto the callable Number symbol: reads resolve
 // through findStaticField and emit as native member accesses on js / C
