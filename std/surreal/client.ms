@@ -76,8 +76,8 @@ export function cborTagEquals(a: CborValue, b: CborValue): boolean {
 		return ai.textVal == bi.textVal;
 	}
 	if (ai.kind == CborKind.Bytes && bi.kind == CborKind.Bytes) {
-		if (ai.bytesVal.byteLength != bi.bytesVal.byteLength) return false;
-		const n = ai.bytesVal.byteLength;
+		if (ai.bytesVal.byteLength() != bi.bytesVal.byteLength()) return false;
+		const n = ai.bytesVal.byteLength();
 		for (let i: int64 = 0; i < n; i = i + 1) {
 			if (ai.bytesVal.byteAt(i as int32) != bi.bytesVal.byteAt(i as int32)) return false;
 		}
