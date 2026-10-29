@@ -219,7 +219,7 @@ test "an empty leftover zig directory gives way to a published install" {
 	assert removeAll(root).ok;
 }
 
-struct NativeToolchain {
+export struct NativeToolchain {
 	root: string;
 	version: string;
 	identity: string;
@@ -525,6 +525,11 @@ function nativeRuntimeConfig(targetOs: string, cpu: string): string {
 let pendingBundle: NativeToolchain | null = null;
 let pendingPath = "";
 let pendingStampRoot = "";
+let selectedBundle: NativeToolchain | null = null;
+
+export function selectedNativeToolchain(): NativeToolchain | null {
+	return selectedBundle;
+}
 
 function verifySelectedToolchain(): string {
 	const selected = pendingBundle;
@@ -562,7 +567,9 @@ function macosSdkPath(stampRoot: string): string {
 }
 
 function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string): Result<void, string> {
+	selectedBundle = null;
 	const bundle = try readNativeToolchain(path);
+	selectedBundle = bundle;
 	pendingBundle = bundle;
 	pendingPath = path;
 	pendingStampRoot = stampRoot;
@@ -613,6 +620,8 @@ test "selecting a bundle reads its identity and leaves payload verification to t
 		const error = verifySelectedToolchain();
 		assert error.contains(manifest ? "invalid manifest entry not a manifest" : "FILES.sha256");
 		assert verifySelectedToolchain() == "";
+		const selected = selectedNativeToolchain();
+		assert selected != null && selected.root == root && selected.identity == SEAL_LINES[0].slice(0, 64);
 		assert removeAll(root).ok;
 	}
 }
@@ -645,6 +654,7 @@ test "a bundle with an unreadable identity is refused at selection" {
 	const selected = selectNativeToolchain(linuxOptions(), root, "");
 	assert !selected.ok;
 	assert selected.error.contains("invalid IDENTITY");
+	assert selectedNativeToolchain() == null;
 	assert removeAll(root).ok;
 }
 
