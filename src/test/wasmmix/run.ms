@@ -29,6 +29,8 @@ function resolveMsc(): string {
 	return "msc";
 }
 const MSC = resolveMsc();
+const BROWSER = env.get("WASMMIX_BROWSER") == "1";
+const RUN_PAGE = "src/test/wasmmix/browser/runPage.mjs";
 
 function say(line: string): void {
 	writeStderr(line + "\n");
@@ -111,7 +113,9 @@ function runProgram(name: string): boolean {
 		if (b.exitCode == 0) { problems.push(`[mixed] build succeeded, expected an error containing ${JSON.stringify(spec.mixedError)}`); }
 		else if (!text.contains(spec.mixedError)) { problems.push(`[mixed] error lacks ${JSON.stringify(spec.mixedError)}:\n${tail(text)}`); }
 	} else {
-		cols.push(buildAndRun("mixed", entry, dir + "mixed/", [], true));
+		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
+		cols.push(mixed);
+		if (BROWSER && mixed.ok) { cols.push(runProcess("browser", "node", [RUN_PAGE, dir + "mixed/", "app.js"])); }
 	}
 	for (const p of judge(spec, cols)) { problems.push(p); }
 	if (problems.length == 0) { say(`  PASS ${name}`); return true; }
