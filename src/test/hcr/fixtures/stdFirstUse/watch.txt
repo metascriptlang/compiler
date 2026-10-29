@@ -13,7 +13,7 @@ export function label(): string {
 	const packed = gzip("native first use");
 	if (hash("abc") <= 0 || blake2b("native first use").length != 32 || !key.ok || !packed.ok) return "native failed";
 	const unpacked = gunzip(packed.value);
-	if (!unpacked.ok || unpacked.value != "native first use") return "native failed";
+	if (!unpacked.ok || unpacked.value.asString() != "native first use") return "native failed";
 	const value = jsonArray([jsonArray([jsonString("json tag "), jsonNumber(7)])]);
 	if (value.kind != JsonKind.Array) return "union failed";
 	const nested = value.items[0];
