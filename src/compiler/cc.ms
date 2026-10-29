@@ -1143,6 +1143,11 @@ export function includePrefix(source: string): string {
 	return source.substring(0, end);
 }
 
+export function buildsPch(ccOption: number, ccBinary: string, mode: number): boolean {
+	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, "");
+	return parts.ok && isZigDriver(parts.value.command);
+}
+
 export function buildPch(header: string, pch: string, depFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
 	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, extraFlags);
 	if (!parts.ok || !isZigDriver(parts.value.command)) return false;

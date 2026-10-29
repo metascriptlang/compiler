@@ -81,7 +81,7 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -1427,12 +1427,13 @@ function warmHcrSession(opts: Readonly<CliOptions>): void {
 }
 
 function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): void {
+	if (!buildsPch(ccOption, ccBinary, mode)) return;
 	for (const j of jobs) {
 		if (j.modPath == "") continue;
 		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
 		if (files.length != 3 || currentPch(files)) continue;
 		ensureDir(dirname(files[1]));
-		if (!writeFile(files[1], files[0]).ok) continue;
+		if (!atomicWriteFile(files[1], files[0])) continue;
 		const depFile = `${files[2]}.${performance.now()}.d`;
 		if (buildPch(files[1], files[2], depFile, j.flags, mode, ccOption, ccBinary)) writePchManifest(depFile, `${files[2]}.deps`);
 		remove(depFile);
