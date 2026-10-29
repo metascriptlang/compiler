@@ -3,7 +3,7 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, DeclKind, VariableDeclData, Type, TypeKind,
+	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, SymbolKind, DeclKind, VariableDeclData, Type, TypeKind,
 	ExportDeclData, DecoratedDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
@@ -36,6 +36,7 @@ import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHos
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
+import { ExportedSymInfo } from "../../checker/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { unboxFloat } from "../../raiser/marshal";
 
@@ -372,7 +373,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exportsOf: string = ""): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -399,11 +400,18 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
 				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
 				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode, routine: fnNode.resolvedSym });
-				if (modules[mi].modulePath == exportsOf && pd.programStmts[i].kind == NodeKind.ExportDecl) {
-					exports.push({ name: fd.fnName, funcIdx: funcIdx as int32, arity: paramSyms.length });
-				}
 				funcIdx += 1;
 			}
+		}
+	}
+
+	for (const info of exported) {
+		if (info.sym.symbolKind != SymbolKind.Function) continue;
+		const declared = [info.sym];
+		for (const ov of info.sym.overloads) declared.push(ov);
+		for (const sym of declared) {
+			const idx = globalFuncMap.symbolIndices.get(sym);
+			if (idx != null) exports.push({ name: info.name, funcIdx: idx, arity: projectDecls[idx].paramSyms.length as int32 });
 		}
 	}
 

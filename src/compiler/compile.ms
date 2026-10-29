@@ -4933,6 +4933,13 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
+function entryExports(unitCtxs: CheckerContext[], unitPaths: string[], entryPath: string): ExportedSymInfo[] {
+	const at = unitPaths.indexOf(entryPath);
+	if (at < 0) return [];
+	const entry = findModuleExports(unitCtxs[at].exportRegistry, entryPath);
+	return entry != null ? entry.symbols : [];
+}
+
 export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
@@ -4997,7 +5004,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryCanonical : "");
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
