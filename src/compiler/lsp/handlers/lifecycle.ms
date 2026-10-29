@@ -1989,7 +1989,7 @@ test "rangeFormatting rewrites only the statement under the range" {
 }
 
 test "rangeFormatting breaks a long JSX statement under its own tab indentation" {
-	assert applyRangeFormatting(RANGE_FMT_SOURCE, 6, 3) == "const xs = [\n\t1,\n\t2,\n];\nfunction f(): Node {\n\tlet   x=1;\n\treturn <panel\n\t  title=\"a fairly long title value\"\n\t  subtitle=\"another long value\"\n\t  onClose={handleClose}\n\t>body</panel>;\n}\n";
+	assert applyRangeFormatting(RANGE_FMT_SOURCE, 6, 3) == "const xs = [\n\t1,\n\t2,\n];\nfunction f(): Node {\n\tlet   x=1;\n\treturn <panel\n\t\ttitle=\"a fairly long title value\"\n\t\tsubtitle=\"another long value\"\n\t\tonClose={handleClose}\n\t>body</panel>;\n}\n";
 }
 
 test "rangeFormatting on an already formatted statement returns no edit" {

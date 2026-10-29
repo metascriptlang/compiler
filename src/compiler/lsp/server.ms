@@ -906,15 +906,15 @@ test "editing the macro statement or the macro re-checks the importer of the spl
 const HOME_LIB = 'import { fooBody } from "./mac";
 fooBody(0);
 export class Home {
-  n: int32 = 1;
+	n: int32 = 1;
 }
 export function built(h: Home, f: Foo): int32 {
-  return f.x == null ? h.n : 0;
+	return f.x == null ? h.n : 0;
 }
 ';
 const HOME_GEN = 'import { Home, Foo, built } from "./lib";
 export function each<T>(x: T, h: Home, f: Foo): int32 {
-  return built(h, f);
+	return built(h, f);
 }
 ';
 const HOME_USER = 'import { each } from "./gen";
@@ -939,15 +939,15 @@ test "a class from a macro-importing module keeps one identity for a generic che
 }
 
 const BUILT_LIB = 'export class Home {
-  n: int32 = 1;
+	n: int32 = 1;
 }
 export function built(h: Home, f: string | null): int32 {
-  return f == null ? h.n : 0;
+	return f == null ? h.n : 0;
 }
 ';
 const BUILT_GEN = 'import { Home, built } from "./lib";
 export function each<T>(x: T, h: Home): int32 {
-  return built(h, null);
+	return built(h, null);
 }
 ';
 const BUILT_USER = 'import { each } from "./gen";
@@ -966,15 +966,15 @@ test "a generic from a module not checked yet resolves its own module's imports"
 
 const DRIFT_LIB = 'import { k } from "./d";
 export class Home {
-  n: int32 = k;
+	n: int32 = k;
 }
 export function mk(): Home {
-  return new Home();
+	return new Home();
 }
 ';
 const DRIFT_MID = 'import { Home } from "./lib";
 export function take(h: Home): int32 {
-  return h.n;
+	return h.n;
 }
 ';
 const DRIFT_USER = 'import { mk } from "./lib";
