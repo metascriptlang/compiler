@@ -34,10 +34,10 @@ function onDestroy(this self: Shape): void { shapeCalls += 1; }
 
 function onCopy(this ref dest: WriterRef, src: WriterRef): void { refCopy += 1; dest.id = src.id; dest.name = src.name; }
 function onMove(this ref dest: WriterRef, src: WriterRef): void { refMove += 1; dest.id = src.id; dest.name = src.name; }
-function onMoved(this ref self: WriterRef): void { refMoved += 1; }
+function onMoved(this ref self: WriterRef): void { refMoved += 1; self.name = ""; }
 function onCopy(this dest: Var<WriterVar>, src: WriterVar): void { varCopy += 1; dest.id = src.id; dest.name = src.name; }
 function onMove(this dest: Var<WriterVar>, src: WriterVar): void { varMove += 1; dest.id = src.id; dest.name = src.name; }
-function onMoved(this self: Var<WriterVar>): void { varMoved += 1; }
+function onMoved(this self: Var<WriterVar>): void { varMoved += 1; self.name = ""; }
 
 function mkRef(i: int32): WriterRef { return { id: i, name: "r" + i.toString() }; }
 function mkVar(i: int32): WriterVar { return { id: i, name: "v" + i.toString() }; }
