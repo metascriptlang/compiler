@@ -867,20 +867,24 @@ function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformConte
 	}
 	if (target.kind == NodeKind.MemberExpr) {
 		const md = target.data as MemberExprData;
-		md.object = md.object.kind == NodeKind.Identifier && !isValueLayoutType(md.object.nodeType) && readsAnyOf(md.object, writes)
-			? hoistRvalueToTemp(md.object, pre, ctx, writes)
-			: hoistAssignTargetEffects(md.object, pre, ctx, writes);
+		md.object = hoistTargetObject(md.object, pre, ctx, writes);
 		return target;
 	}
 	if (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
 		const hd = target.data as HiddenDerefData;
-		hd.expr = hoistAssignTargetEffects(hd.expr, pre, ctx, writes);
+		hd.expr = target.kind == NodeKind.HiddenDeref ? hoistTargetObject(hd.expr, pre, ctx, writes) : hoistAssignTargetEffects(hd.expr, pre, ctx, writes);
 		return target;
 	}
 	if (target.kind == NodeKind.CallExpr || target.kind == NodeKind.NewExpr) {
 		return hoistRvalueToTemp(target, pre, ctx, writes);
 	}
 	return target;
+}
+
+function hoistTargetObject(object: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
+	return object.kind == NodeKind.Identifier && !isValueLayoutType(object.nodeType) && readsAnyOf(object, writes)
+		? hoistRvalueToTemp(object, pre, ctx, writes)
+		: hoistAssignTargetEffects(object, pre, ctx, writes);
 }
 
 function collectCalleeWritable(n: Node, writes: Symbol[]): void {
