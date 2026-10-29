@@ -282,13 +282,12 @@ function makeErrorCheck(sym: Symbol, resType: Type | null, enclosingFnRetType: T
 
 	const errorAccess = makeResultMember(ctx, sym, resType, "error", loc);
 	// Use enclosing function's return type for the error literal, falling back to resType
-	let errRetType = (enclosingFnRetType != null && isResult(enclosingFnRetType))
-		? enclosingFnRetType : resType;
+	const awaited = awaitedType(enclosingFnRetType);
+	const fnResult = awaited != null ? awaited : enclosingFnRetType;
+	const errRetType = fnResult != null && isResult(fnResult) ? fnResult : resType;
 	let errValue = errorAccess;
 	if (converter != null) {
 		errValue = makeCallResolved(makeIdentResolved(converter, loc), [errorAccess], converter, loc);
-		const awaited = awaitedType(enclosingFnRetType);
-		if (errRetType == resType && awaited != null && isResult(awaited)) errRetType = awaited;
 	}
 	const resultErr = makeResultErr(errValue, errRetType, loc);
 
