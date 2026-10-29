@@ -759,6 +759,15 @@ function forgetHeapStringRefs(refs: Ptr<int64>, frame: RaiserFunction): void {
 	}
 }
 
+function liveFramesTop(vm: RaiserVM): number {
+	let top = Math.max(vm.floor, vm.base + getModuleFunc(vm.mod, vm.funcIdx).frameSize);
+	for (let d = 0; d < vm.callStack.depth; d += 1) {
+		const frame = vm.callStack.items[d];
+		top = Math.max(top, frame.base + getModuleFunc(vm.mod, frame.funcIdx).frameSize);
+	}
+	return top;
+}
+
 function hasFloor(vm: RaiserVM): boolean {
 	return vm.floor > 0;
 }
@@ -5253,7 +5262,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	setActiveProgramArgv(vm.programArgv);
 	const outerFloor = vm.floor;
 	const suspended = vm.suspendedRuns.length;
-	vm.floor = Math.max(1, vm.base + getModuleFunc(vm.mod, vm.funcIdx).frameSize);
+	vm.floor = Math.max(1, liveFramesTop(vm));
 	const result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
