@@ -184,7 +184,8 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | nu
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
-			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
+			if (pd.propIsStatic) continue;
+			const fieldReg = emitZeroValue(s, classBody[ci].nodeType);
 			const nameIdx = addConst(s, raiserConstString(pd.propName));
 			emitInst(s, fieldInst(s, thisType, pd.propName, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, thisReg, nameIdx, fieldReg));
 		}
