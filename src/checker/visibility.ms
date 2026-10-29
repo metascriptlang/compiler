@@ -1,6 +1,6 @@
 import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
-import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
-import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType } from "./context";
+import { classDeclNodeOf, parentClassSymOf, Scope, SymbolFlag, hasFlag } from "./symbol";
+import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
@@ -376,6 +376,15 @@ export function refuseHookValue(ctx: CheckerContext, node: Node): void {
 	const hook = hookNamed(node.resolvedSym);
 	if (hook == "") return;
 	addError(ctx, `'${hook}' ${HOOK_RUNS_ONCE}: it has no value to keep and call later`, node.location.line, node.location.column);
+}
+
+export function refusePatternExternValue(ctx: CheckerContext, node: Node): void {
+	const sym = node.resolvedSym;
+	if (node == ctx.calleeExpr || node == ctx.typeExprSlot || sym == null || sym.symbolKind != SymbolKind.Function
+			|| !hasFlag(sym, SymbolFlag.ImportC) || !isNativePattern(sym.nativeName)) return;
+	addError(ctx,
+		`extern function '${sym.name}' is the pattern "${sym.nativeName}", which has a meaning only where it is called, so it has no function value: call it inside an arrow function and pass that`,
+		node.location.line, node.location.column);
 }
 
 export function isSuperReceiver(object: Node): boolean {

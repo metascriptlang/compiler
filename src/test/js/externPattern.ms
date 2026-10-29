@@ -1,4 +1,4 @@
-import { compileToJS } from "../helpers";
+import { compileToJS, compileToJSWithStd } from "../helpers";
 
 test "JS: a pattern without a placeholder is emitted, not called by name" {
 	const js = compileToJS("extern function answer(): int32 from \"(40 + 2)\";\nconst v = answer();");
@@ -127,4 +127,34 @@ test "JS: an extern let bound by a from name is written through that name" {
 	assert js.ok;
 	assert js.value.contains("globalThis.msCounter = 3");
 	assert js.value.contains("globalThis.msCounter += 1");
+}
+
+test "JS: a pattern extern passed as a function value is refused, naming it" {
+	const js = compileToJS("extern function twice(x: float64): float64 from \"(#) * 2\";\n"
+		+ "function apply(f: (x: number) => number): number { return f(4); }\nconsole.log(apply(twice));");
+	assert !js.ok;
+	assert js.error.contains("extern function 'twice' is the pattern \"(#) * 2\"");
+}
+
+test "JS: a two-placeholder pattern extern stored in a const is refused, its call still emits" {
+	const js = compileToJS("extern function add(a: float64, b: float64): float64 from \"(#) + (#)\";\nconst f = add;");
+	assert !js.ok;
+	assert js.error.contains("extern function 'add' is the pattern \"(#) + (#)\"");
+	const call = compileToJS("extern function add(a: float64, b: float64): float64 from \"(#) + (#)\";\nconst s = add(2, 3);");
+	assert call.ok;
+	assert call.value.contains("(2) + (3)");
+}
+
+test "JS: a plain-named extern stays a function value" {
+	const js = compileToJS("extern function myAbs(x: number): number from \"Math.abs\";\n"
+		+ "function apply(f: (x: number) => number): number { return f(-4); }\nconst a = apply(myAbs);");
+	assert js.ok;
+	assert js.value.contains("(Math.abs)");
+}
+
+test "JS: a std static pattern extern read through its class is refused" {
+	const js = compileToJSWithStd("function make(f: (n: number) => Buffer): number { return f(3).length; }\n"
+		+ "console.log(make(Buffer.alloc));");
+	assert !js.ok;
+	assert js.error.contains("extern function 'alloc' is the pattern \"new Uint8Array(#)\"");
 }
