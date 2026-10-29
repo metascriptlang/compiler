@@ -388,7 +388,9 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 
 	let dataExpr: Node;
 	if (arrType.kind == TypeKind.Array || arrType.kind == TypeKind.String) {
-		dataExpr = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(d.array, "p", loc), startExpr], loc);
+		const slot = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(d.array, "p", loc), startExpr], loc);
+		slot.nodeType = createPtr(resultType.typeReturn);
+		dataExpr = makeHiddenStdConv(slot, spanDataPtr(resultType.typeReturn), loc);
 	} else if (arrType.kind == TypeKind.SizedArray || arrType.kind == TypeKind.Span) {
 		dataExpr = makeBinary(makeMember(d.array, "data", loc), "+", startExpr, loc);
 	} else if (slicesPointer(d)) {
@@ -397,8 +399,7 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		return node;
 	}
 
-	// Set pointer type for correct C emission
-	if (resultType.typeReturn != null) {
+	if (dataExpr.kind != NodeKind.HiddenStdConv && resultType.typeReturn != null) {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);
 	}
 
