@@ -1,7 +1,7 @@
 import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { manifestFor } from "./manifest";
+import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
 
 const SOURCE = `
@@ -13,6 +13,8 @@ export function flip(b: boolean): boolean { return !b; }
 export function wide(x: uint32): uint32 { return x; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
 export function pick(f: (a: boolean, b: uint32) => boolean): void { f(true, 1); }
+export function twice(s: string): string { return s + s; }
+export function both(a: string, n: int32, b: string): int32 { return a.length + n + b.length; }
 `;
 
 function bindingsFor(names: string[]) {
@@ -53,4 +55,52 @@ test "js side: one prelude awaits the wasm module once and a stale callback id t
 	assert b.prelude.includes("globalThis.__msb = __msb;");
 	assert b.prelude.includes('throw new Error("callback used after its call returned");');
 	assert b.prelude.indexOf("globalThis.__msb") < b.prelude.indexOf("_MsMain");
+}
+
+test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
+	const code = bindingsFor(["both"]).modules[0].code;
+	assert code.includes("function bundled_both(a0, a1, a2) {
+	const e0 = __msbEnc(a0);
+	const e2 = __msbEnc(a2);
+	try {
+		return __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);
+	} finally {
+		__msbMod._free(e0[0]);
+		__msbMod._free(e2[0]);
+	}
+}");
+}
+
+test "js side: a string result is decoded with the length read right after the call" {
+	const code = bindingsFor(["twice"]).modules[0].code;
+	assert code.includes("function bundled_twice(a0) {
+	const e0 = __msbEnc(a0);
+	try {
+		return __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());
+	} finally {
+		__msbMod._free(e0[0]);
+	}
+}");
+}
+
+test "js side: a callback string parameter arrives as pointer and length and is decoded" {
+	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], result: BoundaryKind.I32, signature: "i_si" };
+	const m: Manifest = {
+		functions: [{
+			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", exportSymbol: "msb_calc_note",
+			params: [{ name: "cb", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb }],
+			result: BoundaryKind.Void,
+		}],
+		errors: [],
+	};
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
+}
+
+test "js side: the prelude carries the string glue once and reads the heap fresh" {
+	const p = bindingsFor(["twice"]).prelude;
+	assert p.indexOf("function __msbEnc(s)") == p.lastIndexOf("function __msbEnc(s)");
+	assert p.includes("function __msbDec(p, len)");
+	assert p.includes("__msbMod.HEAPU8");
+	assert !p.includes("wasmMemory");
 }
