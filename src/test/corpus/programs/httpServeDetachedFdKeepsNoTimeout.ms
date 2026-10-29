@@ -46,7 +46,7 @@ function statusLine(fd: int32): string {
 	while (!head.includes("\r\n\r\n")) {
 		const chunk = recv(fd, 256);
 		if (chunk.length == 0) break;
-		head += chunk;
+		head += chunk.asString();
 	}
 	return head.split("\r\n")[0];
 }
@@ -58,7 +58,7 @@ function plainClient(port: int32): int32 {
 	const status = statusLine(fd);
 	await sleepAsync(PAST_SWEEP_MS);
 	send(fd, "hello");
-	console.log(`serve: ${status} then ${recv(fd, 64)}`);
+	console.log(`serve: ${status} then ${recv(fd, 64).asString()}`);
 	close(fd);
 	lockedUpdate(clientDone, (d: boolean): boolean => true);
 	return 0;
@@ -67,7 +67,7 @@ function plainClient(port: int32): int32 {
 const plain = createServer((req: HttpRequest, res: ServerResponse): void => {
 	const fd = res.detach();
 	send(fd, "HTTP/1.1 101 Switching Protocols\r\n\r\n");
-	send(fd, `echo: ${recv(fd, 64)}`);
+	send(fd, `echo: ${recv(fd, 64).asString()}`);
 	close(fd);
 	const t0 = Date.now();
 	while (!lockedRead(clientDone, (d: boolean): boolean => d) && Date.now() - t0 < 10000) {}

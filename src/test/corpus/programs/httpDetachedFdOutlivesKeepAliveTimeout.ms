@@ -43,7 +43,7 @@ function statusLine(fd: int32): string {
 	while (!head.includes("\r\n\r\n")) {
 		const chunk = recv(fd, 256);
 		if (chunk.length == 0) break;
-		head += chunk;
+		head += chunk.asString();
 	}
 	return head.split("\r\n")[0];
 }
@@ -56,7 +56,7 @@ function concurrentClient(port: int32): int32 {
 	const status = statusLine(fd);
 	await sleepAsync(PAST_SWEEP_MS);
 	lockedUpdate(waited, (w: boolean): boolean => true);
-	console.log(`serveConcurrent: ${status} then ${recv(fd, 64)}`);
+	console.log(`serveConcurrent: ${status} then ${recv(fd, 64).asString()}`);
 	close(fd);
 	return 0;
 }

@@ -30,7 +30,7 @@ function freePort(): int32 {
 async function echoOnce(fd: int32): Promise<void> {
 	const chunk = await recvAsync(fd, 64);
 	if (chunk.length == 0) return;
-	send(fd, `echo: ${chunk}`);
+	send(fd, `echo: ${chunk.asString()}`);
 	close(fd);
 }
 
@@ -67,7 +67,7 @@ function readHead(fd: int32): string {
 	while (!got.includes("\r\n\r\n")) {
 		const chunk = recv(fd, 256);
 		if (chunk.length == 0) break;
-		got += chunk;
+		got += chunk.asString();
 	}
 	return got;
 }
@@ -78,7 +78,7 @@ function detached(port: int32, path: string): string {
 	const status = readHead(fd).split("\r\n")[0];
 	await sleepAsync(PAST_SWEEP_MS);
 	send(fd, "hello");
-	const reply = recv(fd, 64);
+	const reply = recv(fd, 64).asString();
 	close(fd);
 	return `${path}: ${status} then ${reply}`;
 }
@@ -91,7 +91,7 @@ function idleClosed(port: int32): boolean {
 	while (!got.endsWith("idle")) {
 		const chunk = recv(fd, 256);
 		if (chunk.length == 0) break;
-		got += chunk;
+		got += chunk.asString();
 	}
 	const rest = recv(fd, 64);
 	const closed = rest.length == 0 && !recvTimedOut();
