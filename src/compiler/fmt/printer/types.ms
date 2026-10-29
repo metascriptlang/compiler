@@ -8,7 +8,7 @@ import {
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
-	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docIndent, docLine, docSoftLine, docIfBreak,
+	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
 } from "../doc";
 import { commentsWithin } from "./commentDocs";
 import { sourceSpan, sourceByteAt, blankLineBefore, normalizeStringToken } from "./literals";
@@ -119,7 +119,7 @@ function printUnion(node: Node, parent: TypeParent, options: FormatOptions): Doc
 			body.push(docLine());
 			body.push(docText("| "));
 		}
-		body.push(docIndent([member(members[i], TypeParent.Element, options)]));
+		body.push(docAlign([member(members[i], TypeParent.Element, options)]));
 	}
 	if (parent == TypeParent.Element) return docGroup([docIndent(body), docSoftLine()]);
 	return docGroup(indented ? [docIndent(body)] : body);
@@ -252,7 +252,7 @@ function flat(doc: Doc): string {
 		DocKind.Nil | DocKind.Line | DocKind.HardLine | DocKind.BreakParent => "",
 		DocKind.Text | DocKind.SourceText => (doc.data as { text: string }).text,
 		DocKind.IfBreak => flat((doc.data as { broken: Doc, flat: Doc }).flat),
-		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			let out = "";
 			for (const child of (doc.data as { children: Doc[] }).children) out += flat(child);
 			return out;

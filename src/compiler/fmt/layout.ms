@@ -2,7 +2,7 @@
 // the current line.
 
 import { FormatOptions, TrailingComma } from "./options";
-import { Doc, DocKind, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText, docGroupWithId, docIfGroupBreaks, docIndentIfGroupBreaks, docBestFitting, docFill, newGroupId, noGroupId, docWillBreak, docWithoutSoftLines } from "./doc";
+import { Doc, DocKind, alignWidth, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText, docGroupWithId, docIfGroupBreaks, docIndentIfGroupBreaks, docBestFitting, docFill, newGroupId, noGroupId, docWillBreak, docWithoutSoftLines } from "./doc";
 
 enum Mode {
 	Flat,
@@ -75,7 +75,7 @@ function printedModeOfNamedGroup(modes: GroupModes, doc: Doc, current: Mode): Mo
 function propagateBreaks(doc: Doc): boolean {
 	return match (doc.kind) {
 		DocKind.BreakParent | DocKind.HardLine => true,
-		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			let hasBreak = false;
 			for (const child of childrenOf(doc)) {
 				if (propagateBreaks(child)) hasBreak = true;
@@ -167,6 +167,24 @@ function indentString(levels: int32, options: FormatOptions): string {
 	return options.useTabs ? "\t".repeat(levels) : " ".repeat(levels * options.tabWidth);
 }
 
+const alignShift: int32 = 16;
+
+function levelsOf(indent: int32): int32 {
+	return indent & ((1 << alignShift) - 1);
+}
+
+function alignsOf(indent: int32): int32 {
+	return indent >> alignShift;
+}
+
+function aligned(indent: int32): int32 {
+	return indent + (1 << alignShift);
+}
+
+function deeper(indent: int32, options: FormatOptions): int32 {
+	return options.useTabs ? levelsOf(indent) + alignsOf(indent) + 1 : indent + 1;
+}
+
 function indentWidth(prefix: string, options: FormatOptions): int32 {
 	let w = 0;
 	for (let i = 0; i < prefix.byteLength; i += 1) {
@@ -207,6 +225,7 @@ function fits(next: Cmd[], rest: Cmd[], restIdx: int32, width: int32, tabWidth: 
 				pushChildren(stack, doc, cmd.indent, groupMode);
 			},
 			DocKind.Indent => { pushChildren(stack, doc, cmd.indent + 1, cmd.mode); },
+			DocKind.Align => { pushChildren(stack, doc, aligned(cmd.indent), cmd.mode); },
 			DocKind.IndentIfGroupBreaks => {
 				const broken = modeOfNamedGroup(modes, doc, cmd.mode) == Mode.Break;
 				pushChildren(stack, doc, broken ? cmd.indent + 1 : cmd.indent, cmd.mode);
@@ -301,10 +320,11 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 				recordGroupMode(modes, d, childMode);
 				pushChildren(stack, d, cmd.indent, childMode);
 			},
-			DocKind.Indent => { pushChildren(stack, d, cmd.indent + 1, cmd.mode); },
+			DocKind.Indent => { pushChildren(stack, d, deeper(cmd.indent, options), cmd.mode); },
+			DocKind.Align => { pushChildren(stack, d, aligned(cmd.indent), cmd.mode); },
 			DocKind.IndentIfGroupBreaks => {
 				const broken = printedModeOfNamedGroup(modes, d, cmd.mode) == Mode.Break;
-				pushChildren(stack, d, broken ? cmd.indent + 1 : cmd.indent, cmd.mode);
+				pushChildren(stack, d, broken ? deeper(cmd.indent, options) : cmd.indent, cmd.mode);
 			},
 			DocKind.BestFitting => {
 				const variants = variantsOf(d);
@@ -367,9 +387,9 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 						if (fromSource) textEnd = line.length;
 					}
 					result = result + trimTrailingBlanks(line, textEnd) + "\n";
-					line = baseIndent + indentString(cmd.indent, options);
+					line = baseIndent + indentString(levelsOf(cmd.indent), options) + " ".repeat(alignsOf(cmd.indent) * alignWidth);
 					textEnd = 0;
-					column = baseWidth + cmd.indent * options.tabWidth;
+					column = baseWidth + levelsOf(cmd.indent) * options.tabWidth + alignsOf(cmd.indent) * alignWidth;
 				} else if (!isSoft(d)) {
 					line = line + " ";
 					column = column + 1;

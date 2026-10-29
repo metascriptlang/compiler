@@ -14,6 +14,7 @@ export enum DocKind {
 	IndentIfGroupBreaks,
 	BestFitting,
 	Fill,
+	Align,
 }
 
 export type DocData =
@@ -24,6 +25,8 @@ export type DocData =
 	| { variants: Doc[][] };
 
 export const noGroupId: int32 = 0;
+
+export const alignWidth: int32 = 2;
 
 let lastGroupId: int32 = 0;
 
@@ -73,6 +76,10 @@ export function docGroupWithId(children: Doc[], groupId: int32): Doc {
 
 export function docIndent(children: Doc[]): Doc {
 	return createDoc(DocKind.Indent, { children } as DocData);
+}
+
+export function docAlign(children: Doc[]): Doc {
+	return createDoc(DocKind.Align, { children } as DocData);
 }
 
 export function docLine(): Doc {
@@ -148,7 +155,7 @@ export function docWillBreak(doc: Doc): boolean {
 	return match (doc.kind) {
 		DocKind.HardLine | DocKind.BreakParent => true,
 		DocKind.Text | DocKind.SourceText => (doc.data as { text: string }).text.includes("\n"),
-		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			if (doc.kind == DocKind.Group && doc.shouldBreak) return true;
 			for (const child of childDocs(doc)) {
 				if (docWillBreak(child)) return true;
@@ -180,7 +187,7 @@ export function docWithoutSoftLines(doc: Doc): Doc {
 		DocKind.Nil | DocKind.Text | DocKind.SourceText | DocKind.HardLine | DocKind.BreakParent => doc,
 		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? docNil() : docText(" "),
 		DocKind.IfBreak => docWithoutSoftLines((doc.data as { broken: Doc, flat: Doc }).flat),
-		DocKind.Group | DocKind.Indent | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			const copy = createDoc(doc.kind, { children: copyDocs(childDocs(doc)) } as DocData);
 			copy.shouldBreak = doc.shouldBreak;
 			copy.groupId = doc.groupId;
