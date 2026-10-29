@@ -41,31 +41,43 @@ export function surrogatePairAt(data: Readonly<Span<uint8>>, i: int64): boolean 
 		&& data[i + 3] == 0xED && data[i + 4] >= 0xB0 && data[i + 4] <= 0xBF && (data[i + 5] & 0xC0) == 0x80;
 }
 
+when (c) {
+	@inline
+	function byteOf(data: Readonly<Span<uint8>>, i: int64): int32 {
+		return (data as Readonly<Ptr<uint8>>)[i] as int32;
+	}
+} else {
+	@inline
+	function byteOf(data: Readonly<Span<uint8>>, i: int64): int32 {
+		return data[i] as int32;
+	}
+}
+
 export function wellFormedPrefix(data: Readonly<Span<uint8>>, from: int64, surrogates: boolean): int64 {
 	const length = data.length as int64;
 	const room = length - 4;
 	let i = from;
 	while (i < length) {
-		const lead = data[i] as int32;
+		const lead = byteOf(data, i);
 		if (lead < 0x80) {
 			i += 1;
-			if (i <= room && ((data[i] | data[i + 1] | data[i + 2]) as int32) < 0x80) i += 3;
+			if (i <= room && (byteOf(data, i) | byteOf(data, i + 1) | byteOf(data, i + 2)) < 0x80) i += 3;
 			continue;
 		}
 		if (i <= room) {
-			const b1 = (data[i + 1] as int32) ^ 0x80;
+			const b1 = byteOf(data, i + 1) ^ 0x80;
 			if (lead < 0xE0) {
 				if (lead >= 0xC2 && b1 < 0x40) {
 					i += 2;
 					continue;
 				}
 			} else if (lead < 0xF0) {
-				if (lead != 0xED && (b1 | ((data[i + 2] as int32) ^ 0x80)) < 0x40 && (lead != 0xE0 || b1 >= 0x20)) {
+				if (lead != 0xED && (b1 | (byteOf(data, i + 2) ^ 0x80)) < 0x40 && (lead != 0xE0 || b1 >= 0x20)) {
 					i += 3;
 					continue;
 				}
 			} else if (lead < 0xF4) {
-				if ((b1 | ((data[i + 2] as int32) ^ 0x80) | ((data[i + 3] as int32) ^ 0x80)) < 0x40 && (lead != 0xF0 || b1 >= 0x10)) {
+				if ((b1 | (byteOf(data, i + 2) ^ 0x80) | (byteOf(data, i + 3) ^ 0x80)) < 0x40 && (lead != 0xF0 || b1 >= 0x10)) {
 					i += 4;
 					continue;
 				}
