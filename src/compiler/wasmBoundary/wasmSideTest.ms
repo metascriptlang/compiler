@@ -9,6 +9,8 @@ export function add64(a: int64, b: int64): int64 { return a + b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
 export function isEven(x: uint8): boolean { return x % 2 == 0; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
+export function twice(s: string): string { return s + s; }
+export function report(cb: (s: string) => int32): int32 { return cb("x"); }
 `;
 
 function entryFor(names: string[]) {
@@ -45,4 +47,28 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	assert e.exportedFunctions.join(",") == "_msb_calc_evaluate,_msb_calc_add64,_MsMain";
 	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, ...a) => globalThis.__msb.cb(id, ...a),\n});\n";
 	assert entryFor(["add64"]).jsLibrary == "";
+}
+
+test "wasm entry: a string parameter arrives as ptr and len, a result is kept in the slot and read by length" {
+	const e = entryFor(["twice"]);
+	const s = e.source;
+	assert s.includes("function msbStrFrom(ptr: uint32, len: int32): string {\n\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);\n}");
+	assert s.includes('let msbRet: string = "";');
+	assert s.includes('@exportName("msb_ret_len")');
+	assert s.includes('@exportName("msb_calc_twice")\nexport function msb_calc_twice(sPtr: uint32, sLen: int32): uint32 {\n\tmsbRet = msbm0_twice(msbStrFrom(sPtr, sLen));\n\treturn msbStrPtr(msbRet);\n}');
+	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_msb_ret_len,_malloc,_free,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+	const plain = entryFor(["add64"]);
+	assert plain.source.includes("msStringNew") == false;
+	assert plain.runtimeMethods.length == 0;
+}
+
+test "wasm entry: a callback string parameter passes ptr and len of a value alive for the call" {
+	const e = entryFor(["report"]);
+	const s = e.source;
+	assert s.includes("msbm0_report((a0: string): int32 => msb_cb_i_s(cb, msbStrPtr(a0), a0.asBytes().length))");
+	assert s.includes('extern function msb_cb_i_s(id: int32, a0p: uint32, a0l: int32): int32 from "msb_cb_i_s";');
+	assert s.includes("int32_t msb_cb_i_s(int32_t id, uint32_t a0p, int32_t a0l);");
+	assert s.includes("msbRet") == false;
+	assert e.exportedFunctions.join(",") == "_msb_calc_report,_malloc,_free,_MsMain";
 }

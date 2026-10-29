@@ -4,6 +4,7 @@ export interface WasmEntry {
 	source: string;
 	exportedFunctions: string[];
 	jsLibrary: string;
+	runtimeMethods: string[];
 }
 
 function msTypeOf(kind: BoundaryKind): string {
@@ -66,6 +67,11 @@ function callbackLines(cb: BoundaryCallback): string[] {
 	let msParams = "id: int32";
 	for (let i = 0; i < letters.length; i += 1) {
 		const l = letters.slice(i, i + 1);
+		if (l == "s") {
+			cParams += `, uint32_t a${i}p, int32_t a${i}l`;
+			msParams += `, a${i}p: uint32, a${i}l: int32`;
+			continue;
+		}
 		cParams += `, ${wireCType(l)} a${i}`;
 		msParams += `, a${i}: ${wireMsType(l)}`;
 	}
@@ -83,12 +89,35 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 	let args = idName;
 	for (let i = 0; i < params.length; i += 1) {
 		if (i > 0) sig += ", ";
+		if (params[i] == BoundaryKind.String) {
+			sig += `a${i}: string`;
+			args += `, msbStrPtr(a${i}), a${i}.asBytes().length`;
+			continue;
+		}
 		sig += `a${i}: ${msTypeOf(params[i])}`;
 		args += ", " + toWire(params[i], `a${i}`);
 	}
 	const call = `msb_cb_${cb.signature}(${args})`;
 	if (cb.result == BoundaryKind.Void) return `(${sig}): void => { ${call}; }`;
 	return `(${sig}): ${msTypeOf(cb.result)} => ${fromWire(cb.result, call)}`;
+}
+
+function stringHelperLines(withResult: boolean): string[] {
+	const lines = [
+		"extern function msStringNew(data: cstring, length: int64): string;",
+		"function msbStrFrom(ptr: uint32, len: int32): string {",
+		"\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);",
+		"}",
+		"function msbStrPtr(s: string): uint32 {",
+		"\treturn (s as cstring) as Ptr<uint8> as uint64 as uint32;",
+		"}",
+	];
+	if (withResult) {
+		lines.push('let msbRet: string = "";');
+		lines.push('@exportName("msb_ret_len")');
+		lines.push("export function msb_ret_len(): int32 { return msbRet.asBytes().length; }");
+	}
+	return lines;
 }
 
 function wrapperLines(f: BoundaryFunction, alias: string): string[] {
@@ -98,9 +127,9 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 		const p: BoundaryParam = f.params[i];
 		if (i > 0) { sig += ", "; args += ", "; }
 		if (p.kind == BoundaryKind.String) {
-			throw new Error(`internal: string parameter '${p.name}' of '${f.name}' reached the wasm side before string crossing exists`);
-		}
-		if (p.kind == BoundaryKind.Callback) {
+			sig += `${p.name}Ptr: uint32, ${p.name}Len: int32`;
+			args += `msbStrFrom(${p.name}Ptr, ${p.name}Len)`;
+		} else if (p.kind == BoundaryKind.Callback) {
 			sig += `${p.name}: int32`;
 			args += closureOf(p.callback!, p.name);
 		} else {
@@ -108,10 +137,16 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 			args += p.name;
 		}
 	}
-	if (f.result == BoundaryKind.String) {
-		throw new Error(`internal: string result of '${f.name}' reached the wasm side before string crossing exists`);
-	}
 	const call = `${alias}(${args})`;
+	if (f.result == BoundaryKind.String) {
+		return [
+			`@exportName("${f.exportSymbol}")`,
+			`export function ${f.exportSymbol}(${sig}): uint32 {`,
+			`\tmsbRet = ${call};`,
+			"\treturn msbStrPtr(msbRet);",
+			"}",
+		];
+	}
 	return [
 		`@exportName("${f.exportSymbol}")`,
 		`export function ${f.exportSymbol}(${sig}): ${msTypeOf(f.result)} {`,
@@ -137,6 +172,18 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		lines.push(`import { ${names} } from "${importPathOf(modules[m])}";`);
 	}
 
+	let hasStringParam = false;
+	let hasStringResult = false;
+	for (const f of fns) {
+		if (f.result == BoundaryKind.String) hasStringResult = true;
+		for (const p of f.params) {
+			if (p.kind == BoundaryKind.String) hasStringParam = true;
+			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.String)) hasStringParam = true;
+		}
+	}
+	const hasString = hasStringParam || hasStringResult;
+	if (hasString) for (const l of stringHelperLines(hasStringResult)) lines.push(l);
+
 	const signatures: string[] = [];
 	for (const f of fns) {
 		for (const p of f.params) {
@@ -151,6 +198,11 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
+	if (hasStringResult) exported.push("_msb_ret_len");
+	if (hasString) {
+		exported.push("_malloc");
+		exported.push("_free");
+	}
 	exported.push("_MsMain");
 
 	let jsLibrary = "";
@@ -159,5 +211,6 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		for (const s of signatures) entries.push(`\tmsb_cb_${s}: (id, ...a) => globalThis.__msb.cb(id, ...a),`);
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
-	return { source: lines.join("\n") + "\n", exportedFunctions: exported, jsLibrary };
+	const runtimeMethods = hasString ? ["HEAPU8", "wasmMemory"] : [];
+	return { source: lines.join("\n") + "\n", exportedFunctions: exported, jsLibrary, runtimeMethods };
 }
