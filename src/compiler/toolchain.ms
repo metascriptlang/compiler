@@ -519,6 +519,8 @@ function nativeRuntimeConfig(targetOs: string, cpu: string): string {
 	if (targetOs == "linux" && (cpu == "arm64" || cpu == "aarch64")) return "aarch64-linux-gnu.2.31.cfg";
 	if (targetOs == "windows" && (cpu == "amd64" || cpu == "x86_64")) return "windows/x86_64-windows-gnu.cfg";
 	if (targetOs == "windows" && (cpu == "arm64" || cpu == "aarch64")) return "windows/aarch64-windows-gnu.cfg";
+	if ((targetOs == "darwin" || targetOs == "macos") && (cpu == "amd64" || cpu == "x86_64")) return "darwin/x86_64-macos.cfg";
+	if ((targetOs == "darwin" || targetOs == "macos") && (cpu == "arm64" || cpu == "aarch64")) return "darwin/aarch64-macos.cfg";
 	return "";
 }
 
@@ -575,9 +577,8 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	pendingStampRoot = stampRoot;
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
-	if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
-		const sdk = macosSdkPath(stampRoot);
-		if (sdk == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
+	const sdk = opts.targetOs == "darwin" || opts.targetOs == "macos" ? macosSdkPath(stampRoot) : "";
+	if (sdk != "") {
 		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
 		opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
 		return Result.ok(null);
@@ -678,6 +679,8 @@ test "prepared runtimes are selected by both OS and CPU" {
 	assert nativeRuntimeConfig("linux", "amd64") == "x86_64-linux-gnu.2.31.cfg";
 	assert nativeRuntimeConfig("linux", "x86_64") == "x86_64-linux-gnu.2.31.cfg";
 	assert nativeRuntimeConfig("linux", "arm64") == "aarch64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("darwin", "arm64") == "darwin/aarch64-macos.cfg";
+	assert nativeRuntimeConfig("macos", "x86_64") == "darwin/x86_64-macos.cfg";
 	assert nativeRuntimeConfig("linux", "aarch64") == "aarch64-linux-gnu.2.31.cfg";
 	assert nativeRuntimeConfig("linux", "arm") == "";
 	assert nativeRuntimeConfig("windows", "amd64") == "windows/x86_64-windows-gnu.cfg";
