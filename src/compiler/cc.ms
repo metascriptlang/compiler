@@ -1379,16 +1379,17 @@ export function compileCFile(cFile: string, oFile: string, dependencyFile: strin
 		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
 	}
 	const args = objectCompileArgv(parts, cFile, tmp, depTmp);
+	const objectName = `${withoutExtension(cFile)}.o`;
 	if (emitsCodeView(command, parts.lead, parts.trail)) {
 		args.push("-Xclang");
-		args.push(`-object-file-name=${oFile}`);
+		args.push(`-object-file-name=${objectName}`);
 	}
 	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
 	let planned = false;
 	if (plan.exe != "") {
 		const direct = planArgs(plan, [cFile], tmp, depTmp);
 		for (let k = 0; k < direct.length; k += 1) {
-			if (direct[k] == `-object-file-name=${tmp}`) direct[k] = `-object-file-name=${oFile}`;
+			if (direct[k] == `-object-file-name=${tmp}`) direct[k] = `-object-file-name=${objectName}`;
 		}
 		if (pch != "") {
 			const withPch: string[] = [direct[0], "-include-pch", pch];
@@ -1929,22 +1930,21 @@ test "trim mode adds no flag for a compiler that may not take it" {
 	}
 }
 
-test "compiling the same C twice leaves byte-identical objects" {
+test "compiling the same C twice leaves byte-identical objects, whatever name the cache gives each" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const dir = `${base}/msc-det-${performance.now()}`;
 	ensureDir(dir);
 	const source = `${dir}/a.c`;
-	const object = `${dir}/a.o`;
 	writeFile(source, "int answer(void) { return 42; }\n");
 	const parts = objectCompileArgs(0, "", false, 0, "");
 	assert parts.ok;
-	assert compileCFile(source, object, `${dir}/a.d`, parts.value, NO_PLAN).ok;
-	const first = readFileBytes(object);
-	assert compileCFile(source, object, `${dir}/a.d`, parts.value, NO_PLAN).ok;
-	const second = readFileBytes(object);
+	assert compileCFile(source, `${dir}/a.1.o`, `${dir}/a.d`, parts.value, NO_PLAN).ok;
+	const first = readFileBytes(`${dir}/a.1.o`);
+	assert compileCFile(source, `${dir}/a.2.o`, `${dir}/a.d`, parts.value, NO_PLAN).ok;
+	const second = readFileBytes(`${dir}/a.2.o`);
 	assert first.ok && second.ok;
 	assert first.value.byteLength() == second.value.byteLength();
 	for (let i = 0; i < first.value.byteLength(); i += 1) assert first.value.byteAt(i as int32) == second.value.byteAt(i as int32);
-	for (const name of ["a.c", "a.o", "a.d"]) remove(`${dir}/${name}`);
+	for (const name of ["a.c", "a.1.o", "a.2.o", "a.d"]) remove(`${dir}/${name}`);
 	remove(dir);
 }
