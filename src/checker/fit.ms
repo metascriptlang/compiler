@@ -2730,6 +2730,10 @@ function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
 
+function sameCarrier(a: Type | null, b: Type): boolean {
+	return a != null && sameType(a, b) && a.typeName == b.typeName;
+}
+
 export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type, ctx: CheckerContext | null = null): Node {
 	const formal = instantiatedUnionBehind(formalSlot);
 	if (instantiatedUnionBehind(exprType) != exprType || unwrapRefNullUnion(formal) != null) return null as unknown as Node;
