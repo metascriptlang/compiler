@@ -95,11 +95,13 @@ function main(): void {
 main();
 `;
 
-test "macro unsupported evaluation: unbridged externs identify the unavailable host function" {
-	const c = compileToCWithStd(unbridgedCallSource);
-	assert !c.ok;
-	if (!c.ok) {
-		assert c.error.contains("msSetTimeout");
+test "macro unsupported evaluation: a timer a macro starts names the module state the VM cannot read" {
+	for (const timer of ["setTimeout", "setInterval"]) {
+		const c = compileToCWithStd(unbridgedCallSource.replace("setTimeout", timer));
+		assert !c.ok;
+		if (!c.ok) {
+			assert c.error.contains("timerNext"), c.error;
+		}
 	}
 }
 
