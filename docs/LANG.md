@@ -3850,6 +3850,8 @@ The custom `toString` takes priority over the default debug format everywhere â€
 | struct | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 | class | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 
+A template interpolation `${v}` is `String(v)`: an enum interpolates as its variant name, also with explicit values, as a struct field, inside a nested template and as an operand of `+` after a string, on C, `--danger`, JS and split JS (corpus `enumInTemplateTextsAsItsName`, measured 2026-10-30 on a candidate of this slice; before it JS printed the number). The Raiser VM still prints the ordinal (card `2026-09-25-raiser-enum-to-string-prints-the-number`), and `s += v` with an enum `v` does not compile on C (not measured further). The language has no string enums.
+
 #### Explicit `.toItems()` â€” Iterator Protocol for `for...of`
 
 Any type with a `toItems()` method becomes iterable with `for...of`. The compiler resolves `toItems()` during type checking, not at runtime.
