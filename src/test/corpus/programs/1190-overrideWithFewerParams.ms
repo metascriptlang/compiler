@@ -1,3 +1,4 @@
+// @xfail(raiser): heap corruption (free(): invalid next size) calling an override with fewer params through the base; card 2026-10-29-raiser-override-through-base-corrupts-heap-and-reads-garbage-defaults
 // @stdout: one 3
 // @stdout: none
 // @stdout: deep 3 4

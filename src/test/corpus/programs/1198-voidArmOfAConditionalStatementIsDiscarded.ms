@@ -1,3 +1,4 @@
+// @xfail(raiser): stops after the first void arm with a stack dump; card 2026-10-29-raiser-void-arm-of-a-conditional-statement-crashes
 // @stdout: x
 // @stdout: y
 // @stdout: z

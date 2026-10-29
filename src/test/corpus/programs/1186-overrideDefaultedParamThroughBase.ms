@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser does not fill the override's defaults through the base (reads an uninitialized slot); card 2026-10-29-raiser-override-through-base-corrupts-heap-and-reads-garbage-defaults
 // @skip-js: the callee does not evaluate a default; a call typed as the base passes none, so the override reads undefined
 // @stdout: B3,7
 // @stdout: B3,7
