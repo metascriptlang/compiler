@@ -7,18 +7,18 @@ import {
 	ConditionalExprData, SpreadExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
+	IdentifierData, NewExprData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, takeOwnLineTrailing, commentsOfRun } from "./commentDocs";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, takeOwnLineTrailing, commentsOfRun } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
-import { callPrintNode } from "./callbacks";
+import { callPrintNode, printedAncestor } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 
@@ -26,11 +26,101 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
 	if (template != "") return docText(template);
 	const d = node.data as BinaryExprData;
-	return docGroup([
-		printBinaryOperand(d.left, d.operator, false, options),
-		docText(" " + d.operator + " "),
-		docIndent([docSoftLine(), printBinaryOperand(d.right, d.operator, true, options)]),
-	]);
+	if (!isBinaryLikeOp(d.operator)) {
+		return docGroup([
+			printBinaryOperand(d.left, d.operator, false, options),
+			docText(" " + d.operator + " "),
+			docIndent([docSoftLine(), printBinaryOperand(d.right, d.operator, true, options)]),
+		]);
+	}
+	const spine: Node[] = [node];
+	let bottom = node;
+	while (true) {
+		const left = (bottom.data as BinaryExprData).left;
+		if (left == null || left.flags.has(NodeFlag.Parenthesized) || !isBinaryLike(left, options)) break;
+		if (!shouldFlatten((bottom.data as BinaryExprData).operator, (left.data as BinaryExprData).operator)) break;
+		spine.push(left);
+		bottom = left;
+	}
+	const bd = bottom.data as BinaryExprData;
+	const first = docGroup([printBinaryOperand(bd.left, bd.operator, false, options)]);
+	const parent = printedAncestor(1);
+	const tail: Doc[] = [];
+	for (let i = spine.length - 1; i >= 0; i -= 1) {
+		const sideParent = i == 0 ? parent : spine[i - 1];
+		for (const part of binaryRightSide(spine[i], i > 0, sideParent, options)) tail.push(part);
+	}
+	if (bindsAsOperandHead(parent, node)) return docGroup([docIndent([docSoftLine(), first, ...tail]), docSoftLine()]);
+	const arrowBody = parent != null && parent.kind == NodeKind.ArrowFunction
+		&& (writtenArrowBody((parent.data as ArrowFunctionData).arrowBody, options) == node || (parent.data as ArrowFunctionData).arrowBody == node);
+	if (arrowBody || (inlinesLogicalOperand(node) && spine.length == 1)) return docGroup([first, ...tail]);
+	return docGroup([first, docIndent(tail)]);
+}
+
+function isBinaryLikeOp(op: string): boolean {
+	return !isAssignOp(op) && op != "|>" && opPrecedence(op) != 0;
+}
+
+function isBinaryLike(node: Node, options: FormatOptions): boolean {
+	return node.kind == NodeKind.BinaryExpr && isBinaryLikeOp((node.data as BinaryExprData).operator) && rawTemplateAt(node, options) == "";
+}
+
+function isLogicalOp(op: string): boolean {
+	return op == "&&" || op == "||" || op == "??";
+}
+
+function shouldFlatten(parentOp: string, op: string): boolean {
+	const prec = opPrecedence(op);
+	if (prec != opPrecedence(parentOp) || parentOp == "**") return false;
+	if (prec == EQUALITY_PREC || prec == SHIFT_PREC) return false;
+	if (prec == MULTIPLICATIVE_PREC) return parentOp == op && op != "%";
+	return true;
+}
+
+function inlinesLogicalOperand(node: Node): boolean {
+	const d = node.data as BinaryExprData;
+	if (!isLogicalOp(d.operator)) return false;
+	return match (d.right.kind) {
+		NodeKind.ObjectLiteral => (d.right.data as ObjectLiteralData).keys.length > 0,
+		NodeKind.ArrayLiteral => (d.right.data as ArrayLiteralData).elements.length > 0,
+		_ => false,
+	};
+}
+
+function sharesBinaryKind(op: string, other: Node | null, options: FormatOptions): boolean {
+	return other != null && isBinaryLike(other, options) && isLogicalOp((other.data as BinaryExprData).operator) == isLogicalOp(op);
+}
+
+function binaryRightSide(node: Node, isInner: boolean, parent: Node | null, options: FormatOptions): Doc[] {
+	const d = node.data as BinaryExprData;
+	const right = printBinaryOperand(d.right, d.operator, true, options);
+	const side: Doc[] = inlinesLogicalOperand(node)
+		? [docText(" " + d.operator + " "), right]
+		: [docText(" " + d.operator), docLine(), right];
+	const grouped = !(isInner || sharesBinaryKind(d.operator, parent, options)
+		|| sharesBinaryKind(d.operator, d.left, options) || sharesBinaryKind(d.operator, d.right, options));
+	const body: Doc[] = grouped ? [docGroup(side)] : side;
+	if (!isInner) return body;
+	return [...commentLeading(node), ...body, ...commentTrailing(node)];
+}
+
+function bindsAsOperandHead(parent: Node | null, node: Node): boolean {
+	if (parent == null) return false;
+	if (parent.kind == NodeKind.UnaryExpr) return (parent.data as UnaryExprData).operand == node;
+	if (parent.kind == NodeKind.NewExpr) return (parent.data as NewExprData).newCallee == node;
+	let cur: Node = parent;
+	while (true) {
+		const next = match (cur.kind) {
+			NodeKind.CallExpr => (cur.data as CallExprData).callee,
+			NodeKind.MemberExpr => (cur.data as MemberExprData).object,
+			NodeKind.ArrayAccess => (cur.data as ArrayAccessData).array,
+			_ => null,
+		};
+		if (next == null) return false;
+		if (next == node) return cur.kind != NodeKind.ArrayAccess;
+		cur = next;
+	}
+	return false;
 }
 
 // Wrap a binary operand in `(...)` when:
@@ -63,6 +153,9 @@ function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, opt
 }
 
 const AS_PREC = 40;
+const EQUALITY_PREC = 30;
+const SHIFT_PREC = 45;
+const MULTIPLICATIVE_PREC = 60;
 const UNBOUND_PREC = 100;
 
 // `as` binds at relational precedence, left to right; on the left a type would swallow `|`, `&` or `<`, and a
