@@ -1,4 +1,4 @@
-// @stdout: assign|ret|await|then|resolve 7|done
+// @stdout: assign|ret|await|stmt|resolve 7|done
 
 @passC("-Werror=incompatible-pointer-types");
 
@@ -10,7 +10,7 @@ async function run(): Promise<void> {
 	try { log += `${await p}`; } catch (e) { log += `${e.message}|`; }
 	try { log += await failing(); } catch (e) { log += `${e.message}|`; }
 	try { log += `${await Promise.reject(new Error("await"))}`; } catch (e) { log += `${e.message}|`; }
-	await Promise.reject(new Error("then")).catch((e: Error): void => { log += `${e.message}|`; });
+	try { await Promise.reject(new Error("stmt")); } catch (e) { log += `${e.message}|`; }
 	const r: Promise<int32> = Promise.resolve(7);
 	log += `resolve ${await r}|`;
 	console.log(log + "done");
