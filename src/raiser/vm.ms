@@ -1451,6 +1451,8 @@ function unhandledException(vm: RaiserVM): void {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
 		futureFail(vm, s.resultFuture, msg, vm.currentException);
+		rcDecref(vm.arrayHeap, vm.objectHeap, vm.currentException);
+		clearException(vm);
 		releaseSpawnEnv(vm, s);
 		thenFinished(vm, vm.current);
 		s.status = RaiserStrandStatus.Done;
