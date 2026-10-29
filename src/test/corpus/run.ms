@@ -182,19 +182,14 @@ const SOLO = SAN || TSAN;
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
 const SAN_PASSC = "-O0 -g -fsanitize=address -Wno-error=incompatible-pointer-types -DMS_SLAB_MAX=0 -DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=8388608u";
 // -pthread on Windows: the DRC ledger's pthread_mutex (runtime/drc.c) needs
-// winpthreads linked explicitly under a mingw-targeting clang (zig cc bundles
-// it implicitly, llvm-mingw and scoop's MinGW gcc do not).
+// winpthreads linked explicitly under a mingw-targeting clang (llvm-mingw and
+// scoop's MinGW gcc do not link it implicitly).
 const SAN_PASSL = "-fsanitize=address" + (IS_WIN ? " -pthread" : "");
 
-// The danger and san lanes ask for clang by name. That is not a preference on
-// macOS — `--danger` defaults to --lto=thin and native-macOS zig + any LTO is
-// rejected outright (toolchain.ms), so clang is the only vehicle that reaches
-// LTO there. But a box with zig and no clang (a stock Windows install) would
-// turn every one of those cells into a build failure that says nothing about
-// the compiler under test. Drop the flag there instead: msc then notes
-// "--danger builds without LTO for zig cc targeting windows" and the lane runs
-// with -O3 minus whole-program DCE. The header prints which of the two it is,
-// so a weakened lane is never silent.
+// The danger and san lanes ask for clang by name where one is usable, because
+// `--danger` defaults to --lto=thin and clang is the vehicle that reaches LTO.
+// Without a usable clang on PATH the flag is dropped and msc builds with its
+// own bundle clang.
 // Presence on PATH is NOT the same question as "can this driver compile here".
 // A stock Windows scoop install ships an MSVC-targeting clang with no MSVC and
 // no MinGW headers behind it: a two-line hello.c dies before reaching generated
@@ -266,15 +261,15 @@ function sanWindowsClang(): string {
 const HAS_CLANG = ccUsable("clang");
 const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
 // Same winpthreads gap as SAN_PASSL (see above): a mingw-targeting clang
-// needs -pthread spelled out on the link line, zig cc bundles it implicitly.
-// Only when clang actually drives the lane — the zig fallback path is fine.
+// needs -pthread spelled out on the link line.
+// Only when the PATH clang drives the lane.
 const DANGER_PASSL = (IS_WIN && HAS_CLANG) ? " --passL=-pthread" : "";
 // And the same generated-C warning class SAN_PASSC downgrades: mingw clang
 // makes -Wincompatible-pointer-types a hard error (protocol-receiver upcasts
-// in method calls), zig cc keeps it a warning.
+// in method calls).
 const DANGER_PASSC_FLAG = (IS_WIN && HAS_CLANG) ? "-Wno-error=incompatible-pointer-types" : "";
 
-// A debug build's per-thread cost is the toolchain's, not the program's: zig's UBSan runtime holds a
+// A debug build's per-thread cost is the toolchain's, not the program's: a UBSan runtime holds a
 // 256 KB thread-local signal stack, so a pool of one worker per CPU grows RSS with the host
 // (26 MB on 96 CPUs against 12 MB on 26). An RSS cell sizes its pool as an 8-CPU host would.
 const RSS_POOL_WORKERS = 8;
@@ -285,13 +280,9 @@ function rssPassC(spec: Readonly<Spec>, platform: string): string {
 	return " --passC=\"" + (platform == "" ? define : platform + " " + define) + "\"";
 }
 
-// SAN lane needs a driver that links the ASan runtime itself. zig cc 0.16
-// targeting linux-gnu compiles -fsanitize=address objects fine but its link
-// step cannot find the runtime (ld.lld: undefined __asan_init) — a
-// driver-level gap, not a flag we can add from here. clang and gcc both
-// self-link it. Prefer clang (parity with the danger lane), fall back to
-// gcc (stock Linux), and only then go driverless (managed zig), which is
-// correct on the hosts where that combination is known to work.
+// SAN lane needs a driver that links the ASan runtime itself. Prefer clang
+// (parity with the danger lane), fall back to gcc (stock Linux), and only
+// then go driverless (msc's own bundle clang).
 const SAN_WIN = SAN ? sanWindowsClang() : "";
 const SAN_CC = !SAN ? "" : SAN_WIN != "" ? " --cc=clang" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
 
@@ -405,9 +396,28 @@ function shellOut(cmd: string): string {
 // 150 lines of C and a stale copy would be worse than a rebuild.
 const WINTIME = OUT_DIR + "wintime.exe";
 
+function bundleRoot(): string {
+	const named = envOr("MSC_NATIVE_TOOLCHAIN", "");
+	let root = named.replaceAll("\\", "/");
+	if (named == "") {
+		const base = envOr("USERPROFILE", envOr("HOME", "")).replaceAll("\\", "/") + "/.metascript/toolchains";
+		const found = exists(base) ? readDir(base) : [];
+		if (found.length != 1) { return ""; }
+		root = base + "/" + found[0];
+	}
+	return root;
+}
+
 function ensureWintime(): boolean {
 	if (!IS_WIN) { return true; }
-	const r = runCapture("zig cc -O2 src/test/corpus/wintime.c -o " + WINTIME + " -lpsapi");
+	const root = bundleRoot();
+	const clang = root + "/bin/clang.exe";
+	const config = root + "/runtime/windows/x86_64-windows-gnu.cfg";
+	if (root == "" || !exists(clang) || !exists(config)) {
+		progress("  !! cannot build " + WINTIME + " — no bundle clang and Windows runtime config: set MSC_NATIVE_TOOLCHAIN or keep exactly one directory under ~/.metascript/toolchains");
+		return false;
+	}
+	const r = runCapture("\"" + winPath(clang) + "\" --no-default-config \"--config=" + winPath(config) + "\" -O2 src/test/corpus/wintime.c -o " + WINTIME + " -lpsapi");
 	if (exists(WINTIME)) { return true; }
 	progress("  !! cannot build " + WINTIME + " — the Windows runner needs it for cell launch, sleep and RSS:");
 	progress("     " + r.output.trim());

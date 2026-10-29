@@ -783,7 +783,7 @@ function runLinkCache(): void {
 		const resource = fixture("cli-resource", "@compile(\"./native.c\");", "int probeValue(void) { return 1; }\n");
 		for (const name of ["AlphaOne", "BravoTwo"]) {
 			put(`${resource}/version.rc`, `1 VERSIONINFO\nFILEVERSION 1,2,3,4\nBEGIN\n  BLOCK "StringFileInfo"\n  BEGIN\n    BLOCK "040904B0"\n    BEGIN\n      VALUE "ProductName", "${name}"\n    END\n  END\n  BLOCK "VarFileInfo"\n  BEGIN\n    VALUE "Translation", 0x409, 1200\n  END\nEND\n`);
-			need(command(resource, `rc-${name}`, "zig", ["rc", "/fo", "version.res", "version.rc"]).code == 0, `zig rc ${name}`);
+			need(command(resource, `rc-${name}`, bundleRc(), ["/fo", "version.res", "version.rc"]).code == 0, `llvm-rc ${name}`);
 			need(build(resource, name, "probe", ["--link=version.res"]) == 0, `cli resource ${name}`);
 			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe`, "AlphaOne"), "cli resource initial product name");
 		}
@@ -824,6 +824,35 @@ function makeArchive(dir: string, name: string, result: int32): string {
 	need(command(dir, `cc-${name}`, "clang", ["-c", `${name}.c`, "-o", `${name}.o`]).code == 0, `cc ${name}`);
 	need(command(dir, `ar-${name}`, "ar", ["rcs", `${name}.a`, `${name}.o`]).code == 0, `ar ${name}`);
 	return `${dir}/${name}.a`;
+}
+
+function bundleBin(): string {
+	const named = env.get("MSC_NATIVE_TOOLCHAIN");
+	if (named != "") return `${named.replaceAll("\\", "/")}/bin`;
+	const base = `${homeDir()}/.metascript/toolchains`;
+	const found = exists(base) ? readDir(base) : [];
+	need(found.length == 1, `expected exactly one toolchain under ${base} or MSC_NATIVE_TOOLCHAIN, found ${found.length}`);
+	return `${base}/${found[0]}/bin`;
+}
+
+function bundleClang(): string {
+	const clang = `${bundleBin()}/clang${windows ? ".exe" : ""}`;
+	need(exists(clang), `bundle clang ${clang} is missing`);
+	return clang;
+}
+
+function bundleConfig(): string {
+	const config = `${bundleBin()}/../runtime/windows/x86_64-windows-gnu.cfg`;
+	need(exists(config), `bundle runtime config ${config} is missing`);
+	return config;
+}
+
+function bundleRc(): string {
+	const beside = `${bundleBin()}/llvm-rc${windows ? ".exe" : ""}`;
+	if (exists(beside)) return beside;
+	const onPath = execFileCapture("llvm-rc", ["/?"], cwd());
+	need(onPath.ok || onPath.error.exitCode != 0, `llvm-rc is neither at ${beside} nor on PATH`);
+	return "llvm-rc";
 }
 
 function homeDir(): string {
@@ -873,18 +902,19 @@ function writeWrapper(dir: string, toolValue: int32): string {
 	if (windows) {
 		const wrapper = `${dir}/cc-wrapper.exe`;
 		const source = `${dir}/cc-wrapper.c`;
-		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
+		const cc = bundleClang();
 		put(source,
 			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
-			+ "  char **args = malloc(sizeof(char *) * (argc + 3));\n"
-			+ `  args[0] = quoteArgument("${zig}");\n`
-			+ "  args[1] = \"cc\";\n"
-			+ `  args[2] = "-DTOOL_VALUE=${toolValue}";\n`
-			+ "  for (int i = 1; i < argc; i++) args[i + 2] = quoteArgument(argv[i]);\n"
-			+ "  args[argc + 2] = NULL;\n"
-			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
+			+ "  char **args = malloc(sizeof(char *) * (argc + 4));\n"
+			+ `  args[0] = quoteArgument("${cc}");\n`
+			+ "  args[1] = \"--no-default-config\";\n"
+			+ `  args[2] = quoteArgument("--config=${bundleConfig()}");\n`
+			+ `  args[3] = "-DTOOL_VALUE=${toolValue}";\n`
+			+ "  for (int i = 1; i < argc; i++) args[i + 3] = quoteArgument(argv[i]);\n"
+			+ "  args[argc + 3] = NULL;\n"
+			+ `  return (int)_spawnv(_P_WAIT, "${cc}", (const char * const *)args);\n`
 			+ "}\n");
 		need(command(dir, `wrapper-${toolValue}`, "gcc", [source, "-o", wrapper]).code == 0, "compile cc wrapper");
 		return wrapper;
@@ -899,7 +929,7 @@ function projectDriver(dir: string): string {
 	if (windows) {
 		const wrapper = `${dir}/project-cc.exe`;
 		const source = `${dir}/project-cc.c`;
-		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
+		const cc = bundleClang();
 		put(source,
 			"#include <process.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
@@ -911,12 +941,13 @@ function projectDriver(dir: string): string {
 			+ "    for (int i = 1; i < argc; i++) if (strcmp(argv[i], \"-c\") == 0) compile = 1;\n"
 			+ "    if (compile) for (int i = 1; i < argc; i++) if (strstr(argv[i], \"_dispatch.\")) return 98;\n"
 			+ "  }\n"
-			+ "  char **args = malloc(sizeof(char *) * (argc + 2));\n"
-			+ `  args[0] = quoteArgument("${zig}");\n`
-			+ "  args[1] = \"cc\";\n"
-			+ "  for (int i = 1; i < argc; i++) args[i + 1] = quoteArgument(argv[i]);\n"
-			+ "  args[argc + 1] = NULL;\n"
-			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
+			+ "  char **args = malloc(sizeof(char *) * (argc + 3));\n"
+			+ `  args[0] = quoteArgument("${cc}");\n`
+			+ "  args[1] = \"--no-default-config\";\n"
+			+ `  args[2] = quoteArgument("--config=${bundleConfig()}");\n`
+			+ "  for (int i = 1; i < argc; i++) args[i + 2] = quoteArgument(argv[i]);\n"
+			+ "  args[argc + 2] = NULL;\n"
+			+ `  return (int)_spawnv(_P_WAIT, "${cc}", (const char * const *)args);\n`
 			+ "}\n");
 		need(command(dir, "project-driver", "gcc", [source, "-o", wrapper]).code == 0, "compile project driver");
 		return wrapper;
@@ -1090,7 +1121,7 @@ function runArgv(): void {
 	if (quotedResult == 0) record("quoted flag value executable", "4", value(quoted));
 
 	const leading = fixture("compiler words", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
-	const ccWords = windows ? `${homeDir()}/.metascript/zig/zig.exe cc` : "clang";
+	const ccWords = windows ? `"${bundleClang()}" --no-default-config "--config=${bundleConfig()}"` : "clang";
 	const firstWords = build(leading, "compiler-words", "probe", [], `${ccWords} -DTOOL_VALUE=71`);
 	record("compiler command with leading arguments", "0", `${firstWords}`);
 	if (firstWords == 0) record("compiler command leading argument reaches cc", "71", value(leading));
