@@ -52,15 +52,57 @@ function surrogateString(unit: int32): string {
 	return out;
 }
 
+function strayContinuations(sb: Readonly<Span<uint8>>, from: int64, to: int64): int64 {
+	let n: int64 = 0;
+	while (n < 3 && from + n < to && (sb[from + n] & 0xC0) == 0x80) n++;
+	return n;
+}
+
+// Start of a sequence cut short at `to`, or `to` when the last sequence is whole; `from` bounds the look-back.
+function cutLeadAt(sb: Readonly<Span<uint8>>, from: int64, to: int64): int64 {
+	let j = to - 1;
+	while (j >= from && to - j < 4 && (sb[j] & 0xC0) == 0x80) j--;
+	if (j < from) return to;
+	const lead = sb[j];
+	const width = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+	return to - j < width ? j : to;
+}
+
+// U+FFFD count for the cut sequence sb[at, to): its lead alone when the next byte cannot follow it (ED then A0..BF), else one.
+function cutReplacements(sb: Readonly<Span<uint8>>, at: int64, to: int64): int64 {
+	return sb[at] == 0xED && to - at == 2 && sb[at + 1] >= 0xA0 ? 2 : 1;
+}
+
+function writeReplacements(dst: Ptr<uint8>, at: int64, count: int64): int64 {
+	for (let i: int64 = 0; i < count; i++) {
+		dst[at + 3 * i] = 0xEF;
+		dst[at + 3 * i + 1] = 0xBF;
+		dst[at + 3 * i + 2] = 0xBD;
+	}
+	return at + 3 * count;
+}
+
 @exportName("msStringByteSlice")
 function byteSliceCopy(s: string, start: int64, end: int64): string {
 	const sb = s.asBytes();
 	const from = start < 0 ? (sb.length + start < 0 ? 0 : sb.length + start) : start;
 	const to = end < 0 ? sb.length + end : end > sb.length ? sb.length : end;
 	if (from >= to) return "";
-	const out = newBytes(to - from);
-	copyTo(writable(out), 0, sb, from, to - from);
-	if (msStringKnownAscii(s)) msStringMarkAscii(out);
+	if (msStringKnownAscii(s)) {
+		const ascii = newBytes(to - from);
+		copyTo(writable(ascii), 0, sb, from, to - from);
+		msStringMarkAscii(ascii);
+		return ascii;
+	}
+	const head = strayContinuations(sb, from, to);
+	const body = from + head;
+	const cut = body < to ? cutLeadAt(sb, body, to) : to;
+	const tail = cut < to ? cutReplacements(sb, cut, to) : 0;
+	const out = newBytes(3 * head + (cut - body) + 3 * tail);
+	const dst = writable(out);
+	const at = writeReplacements(dst, 0, head);
+	copyTo(dst, at, sb, body, cut - body);
+	writeReplacements(dst, at + (cut - body), tail);
 	return out;
 }
 
