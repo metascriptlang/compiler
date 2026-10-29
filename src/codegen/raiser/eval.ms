@@ -526,6 +526,22 @@ function evalArenaVM(code: string): RaiserVM {
 	return execModule(compileForOrc(code), "arena");
 }
 
+test "engine: an extern routine read as a value calls its host bridge when stored, passed or held in an array" {
+	const vm = evalOrcVM("extern function magnitude(x: float64): float64 from \"fabs\";"
+		+ " extern function lift(x: float64, y: float64): float64 from \"pow\";"
+		+ " function apply(g: (x: float64) => float64, x: float64): float64 { return g(x); }"
+		+ " const f = magnitude;"
+		+ " const fs: ((x: float64, y: float64) => float64)[] = [lift];"
+		+ " console.log(`${f(-2.5)} ${apply(magnitude, -1.5)} ${fs[0](2.0, 10.0)}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "2.5 1.5 1024\n", vm.output;
+}
+
+test "engine: an extern routine with no host bridge read as a value is refused by its name" {
+	const vm = evalOrcVM("extern function nowhere(x: float64): float64; const f = nowhere; console.log(`${f(1.0)}`);");
+	assert vm.error.indexOf("no host bridge for 'nowhere'") >= 0, vm.error;
+}
+
 test "engine: an enum converts to an integer type as its ordinal does, as on C and JS" {
 	const decl = "enum E { Neg = -5, Big = 1000000000 } let e: E[] = [E.Neg, E.Big];";
 	const ok = evalOrcVM(decl + " console.log(`${e[0] as uint8} ${e[0] as uint16} ${e[1] as uint8} ${e[0] as int64} ${e[1] as float64}`);");
