@@ -2113,7 +2113,7 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		// !assumeTrue (!== null) removes it via removeNullFromType.
 		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
-	const value = equalityLiteralType(skipHiddenConv(literal));
+	const value = equalityLiteralType(exactLiteralOf(skipHiddenConv(literal)));
 	if (value == null) return t;
 	if (isMaybeType(t) && t.typeReturn != null) {
 		const narrowed = filterByLiteral(t.typeReturn!, value, assumeTrue);
@@ -2138,7 +2138,14 @@ function filterByLiteral(t: Type, value: Type, assumeTrue: boolean): Type {
 	}
 	if (kept.length == 0) return neverType();
 	if (kept.length == t.typeChildren.length) return t;
+	if (kept.length == 1) return kept[0];
 	return unionPreservingDiscriminant(t, kept);
+}
+
+function exactLiteralOf(node: Node): Node {
+	if (node.kind != NodeKind.HiddenStdConv) return node;
+	const inner = skipHiddenConv((node.data as HiddenStdConvData).convExpr);
+	return inner.kind == NodeKind.NumberLiteral ? inner : node;
 }
 
 function equalityLiteralType(node: Node): Type | null {
