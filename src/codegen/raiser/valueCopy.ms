@@ -5,7 +5,7 @@ import { getOpByKey } from "../c/types";
 import { isSlotUnion } from "../../checker/fit";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
+import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
 import { MemKind, memKindOf } from "../../raiser/layout";
 import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
@@ -43,7 +43,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
-	} else if (valueType.kind == TypeKind.Union && raiserFlatCellUnion(valueType)) {
+	} else if (valueType.kind == TypeKind.Union && raiserFlatCellUnion(valueType) && !isDiscriminatedUnion(valueType)) {
 		plan.kind = RaiserCopyKind.Object;
 		for (const arm of valueType.typeChildren) {
 			if (arm.kind == TypeKind.Function) continue;
