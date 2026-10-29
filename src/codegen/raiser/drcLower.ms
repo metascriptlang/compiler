@@ -1,12 +1,13 @@
-import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
 import { declaresUserHook } from "../../checker/instantiate";
-import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, isPlainDataType, valueCopyRepr, distinctBody, skipModifier } from "../../checker/types";
+import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, isPlainDataType, valueCopyRepr, distinctBody, skipModifier, matchUnionBehindInstance } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser/bytecode";
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocDyn, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { getOpByKey } from "../c/types";
-import { raiserFlatCellUnion } from "../../analyzer/classify";
+import { raiserFlatCellUnion, raiserBareUnion, raiserStructSlotUnion } from "../../analyzer/classify";
+import { isUnionSlotLocation } from "../../analyzer/alias";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
 import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, nullIsZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
@@ -17,6 +18,21 @@ import {
 
 function placeOf(arg: Node): Node {
 	return arg.kind == NodeKind.HiddenAddr ? placeOf((arg.data as HiddenDerefData).expr) : arg;
+}
+
+function clearedPlaceOf(arg: Node): Node {
+	const place = placeOf(arg);
+	if (place.kind != NodeKind.HiddenSubConv || !isUnionSlotLocation(place)) return place;
+	const union = (place.data as HiddenStdConvData).convExpr;
+	if (!unionHoldsItsMember(union.nodeType)) throw new Error(`internal: a move out of a union arm at ${getRaiserModulePath()}:${place.location.line}:${place.location.column} clears a union the Raiser does not hold as its member's own value`);
+	return clearedPlaceOf(union);
+}
+
+function unionHoldsItsMember(type: Type | null): boolean {
+	const t = skipModifier(type);
+	if (t == null) return false;
+	const u = matchUnionBehindInstance(t);
+	return u.kind == TypeKind.Union && (raiserBareUnion(u) || raiserStructSlotUnion(u) || raiserFlatCellUnion(u));
 }
 
 function refRegister(s: RaiserCompState, name: string, arg: Node): int32 {
@@ -66,7 +82,7 @@ function localOfPlace(s: RaiserCompState, place: Node): int32 {
 }
 
 function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray: boolean = true): void {
-	const place = placeOf(arg);
+	const place = clearedPlaceOf(arg);
 	const local = localOfPlace(s, place);
 	if (local >= 0) {
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, local, 0, 0));
