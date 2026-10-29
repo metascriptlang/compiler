@@ -577,6 +577,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	pendingStampRoot = stampRoot;
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
+	if (opts.targetOs == "bare") return Result.ok(null);
 	const sdk = opts.targetOs == "darwin" || opts.targetOs == "macos" ? macosSdkPath(stampRoot) : "";
 	if (sdk != "") {
 		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
@@ -736,7 +737,7 @@ export function resolveCC(opts: CliOptions, stampRoot: string): void {
 	if (opts.ccBinary == "zig") opts.ccBinary = "zig cc";
 
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
-	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
+	if (opts.targetOs == "solana" || opts.targetOs == "emcc") return;
 
 	const native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
 	if (native != "") {
