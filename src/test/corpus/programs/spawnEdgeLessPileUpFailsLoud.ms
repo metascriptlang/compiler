@@ -4,7 +4,24 @@
 // @skip-raiser: the Raiser runs spawn inline
 // @skip-js: JS runs every task on the one thread, so no wait blocks a worker
 // @xfail(san): the error stops the program with _exit, which skips the exit-time ledger dump, and the tasks it stops are never destroyed
-// note: a thousand tasks each await a promise that the main thread resolves only after a later-queued child has run. Each such wait starts a spare thread for the queue, and past the 256-thread limit the runtime stops with an error naming the wait instead of running unrelated queued work inside it (which can deadlock the waiter on its own stack) or hanging. The stop is `_exit(1)`, because `exit()` would join the starved threads and hang; `_exit` also skips the exit-time DRC ledger dump, so the SAN lane reads no ledger here and the tasks still in flight are never destroyed, which is the stop and not a leak (`@xfail(san)`). The tasks borrow their promise, so each level spawns, recurses, then awaits its own task in its own scope.
+// note: a thousand tasks each await a promise that the main thread resolves only after a later-queued child has run. Each such wait starts a spare thread for the queue, and past the 256-thread limit the runtime stops with an error naming the wait instead of running unrelated queued work inside it (which can deadlock the waiter on its own stack) or hanging. The stop is `_exit(1)`, because `exit()` would join the starved threads and hang; `_exit` also skips the exit-time DRC ledger dump, so the SAN lane reads no ledger here and the tasks still in flight are never destroyed, which is the stop and not a leak (`@xfail(san)`). The tasks borrow their promise, so each level spawns, recurses, then awaits its own task in its own scope. Every worker is first held busy for half a second, so the main thread fills the spawn queue before any worker takes a task, as a loaded host does by chance: a full queue makes the main thread wait for room, because running the next task inline would block main on a promise only its own later code resolves, and the pool would drain the queue and hang with nothing queued instead of stopping at the limit.
+import { cpuCount } from "std/os";
+import { lockedUpdate, lockedRead } from "std/core/promise";
+
+const started = new Locked<int32>(0);
+
+function hold(): int32 {
+	lockedUpdate(started, (n: int32): int32 => n + 1);
+	const from = Date.now();
+	while (Date.now() - from < 500) {}
+	return 1;
+}
+
+const workers = cpuCount();
+const holders: Promise<int32>[] = [];
+for (let i = 0; i < workers; i++) holders.push(spawn(() => hold()));
+while (lockedRead(started, (n: int32): int32 => n) < workers) {}
+
 let resolvers: ((v: int32) => void)[] = [];
 
 function fan(i: int32, n: int32): int32 {
