@@ -148,3 +148,4 @@ import "./cases/binaryChains";
 import "./cases/staticMembers";
 import "./cases/assignmentExpr";
 import "./cases/propertyAssignment";
+import "./cases/binaryAssignmentIndent";

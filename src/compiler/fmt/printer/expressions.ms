@@ -55,8 +55,17 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	if (bindsAsOperandHead(parent, node)) return docGroup([docIndent([docSoftLine(), first, ...tail]), docSoftLine()]);
 	const arrowBody = parent != null && parent.kind == NodeKind.ArrowFunction
 		&& (writtenArrowBody((parent.data as ArrowFunctionData).arrowBody, options) == node || (parent.data as ArrowFunctionData).arrowBody == node);
-	if (arrowBody || (inlinesLogicalOperand(node) && spine.length == 1)) return docGroup([first, ...tail]);
+	const inlines = inlinesLogicalOperand(node);
+	if (arrowBody || (inlines && spine.length == 1) || (!inlines && indentsItsValue(parent))) return docGroup([first, ...tail]);
 	return docGroup([first, docIndent(tail)]);
+}
+
+function indentsItsValue(parent: Node | null): boolean {
+	if (parent == null) return false;
+	return match (parent.kind) {
+		NodeKind.ObjectLiteral | NodeKind.ComputedProperty | NodeKind.VariableDecl | NodeKind.DestructuringDecl | NodeKind.PropertyDecl => true,
+		_ => isAssignmentNode(parent),
+	};
 }
 
 function isAssignmentNode(node: Node | null): boolean {
