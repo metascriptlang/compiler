@@ -111,7 +111,8 @@ export function doRequestOver(
 ): Result<HttpResponse, HttpError> {
 	// Build request line + headers + body.
 	setHeader(options.headers, "host", options.hostname);
-	if (options.body.byteLength > 0) {
+	const methodDefinesBody = options.method == HttpMethod.POST || options.method == HttpMethod.PUT || options.method == HttpMethod.PATCH;
+	if (options.body.byteLength > 0 || methodDefinesBody) {
 		setHeader(options.headers, "content-length", options.body.byteLength.toString());
 	}
 	setHeader(options.headers, "connection", "close");
