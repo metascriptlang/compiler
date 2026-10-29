@@ -27,6 +27,18 @@ function numberElsed(x: 1 | 2 | 3 | null): 3 {
 }
 `;
 
+const SRC_OPTIONAL_FIELD = `
+interface Style { width?: float64 | string; }
+function grown(s: Style): float64 {
+	if (s.width === 18) return s.width + 1;
+	return 0;
+}
+function wider(s: Style): boolean {
+	if (s.width === 18) return s.width > 5;
+	return false;
+}
+`;
+
 const SRC_KEPT = `
 function kept(x: "a" | "b" | "c" | null): "a" | "b" {
 	if (x === "c") return "a";
@@ -60,4 +72,9 @@ test "the false branch keeps null and the true branch keeps only the literal" {
 test "a function named like the equality routine does not narrow" {
 	const text = checkOnly(SRC_NOT_EQUALITY).errors.join("\n");
 	assert text.contains("is not assignable to type '\"a\" | \"b\" | null'"), "a user call must not narrow as equality: " + text;
+}
+
+test "equality with a literal narrows an optional union field to the member it names, not to a one-member union" {
+	const errors = checkOnly(SRC_OPTIONAL_FIELD).errors;
+	assert errors.length == 0, "the narrowed field must read as its member: " + errors.join("\n");
 }
