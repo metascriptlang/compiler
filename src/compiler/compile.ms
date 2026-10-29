@@ -63,7 +63,7 @@ import { markTypeOnlyImports } from "../checker/importElision";
 import { markVmOnlyRoutines } from "../checker/vmOnly";
 import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
+import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules, DynamicModulePlan } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeHeaderTimings, registerHeaderCache, headerModuleSource, isCHeaderPath } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { modulePassIdentity } from "../checker/prelude";
@@ -80,6 +80,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { hasWasmPlacement } from "./wasmBoundary/placement";
+import { buildWasmHalf } from "./wasmBoundary/placementBuild";
+import { manifestFor, BoundaryFunction } from "./wasmBoundary/manifest";
+import { wasmEntrySource } from "./wasmBoundary/wasmSide";
+import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
+import { stringBoundaryErrors, placedModuleErrors, placedImportErrors } from "./wasmBoundary/refusals";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -1604,11 +1609,42 @@ function isJsIdentifierName(name: string): boolean {
 	return true;
 }
 
-// The one place the wasm half of a placed program joins a js build: the manifest of the placed modules,
-// buildWasmHalf, and the bindings that replace each placed module's body in the bundle (the Phase 2 loop
-// of cmdBuildJS, where result.code is appended) all enter from here.
-function placeWasmModules(placed: string[]): void {
-	throw new Error(`internal: wasm placement of ${placed.length} module(s) (${placed[0]}) has no manifest and bindings yet`);
+function placeWasmModules(placed: string[], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, opts: CliOptions): JsBindings {
+	const errors = placedModuleErrors(placed, entryPath, dynamicPlan.lazy);
+	const exportsOf = (path: string): ExportedSymInfo[] => {
+		const found = findModuleExports(graphRegistry, path);
+		return found == null ? [] : found.symbols;
+	};
+	for (const importer of importerPaths) {
+		const mod = findModule(graph, importer);
+		if (mod == null || placed.includes(importer)) continue;
+		for (const e of placedImportErrors(importer, mod.imports, placed, exportsOf)) errors.push(e);
+	}
+	const functions: BoundaryFunction[] = [];
+	for (const path of placed) {
+		const manifest = manifestFor(path, entryPath, exportsOf(path));
+		for (const e of manifest.errors) errors.push(e);
+		for (const f of manifest.functions) functions.push(f);
+	}
+	for (const e of stringBoundaryErrors(functions)) errors.push(e);
+	if (errors.length == 0 && functions.length == 0) errors.push(`the wasm-placed module(s) ${placed.join(", ")} export no function, so nothing crosses the JS/wasm boundary`);
+	if (errors.length > 0) {
+		for (const e of errors) printDiag(`${error("error")}: ${e}`);
+		stopBuild();
+	}
+	const entry = wasmEntrySource(functions, (path: string): string => path.replaceAll("\\", "/"));
+	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.jsLibrary, outStem, opts);
+	if (!built.ok) {
+		printDiag(`${error("error")}: ${built.error}`);
+		stopBuild();
+	}
+	const symOf = (f: BoundaryFunction): Symbol => {
+		for (const e of exportsOf(f.modulePath)) {
+			if (e.name == f.name) return e.sym;
+		}
+		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
+	};
+	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => jsBundleReferenceName(symOf(f), f.name));
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -1709,10 +1745,18 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
-	if (placedPaths.length > 0) placeWasmModules(placedPaths);
+
+	// `--output` wins here exactly as it does for the C binary. Deriving the
+	// name from the entry file alone collides for directory-style programs,
+	// which are all spelled `main.ms`.
+	const outPath = opts.outputPath != ""
+		? opts.outputPath
+		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
+	let wasmBindings: JsBindings = { prelude: "", modules: [] };
+	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, opts);
 
 	// Phase 2 — backend transform + codegen
-	let anyTopLevelAwait = false;
+	let anyTopLevelAwait = placedPaths.length > 0;
 	let entryExports = "";
 	const helpers = createJSHelpers();
 	setJsProgramScope(true);
@@ -1720,6 +1764,17 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
+		if (placedPaths.includes(modPath)) {
+			let bound = "";
+			for (const m of wasmBindings.modules) {
+				if (m.modulePath == modPath) bound = m.code;
+			}
+			const boundSeparator = `\n// --- Module: ${replaceExt(moduleDisplayPath(modPath), "")} ---\n`;
+			bundle = bundle + boundSeparator + bound;
+			if (opts.sourcemap) bundleLines += countNewlines(boundSeparator) + countNewlines(bound);
+			compiled = compiled + 1;
+			continue;
+		}
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
@@ -1764,16 +1819,10 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
 	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
-	output = output + bundleModuleEvaluator(dynamicPlan);
+	output = output + bundleModuleEvaluator(dynamicPlan) + wasmBindings.prelude;
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle + entryExports;
 
-	// `--output` wins here exactly as it does for the C binary. Deriving the
-	// name from the entry file alone collides for directory-style programs,
-	// which are all spelled `main.ms`.
-	const outPath = opts.outputPath != ""
-		? opts.outputPath
-		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
 	// The link comment goes after the map is built; it sits past every mapped
 	// line, so it shifts nothing.
