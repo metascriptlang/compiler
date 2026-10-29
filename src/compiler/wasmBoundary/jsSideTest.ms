@@ -59,28 +59,12 @@ test "js side: one prelude awaits the wasm module once and a stale callback id t
 
 test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
 	const code = bindingsFor(["both"]).modules[0].code;
-	assert code.includes("function bundled_both(a0, a1, a2) {
-	const e0 = __msbEnc(a0);
-	const e2 = __msbEnc(a2);
-	try {
-		return __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);
-	} finally {
-		__msbMod._free(e0[0]);
-		__msbMod._free(e2[0]);
-	}
-}");
+	assert code.includes("function bundled_both(a0, a1, a2) {\n\tconst e0 = __msbEnc(a0);\n\tconst e2 = __msbEnc(a2);\n\ttry {\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\t__msbMod._free(e0[0]);\n\t\t__msbMod._free(e2[0]);\n\t}\n}");
 }
 
 test "js side: a string result is decoded with the length read right after the call" {
 	const code = bindingsFor(["twice"]).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {
-	const e0 = __msbEnc(a0);
-	try {
-		return __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());
-	} finally {
-		__msbMod._free(e0[0]);
-	}
-}");
+	assert code.includes("function bundled_twice(a0) {\n\tconst e0 = __msbEnc(a0);\n\ttry {\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\t__msbMod._free(e0[0]);\n\t}\n}");
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
