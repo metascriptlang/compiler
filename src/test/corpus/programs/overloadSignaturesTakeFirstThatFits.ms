@@ -1,5 +1,7 @@
 // @stdout: first-signature ok dog dog dog dog dog dog dog
 // note: a call into a set of overload signatures takes the first signature its arguments fit, as TS does: a signature with a literal parameter type comes before the others whatever its place, a literal union and an alias of a literal type do not, and a fit without a numeric widening comes before one with it. Each call reads `bark()`, which only the Dog-returning signature allows; as a function and as an extension. Same output on C, JS and the Raiser.
+@passC("-Werror=incompatible-pointer-types");
+
 class Animal { kind(): string { return "animal"; } }
 class Dog extends Animal { bark(): string { return "dog"; } }
 

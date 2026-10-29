@@ -27,6 +27,7 @@ import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, reviveConsumedName, symbolConsumeKey, MOVED_PREFIX } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
+import { calledRoutineType } from "./effects";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
@@ -402,6 +403,35 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 	derefBorrowResult(node);
+	checkOverloadResult(ctx, node);
+}
+
+function checkOverloadResult(ctx: CheckerContext, node: Node): void {
+	if (node.kind != NodeKind.CallExpr || !node.flags.has(NodeFlag.ObjCheck)) return;
+	node.flags = node.flags.excl(NodeFlag.ObjCheck);
+	if (node.nodeType == null) return;
+	const routine = calledRoutineType(node);
+	const ran = routine != null ? routine.typeReturn : null;
+	const result = node.nodeType;
+	if (ran == null || hasGenericParams(ran) || hasGenericParams(result) || sameType(ran, result) || objectConversion(ran, result) != ObjConv.Checked) return;
+	const call = createNodeAt(NodeKind.CallExpr, node.data, node.location);
+	call.nodeType = ran;
+	call.resolvedSym = node.resolvedSym;
+	call.flags = node.flags;
+	call.typeExpr = node.typeExpr;
+	call.typeArg = node.typeArg;
+	call.typeExprs = node.typeExprs;
+	call.flowNode = node.flowNode;
+	node.kind = NodeKind.TypeAssertion;
+	node.data = { asExpr: call, asType: typeDisplayName(result) } as TypeAssertionData;
+	node.resolvedSym = null;
+	node.typeExprs = null;
+	node.typeArg = "";
+	node.typeExpr = createNodeAt(NodeKind.Identifier, { name: typeDisplayName(result) } as IdentifierData, node.location);
+	node.typeExpr!.flags = node.typeExpr!.flags.incl(NodeFlag.BoundSym);
+	node.typeExpr!.nodeType = result;
+	node.flags = (0 as BitSet<NodeFlag>).incl(NodeFlag.Sem).incl(NodeFlag.ObjCheck);
+	stampCheckedInstance(ctx, node, result);
 }
 
 function derefBorrowResult(node: Node): void {

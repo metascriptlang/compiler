@@ -4519,7 +4519,10 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// per-variant sigs (`data: TypeUnionData`) all redirect to one impl taking
 	// the union (`data: NodeData`), and handing it a bare variant struct
 	// corrupts memory — clang only warns on the pointer mismatch.
-	if (impl != null && hasFlag(winnerSymFinal, SymbolFlag.OverloadSig)) fitCallToImplementation(ctx, callNode, impl, false);
+	if (impl != null && hasFlag(winnerSymFinal, SymbolFlag.OverloadSig)) {
+		fitCallToImplementation(ctx, callNode, impl, false);
+		callNode.flags = callNode.flags.incl(NodeFlag.ObjCheck);
+	}
 	if (d.callee != null && d.callee.kind == NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType != null) d.callee.nodeType = sym.symbolType;
@@ -4975,6 +4978,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	if (extWinnerSym != null && callNode.resolvedSym != extWinnerSym && hasFlag(extWinnerSym, SymbolFlag.OverloadSig)) {
 		fitCallToImplementation(ctx, callNode, callNode.resolvedSym!, !exts[idx].isStatic);
+		callNode.flags = callNode.flags.incl(NodeFlag.ObjCheck);
 	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
