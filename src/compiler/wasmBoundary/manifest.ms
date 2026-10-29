@@ -66,6 +66,8 @@ export function signatureLetter(kind: BoundaryKind): string {
 			return "d";
 		case BoundaryKind.Void:
 			return "v";
+		case BoundaryKind.String:
+			return "s";
 		default:
 			throw new Error("internal: boundary kind " + kind.toString() + " has no callback signature letter");
 	}
@@ -135,9 +137,9 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 	const params: BoundaryKind[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const pt = peeled(t.typeChildren[i]);
-		const k = isMaybeType(pt) ? null : scalarKind(pt);
+		const k = isMaybeType(pt) ? null : pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
 		if (k == null) {
-			refuse(c, `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer and float parameters");
+			refuse(c, `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float and string parameters");
 			ok = false;
 		} else {
 			params.push(k);
