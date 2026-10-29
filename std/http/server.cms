@@ -502,6 +502,7 @@ export function getClientFd(req: HttpRequest): int32 {
 // no longer a valid protocol switch.
 export function detach(this res: ServerResponse): int32 {
 	res._upgraded = true;
+	msNetSetTimeout(res.fd, 0);
 	return res.fd;
 }
 
@@ -665,6 +666,10 @@ const DRIVER_POLL_MS: int32 = 10;
 const MAX_CLIENT_FDS: int32 = 1024;
 const SWEEP_INTERVAL_TICKS: int32 = 100;
 
+function loopOwns(c: ClientState): boolean {
+	return c.lastActivityMs != (0 as int64) && !c.response._upgraded;
+}
+
 // Force-close idle conns. cancelFd completes the pending recv future with
 // peer-close shape; msNetClose triggers engine cleanup on uring/IOCP.
 // Opt-out via keepAliveTimeout <= 0 (e.g. WS servers that drive their
@@ -676,7 +681,7 @@ function idleSweep(clients: ClientState[], cfg: Readonly<LoopConfig>): void {
 	let i: int32 = 0;
 	while (i < MAX_CLIENT_FDS) {
 		const c = clients[i];
-		if (c.lastActivityMs != (0 as int64) && c.lastActivityMs < threshold) {
+		if (loopOwns(c) && c.lastActivityMs < threshold) {
 			msIoEngineCancelFd_ms(i);
 			msNetClose(i);
 			c.lastActivityMs = 0 as int64;
@@ -732,7 +737,7 @@ function closeWaitingCountOpen(clients: ClientState[]): int32 {
 	let i: int32 = 0;
 	while (i < MAX_CLIENT_FDS) {
 		const c = clients[i];
-		if (c.lastActivityMs != (0 as int64) && !c.response._upgraded) {
+		if (loopOwns(c)) {
 			if (c.data.length == 0) msIoEngineCancelFd_ms(i);
 			open = open + 1;
 		}
