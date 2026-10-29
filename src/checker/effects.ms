@@ -755,7 +755,7 @@ function useEffect(node: Node, e: Effect): EffectCause | null {
 export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (node == null) return null;
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
-	if (e == Effect.Suspends && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
+	if ((e == Effect.Suspends || e == Effect.SpawnUnsafe) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e)
