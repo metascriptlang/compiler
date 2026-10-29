@@ -219,7 +219,8 @@ class RoleTest(unittest.TestCase):
     def test_the_system_allowlist_and_the_tools_are_exactly_the_observed_ones(self):
         self.assertEqual(sorted(pw.SYSTEM_DLLS), ["advapi32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll",
                                                   "shell32.dll", "user32.dll", "version.dll"])
-        self.assertEqual(len(pw.TOOLS), 12)
+        self.assertEqual(len(pw.TOOLS), 13)
+        self.assertIn("llvm-dlltool.exe", pw.TOOLS)
         for name in ("dsymutil.exe", "clang-22.exe", "ld64.lld.exe"):
             self.assertNotIn(name, pw.TOOLS)
 
@@ -283,7 +284,7 @@ MISSING = object()
 
 
 class World(TempCase):
-    """A fake installed LLVM: twelve fake PE tools in bin/, a resource directory, an operator license."""
+    """A fake installed LLVM: thirteen fake PE tools in bin/, a resource directory, an operator license."""
     def setUp(self):
         super().setUp()
         self.llvm = self.path("LLVM root")
