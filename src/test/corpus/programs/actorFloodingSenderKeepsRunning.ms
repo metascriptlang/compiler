@@ -1,6 +1,5 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms)
 // @serial
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: rounds 20
 // note: an actor that floods a busy receiver and then waits on a reply from it keeps
 //   being scheduled. The runtime once paused a sender whose receiver was behind and

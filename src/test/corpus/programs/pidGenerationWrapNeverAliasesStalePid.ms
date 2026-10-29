@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: churn 40 | pid equals stale 0 | monitor via stale 0 | handle call via stale 0 | stale stop killed live 0
 // note: the pid generation is lowered to 4 bits, so the one slot this loop reuses wraps its generation twice; a retired slot must never hand a stale pid to the actor that lives there now. The JS lanes have no pid table and print the same line.
 import { stop, monitor, ExitReason } from "std/actor";

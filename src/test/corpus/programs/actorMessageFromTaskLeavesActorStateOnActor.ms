@@ -1,6 +1,5 @@
 // @stdout: spawn send 1 call 2
 // @stdout: sendable call 6
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @serial
 import { stop, ExitReason } from "std/actor";
 
