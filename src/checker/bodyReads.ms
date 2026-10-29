@@ -31,6 +31,7 @@ const SITES: ReaderSite[] = [
 	{ file: "checker/checkPass.ms", readers: 4, records: 0 },
 	{ file: "checker/callResolve.ms", readers: 1, records: 0 },
 	{ file: "checker/ctorRoutine.ms", readers: 1, records: 0 },
+	{ file: "checker/ctorDecl.ms", readers: 2, records: 0 },
 	{ file: "checker/varPartitions.ms", readers: 5, records: 2 },
 	{ file: "checker/effects.ms", readers: 7, records: 5 },
 	{ file: "checker/sendable.ms", readers: 7, records: 1 },
@@ -41,14 +42,14 @@ const SITES: ReaderSite[] = [
 	{ file: "compiler/meta/expand.ms", readers: 5, records: 1 },
 	{ file: "compiler/meta/decorators.ms", readers: 1, records: 0 },
 	{ file: "compiler/meta/stdTags.ms", readers: 1, records: 0 },
-	{ file: "compiler/compile.ms", readers: 2, records: 0 },
+	{ file: "compiler/compile.ms", readers: 3, records: 0 },
 	{ file: "compiler/transam/index.ms", readers: 7, records: 0 },
 	{ file: "compiler/lsp/handlers/lifecycle.ms", readers: 3, records: 0 },
 	{ file: "codegen/raiser/eval.ms", readers: 5, records: 1 },
 	{ file: "transform/lowering/iterInline.ms", readers: 4, records: 1 },
 	{ file: "transform/lowering/jsPointerLower.ms", readers: 2, records: 0 },
 	{ file: "analyzer/cursors.ms", readers: 1, records: 0 },
-	{ file: "analyzer/writeEffects.ms", readers: 7, records: 0 },
+	{ file: "analyzer/writeEffects.ms", readers: 8, records: 0 },
 ];
 
 function occurrences(text: string, token: string): int32 {
