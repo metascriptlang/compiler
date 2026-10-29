@@ -3301,13 +3301,17 @@ function neverPromiseUpcast(expr: Node, formal: Type, exprType: Type): Node | nu
 	return classUpcast(expr, formal);
 }
 
+function nominalBodyOf(t: Type | null): Type | null {
+	return t != null && t.kind == TypeKind.GenericInstance && t.typeReturn != null ? unwrapRefBase(t.typeReturn) : t;
+}
+
 function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null {
 	const target = formal.kind == TypeKind.Union ? nonNullMemberOfNullable(formal) : formal;
 	const source = exprType.kind == TypeKind.Union ? nonNullMemberOfNullable(exprType) : exprType;
 	if (target == null || source == null || target.kind != TypeKind.Ref || source.kind != TypeKind.Ref) return null;
 	if (hasGenericParams(target)) return null;
-	const to = target.typeReturn;
-	const from = source.typeReturn;
+	const to = nominalBodyOf(target.typeReturn);
+	const from = nominalBodyOf(source.typeReturn);
 	if (to == null || from == null || to.kind != TypeKind.Struct || from.kind != TypeKind.Struct || sameType(to, from)) return null;
 	if (!isAssignable(exprType, formal)) return null;
 	return classUpcast(expr, source == exprType ? target : formal);
@@ -4001,7 +4005,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral, layoutFromC } from "./types";
+import { createNumberLiteral, layoutFromC, unwrapRefBase } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);
