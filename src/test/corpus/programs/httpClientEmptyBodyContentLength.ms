@@ -45,7 +45,7 @@ function serveOne(listenFd: int32): string {
 	while (!head.includes("\r\n\r\n")) {
 		const chunk = recv(fd, 4096);
 		if (chunk.length == 0) break;
-		head += chunk;
+		head += chunk.asString();
 	}
 	send(fd, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
 	close(fd);
