@@ -753,9 +753,9 @@ function forgetHeapStrings(slots: RaiserValue[]): void {
 	}
 }
 
-function forgetHeapStringRefs(refs: Ptr<int64>, count: number): void {
-	for (let i = 0; i < count; i += 1) {
-		if (refs[i] != 0 && handleHeapKind(refs[i]) == RaiserHeapKind.String) refs[i] = 0;
+function forgetHeapStringRefs(refs: Ptr<int64>, frame: RaiserFunction): void {
+	for (let i = 0; i < frame.frameSize && i < frame.regClasses.length; i += 1) {
+		if (inRefFile(frame.regClasses[i]) && refs[i] != 0 && handleHeapKind(refs[i]) == RaiserHeapKind.String) refs[i] = 0;
 	}
 }
 
@@ -767,7 +767,7 @@ export function vmReleaseHeaps(vm: RaiserVM): void {
 	if (hasFloor(vm)) return;
 	clearObjectHeap(vm.objectHeap);
 	clearArrayHeap(vm.arrayHeap);
-	forgetHeapStringRefs(vm.regs.slots, getModuleFunc(vm.mod, vm.mod.entry).frameSize);
+	forgetHeapStringRefs(vm.regs.slots, getModuleFunc(vm.mod, vm.callStack.depth > 0 ? vm.callStack.items[0].funcIdx : vm.funcIdx));
 	forgetHeapStrings(vm.globals);
 	if (vm.currentException.kind == RaiserValueKind.String && handleHeapKind(vm.currentException.intVal) == RaiserHeapKind.String) vm.currentException = raiserNil();
 }
