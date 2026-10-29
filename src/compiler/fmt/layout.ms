@@ -75,7 +75,7 @@ function printedModeOfNamedGroup(modes: GroupModes, doc: Doc, current: Mode): Mo
 function propagateBreaks(doc: Doc): boolean {
 	return match (doc.kind) {
 		DocKind.BreakParent | DocKind.HardLine => true,
-		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Concat | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			let hasBreak = false;
 			for (const child of childrenOf(doc)) {
 				if (propagateBreaks(child)) hasBreak = true;
@@ -226,6 +226,7 @@ function fits(next: Cmd[], rest: Cmd[], restIdx: int32, width: int32, tabWidth: 
 			},
 			DocKind.Indent => { pushChildren(stack, doc, cmd.indent + 1, cmd.mode); },
 			DocKind.Align => { pushChildren(stack, doc, aligned(cmd.indent), cmd.mode); },
+			DocKind.Concat => { pushChildren(stack, doc, cmd.indent, cmd.mode); },
 			DocKind.IndentIfGroupBreaks => {
 				const broken = modeOfNamedGroup(modes, doc, cmd.mode) == Mode.Break;
 				pushChildren(stack, doc, broken ? cmd.indent + 1 : cmd.indent, cmd.mode);
@@ -322,6 +323,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 			},
 			DocKind.Indent => { pushChildren(stack, d, deeper(cmd.indent, options), cmd.mode); },
 			DocKind.Align => { pushChildren(stack, d, aligned(cmd.indent), cmd.mode); },
+			DocKind.Concat => { pushChildren(stack, d, cmd.indent, cmd.mode); },
 			DocKind.IndentIfGroupBreaks => {
 				const broken = printedModeOfNamedGroup(modes, d, cmd.mode) == Mode.Break;
 				pushChildren(stack, d, broken ? deeper(cmd.indent, options) : cmd.indent, cmd.mode);

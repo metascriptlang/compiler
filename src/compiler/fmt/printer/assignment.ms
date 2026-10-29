@@ -8,7 +8,7 @@ import {
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { FormatOptions } from "../options";
-import { Doc, docText, docGroup, docGroupWithId, docIndent, docLine, docIndentIfGroupBreaks, newGroupId } from "../doc";
+import { Doc, docText, docGroup, docConcat, docGroupWithId, docIndent, docLine, docIndentIfGroupBreaks, newGroupId } from "../doc";
 import { rawTemplateAt } from "./literals";
 import { isPoorlyBreakableMemberOrCallChain } from "./calls";
 
@@ -152,8 +152,8 @@ export function printAssignmentLike(left: Doc[], operator: string, right: Node |
 export function assembleAssignment(left: Doc[], operator: string, layout: AssignmentLayout, rightDoc: Doc): Doc {
 	if (layout == AssignmentLayout.OnlyLeft) return docGroup(left);
 	const head: Doc[] = layout == AssignmentLayout.BreakLeftHandSide ? [...left, docText(operator)] : [docGroup(left), docText(operator)];
-	if (layout == AssignmentLayout.Chain) return docGroup([...head, docLine(), rightDoc]);
-	if (layout == AssignmentLayout.ChainTail) return docGroup([...head, docIndent([docLine(), rightDoc])]);
+	if (layout == AssignmentLayout.Chain) return docConcat([...head, docLine(), rightDoc]);
+	if (layout == AssignmentLayout.ChainTail) return docConcat([...head, docIndent([docLine(), rightDoc])]);
 	if (layout == AssignmentLayout.Fluid) return docGroup([...head, ...fluidTail(rightDoc)]);
 	if (layout == AssignmentLayout.BreakAfterOperator) return docGroup([...head, docGroup([docIndent([docLine(), rightDoc])])]);
 	if (layout == AssignmentLayout.NeverBreakAfterOperator || layout == AssignmentLayout.ChainTailArrowChain) return docGroup([...head, docText(" "), rightDoc]);

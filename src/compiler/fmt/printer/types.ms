@@ -252,7 +252,7 @@ function flat(doc: Doc): string {
 		DocKind.Nil | DocKind.Line | DocKind.HardLine | DocKind.BreakParent => "",
 		DocKind.Text | DocKind.SourceText => (doc.data as { text: string }).text,
 		DocKind.IfBreak => flat((doc.data as { broken: Doc, flat: Doc }).flat),
-		DocKind.Group | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
+		DocKind.Group | DocKind.Concat | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			let out = "";
 			for (const child of (doc.data as { children: Doc[] }).children) out += flat(child);
 			return out;

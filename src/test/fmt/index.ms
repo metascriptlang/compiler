@@ -152,3 +152,4 @@ import "./cases/binaryAssignmentIndent";
 import "./cases/conditionalLayout";
 import "./cases/functionExpressionTypes";
 import "./cases/binaryStatementHeader";
+import "./cases/assignmentChain";
