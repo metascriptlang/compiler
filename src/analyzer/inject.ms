@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
@@ -1838,6 +1838,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
 		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); stmt },
 		NodeKind.ThrowStmt => processThrow(stmt, dctx),
+		NodeKind.AssertStmt => processAssert(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, idx, stmts, dctx, sloc),
 		NodeKind.ClassDecl => liftedOutOf(stmt, stmts, dctx) ? stmt : processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
@@ -2535,6 +2536,12 @@ function reportUntypedReturn(expr: Node, dctx: DrcContext, what: string): void {
 		message: "internal: the returned " + what + " reached the analyzer without its type",
 		line: expr.location.line, column: expr.location.column, fatal: false,
 	});
+}
+
+function processAssert(stmt: Node, dctx: DrcContext): Node {
+	const d = stmt.data as AssertStmtData;
+	d.assertExpr = processNonRcRead(d.assertExpr, dctx);
+	return stmt;
 }
 
 function processThrow(stmt: Node, dctx: DrcContext): Node {
