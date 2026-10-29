@@ -1102,7 +1102,7 @@ function writeQueryRecord(depFile: string, record: QueryRecord, settled: boolean
 
 function recordQueries(depFile: string, sources: string[], deps: string[], search: HeaderSearch, includers: string[], startedSeconds: number): boolean {
 	const record = queryRecord(sources, deps, search, includers);
-	const settled = record.bounded && newestCandidate(record) < Math.floor(startedSeconds);
+	const settled = !record.bounded || newestCandidate(record) < Math.floor(startedSeconds);
 	writeQueryRecord(depFile, record, settled);
 	trackQueryRecord(depFile);
 	return settled;
@@ -3157,4 +3157,13 @@ test "a trimmed manifest names roots by token and reads back against the reading
 	_stemRoots = [];
 	assert tokensOfRoots(manifest("/work/a")) == manifest("/work/a");
 	_stemRoots = saved;
+}
+
+test "a record that cannot bound its header queries settles untrusted, so a cold object is named as a warm one" {
+	const dir = `out/test/unboundedSettles${performance.now()}`;
+	ensureDir(dir);
+	writeFile(`${dir}/entry.c`, "int a;\n");
+	const search: HeaderSearch = { dirs: [], frameworks: [], complete: false };
+	assert recordQueries(`${dir}/entry.d`, [`${dir}/entry.c`], [], search, [], Date.now() / 1000 + 60);
+	assert queryPresence(`${dir}/entry.d`) == HEADER_QUERY_UNBOUNDED;
 }
