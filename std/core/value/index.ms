@@ -12,7 +12,7 @@ export function valueEquals<T>(a: T, b: T): boolean {
 
 // `T | null` over a value payload: equal when both are null or both hold equal payloads.
 @compilerFunc
-export function nullableEquals<T>(a: Readonly<T | null>, b: Readonly<T | null>): boolean {
+export function nullableEquals<A, B>(a: Readonly<A | null>, b: Readonly<B | null>): boolean {
 	if (a == null) return b == null;
 	if (b == null) return false;
 	return a == b;
@@ -116,6 +116,10 @@ extern function unionMemberText<T, H>(x: T, holder: H, ...texts: string[]): stri
 @compilerFunc
 @builtin("UnionDebug")
 extern function unionMemberDebug<T, H>(x: T, holder: H, ...texts: string[]): string;
+
+@compilerFunc
+@builtin("UnionEq")
+extern function unionMemberEq<A, B>(a: A, b: B, holderA: A, holderB: B, ...held: boolean[]): boolean;
 
 @compilerFunc
 export function valueDebug<T>(x: T): string {

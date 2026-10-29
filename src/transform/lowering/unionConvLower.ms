@@ -1,11 +1,11 @@
-import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
 import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv } from "../util";
+import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind } from "../util";
 import { createNode } from "../../ast/node";
 import { memberLabels } from "../native/unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
@@ -52,6 +52,7 @@ function targetMembers(target: Type): Type[] {
 
 function lowerConversion(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) return lowerComparison(node, ctx);
+	if (node.kind == NodeKind.CallExpr && callBuiltinKind(node) == "UnionEq") return lowerHeldEquality(node, ctx);
 	if (!ctx.jsBackend && !ctx.raiserBackend) storeNarrowedReads(node, ctx);
 	if (!ctx.jsBackend && !ctx.raiserBackend && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) buildArm(node, ctx);
 	const pair = unionPair(node);
@@ -165,6 +166,65 @@ function lowerComparison(node: Node, ctx: TransformContext): Node {
 	const call = makeCall(makeTypedIdentResolved(comparisonRoutine(left, right, unionOnLeft, ctx, node.location), null, node.location), [d.left, d.right], node.location);
 	call.nodeType = booleanType();
 	return negated ? makeUnary("!", call, node.location) : call;
+}
+
+function lowerHeldEquality(node: Node, ctx: TransformContext): Node {
+	const args = (node.data as CallExprData).arguments;
+	const loc = node.location;
+	const ul = args[2].nodeType!;
+	const ur = args[3].nodeType!;
+	const name = "msUnionHeldEq_" + hashToBase36(typeKey(ul) + "=" + typeKey(ur));
+	const at = _convNames.indexOf(name);
+	let sym: Symbol;
+	if (at >= 0) {
+		sym = _convSyms[at];
+	} else {
+		sym = mintSym(ctx, SymbolKind.Function, name, null);
+		_convNames.push(name);
+		_convSyms.push(sym);
+		const l = args[2].resolvedSym!;
+		const r = args[3].resolvedSym!;
+		const orderL = armOrder(ul, ctx, loc);
+		const orderR = armOrder(ur, ctx, loc);
+		const body: Node[] = [];
+		for (let k = 0; k < orderL.length; k += 1) {
+			const vi = orderL[k];
+			let answer: Node = makeBool(false, loc);
+			for (let wj: int32 = 0; wj < ur.typeChildren.length; wj += 1) {
+				const eq = args[4 + vi * ur.typeChildren.length + wj];
+				if (isFalseLiteral(eq)) continue;
+				const same = makeBinary(heldIn(ur, r, orderR, wj, ctx, loc), "&&", eq, loc);
+				same.nodeType = booleanType();
+				answer = isFalseLiteral(answer) ? same : makeBinary(answer, "||", same, loc);
+				answer.nodeType = booleanType();
+			}
+			if (k == orderL.length - 1) {
+				body.push(makeReturn(answer, loc));
+			} else {
+				body.push(makeIf(holdsMember(ul, l, vi, ctx, loc), makeBlock([makeReturn(answer, loc)], loc), null, loc));
+			}
+		}
+		declareRoutine(sym, name, [l, r], [ul, ur], booleanType(), body, loc);
+	}
+	const call = makeCall(makeTypedIdentResolved(sym, null, loc), [args[0], args[1]], loc);
+	call.nodeType = booleanType();
+	return call;
+}
+
+function isFalseLiteral(n: Node): boolean {
+	return n.kind == NodeKind.BooleanLiteral && !(n.data as BooleanLiteralData).boolValue;
+}
+
+function heldIn(union: Type, valueSym: Symbol, order: int32[], vi: int32, ctx: TransformContext, loc: SourceLocation): Node {
+	if (vi != order[order.length - 1]) return holdsMember(union, valueSym, vi, ctx, loc);
+	let held: Node | null = null;
+	for (let k = 0; k < order.length - 1; k += 1) {
+		const absent = makeUnary("!", holdsMember(union, valueSym, order[k], ctx, loc), loc);
+		absent.nodeType = booleanType();
+		held = held == null ? absent : makeBinary(held, "&&", absent, loc);
+		held.nodeType = booleanType();
+	}
+	return held ?? makeBool(true, loc);
 }
 
 function comparisonRoutine(left: Type, right: Type, unionOnLeft: boolean, ctx: TransformContext, loc: SourceLocation): Symbol {

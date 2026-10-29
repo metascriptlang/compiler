@@ -314,7 +314,7 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 	if (isMaybeType(a) || isMaybeType(b)) {
 		const carrier = isMaybeType(a) ? a : b;
 		const other = isMaybeType(a) ? b : a;
-		if (isMaybeType(other)) return sameType(a, b) ? "nullableEquals" : "";
+		if (isMaybeType(other)) return sameType(a, b) || payloadsCompareByHeldMember(a, b) ? "nullableEquals" : "";
 		if (isUnknownType(other) || carrier.typeReturn == null) return "";
 		return equalityOperandsOk(carrier.typeReturn, other) ? "nullableEquals" : "";
 	}
@@ -389,6 +389,12 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	const negated = op == "!=" || op == "!==";
 	if (!negated && op != "==" && op != "===") return false;
 	if (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const held = comparedByHeldMember(leftType, rightType);
+	if (held != null && !declaresEquality(ctx, [leftType, rightType])) {
+		const call = unionEqualityCall(ctx, d.left, d.right, held, node.location);
+		replaceWithCall(node, call, negated);
+		return true;
+	}
 	const entry = equalityEntry(ctx, leftType, rightType);
 	if (entry == "") return false;
 	const loc = node.location;
@@ -410,8 +416,8 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	if (entry == "nullableEquals") {
 		const a = valueShape(leftType);
 		const b = valueShape(rightType);
-		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType, ctx);
-		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType, ctx);
+		if (!isMaybeType(a)) left = wrapIntoCarrier(ctx, left, b, leftType);
+		if (!isMaybeType(b)) right = wrapIntoCarrier(ctx, right, a, rightType);
 	}
 	const call = boundCall(ctx, entry, [left, right], loc);
 	callCheckExpr(ctx, call, null);
@@ -430,6 +436,81 @@ function refuseEqualityThroughView(ctx: CheckerContext, node: Node, ops: string[
 		return true;
 	}
 	return false;
+}
+
+function wrapIntoCarrier(ctx: CheckerContext, operand: Node, carrier: Type, operandType: Type): Node {
+	const payload = carrier.typeReturn;
+	const taken = payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
+	return synthMaybeWrap(taken, carrier, taken.nodeType ?? operandType, ctx);
+}
+
+function declaresEquality(ctx: CheckerContext, pair: Type[]): boolean {
+	return ctx.extensionRegistry != null && resolveUserOperator(ctx, "==", pair) != null;
+}
+
+function comparedSlotUnion(t: Type): Type | null {
+	const shape = valueShape(t);
+	return shape.kind == TypeKind.Union && isSlotUnion(shape) && !isResult(shape) && !hasGenericParams(shape) ? shape : null;
+}
+
+function holdsValueMember(u: Type): boolean {
+	for (const m of u.typeChildren) {
+		if (!isPrimitiveUnionMember(m) && m.kind != TypeKind.Ref && m.kind != TypeKind.Ptr) return true;
+	}
+	return false;
+}
+
+function comparedByHeldMember(leftType: Type, rightType: Type): Type[] | null {
+	const a = comparedSlotUnion(leftType);
+	const b = comparedSlotUnion(rightType);
+	if (a == null || b == null) return null;
+	if (sameType(a, b)) return holdsValueMember(a) ? [a, b] : null;
+	for (const m of a.typeChildren) {
+		for (const n of b.typeChildren) {
+			if (membersCompare(m, n)) return [a, b];
+		}
+	}
+	return null;
+}
+
+function payloadsCompareByHeldMember(a: Type, b: Type): boolean {
+	return a.typeReturn != null && b.typeReturn != null && comparedByHeldMember(a.typeReturn, b.typeReturn) != null;
+}
+
+function isLiteralMember(t: Type): boolean {
+	return t.kind == TypeKind.NumberLiteral || t.kind == TypeKind.StringLiteral || t.kind == TypeKind.BooleanLiteral;
+}
+
+function membersCompare(m: Type, n: Type): boolean {
+	if (sameType(m, n)) return true;
+	if (!isPrimitiveUnionMember(m) || !isPrimitiveUnionMember(n) || jsMemberKind(m) != jsMemberKind(n)) return false;
+	return !isLiteralMember(m) || !isLiteralMember(n);
+}
+
+function unionEqualityCall(ctx: CheckerContext, left: Node, right: Node, unions: Type[], loc: SourceLocation): Node {
+	const ul = unions[0];
+	const ur = unions[1];
+	const holderL = newSym(ctx, SymbolKind.Parameter, "l", ul);
+	const holderR = newSym(ctx, SymbolKind.Parameter, "r", ur);
+	const args: Node[] = [left, right, holderRead(holderL, ul, loc), holderRead(holderR, ur, loc)];
+	for (const m of ul.typeChildren) {
+		for (const n of ur.typeChildren) {
+			if (!membersCompare(m, n)) {
+				args.push(createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, loc));
+				continue;
+			}
+			const same = createNodeAt(NodeKind.BinaryExpr, {
+				operator: "==",
+				left: projectTagUnionMember(holderRead(holderL, ul, loc), ul, m),
+				right: projectTagUnionMember(holderRead(holderR, ur, loc), ur, n),
+			}, loc);
+			callCheckExpr(ctx, same, null);
+			args.push(same);
+		}
+	}
+	const call = boundCall(ctx, "unionMemberEq", args, loc);
+	callCheckExpr(ctx, call, null);
+	return call;
 }
 
 function isMatchStruct(t: Type): boolean {
