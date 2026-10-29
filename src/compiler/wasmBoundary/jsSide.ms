@@ -30,10 +30,19 @@ function toWire(kind: BoundaryKind, expr: string): string {
 function adapterOf(cb: BoundaryCallback, target: string): string {
 	let names = "";
 	let args = "";
+	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
-		if (i > 0) { names += ", "; args += ", "; }
-		names += `x${i}`;
-		args += fromWire(cb.params[i], `x${i}`);
+		if (i > 0) args += ", ";
+		if (w > 0) names += ", ";
+		if (cb.params[i] == BoundaryKind.String) {
+			names += `x${w}, x${w + 1}`;
+			args += `__msbDec(x${w}, x${w + 1})`;
+			w += 2;
+		} else {
+			names += `x${w}`;
+			args += fromWire(cb.params[i], `x${w}`);
+			w += 1;
+		}
 	}
 	const call = `${target}(${args})`;
 	if (cb.result == BoundaryKind.Void) return `(${names}) => { ${call}; }`;
@@ -41,7 +50,7 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 }
 
 function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
-	const ids: string[] = [];
+	const cleanup: string[] = [];
 	const lines: string[] = [];
 	let sig = "";
 	let args = "";
@@ -50,31 +59,31 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 		if (i > 0) { sig += ", "; args += ", "; }
 		sig += `a${i}`;
 		if (p.kind == BoundaryKind.String) {
-			throw new Error(`internal: string parameter '${p.name}' of '${f.name}' reached the wasm side before string crossing exists`);
-		}
-		if (p.kind == BoundaryKind.Callback) {
-			lines.push(`\tconst id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`)});`);
-			ids.push(`id${i}`);
+			lines.push(`	const e${i} = __msbEnc(a${i});`);
+			cleanup.push(`__msbMod._free(e${i}[0]);`);
+			args += `e${i}[0], e${i}[1]`;
+		} else if (p.kind == BoundaryKind.Callback) {
+			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`)});`);
+			cleanup.push(`__msb.pop(id${i});`);
 			args += `id${i}`;
 		} else {
 			args += toWire(p.kind, `a${i}`);
 		}
 	}
-	if (f.result == BoundaryKind.String) {
-		throw new Error(`internal: string result of '${f.name}' reached the wasm side before string crossing exists`);
-	}
 	const call = `__msbMod._${f.exportSymbol}(${args})`;
-	const ret = f.result == BoundaryKind.Void ? `${call};` : `return ${fromWire(f.result, call)};`;
+	let ret = `return ${fromWire(f.result, call)};`;
+	if (f.result == BoundaryKind.Void) ret = `${call};`;
+	if (f.result == BoundaryKind.String) ret = `return __msbDec(${call}, __msbMod._msb_ret_len());`;
 	const out = [`function ${bundleName}(${sig}) {`];
-	if (ids.length == 0) {
-		out.push(`\t${ret}`);
+	if (cleanup.length == 0) {
+		out.push(`	${ret}`);
 	} else {
 		for (const l of lines) out.push(l);
-		out.push("\ttry {");
-		out.push(`\t\t${ret}`);
-		out.push("\t} finally {");
-		for (const id of ids) out.push(`\t\t__msb.pop(${id});`);
-		out.push("\t}");
+		out.push("	try {");
+		out.push(`		${ret}`);
+		out.push("	} finally {");
+		for (const c of cleanup) out.push(`		${c}`);
+		out.push("	}");
 	}
 	out.push("}");
 	return out;
@@ -83,6 +92,56 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 function quoted(s: string): string {
 	return "\"" + s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"") + "\"";
 }
+
+const GLUE = [
+	"const __msbTe = new TextEncoder();",
+	"const __msbTd = new TextDecoder();",
+	"function __msbEnc(s) {",
+	"\tconst n = s.length;",
+	"\tlet i = 0;",
+	"\twhile (i < n && s.charCodeAt(i) < 128) i++;",
+	"\tif (i === n) {",
+	"\t\tconst p = __msbMod._malloc(n || 1);",
+	"\t\t__msbTe.encodeInto(s, __msbMod.HEAPU8.subarray(p, p + n));",
+	"\t\treturn [p, n];",
+	"\t}",
+	"\tconst p = __msbMod._malloc(n * 3);",
+	"\tconst h = __msbMod.HEAPU8;",
+	"\tlet o = p;",
+	"\tfor (i = 0; i < n; i++) {",
+	"\t\tlet c = s.charCodeAt(i);",
+	"\t\tif (c < 128) h[o++] = c;",
+	"\t\telse if (c < 2048) { h[o++] = 192 | c >> 6; h[o++] = 128 | c & 63; }",
+	"\t\telse if (c >= 0xd800 && c < 0xdc00 && i + 1 < n && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {",
+	"\t\t\tc = 0x10000 + ((c & 1023) << 10 | s.charCodeAt(++i) & 1023);",
+	"\t\t\th[o++] = 240 | c >> 18; h[o++] = 128 | c >> 12 & 63; h[o++] = 128 | c >> 6 & 63; h[o++] = 128 | c & 63;",
+	"\t\t} else { h[o++] = 224 | c >> 12; h[o++] = 128 | c >> 6 & 63; h[o++] = 128 | c & 63; }",
+	"\t}",
+	"\treturn [p, o - p];",
+	"}",
+	"function __msbDecLoop(h, p, end) {",
+	"\tlet r = \"\";",
+	"\twhile (p < end) {",
+	"\t\tconst x = h[p];",
+	"\t\tif (x < 128) { r += String.fromCharCode(x); p++; }",
+	"\t\telse if (x < 224) { r += String.fromCharCode((x & 31) << 6 | h[p + 1] & 63); p += 2; }",
+	"\t\telse if (x < 240) { r += String.fromCharCode((x & 15) << 12 | (h[p + 1] & 63) << 6 | h[p + 2] & 63); p += 3; }",
+	"\t\telse {",
+	"\t\t\tconst c = ((x & 7) << 18 | (h[p + 1] & 63) << 12 | (h[p + 2] & 63) << 6 | h[p + 3] & 63) - 65536;",
+	"\t\t\tr += String.fromCharCode(55296 + (c >> 10), 56320 + (c & 1023)); p += 4;",
+	"\t\t}",
+	"\t}",
+	"\treturn r;",
+	"}",
+	"function __msbDec(p, len) {",
+	"\tconst h = __msbMod.HEAPU8;",
+	"\tif (len <= 16) return __msbDecLoop(h, p, p + len);",
+	"\tfor (let i = p, e = p + len; i < e; i++) {",
+	"\t\tif (h[i] === 0xed && h[i + 1] >= 0xa0) return __msbDecLoop(h, p, e);",
+	"\t}",
+	"\treturn __msbTd.decode(h.subarray(p, p + len));",
+	"}",
+];
 
 function preludeFor(wasmModuleUrl: string): string {
 	return [
@@ -100,6 +159,8 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\t};",
 		"})();",
 		"globalThis.__msb = __msb;",
+		GLUE.join("
+"),
 		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default();`,
 		"__msbMod._MsMain();",
 		"",
