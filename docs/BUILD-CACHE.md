@@ -21,9 +21,10 @@ resolved), `src/compiler/options.ms` (`applyCacheConfig`), `src/compiler/cache.m
 `publishToStore`, `collectGlobalCache`), `src/utils/stampDirs.ms` (`collectStaleEntries`,
 `markUsed`), `src/checker/preludePack.ms` (`packBase`, `packRoot`).
 Package downloads in `$HOME/.metascript/cache/extracted` belong to the package manager
-(`src/compiler/package/cache.ms`), and `$HOME/.metascript/cache/gate-ctl` to `tools/gate.sh`
-(`CTL_CACHE`); neither is part of the compiler cache, and neither moves with a chosen global
-root. `objects/` is written by older compilers only.
+(`src/compiler/package/cache.ms`), and `$HOME/.metascript/cache/gate-results` to `tools/gate.sh`
+(`RESULTS`, the corpus passes a gate selects by: [TESTING.md](TESTING.md) "Emit-diff selector");
+neither is part of the compiler cache, and neither moves with a chosen global root. `objects/` is
+written by older compilers only, and `gate-ctl` by gates before the records.
 
 ## What a worktree reuses from another
 
@@ -34,6 +35,11 @@ root. `objects/` is written by older compilers only.
   path. Two worktrees each holding a copy of a C file compile it once each.
 - **The prelude pack** is shared by every compiler build that reads the same pack format; a
   foreign compiler stamp is a miss, never a deletion.
+- **Two checkouts of the compiler** share little even under `--trimpath` (off by default): its C
+  holds no absolute path, yet the names of generic instances still hash each module's absolute
+  path, so self-host builds of one tree at two paths differ in 2.8 MB of 25 MB of C, while one
+  checkout built twice is byte-identical. Inbox card
+  `2026-10-23-emitted-c-names-depend-on-the-compilers-install-path.md` owns the fix.
 
 Measured on installed v0.3.2 (tree `5d2c1980d`, macOS arm64, Apple clang 21, fresh `HOME` and
 local caches): a second root building `console.log(42)` with the first root's global store
@@ -96,7 +102,7 @@ a temporary file of an entry left over an hour:
 | `store/<shard>/` | `<key>.m` with its `<key>.o` | yes, at most hourly |
 | `headers/<shard>/` | `<key>.hi` | yes, at most hourly |
 | `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
-| `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write | no |
+| `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write | yes, at most hourly, on a pack hit |
 
 The collector deletes only files with those names, record before companion, so a reader never
 finds a companion without its record; it never enters a directory whose real path leaves the
@@ -104,6 +110,18 @@ bucket, and it removes a shard only when `rmdir` finds it empty. A foreign file,
 directory and anything outside the buckets are left alone. `cc/` (compiler identity memos,
 about a megabyte) is not collected. The model is the build cache trim of a mainstream toolchain:
 owned suffixes, mtime refreshed on use at most hourly, trim at most once per period.
+
+## Local versions
+
+The local cache keeps the current object of each module per configuration, and an older version
+for an hour after its last use (`settleModuleVersion`), because concurrent builds in one tree
+(corpus workers, a test run beside a build) read the same `out/<mode>/.cache`, and one of them
+may still be compiling the older version. The emitted `.c` is named by its content alone and is
+shared by every configuration, so retention never removes it; only the per-configuration `.d`,
+`.d.q`, presence memo, `.o` and `.cfp` go. Removing the `.c` per configuration deleted it under a
+running compile on 2026-10-29 (suite reds `no such file …c` in gates q1029044026, q1029084125 and
+q1029100952). The price: the `.c` of every edit stays until `out/` is removed. When that grows
+enough to matter, the upgrade is a use record kept beside the `.c`.
 
 ## Known limits, measured
 

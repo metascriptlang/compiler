@@ -413,27 +413,33 @@ byte-identical C means no lane outcome can change. The C argument covers the JS 
 C ⇒ the changed checker branch never fired for that program ⇒ the JS emitter
 saw the same checker output as before.
 
-**`tools/gate.sh` runs this recipe itself** whenever the diff pulls in the
-corpus or SAN lane. Control = the compiler at the merge base (`git archive src`
-built into `out/gate/ctl-<key>/msc`, `<key>` hashing the merge base's `src/` minus
-`src/test` plus `std/`, the three newest kept). A select on a clean tree files its
-candidate and its per-program signatures under the candidate's key, so after a
-land the next gate finds its control built and reuses the control signature of
-every program whose git object is unchanged; a signature whose C emit failed is
-emitted again. A program whose C emit fails on either side counts as changed.
-Both binaries sit under `out/gate/`, so they resolve the same `std/` and
-`runtime/`. Both sides emit at the same shallow depth, `out/gate/emit/ctrl/<n>`
-and `out/gate/emit/cand/<n>` with `<n>` the program's line in the list: emitted
-C file names embed the absolute path, and a side emitting one level deeper
-crossed Windows MAX_PATH on multi-module programs while the other did not. The signature per program
-is the C of a plain build plus `--danger` and the JS bundle; the differing
-set goes to the runner as `MSCORPUS_ONLY=<exact names>` (SAN: the C set only),
-a JS-only set adds `MSCORPUS_LANES=c,js,esm` (`,raiser` when the raiser lane is on), and `known-red.json` is read
-for those programs alone. Changed files under `corpus/programs/` always join
-the set.
+**`tools/gate.sh` selects by recorded passes, with no control compiler.**
+Whenever the diff pulls in the corpus or SAN lane, the gate emits every program
+once with the candidate (plain C, `--danger` C and JS, in one per-gate copy of the
+tree's sources and `std/`) and runs only the programs with no recorded pass for
+that emit. What keys a record, where it is written and what never records:
+`tools/gate.sh --help` and `support_stamp`, `record_keys`. Records stay on the
+host that wrote them, so a gate on another host starts with none, and a gate
+whose corpus lane is skipped by an earlier red records nothing.
 
-Measured 2026-09-19 (14 cores, load 15–20), candidate `832301f3` against
-control `08ac0858`, a range that holds the `needsTry` analyzer fix:
+Measured over the 39 gates queued with this selector on 2026-10-29
+(`~/metascript/.gate-host/queue/q1029*.log`, oci-u and rtx), the day both cache
+arcs and the toolchain arc landed files the support stamp hashes:
+
+| gates | programs selected | select | GREEN gate |
+|---|---|---|---|
+| 8 found records | 13–68 | 3m31s–15m40s | 10m03s–23m02s, median 15m49s |
+| 31 ran whole | 1703–1800 | 2m44s–84m09s, median 5m46s | 26m38s–110m26s, median 39m15s (12 green) |
+
+Of the 31, 14 changed a file the support stamp hashes (`src/compiler/{cache,cc,compile,toolchain,buildConfig,options}.ms`,
+`runtime/`, the corpus runner); of the other 17, 7 never reached the corpus lane
+because an earlier phase went red, and 10 are not classified. The selector it replaced built a control
+compiler at the merge base and emitted every program on both sides; its select took a
+median of 1231 s over 105 host logs.
+
+Measured 2026-09-19 with that retired control selector (14 cores, load 15–20),
+candidate `832301f3` against control `08ac0858`, a range that holds the
+`needsTry` analyzer fix:
 
 | step | result | time |
 |---|---|---|
@@ -453,12 +459,10 @@ programs: `--gc=orc` C is byte-identical to `--gc=drc` C on 215/215, so it is
 not emitted; `--danger` C differs on 34/215 (range checks dropped), so it is.
 
 The gate does NOT narrow — it runs the lane whole and says why — under
-`--lanes`, `--release`, `--record`, and when a changed path cannot show in
-emitted code: `runtime/`, `std/`, `vendor/`, or a file directly under
-`src/test/corpus/` (the runner). NOT verified: the give-up paths (control fails
-to build, an emit pass loses programs) have never fired, and no gate run has
-yet produced a JS-only set (`MSCORPUS_LANES` was exercised by hand on two
-programs: 8 pass, parity `js↔esm↔c`).
+`--lanes`, `--release` and `--record`. A change no emit can show (`runtime/`,
+`vendor/`, a `std/` file that is not a module, the corpus runner, the compiler
+files that choose build flags) moves the support stamp instead, so no record
+matches and the lane runs whole without a stated reason.
 
 The `solana` lane runs after `san`, offline, with the candidate: `msc test` on
 `std/solana/test.cms`, `idlTest.ms`, `accountCodecTest.ms` (C, then `--target=js`),
