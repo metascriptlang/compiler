@@ -124,6 +124,113 @@ ARM_COMPILE = COMPILE.replace("x86_64-unknown-windows-gnu", "aarch64-unknown-win
 ARM_REMOVED = ["-no-zcz-fp", "-tme", "-zcz", "-zcz-gp"]
 
 
+class MingwDefinitionTest(TempCase):
+    def tree(self):
+        mingw = self.path("mingw")
+        for rel in ("lib-common/gdi32.def", "lib-common/ole32.def.in", "lib-common/ucrtbase-common.def.in",
+                    "lib-common/readme.txt", "lib-common/over.def", "lib64/over.def.in", "lib64/only64.def"):
+            write(os.path.join(mingw, rel))
+        return mingw
+
+    def test_lib_common_is_overridden_by_the_target_directory_and_a_fragment_or_other_file_is_no_library(self):
+        found = {n: os.path.relpath(p, self.path("mingw")).replace(os.sep, "/")
+                 for n, p in pw.mingwDefinitions(self.tree(), pw.TARGET).items()}
+        self.assertEqual(found, {"gdi32": "lib-common/gdi32.def", "ole32": "lib-common/ole32.def.in",
+                                 "over": "lib64/over.def.in", "only64": "lib64/only64.def"})
+
+    def test_a_target_without_its_own_directory_takes_lib_common_alone(self):
+        self.assertEqual(sorted(pw.mingwDefinitions(self.tree(), pw.ARM64_TARGET)), ["gdi32", "ole32", "over"])
+
+    def test_two_definitions_of_one_name_in_a_directory_are_refused(self):
+        mingw = self.tree()
+        write(os.path.join(mingw, "lib-common", "gdi32.def.in"))
+        with self.assertRaisesRegex(pe.EngineError, "two definitions of gdi32"):
+            pw.mingwDefinitions(mingw, pw.TARGET)
+
+
+class MingwLibraryTest(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.zigLib = self.path("zig", "lib")
+        for rel in ("lib-common/gdi32.def", "lib-common/ole32.def.in", "lib-common/kernel32.def.in",
+                    "lib-common/ucrtbase-common.def.in"):
+            write(os.path.join(self.zigLib, "libc", "mingw", rel))
+        self.engine = self.path("engine")
+        write(os.path.join(self.engine, "bin", "llvm-dlltool"))
+        self.commands = []
+
+    def fakeRun(self, command):
+        self.commands.append(command)
+        out = command[command.index("-o" if "-E" in command else "-l") + 1]
+        write(out, "built by %s" % os.path.basename(command[0]))
+        return ""
+
+    def build(self, target=pw.TARGET, skip=()):
+        with mock.patch.object(pe, "run", side_effect=self.fakeRun):
+            return pw.buildMingwLibraries(self.engine, self.zigLib, target, self.path("work"), set(skip))
+
+    def test_each_definition_becomes_a_library_and_a_def_in_goes_through_the_target_preprocessor_first(self):
+        libraries = self.build()
+        names = [l["name"] for l in libraries]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual([l["name"] for l in libraries if l["source"]], ["gdi32", "kernel32", "ole32"])
+        self.assertEqual({l["source"] for l in libraries if l["source"]},
+                         {"lib-common/gdi32.def", "lib-common/ole32.def.in", "lib-common/kernel32.def.in"})
+        mingw = os.path.join(self.zigLib, "libc", "mingw")
+        preprocess = [c for c in self.commands if "-E" in c]
+        self.assertEqual(len(preprocess), 2)
+        for command in preprocess:
+            self.assertEqual(command[:1], [os.path.join(self.engine, "bin", "clang")])
+            self.assertEqual(command[command.index("-target") + 1], "x86_64-unknown-windows-gnu")
+            self.assertEqual(command[command.index("-I") + 1], os.path.join(mingw, "def-include"))
+        dlltool = [c for c in self.commands if os.path.basename(c[0]) == "llvm-dlltool"]
+        self.assertEqual(len(dlltool), 3)
+        for command in dlltool:
+            self.assertEqual(command[command.index("-m") + 1], "i386:x86-64")
+        gdi = next(c for c in dlltool if c[c.index("-l") + 1].endswith("libgdi32.a"))
+        self.assertEqual(gdi[gdi.index("-d") + 1], os.path.join(mingw, "lib-common", "gdi32.def"))
+        ole = next(c for c in dlltool if c[c.index("-l") + 1].endswith("libole32.a"))
+        self.assertTrue(ole[ole.index("-d") + 1].endswith("ole32.def"))
+        self.assertTrue(ole[ole.index("-d") + 1].startswith(self.path("work")))
+
+    def test_arm64_uses_its_machine_and_the_arm64_preprocessor_target(self):
+        self.build(pw.ARM64_TARGET)
+        self.assertEqual({c[c.index("-m") + 1] for c in self.commands if os.path.basename(c[0]) == "llvm-dlltool"},
+                         {"arm64"})
+        self.assertEqual({c[c.index("-target") + 1] for c in self.commands if "-E" in c},
+                         {"aarch64-unknown-windows-gnu"})
+
+    def test_a_skipped_name_is_not_built_and_the_guid_libraries_are_empty_archives(self):
+        libraries = self.build(skip=["kernel32"])
+        self.assertNotIn("kernel32", [l["name"] for l in libraries])
+        empty = [l for l in libraries if l["source"] is None]
+        self.assertEqual([l["name"] for l in empty], sorted(pw.STATIC_LIBRARIES))
+        for library in empty:
+            with open(library["path"], "rb") as f:
+                self.assertEqual(f.read(), b"!<arch>\n")
+
+    def test_an_engine_without_llvm_dlltool_and_a_name_that_is_also_a_static_library_are_refused(self):
+        os.remove(os.path.join(self.engine, "bin", "llvm-dlltool"))
+        with self.assertRaisesRegex(pe.EngineError, "has no llvm-dlltool"):
+            self.build()
+        write(os.path.join(self.engine, "bin", "llvm-dlltool"))
+        write(os.path.join(self.zigLib, "libc", "mingw", "lib-common", "uuid.def"))
+        with self.assertRaisesRegex(pe.EngineError, r"\['uuid'\] have a definition file"):
+            self.build()
+
+    def test_copy_records_each_file_by_its_hash_and_refuses_a_name_a_runtime_input_holds(self):
+        libraries = self.build()
+        out = self.path("out")
+        os.makedirs(os.path.join(out, "d"))
+        records = pw.copyMingwLibraries(libraries, out, "d")
+        self.assertEqual(records[0]["name"], "libamstrmid.a")
+        for record in records:
+            self.assertEqual(record["sha256"], pe.sha256File(os.path.join(out, "d", record["name"])))
+        self.assertEqual(next(r for r in records if r["name"] == "libgdi32.a")["source"], "lib-common/gdi32.def")
+        with self.assertRaisesRegex(pe.EngineError, "collides"):
+            pw.copyMingwLibraries(libraries, out, "d")
+
+
 class ConfigTest(unittest.TestCase):
     def render(self, variant, target=pw.TARGET):
         compile_ = pr.parseCompileArgv(ARM_COMPILE if target == pw.ARM64_TARGET else COMPILE)
@@ -358,9 +465,19 @@ class PipelineTest(TempCase):
         self.engine = self.path("engine")
         os.makedirs(self.engine)
         for patcher in (mock.patch.object(pe, "verifyEngine", return_value=("aarch64-macos", "22.1.1", 0)),
-                        mock.patch.object(pw, "verifyConfigs")):
+                        mock.patch.object(pw, "verifyConfigs"),
+                        mock.patch.object(pw, "buildMingwLibraries", side_effect=self.fakeLibraries)):
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    def fakeLibraries(self, engine, zigLib, target, work, skip):
+        self.skipped = skip
+        os.makedirs(work)
+        libraries = []
+        for name, source in (("gdi32", "lib-common/gdi32.def"), ("uuid", None)):
+            write(os.path.join(work, "lib%s.a" % name), "library %s %s" % (name, target))
+            libraries.append({"name": name, "source": source, "path": os.path.join(work, "lib%s.a" % name)})
+        return libraries
 
     def writeZig(self, machine=None, x64Cpu="x86-64",
                  archives=("libmingw32.lib", "zigc.lib", "compiler_rt.lib", "ws2_32.lib")):
@@ -380,7 +497,9 @@ class PipelineTest(TempCase):
             "x86_64-windows-gnu.dll.cfg"])
         for target, other in (("x86_64-windows-gnu", "aarch64"), ("aarch64-windows-gnu", "x86_64")):
             self.assertEqual(sorted(os.listdir(os.path.join(out, target))),
-                             ["compiler_rt.lib", "crt2.obj", "libmingw32.lib", "ws2_32.lib", "zigc.lib"])
+                             ["compiler_rt.lib", "crt2.obj", "libgdi32.a", "libmingw32.lib", "libuuid.a", "ws2_32.lib",
+                              "zigc.lib"])
+            self.assertEqual(read(os.path.join(out, target + ".dll", "libgdi32.a")), "library gdi32 " + target)
             self.assertEqual(sorted(os.listdir(os.path.join(out, target + ".dll")))[:2], ["compiler_rt.lib", "dllcrt2.obj"])
             self.assertEqual(read(os.path.join(out, target + ".dll", "libmingw32.lib")),
                              "artifact libmingw32.lib %s dll" % target)
@@ -421,6 +540,14 @@ class PipelineTest(TempCase):
         self.assertEqual((armExe["zigTarget"], armExe["cpu"]), ("aarch64-unknown-windows-gnu", "generic"))
         self.assertEqual(armDll["zigLinkOptionsNotCarried"], ["-ALTERNATENAME:__image_base__=__ImageBase"])
         self.assertEqual(armExe["libraryTail"], ["libmingw32", "zigc", "compiler_rt", "ws2_32"])
+        self.assertEqual(self.skipped, {"libmingw32", "zigc", "compiler_rt", "ws2_32"})
+        self.assertEqual(sorted(receipt["mingwLibraries"]), ["aarch64-windows-gnu", "aarch64-windows-gnu.dll",
+                                                             "x86_64-windows-gnu", "x86_64-windows-gnu.dll"])
+        for directory, records in receipt["mingwLibraries"].items():
+            self.assertEqual([(r["name"], r["source"]) for r in records],
+                             [("libgdi32.a", "lib-common/gdi32.def"), ("libuuid.a", None)])
+            for record in records:
+                self.assertEqual(record["sha256"], pe.sha256File(os.path.join(out, directory, record["name"])))
         self.assertTrue(any("never run" in limit for limit in receipt["limits"]))
         self.assertFalse(any("aarch64" in limit and "not prepared" in limit for limit in receipt["limits"]))
         for record in receipt["variants"]:
