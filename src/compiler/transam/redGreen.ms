@@ -495,6 +495,30 @@ test "yellow state prevents infinite recursion" {
 	assert !tryMarkGreen(cache, fileInput, keyA, 2);
 }
 
+test "recomputing a query replaces dependencies when its selected input changes" {
+	for (const order of [[0, 1], [1, 0]]) {
+		const cache = createCacheStore(10);
+		const input = createFileInputStore();
+		const stack = createDependencyStack();
+		setFileText(input, "left.ms", "left");
+		setFileText(input, "right.ms", "right");
+		const key = createQueryKey(TaQueryKind.TypeCheck, 2);
+		for (let i = 0; i < order.length; i += 1) {
+			const fileId = order[i];
+			pushFrame(stack, key);
+			recordDependency(stack, createQueryKey(TaQueryKind.FileText, fileId), getFileHash(input, fileId)!);
+			executeQueryWith(cache, input, stack, key, i + 1, 42, true);
+		}
+		const oldPath = order[0] == 0 ? "left.ms" : "right.ms";
+		const selectedPath = order[1] == 0 ? "left.ms" : "right.ms";
+		setFileText(input, oldPath, "detached input changed");
+		assert tryMarkGreen(cache, input, key, 3);
+		setFileText(input, selectedPath, "selected input changed");
+		assert !tryMarkGreen(cache, input, key, 4);
+		assert cache.recomputed[TaQueryKind.TypeCheck as int32] == 2;
+	}
+}
+
 test "yellow entry returns false immediately" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
