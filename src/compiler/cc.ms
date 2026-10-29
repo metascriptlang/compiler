@@ -805,12 +805,96 @@ export function compilerInvocation(ccOption: number, ccBinary: string): Result<T
 		if (isZigCC(base)) return Result.ok({ path: base.slice(0, base.length - 3), args: ["cc"] });
 		return Result.ok({ path: base, args: [] });
 	}
+	if (ccBinary == "emcc" && platform == "windows") return emccInvocation();
 	const words = splitCcFlags(ccBinary);
 	if (!words.ok) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, `--cc: ${words.error}`));
 	if (words.value.length == 0) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, "--cc names no compiler"));
 	const args: string[] = [];
 	for (let i = 1; i < words.value.length; i++) args.push(words.value[i]);
 	return Result.ok({ path: words.value[0], args });
+}
+
+export struct EmccLookup {
+	command: ToolCommand;
+	config: string;
+}
+
+const EMCC_WIN_NAMES: string[] = ["emcc.exe", "emcc.cmd", "emcc.bat"];
+
+// emsdk ships emcc as emcc.bat, which CreateProcess does not resolve and which needs cmd /c with its
+// quoting; emcc.py run by the emsdk's own python avoids both. `config` is the EM_CONFIG to export, or
+// "" when EM_CONFIG is already set or the root has none.
+export function findEmcc(getEnv: (name: string) => string, has: (path: string) => boolean, list: (dir: string) => string[]): Result<EmccLookup, string> {
+	const looked: string[] = [];
+	let scriptDir = "";
+	const emsdk = getEnv("EMSDK").split("\\").join("/");
+	if (emsdk != "") {
+		const dir = `${emsdk}/upstream/emscripten`;
+		looked.push(`${dir}/emcc.py (EMSDK)`);
+		if (has(`${dir}/emcc.py`)) scriptDir = dir;
+	}
+	if (scriptDir == "") {
+		for (const entry of getEnv("PATH").split(";")) {
+			const dir = entry.split("\\").join("/");
+			if (dir == "") continue;
+			for (const name of EMCC_WIN_NAMES) {
+				if (!has(`${dir}/${name}`)) continue;
+				if (name == "emcc.exe") return Result.ok({ command: { path: `${dir}/${name}`, args: [] }, config: "" });
+				looked.push(`${dir}/${name} (PATH, no emcc.py beside it)`);
+				if (has(`${dir}/emcc.py`)) scriptDir = dir;
+				break;
+			}
+			if (scriptDir != "") break;
+		}
+		if (scriptDir == "") looked.push("emcc.exe, emcc.cmd, emcc.bat in every PATH directory");
+	}
+	if (scriptDir == "") return Result.err(`emcc not found for --os=emcc; looked at ${looked.join(", ")}. Set EMSDK to the emsdk root or put emcc on PATH`);
+	const root = emsdk != "" ? emsdk : dirname(dirname(scriptDir));
+	let python = getEnv("EMSDK_PYTHON").split("\\").join("/");
+	if (python != "" && !has(python)) python = "";
+	if (python == "") {
+		for (const entry of list(`${root}/python`)) {
+			const candidate = `${root}/python/${entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry}/python.exe`;
+			if (has(candidate)) {
+				python = candidate;
+				break;
+			}
+		}
+	}
+	if (python == "") return Result.err(`emcc.py found at ${scriptDir} but no emsdk python: looked at EMSDK_PYTHON and ${root}/python/*/python.exe`);
+	const config = `${root}/.emscripten`;
+	return Result.ok({ command: { path: python, args: [`${scriptDir}/emcc.py`] }, config: getEnv("EM_CONFIG") == "" && has(config) ? config : "" });
+}
+
+function emccInvocation(): Result<ToolCommand, ProcessError> {
+	const found = findEmcc((name: string) => env.get(name), (path: string) => exists(path), (dir: string) => exists(dir) ? readDir(dir) : []);
+	if (!found.ok) return Result.err(processError(ProcessErrorKind.Unknown, "emcc", found.error));
+	if (found.value.config != "") env.set("EM_CONFIG", found.value.config);
+	return Result.ok(found.value.command);
+}
+
+test "emcc is found through EMSDK and run as emsdk python on emcc.py" {
+	const files = ["C:/sdk/upstream/emscripten/emcc.py", "C:/sdk/python/3.13_64bit/python.exe", "C:/sdk/.emscripten"];
+	const r = findEmcc((name: string) => name == "EMSDK" ? "C:\\sdk" : "", (path: string) => files.includes(path), (dir: string) => ["3.13_64bit/"]);
+	assert r.ok;
+	assert r.value.command.path == "C:/sdk/python/3.13_64bit/python.exe";
+	assert r.value.command.args.join("|") == "C:/sdk/upstream/emscripten/emcc.py";
+	assert r.value.config == "C:/sdk/.emscripten";
+}
+
+test "emcc.bat on PATH resolves to the emsdk beside it, and an explicit EM_CONFIG is kept" {
+	const files = ["C:/sdk/upstream/emscripten/emcc.bat", "C:/sdk/upstream/emscripten/emcc.py", "C:/sdk/python/p/python.exe", "C:/sdk/.emscripten"];
+	const r = findEmcc((name: string) => name == "PATH" ? "C:\\bin;C:\\sdk\\upstream\\emscripten" : name == "EM_CONFIG" ? "D:/own" : "", (path: string) => files.includes(path), (dir: string) => ["p"]);
+	assert r.ok;
+	assert r.value.command.args.join("|") == "C:/sdk/upstream/emscripten/emcc.py";
+	assert r.value.config == "";
+}
+
+test "emcc not found names every place it looked" {
+	const r = findEmcc((name: string) => name == "EMSDK" ? "C:/sdk" : name == "PATH" ? "C:/bin" : "", (path: string) => false, (dir: string) => []);
+	assert !r.ok;
+	assert r.error.indexOf("C:/sdk/upstream/emscripten/emcc.py", 0) >= 0;
+	assert r.error.indexOf("PATH", 0) >= 0;
 }
 
 test "an absolute Clang invocation keeps its directory for the C++ driver" {
