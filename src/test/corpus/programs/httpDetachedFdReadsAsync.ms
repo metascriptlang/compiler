@@ -26,7 +26,7 @@ const done: Locked<int32> = new Locked(0);
 
 async function readOnce(fd: int32): Promise<void> {
 	const chunk = await recvAsync(fd, 64);
-	console.log(`detached read: ${chunk}`);
+	console.log(`detached read: ${chunk.asString()}`);
 	close(fd);
 	lockedUpdate(done, (v: int32): int32 => v + 1);
 }
@@ -41,7 +41,7 @@ function client(port: int32): boolean {
 			while (!got.includes("\r\n\r\n")) {
 				const c = recv(fd, 256);
 				if (c.length == 0) break;
-				got += c;
+				got += c.asString();
 			}
 			send(fd, "hello");
 			const t1 = Date.now();
