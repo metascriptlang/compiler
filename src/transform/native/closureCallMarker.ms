@@ -15,7 +15,7 @@
 // and Sink/Lent are never built for a callee — probed, not assumed.
 
 import { Node, NodeKind, SymbolKind, Symbol, CallExprData, ObjectLiteralData, BinaryExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
-import { createFunction, voidType, peelTransparentInstance, closureStorageType, peelToStructOrUnion, isPlainFunctionPointer } from "../../checker/types";
+import { createFunction, voidType, peelTransparentInstance, closureStorageType, peelToStructOrUnion, isPlainFunctionPointer, peelSink } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeObjectLiteral, makeNull, makeHiddenStdConv } from "../util";
@@ -66,7 +66,8 @@ function wrapFuncArgsAsThunks(node: Node): void {
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		const arg = cd.arguments[i];
 		if (arg.flags.has(NodeFlag.Closure)) continue;
-		const formal = i < calleeType.typeChildren.length ? calleeType.typeChildren[i] : null;
+		if (arg.kind == NodeKind.HiddenStdConv && arg.nodeType != null && isPlainFunctionPointer(arg.nodeType)) continue;
+		const formal = i < calleeType.typeChildren.length ? peelSink(calleeType.typeChildren[i]) : null;
 		if (formal != null && formal.kind == TypeKind.Ptr) continue;
 		if (formal != null && isPlainFunctionPointer(formal)) {
 			cd.arguments[i] = asPointerSlot(arg, formal);
