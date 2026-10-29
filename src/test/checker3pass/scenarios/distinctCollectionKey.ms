@@ -51,6 +51,12 @@ enum Color { Red, Green }
 type Tint = distinct Color;
 type Score = distinct float64;
 export function hash(this s: Score): int64 { return 0; }
+@delegate export function \`==\`(this a: UserId, b: UserId): boolean;
+@delegate export function \`==\`(this a: AdminId, b: AdminId): boolean;
+@delegate export function \`==\`(this a: Flag, b: Flag): boolean;
+@delegate export function \`==\`(this a: Ch, b: Ch): boolean;
+@delegate export function \`==\`(this a: Tint, b: Tint): boolean;
+@delegate export function \`==\`(this a: Score, b: Score): boolean;
 const a = new Map<AdminId, string>();
 const b = new Set<Flag>();
 const c = new HashSet<Ch>();
@@ -58,5 +64,14 @@ const d = new HashMap<Tint, int32>();
 const e = new Set<Score>();
 `;
 	const errors = checkOnly(src).errors;
-	assert errors.length == 0, "every key here has a hash: " + errors.join("\n");
+	assert errors.length == 0, "every key here has a hash and a delegated ==: " + errors.join("\n");
+}
+
+test "a distinct integer key without a delegated == is refused where the collection is made" {
+	const src = `
+type UserId = distinct int32;
+const a = new Map<UserId, string>();
+`;
+	const text = checkOnly(src).errors.join("\n");
+	assert text.contains("in instantiation of 'Map<UserId, string>': operator '==' cannot be applied to type 'UserId'"), "equality is not inherited: " + text;
 }
