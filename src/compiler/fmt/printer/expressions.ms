@@ -11,14 +11,14 @@ import {
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, takeOwnLineTrailing, commentsOfRun } from "./commentDocs";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
-import { callPrintNode, printedAncestor, keepsWrittenParens } from "./callbacks";
+import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";

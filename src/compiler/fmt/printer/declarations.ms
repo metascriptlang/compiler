@@ -19,7 +19,7 @@ import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
-import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
+import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
 	isBreakableTypeAnnotation, isComplexTypeAliasGenerics, isUnbreakableTypeText,
