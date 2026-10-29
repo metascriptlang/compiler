@@ -126,20 +126,28 @@ function nullablePointer(p: CType, ms: string): string {
 	return p.kind == CTypeKind.Ptr && ms.startsWith("Ptr<") ? `${ms} | null` : ms;
 }
 
-function emitParams(t: CType, outHandles: boolean): string {
+function receivedPointer(p: CType): string {
+	const ms = cTypeToMs(p);
+	if (p.kind != CTypeKind.Ptr || p.base == null || !p.base.isConst) return nullablePointer(p, ms);
+	if (ms.startsWith("Borrow<")) return `Readonly<Ptr<${ms.slice(7, ms.length - 1)}>> | null`;
+	if (ms.startsWith("Ptr<") && ms != "Ptr<void>") return `Readonly<${ms}> | null`;
+	return nullablePointer(p, ms);
+}
+
+function emitParams(t: CType, outHandles: boolean, calleeReceives: boolean = false): string {
 	let result = "";
 	for (let i = 0; i < t.params.length; i += 1) {
 		if (i > 0) result = result + ", ";
 		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
 		const p = t.params[i];
 		if (outHandles && isOutHandle(p)) result = result + `out ${pName}: ${cTypeToMs(p.base)}`;
-		else result = result + `${pName}: ${nullablePointer(p, cTypeToMs(p))}`;
+		else result = result + `${pName}: ${calleeReceives ? receivedPointer(p) : nullablePointer(p, cTypeToMs(p))}`;
 	}
 	return result;
 }
 
 function emitFuncType(t: CType): string {
-	return "(" + emitParams(t, false) + ") => " + nullablePointer(t.returnType, cTypeToMs(t.returnType));
+	return "(" + emitParams(t, false, true) +") => " + nullablePointer(t.returnType, cTypeToMs(t.returnType));
 }
 
 // ===== Emit Declarations =====
