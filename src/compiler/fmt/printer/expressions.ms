@@ -49,17 +49,34 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const bd = bottom.data as BinaryExprData;
 	const first = docGroup([printBinaryOperand(bd.left, bd.operator, false, options)]);
 	const parent = printedAncestor(1);
+	const insideCondition = isConditionParent(parent);
 	const tail: Doc[] = [];
 	for (let i = spine.length - 1; i >= 0; i -= 1) {
 		const sideParent = i == 0 ? parent : spine[i - 1];
-		for (const part of binaryRightSide(spine[i], i > 0, sideParent, options)) tail.push(part);
+		for (const part of binaryRightSide(spine[i], i > 0, sideParent, insideCondition, options)) tail.push(part);
 	}
 	if (bindsAsOperandHead(parent, node)) return docGroup([docIndent([docSoftLine(), first, ...tail]), docSoftLine()]);
 	const arrowBody = parent != null && parent.kind == NodeKind.ArrowFunction
 		&& (writtenArrowBody((parent.data as ArrowFunctionData).arrowBody, options) == node || (parent.data as ArrowFunctionData).arrowBody == node);
 	const inlines = inlinesLogicalOperand(node);
-	if (arrowBody || (inlines && spine.length == 1) || (!inlines && indentsItsValue(parent))) return docGroup([first, ...tail]);
+	if (arrowBody || keepsOperandsLevel(parent) || (inlines && spine.length == 1) || (!inlines && indentsItsValue(parent))) return docGroup([first, ...tail]);
 	return docGroup([first, docIndent(tail)]);
+}
+
+function keepsOperandsLevel(parent: Node | null): boolean {
+	if (parent == null) return false;
+	return match (parent.kind) {
+		NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ForStmt | NodeKind.JSXAttribute => true,
+		_ => isConditionParent(parent),
+	};
+}
+
+function isConditionParent(parent: Node | null): boolean {
+	if (parent == null) return false;
+	return match (parent.kind) {
+		NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.SwitchStmt => true,
+		_ => false,
+	};
 }
 
 function conditionalParentIndents(): boolean {
@@ -131,14 +148,15 @@ function sharesBinaryKind(op: string, other: Node | null, options: FormatOptions
 	return other != null && isBinaryLike(other, options) && isLogicalOp((other.data as BinaryExprData).operator) == isLogicalOp(op);
 }
 
-function binaryRightSide(node: Node, isInner: boolean, parent: Node | null, options: FormatOptions): Doc[] {
+function binaryRightSide(node: Node, isInner: boolean, parent: Node | null, insideCondition: boolean, options: FormatOptions): Doc[] {
 	const d = node.data as BinaryExprData;
 	const right = printBinaryOperand(d.right, d.operator, true, options);
 	const side: Doc[] = inlinesLogicalOperand(node)
 		? [docText(" " + d.operator + " "), right]
 		: [docText(" " + d.operator), docLine(), right];
 	const grouped = !(isInner || sharesBinaryKind(d.operator, parent, options)
-		|| sharesBinaryKind(d.operator, d.left, options) || sharesBinaryKind(d.operator, d.right, options));
+		|| sharesBinaryKind(d.operator, d.left, options) || sharesBinaryKind(d.operator, d.right, options)
+		|| (insideCondition && isLogicalOp(d.operator)));
 	const body: Doc[] = grouped ? [docGroup(side)] : side;
 	if (!isInner) return body;
 	return [...commentLeading(node), ...body, ...commentTrailing(node)];
