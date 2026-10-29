@@ -1831,7 +1831,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); stmt },
 		NodeKind.ThrowStmt => processThrow(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, idx, stmts, dctx, sloc),
-		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
+		NodeKind.ClassDecl => liftedOutOf(stmt, stmts, dctx) ? stmt : processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
 		NodeKind.FunctionExpr => processFuncExpr(stmt, dctx, sloc),
 		NodeKind.TestDecl => processTestDecl(stmt, dctx, sloc),
@@ -2802,6 +2802,13 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
 		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!, 0);
 	}
+}
+
+function liftedOutOf(decl: Node, stmts: Node[], dctx: DrcContext): boolean {
+	const checker = dctx.ctx.checkerCtx;
+	if (checker == null || checker.liftedLocalTypeDecls.indexOf(decl) < 0) return false;
+	const body = dctx.currentFuncBody;
+	return body == null || body.kind != NodeKind.Program || (body.data as ProgramData).programStmts !== stmts;
 }
 
 function processClass(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
