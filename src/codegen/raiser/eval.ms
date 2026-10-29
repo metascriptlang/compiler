@@ -1620,12 +1620,13 @@ test "orc: a ring through one of two array fields frees each array once" {
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 }
 
-test "orc: a ring through three plain array fields frees each array once" {
+test "orc: a ring through three plain array fields whose builder reads it last frees each array once" {
 	const vm = evalVM("class C { kids: C[] = []; more: C[] = []; last: C[] = []; }"
-		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.more.push(a); b.last.push(b); }"
-		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+		+ " function ring(): int32 { const a = new C(); const b = new C(); a.kids.push(b); b.more.push(a); b.last.push(b);"
+		+ " return a.kids.length + b.more.length + b.last.length; }"
+		+ " let n = 0; for (let i = 0; i < 300; i++) n += ring(); console.log(`${n}`);");
 	assert vm.error == "", vm.error;
-	assert vm.output == "ok\n", vm.output;
+	assert vm.output == "900\n", vm.output;
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length + heapObjectCellHandles(vm.arrayHeap).length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 }
 
