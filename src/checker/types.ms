@@ -4774,6 +4774,14 @@ function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: Un
 	bindings.depth = bindings.depth - 1;
 }
 
+function unifyStoredType(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+	if (formal.kind == TypeKind.GenericParam && isPlainFunctionPointer(concrete)) {
+		bindParam(bindings, withoutReadonlyView(formal), concrete);
+		return;
+	}
+	unifyTypeGuard(formal, concrete, bindings);
+}
+
 function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	if (formal == null) return;
 	if (concrete == null) return;
@@ -4803,7 +4811,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		&& (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray
 			|| formal.kind == TypeKind.Span || formal.kind == TypeKind.Set || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr)) {
 		if (formal.typeReturn != null && concrete.typeReturn != null) {
-			unifyTypeGuard(formal.typeReturn, concrete.typeReturn, bindings);
+			unifyStoredType(formal.typeReturn, concrete.typeReturn, bindings);
 		}
 		return;
 	}
@@ -4831,7 +4839,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
-			unifyTypeGuard(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
+			unifyStoredType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
 		}
 		return;
 	}
