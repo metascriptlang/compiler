@@ -475,18 +475,18 @@ runner_alive() { local p; p=$(cat "$1/runner.lock/pid" 2>/dev/null); [ -n "$p" ]
 start_runner() { (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &); }
 
 # A land gates on the Mac (the queue, or a direct land with no verdict to reuse) only when Linux cannot verify it:
-# while gatedash shows a Linux gate VM up, a change rides the gate train, and its macOS-only .ms lines and Mac-budgeted
+# while gatedash shows a Linux gate VM up, a change goes through the gate queue, and its macOS-only .ms lines and Mac-budgeted
 # corpus cells get platform-check.sh on the Mac; only a macOS-only line outside a .ms module, which no targeted check
 # reaches, still gates on the Mac.
 mac_gate_allowed() {
-  local w=$1 old=$2 new=$3 hosts=$HOME/.local/share/gatedash/hosts.tsv f
+  local w=$1 old=$2 new=$3 name=$4 hosts=$HOME/.local/share/gatedash/hosts.tsv f
   [ -z "${MSC_LAND_MAC:-}" ] && [ -f "$hosts" ] && [ -f "$HOME/metascript/.gate-host/mac-only-paths.sh" ] || return 0
   [ $(( $(date +%s) - $(stat -f %m "$hosts" 2>/dev/null || stat -c %Y "$hosts") )) -le 120 ] || return 0
   awk -F'\t' '$3 == "vm" && $4 == "up" { up = 1 } END { exit !up }' "$hosts" || return 0
   for f in $(cd "$w" && bash "$HOME/metascript/.gate-host/mac-only-paths.sh" "$old" "$new"); do
     case $f in (*.ms) ;; (*) return 0 ;; esac
   done
-  die "land: a Linux gate host is up and every macOS-only line sits in a .ms module, so this land rides the gate train: send READY to merge-train (~/metascript/.gate-host/README.md, Ready); the gate's verdict names the platform-check.sh run the Mac adds. When the person approves the Mac for it (a Linux host red, no merge-train live), run again with MSC_LAND_MAC=1."
+  die "land: a Linux gate host is up and every macOS-only line sits in a .ms module, so this land goes through the gate queue: after its ready check (~/metascript/.gate-host/gate-queue ready-check $name <host>), submit it with ~/metascript/.gate-host/gate-queue submit $name and wait with ~/metascript/.gate-host/gate-queue wait $name (~/metascript/.gate-host/README.md, Ready); the gate's verdict names the platform-check.sh run the Mac adds. When the person approves the Mac for it (a Linux host red, no gate host free), run again with MSC_LAND_MAC=1."
 }
 
 # A gate verdict that needs a platform (needs=macos) counts only beside platform-check.sh's verdict for the same patch.
@@ -573,7 +573,7 @@ cmd_land() {
   [ "$new" != "$old" ] || die "land: nothing to land"
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
   if [ "$async" -eq 1 ]; then
-    mac_gate_allowed "$w" "$old" "$new"
+    mac_gate_allowed "$w" "$old" "$new" "$name"
     mkdir -p "$qd"
     if [ -n "$(queued_for "$qd" "$name" run)" ]; then
       runner_alive "$qd" && die "land: $name is landing now; wait with: wt.sh land $name --wait"
@@ -604,7 +604,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
     platform_verdicts "$name"
     say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ]; then
-    mac_gate_allowed "$w" "$old" "$new"
+    mac_gate_allowed "$w" "$old" "$new" "$name"
     rm -f "$verdict"
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
     for cmd in "${also[@]+"${also[@]}"}"; do
