@@ -869,10 +869,9 @@ function futureAt(vm: RaiserVM, handle: int64): RaiserFuture {
 	return vm.sched.futures.items[futureSlot(handle)];
 }
 
-function blankFuture(counts: RaiserFutureCounts): RaiserFuture {
-	const valueArrayHeap = createArrayHeap();
+function blankFuture(counts: RaiserFutureCounts, valueArrayHeap: RaiserArrayHeap = createArrayHeap(), valueObjectHeap: RaiserObjectHeap = createStructHeap()): RaiserFuture {
 	valueArrayHeap.futures = counts;
-	return { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap: createStructHeap(), waiters: [] as number[], record: -1, dependents: [] as int64[], inputs: [] as int64[], combine: -1, thens: [] as RaiserThen[] };
+	return { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters: [] as number[], record: -1, dependents: [] as int64[], inputs: [] as int64[], combine: -1, thens: [] as RaiserThen[] };
 }
 
 // A future starts with the one reference its creator holds, as msFutureCreate's does; a slot a released future
@@ -880,7 +879,7 @@ function blankFuture(counts: RaiserFutureCounts): RaiserFuture {
 function newFuture(vm: RaiserVM): int64 {
 	const table = vm.sched.futures;
 	const counts = table.counts;
-	const f = blankFuture(counts);
+	const f = blankFuture(counts, vm.arrayHeap, vm.objectHeap);
 	if (table.free.length > 0) {
 		const at = table.free.pop();
 		table.items[at] = f;
@@ -934,6 +933,13 @@ function vmDrainFutures(vm: RaiserVM): void {
 	}
 }
 
+function futureCarry(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, value: RaiserValue): RaiserValue {
+	const layout = value.kind == RaiserValueKind.Object ? heapObjectClass(srcObj, value.intVal) : RAISER_NO_CLASS;
+	const copiesAsValue = value.kind == RaiserValueKind.Object && layout.depth < 0 && !isClosurePair(layout);
+	if (srcArr == dstArr && srcObj == dstObj && !copiesAsValue) return value;
+	return copyGraph(srcArr, srcObj, dstArr, dstObj, value);
+}
+
 function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	if (!futureHandleValid(vm, handle)) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
@@ -944,7 +950,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
 	// value graph moves into storage the future owns.
-	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
+	const owned = futureCarry(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.value = owned;
 	futureSettled(vm, handle);
@@ -1075,7 +1081,7 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 			thenRelease(vm, t);
 			return;
 		}
-		const error = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.error);
+		const error = futureCarry(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.error);
 		rcIncref(t.arrayHeap, t.objectHeap, error);
 		thenStart(vm, t, t.rejected, error);
 		return;
@@ -1085,7 +1091,7 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 		thenRelease(vm, t);
 		return;
 	}
-	const value = copyGraph(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.value);
+	const value = futureCarry(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.value);
 	rcIncref(t.arrayHeap, t.objectHeap, value);
 	thenStart(vm, t, t.fulfilled, value);
 }
@@ -1124,7 +1130,7 @@ function vmHandleFutureThen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
 	const f = futureAt(vm, handle);
 	f.finished = true;
-	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.value);
+	const owned = futureCarry(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.value);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.value = owned;
 	futureSettled(vm, handle);
@@ -1136,7 +1142,7 @@ function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void
 	f.failed = true;
 	f.errorMsg = source.errorMsg;
 	f.record = source.record;
-	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.error);
+	const owned = futureCarry(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.error);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.error = owned;
 	futureSettled(vm, handle);
@@ -1153,7 +1159,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 			item = heapArrayGet(f.valueArrayHeap, arr, earlier as int64);
 		} else {
 			const input = futureAt(vm, f.inputs[i]);
-			item = copyGraph(input.valueArrayHeap, input.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, input.value);
+			item = futureCarry(input.valueArrayHeap, input.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, input.value);
 		}
 		heapArrayPush(f.valueArrayHeap, arr, item);
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, item);
@@ -1279,7 +1285,7 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 	if (ib == RaiserCombine.Any as int32) {
 		const rejection = getDyn(vm, func.blocks[ic + 4] as int32);
 		f.errorMsg = vmExceptionText(vm, rejection);
-		const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection);
+		const owned = futureCarry(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection);
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 		f.error = owned;
 	}
@@ -1385,7 +1391,7 @@ function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: Raiser
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = message;
-	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown);
+	const owned = futureCarry(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.error = owned;
 	futureSettled(vm, handle);
@@ -1627,7 +1633,7 @@ function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	}
 	else if (f.error.kind == RaiserValueKind.Nil) setException(vm, heapAllocString(vm.arrayHeap, f.errorMsg));
 	else {
-		const copied = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error);
+		const copied = futureCarry(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error);
 		rcIncref(vm.arrayHeap, vm.objectHeap, copied);
 		setException(vm, copied);
 	}
@@ -1925,7 +1931,7 @@ function readSettledFuture(vm: RaiserVM, ia: int32, f: RaiserFuture): void {
 		raiseFromFuture(vm, f);
 		return;
 	}
-	const copy = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
+	const copy = futureCarry(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
 	rcIncref(vm.arrayHeap, vm.objectHeap, copy);
 	setRegConform(vm, ia, copy);
 }
