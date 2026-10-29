@@ -2557,7 +2557,31 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	return makeBlock([tmpDecl, incref, retStmt], loc);
 }
 
+// A return in a module's own statements leaves the module scope, which has no finally of its own: the
+// scope's variables are destroyed before it, as the end of the module body destroys them.
 function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
+	const result = processReturnIn(stmt, dctx, loc);
+	if (dctx.currentFuncBody == null || dctx.currentFuncBody.kind != NodeKind.Program) return result;
+	const cleanup = generateCleanup(dctx.scopes[0], loc);
+	if (cleanup.length == 0) return result;
+	const tail = result.kind == NodeKind.BlockStmt ? (result.data as BlockStmtData).statements : [result];
+	const ret = tail[tail.length - 1];
+	if (ret.kind != NodeKind.ReturnStmt) throw new Error("internal: a module-level return lowered to a block that does not end in its return");
+	const out: Node[] = tail.slice(0, tail.length - 1);
+	const rd = ret.data as ReturnStmtData;
+	if (rd.argument != null) {
+		const retSym = freshTempSym(dctx.ctx, "ret", rd.argument.nodeType);
+		const tmpDecl = makeVarDecl(retSym.name, rd.argument, DeclKind.Const, loc);
+		tmpDecl.resolvedSym = retSym;
+		out.push(tmpDecl);
+		rd.argument = makeIdentResolved(retSym, loc);
+	}
+	for (const c of cleanup) out.push(c);
+	out.push(ret);
+	return makeBlock(out, loc);
+}
+
+function processReturnIn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ReturnStmtData;
 
 	setNeedsTryAll(dctx);
