@@ -104,6 +104,16 @@ type.
 | function pointer | a function type |
 | `#define FOO 42` | not imported (`Undefined variable 'FOO'` from a named import) |
 
+A header's function-pointer type is a plain C function pointer: it holds a module-level function
+and no environment, wherever the value goes (an array literal, a binding, a parameter, a struct
+field, `push` onto an array of it, a `sink` parameter, a generic parameter bound to it), and a
+closure into it is a compile error. Measured 2026-10-29 with `./msc-cand` on Linux (oci-u): corpus
+`cFunctionPointerSinkArgumentStaysPlain` prints `6 10 2|15|10` on C, `--danger`, Raiser and under
+ASan, where the compiler before it failed in clang (`initializing … 'int (*)(int)' with an
+expression of incompatible type 'msClosure'`) at `push`, the `sink` parameter and the generic
+`sink` parameter. Not measured: a header type nested deeper than one array or generic argument.
+A function type written in an `.ms` `extern function` parameter is still a closure (`msClosure` in C).
+
 A variable passed through `Ptr<size_t>` or `Ptr<Ptr<cchar>>` is declared with that imported type, because the emitted C spells it `size_t` and `char *`
 and C compares the pointee of `size_t *` and `char **` exactly (`size_t` is `unsigned long` where `uint64_t` is `unsigned long long` on macOS).
 Measured 2026-10-27 with `./msc-cand` and gcc 15.2 on macOS arm64: `src/test/corpus/programs/cImportPointeeIdentity` builds under
