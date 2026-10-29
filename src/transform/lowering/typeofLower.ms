@@ -4,8 +4,8 @@
 // on the held member, one routine per union and table.
 
 import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
-import { isTypeofExpr, primitiveNameLiteral } from "../../checker/fit";
+import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable, findFieldInVariant } from "../../checker/types";
+import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
@@ -48,6 +48,8 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 			if (test != null) return test;
 			const instance = lowerGenericInstanceof(node, ctx);
 			if (instance != null) return instance;
+			const named = lowerInKeyword(node, ctx);
+			if (named != null) return named;
 		},
 		_ => {},
 	};
@@ -147,6 +149,24 @@ function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null 
 	const target: Symbol = cls;
 	const prefix = "msInstanceOf_" + hashToBase36(typeKey(cls.symbolType)) + "_";
 	return routineCall(prefix, operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(derivesFromClass(member, target), loc), ctx, loc), booleanType());
+}
+
+// `"name" in u` over a union asks which member `u` holds: a member that
+// declares `name`, optional or not, answers true.
+function lowerInKeyword(node: Node, ctx: TransformContext): Node | null {
+	const d = node.data as BinaryExprData;
+	if (d.operator != "in" || d.right.nodeType == null) return null;
+	if (shapeOf(peelTransparentInstance(d.right.nodeType)) != Shape.Union) return null;
+	const u = peelTransparentInstance(readInStoredLayout(d.right, peelTransparentInstance(d.right.nodeType)));
+	const loc = node.location;
+	if (d.left.kind != NodeKind.StringLiteral) {
+		reportTransformError(ctx, `'in' on a '${typeDisplayName(u)}' value needs a string literal on the left, to know which members declare the property`, loc);
+		return node;
+	}
+	const name = (d.left.data as StringLiteralData).value;
+	const operand = lowerNode(d.right, ctx);
+	const held: Type = u;
+	return routineCall("msIn_" + hashToBase36(name) + "_", operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(findFieldInVariant(peelTransparentInstance(member), name) != null, loc), ctx, loc), booleanType());
 }
 
 function holdsAwaitable(u: Type): boolean {
