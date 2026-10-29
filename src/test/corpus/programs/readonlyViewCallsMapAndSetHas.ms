@@ -1,6 +1,4 @@
 // @stdout: map true false 2 set true false 2 hashmap true false hashset true false array 3 1 true 1 1 0
-// has() on Map and Set, like HashMap and HashSet and the Array read methods, is callable through a
-// Readonly view. A view reads a value through readonlyGet, because get() returns a mutable one.
 function mapView(v: Readonly<Map<string, number>>): string { return `map ${v.has("a")} ${v.has("z")} ${v.size}`; }
 function setView(v: Readonly<Set<number>>): string { return `set ${v.has(3)} ${v.has(9)} ${v.size}`; }
 function hashMapView(v: Readonly<HashMap<string, number>>): string { return `hashmap ${v.has("a")} ${v.has("z")}`; }
