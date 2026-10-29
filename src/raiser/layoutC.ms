@@ -1,5 +1,5 @@
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { createStruct, createPrimitive, createArray, createRef, createTuple, createUnion, createFunction, createEnum } from "../checker/types";
+import { createStruct, createPrimitive, createArray, createRef, createTuple, createUnion, createFunction, createClosureType, createEnum } from "../checker/types";
 import { makeSymbol } from "../checker/symbol";
 import { CheckerContext } from "../checker/context";
 import { createAliveSet, CEmissionFacts, CSection, createCGen, sec, extract } from "../codegen/c/context";
@@ -105,19 +105,22 @@ test "VmLayout of structs, a union, a union inside a struct and a tuple equals t
 	assert list[3].slots.length == 3 && list[3].slots[1].kind == MemKind.Block && list[1].slots[1].kind == MemKind.Block;
 }
 
-test "VmLayout of a string, an array, a closure and a class cell equals the C compiler's" {
+test "VmLayout of a string, an array, a closure, a plain function pointer and a class cell equals the C compiler's" {
 	const num = createPrimitive(TypeKind.Number);
 	const cell = createRef(declared(createStruct("Cell", ["n", "name", "flag"], [num, createPrimitive(TypeKind.String), createPrimitive(TypeKind.Int16)], false)));
-	const types: Type[] = [createPrimitive(TypeKind.String), createArray(num), createFunction([num], ["x"], num), cell];
+	const plain = createFunction([num], ["x"], num);
+	const holder = declared(createStruct("FnHolder", ["k", "f", "g"], [createPrimitive(TypeKind.Int8), plain, createClosureType([num], ["x"], num)], true));
+	const types: Type[] = [createPrimitive(TypeKind.String), createArray(num), createClosureType([num], ["x"], num), plain, holder, cell];
 	const layouts = createVmLayouts();
 	const list: VmLayout[] = [];
-	for (let i = 0; i < 3; i += 1) list.push(vmLayoutOf(layouts, types[i]));
+	for (let i = 0; i < 5; i += 1) list.push(vmLayoutOf(layouts, types[i]));
 	const body = vmCellOf(layouts, cell);
 	list.push(body);
 	const names = emitted(types);
-	const cTypes = [names[0], names[1], names[2], "struct Cell"];
+	const cTypes = [names[0], names[1], names[2], names[3], "struct FnHolder", "struct Cell"];
 	const verdict = pin(types, cTypes, list);
 	assert verdict == "", verdict;
+	assert list[3].kind == MemKind.Ptr && list[3].slots.length == 0 && list[2].slots.length == 2;
 	const header = compileC(prelude() + `_Static_assert(sizeof(msRefHeader) == ${CELL_HEADER_SIZE} && ${body.header} == ${CELL_HEADER_SIZE}, "cell header");\n`);
 	assert header == "", header;
 }

@@ -1,7 +1,7 @@
 import { Type, TypeKind } from "../ast/node";
 import {
 	TargetInfo, hostTargetInfo, sizeOfType, alignOfType, offsetOfField, storesNothing, enumStorageKind, unwrapRefNullUnion, literalUnionBase,
-	createStruct, createPrimitive, isAwaitable, typeDisplayName, typeKey, offsetOfUnionPayload,
+	createStruct, createPrimitive, isAwaitable, typeDisplayName, typeKey, offsetOfUnionPayload, isPlainFunctionPointer,
 } from "../checker/types";
 
 export enum MemKind { Block, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, Ptr }
@@ -45,7 +45,7 @@ export function memKindOf(t: Type): MemKind {
 		const carried = literalUnionBase(cur);
 		return carried != null ? memKindOf(carried) : MemKind.Block;
 	}
-	if (cur.kind == TypeKind.GenericInstance && isAwaitable(cur)) return MemKind.Ptr;
+	if ((cur.kind == TypeKind.GenericInstance && isAwaitable(cur)) || isPlainFunctionPointer(cur)) return MemKind.Ptr;
 	return match (cur.kind == TypeKind.Enum || cur.kind == TypeKind.EnumLiteral ? enumStorageKind(cur) : cur.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Uint8 => MemKind.U8,
 		TypeKind.Int8 => MemKind.I8,
@@ -105,7 +105,7 @@ function slotsOf(tg: TargetInfo, t: Type): VmSlot[] {
 		return carried != null ? slotsOf(tg, stripped(carried)) : unionSlots(tg, t);
 	}
 	if (t.kind == TypeKind.String || t.kind == TypeKind.StringLiteral || t.kind == TypeKind.Array) return lenPtrSlots();
-	if (t.kind == TypeKind.Function) return closureSlots();
+	if (t.kind == TypeKind.Function && !isPlainFunctionPointer(t)) return closureSlots();
 	return [];
 }
 
