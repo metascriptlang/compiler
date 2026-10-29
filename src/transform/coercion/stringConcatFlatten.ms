@@ -25,6 +25,8 @@ function stringifyEnumOperands(node: Node): Node {
 	if (d.operator == "+") {
 		if (isEnumTyped(d.left) && isStringConcatChain(d.right)) d.left = coerceToString(d.left, d.left.location);
 		if (isEnumTyped(d.right) && isStringConcatChain(d.left)) d.right = coerceToString(d.right, d.right.location);
+	} else if (d.operator == "+=" && isStringLeaf(d.left) && isEnumTyped(d.right)) {
+		d.right = coerceToString(d.right, d.right.location);
 	}
 	return node;
 }

@@ -166,7 +166,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 		flowLap("pass.lowerArraySpread");
 	}
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); flowLap("pass.lowerStringConcatFlatten"); }
-	if (jsBackend) { result = lowerEnumOperandText(result, ctx); flowLap("pass.lowerEnumOperandText"); }
+	result = lowerEnumOperandText(result, ctx);
+	flowLap("pass.lowerEnumOperandText");
 	if (runs(result, ctx, fact(ModuleFact.OptionalChain), "pass.lowerOptionalChain")) result = lowerOptionalChain(result, ctx);
 	flowLap("pass.lowerOptionalChain");
 	if (runs(result, ctx, fact(ModuleFact.Nullish), "pass.lowerNullishCoalesce")) result = lowerNullishCoalesce(result, ctx);
