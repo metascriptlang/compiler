@@ -7,6 +7,7 @@ function limitError(limit: number): Error | null {
 	return null;
 }
 
+@iteratorHelper
 export function* map<T, U>(this it: Iterator<T>, fn: (x: T, i: number) => U): Iterator<U> {
 	let i: number = 0;
 	for (const x of it) {
@@ -15,6 +16,7 @@ export function* map<T, U>(this it: Iterator<T>, fn: (x: T, i: number) => U): It
 	}
 }
 
+@iteratorHelper
 export function* filter<T>(this it: Iterator<T>, fn: (x: T, i: number) => boolean): Iterator<T> {
 	let i: number = 0;
 	for (const x of it) {
@@ -24,6 +26,7 @@ export function* filter<T>(this it: Iterator<T>, fn: (x: T, i: number) => boolea
 	}
 }
 
+@iteratorHelper
 function* takeLazy<T>(it: Iterator<T>, limit: number): Iterator<T> {
 	let left = limit;
 	if (left < 1) {
@@ -46,6 +49,7 @@ export function take<T>(this it: Iterator<T>, limit: number): Iterator<T> {
 	return takeLazy(it, limit);
 }
 
+@iteratorHelper
 function* dropLazy<T>(it: Iterator<T>, limit: number): Iterator<T> {
 	let left = limit;
 	for (const x of it) {
@@ -66,6 +70,7 @@ export function drop<T>(this it: Iterator<T>, limit: number): Iterator<T> {
 	return dropLazy(it, limit);
 }
 
+@iteratorHelper
 export function* flatMap<T, U>(
 	this it: Iterator<T>,
 	fn: (x: T, i: number) => Iterator<U>,
@@ -78,6 +83,7 @@ export function* flatMap<T, U>(
 	}
 }
 
+@iteratorHelper
 export function* flatMap<T, U>(this it: Iterator<T>, fn: (x: T, i: number) => U[]): Iterator<U> {
 	let i: number = 0;
 	for (const x of it) {
@@ -162,6 +168,7 @@ function sizeError(size: number, name: string): Error | null {
 	return null;
 }
 
+@iteratorHelper
 function* chunksLazy<T>(it: Iterator<T>, size: number): Iterator<T[]> {
 	let buffer: T[] = [];
 	for (const x of it) {
@@ -183,6 +190,7 @@ export function chunks<T>(this it: Iterator<T>, size: number): Iterator<T[]> {
 	return chunksLazy(it, size);
 }
 
+@iteratorHelper
 function* windowsLazy<T>(it: Iterator<T>, size: number, partial: boolean): Iterator<T[]> {
 	const buffer: T[] = [];
 	for (const x of it) {
@@ -206,6 +214,7 @@ export function windows<T>(
 	return windowsLazy(it, size, undersized == "allow-partial");
 }
 
+@iteratorHelper
 function* cycleLazy<T>(it: Iterator<T>): Iterator<T> {
 	const seen: T[] = [];
 	for (const x of it) {
@@ -222,6 +231,7 @@ export function cycle<T>(this it: Iterator<T>): Iterator<T> {
 	return cycleLazy(it);
 }
 
+@iteratorHelper
 function* stepByLazy<T>(it: Iterator<T>, step: number): Iterator<T> {
 	let skipped = 0;
 	for (const x of it) {
@@ -239,6 +249,7 @@ export function stepBy<T>(this it: Iterator<T>, step: number): Iterator<T> {
 	return stepByLazy(it, step);
 }
 
+@iteratorHelper
 function* scanLazy<T, U>(it: Iterator<T>, fn: (acc: U, x: T, i: number) => U, init: U): Iterator<U> {
 	let acc = init;
 	let i: number = 0;
