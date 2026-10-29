@@ -86,6 +86,18 @@ test "importedScalarSpelling: an @include of a standard header reaches the C by 
 	assert c.contains("#include \"stdint.h\"") || c.contains("#include <stdint.h>");
 }
 
+test "importedScalarSpelling: a tag a header names only in a parameter list is declared before the header is included" {
+	const c = compileProjectToCWithStd([
+		{ entryPath: "/proj/main.ms", entrySource: "import { readRes, readCell, Res, Cell } from \"./b.h\";\nfunction f(r: Ptr<Res>, c: Ptr<Cell>): int32 {\n\treturn readRes(r) + readCell(c);\n}\nconsole.log(f(null as unknown as Ptr<Res>, null as unknown as Ptr<Cell>));\n" },
+		{ entryPath: "/proj/b.h", entrySource: "int readRes(struct Res* r);\nint readCell(union Cell* c);\n" },
+	], "/proj/main.ms");
+	assert !c.startsWith("ERROR"), c;
+	const include = c.indexOf("#include \"/proj/b.h\"");
+	assert include >= 0, c;
+	assert c.indexOf("\nstruct Res;\n") >= 0 && c.indexOf("\nstruct Res;\n") < include, c;
+	assert c.indexOf("\nunion Cell;\n") >= 0 && c.indexOf("\nunion Cell;\n") < include, c;
+}
+
 test "importedScalarSpelling: std/crypto encoding emits no parse-only stub include" {
 	const c = compileProjectToCWithStd([
 		{ entryPath: "/proj/main.ms", entrySource: "import { encodeHex } from \"std/crypto/encoding\";\nconst d: uint8[] = [1, 2];\nconsole.log(d.encodeHex());\n" },

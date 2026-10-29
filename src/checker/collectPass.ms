@@ -3,7 +3,7 @@ import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripI
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
-import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet } from "./symbol";
+import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd } from "./context";
@@ -1176,10 +1176,6 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 	}
 	defineOrError(ctx, sym, node);
 	if (cTag != "") ctx.exportRegistry.cTags.set(cTag, sym);
-}
-
-function isCTagSpelling(nativeName: string | null): boolean {
-	return nativeName != null && (nativeName.startsWith("struct ") || nativeName.startsWith("union "));
 }
 
 export function collectMacro(ctx: CheckerContext, node: Node): void {

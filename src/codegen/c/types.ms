@@ -11,7 +11,7 @@ import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
-import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly, isCTagSpelling } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
@@ -1503,10 +1503,20 @@ function genObjectType(g: CGen, t: Readonly<Type>): string {
 
 	if (isImportedType(t)) {
 		useImportedTypeHeader(g, t);
+		declareCTag(g, t);
 		typeCacheSet(g.typeCache, key, name);
 		return name;
 	}
 	return genObjectTypeAs(g, t, name, key, t.typeName);
+}
+
+// A header that mentions a tag only inside a parameter list does not declare it, so the tag is declared
+// ahead of every #include: the module's own prototypes then name the type the header's do.
+function declareCTag(g: CGen, t: Readonly<Type>): void {
+	const tag = t.sym!.nativeName;
+	if (!isCTagSpelling(tag) || nameSetHas(g.declaredThings, "tag:" + tag)) return;
+	nameSetAdd(g.declaredThings, "tag:" + tag);
+	addLine(sec(g, CSection.Headers), `${tag};`);
 }
 
 // `t` gives the fields and layout; name, key and bare name give the identity, which for a generic

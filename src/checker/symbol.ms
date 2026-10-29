@@ -70,6 +70,10 @@ export function isTypeSymbol(sym: Readonly<Symbol>): boolean {
 	return k == SymbolKind.Class || k == SymbolKind.Actor || k == SymbolKind.Struct || k == SymbolKind.Interface || k == SymbolKind.Enum || k == SymbolKind.TypeAlias;
 }
 
+export function isCTagSpelling(nativeName: string | null): boolean {
+	return nativeName != null && (nativeName.startsWith("struct ") || nativeName.startsWith("union "));
+}
+
 export function hasFlag(sym: Readonly<Symbol>, flag: SymbolFlag): boolean {
 	return sym.symFlags.has(flag);
 }
