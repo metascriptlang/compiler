@@ -16,7 +16,7 @@ import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
-	docCommaSepList, docWithoutSoftLines,
+	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
@@ -240,23 +240,11 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectLiteralData;
 	if (d.keys.length == 0) return docText("{}");
 
-	// Force multi-line: objects with 2+ properties, nested complex values,
-	// or internal comments (commented-out properties) always expand.
-	let forceBreak = d.keys.length >= 2;
-	if (!forceBreak) {
-		for (const prop of d.properties) {
-			if (prop != null && (prop.kind == NodeKind.ObjectLiteral || prop.kind == NodeKind.ArrayLiteral || prop.kind == NodeKind.ArrowFunction)) {
-				forceBreak = true;
-			}
-			if (prop != null && hasCommentsOutside(prop)) {
-				forceBreak = true;
-			}
-		}
+	let forceBreak = d.keyLocations.length > 0 && d.keyLocations[0].line > node.location.line;
+	for (const prop of d.properties) {
+		if (prop != null && hasCommentsOutside(prop)) forceBreak = true;
 	}
-	// Also check the object node itself for trailing comments
-	if (!forceBreak && danglingOf(node).length > 0) {
-		forceBreak = true;
-	}
+	if (danglingOf(node).length > 0) forceBreak = true;
 
 	const entries: Doc[] = [];
 	for (let i = 0; i < d.keys.length; i += 1) {
@@ -296,6 +284,9 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 			entries.push(entryDoc);
 		}
 	}
+	for (const entry of entries) {
+		if (docWillBreak(entry)) forceBreak = true;
+	}
 	// Collect trailing comments on the object node (before closing brace)
 	const trailingComments: Doc[] = [];
 	for (const comment of danglingOf(node)) {
@@ -303,15 +294,11 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		comment.markFormatted();
 	}
 
-	// When forced to break, separators must not be wrapped in a group
-	// (groups measure independently and would flatten comma+line to comma+space)
-	const sep = forceBreak
-		? [docText(","), docHardLine()]
-		: [docGroup([docText(","), docLine()])];
 	const indentChildren: Doc[] = [docLine()];
 	for (let i = 0; i < entries.length; i += 1) {
 		if (i > 0) {
-			for (const s of sep) { indentChildren.push(s); }
+			indentChildren.push(docText(","));
+			indentChildren.push(docLine());
 		}
 		indentChildren.push(entries[i]);
 	}
@@ -597,12 +584,24 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectPatternData;
 	if (d.patternProps.length == 0) return docText("{}");
-	const props: Doc[] = [];
+	const inner: Doc[] = [docLine()];
+	let expand = false;
 	for (let i = 0; i < d.patternProps.length; i += 1) {
-		if (i > 0) props.push(docText(", "));
-		props.push(callPrintNode(d.patternProps[i], options));
+		if (i > 0) {
+			inner.push(docText(","));
+			inner.push(docLine());
+		}
+		const prop = d.patternProps[i];
+		inner.push(callPrintNode(prop, options));
+		if (prop.kind == NodeKind.ObjectPatternProp) {
+			const pd = prop.data as ObjectPatternPropData;
+			const nested = pd.propAlias != null && (pd.propAlias.kind == NodeKind.ObjectPattern || pd.propAlias.kind == NodeKind.ArrayPattern);
+			if (nested && pd.propDefault == null) expand = true;
+		}
 	}
-	return docGroup([docText("{ "), docGroup(props), docText(" }")]);
+	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) inner.push(docIfBreak(docText(","), docNil()));
+	const parts: Doc[] = [docText("{"), docIndent(inner), docLine(), docText("}")];
+	return expand ? docGroupBreak(parts) : docGroup(parts);
 }
 
 export function printObjectPatternProp(node: Node, options: FormatOptions): Doc {

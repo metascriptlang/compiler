@@ -143,3 +143,4 @@ import "./cases/declaratorList";
 import "./cases/statementHeaders";
 import "./cases/unionAlign";
 import "./cases/functionSignature";
+import "./cases/objectExpansion";

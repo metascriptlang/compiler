@@ -37,8 +37,8 @@ test "fmt: import and export sources print in double quotes" {
 }
 
 test "fmt: an object key loses quotes it does not need and keeps the rest" {
-	assert fmt("const o = { 'one': 1, \"a-b\": 2, 'it\\'s': 3 };\n") == "const o = {\n\tone: 1,\n\t\"a-b\": 2,\n\t\"it's\": 3,\n};\n";
-	assert fmt("const o = { \"new\": 1, \"1\": 2, \"\": 3, '$x': 4 };\n") == "const o = {\n\t\"new\": 1,\n\t\"1\": 2,\n\t\"\": 3,\n\t$x: 4,\n};\n";
+	assert fmt("const o = { 'one': 1, \"a-b\": 2, 'it\\'s': 3 };\n") == "const o = { one: 1, \"a-b\": 2, \"it's\": 3 };\n";
+	assert fmt("const o = { \"new\": 1, \"1\": 2, \"\": 3, '$x': 4 };\n") == "const o = { \"new\": 1, \"1\": 2, \"\": 3, $x: 4 };\n";
 }
 
 test "fmt: an object key that is a reserved word is unquoted and still parses" {
