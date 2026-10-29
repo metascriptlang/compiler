@@ -140,7 +140,8 @@ const BYTE_IMPORT = "import { runByteSink } from \"./constSlots.h\";\n";
 test "C: a by-value struct parameter against a header const T* slot is refused, naming Readonly<Ptr<T>>" {
 	const c = compileConstSlots(PAIR_IMPORT + "function sink(u: Ptr<void> | null, p: Pair): void {}\nrunPairSink(sink);\n");
 	assert c.startsWith("ERROR"), c;
-	assert c.contains("Readonly<Ptr<Pair>>"), c;
+	assert c.contains("declare the parameter Readonly<Ptr<Pair>> | null and narrow it inside"), c;
+	assert !c.contains("Readonly<Readonly"), c;
 }
 
 test "C: a by-value byte parameter against a header const uint8 pointer slot is refused, naming Readonly<Ptr<uint8>>" {

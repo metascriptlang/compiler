@@ -11,7 +11,7 @@ const MAIN = "test/headerSizeTSlots/main.ms";
 const CB = "typedef unsigned long size_t;\ntypedef unsigned char uint8_t;\n"
 	+ "size_t fill(size_t *written);\nvoid setCb(void (*cb)(void *, const uint8_t *, size_t));\n";
 const USE = "import { fill, setCb, size_t } from \"./cb.h\";\n"
-	+ "function onData(u: Ptr<void> | null, bytes: Borrow<uint8>, n: size_t): void {\n\tconsole.log(`${n}`);\n}\n"
+	+ "function onData(u: Ptr<void> | null, bytes: Readonly<Ptr<uint8>> | null, n: size_t): void {\n\tconsole.log(`${n}`);\n}\n"
 	+ "setCb(onData);\nlet written: size_t = 0;\nfill(written);\n";
 
 function compileOn(os: string, cpu: string): string {
