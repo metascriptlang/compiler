@@ -41,7 +41,7 @@ trap 'stop_runner; if [ "$FAIL" -eq 0 ]; then rm -rf "$T"; else printf "landQueu
 setup() {
   stop_runner
   rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
-  export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT MSC_REMOTE_VERDICTS=$T/ws/verdicts
+  export MSC_LAND_MAC=1 LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT MSC_REMOTE_VERDICTS=$T/ws/verdicts
   export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_WAIT_POLL=1
   unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR GATE_PAR MSCORPUS_BUILD_JOBS
   R=$T/ws/repo
