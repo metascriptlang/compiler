@@ -200,7 +200,7 @@ tool_ids() {
     if [ "$t" = zig ]; then v=$(zig version 2>&1 | head -1); else v=$("$t" --version 2>&1 | head -1); fi
     printf '%s %s %s\n' "$t" "$(command -v "$t")" "$v"
   done
-  printf 'toolchain %s\n' "${MSC_NATIVE_TOOLCHAIN:-}"
+  printf 'toolchain %s\n' "$(cat "${MSC_NATIVE_TOOLCHAIN:-$TOP/msc-toolchain}/IDENTITY" 2>/dev/null || echo absent)"
 }
 
 # The inputs of a corpus cell that no emit shows. The src/compiler files pick cc flags, linking and the build cache;
@@ -1383,6 +1383,11 @@ src/test/corpus/programs/p.ms
 CHANGES
   (tool_ids() { echo clang-99; }; [ "$(support_stamp "$d/a")" != "$new" ]) \
     || { printf 'FAIL support stamp: another host C compiler kept the stamp\n'; bad=1; }
+  mkdir -p "$TOP/msc-toolchain"; printf 'aa\n' >"$TOP/msc-toolchain/IDENTITY"
+  [ "$(support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: a native toolchain bundle beside the candidate kept the stamp\n'; bad=1; }
+  new=$(support_stamp "$d/a"); printf 'bb\n' >"$TOP/msc-toolchain/IDENTITY"
+  [ "$(support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: another native toolchain bundle kept the stamp\n'; bad=1; }
+  rm -r "$TOP/msc-toolchain"; new=$(support_stamp "$d/a")
   printf 'export default {};\n' >"$d/build.ms"
   [ "$(support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: an ambient build.ms above the workspace kept the stamp\n'; bad=1; }
   mkdir -p "$d/b/src/raiser" "$d/b/src/codegen/raiser"; printf 'v1\n' >"$d/b/src/raiser/vm.ms"
