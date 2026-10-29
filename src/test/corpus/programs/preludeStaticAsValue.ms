@@ -7,6 +7,7 @@
 // @stdout: combine(Math.hypot)=5
 // @stdout: table: 2 3 3
 // @stdout: calls: 3 2.5 true
+// @stdout: Number as value: 3.5
 
 function apply(f: (x: number) => number, x: number): number {
 	return f(x);
@@ -38,3 +39,6 @@ const table: ((x: number) => number)[] = [Math.floor, Math.ceil, Math.round];
 console.log(`table: ${table[0](2.5)} ${table[1](2.5)} ${table[2](2.5)}`);
 
 console.log(`calls: ${Math.floor(3.7)} ${Math.abs(-2.5)} ${Number.isInteger(8)}`);
+
+const parsed = ["1", "2.5"].map(Number);
+console.log(`Number as value: ${parsed[0] + parsed[1]}`);
