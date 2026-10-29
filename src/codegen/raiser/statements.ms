@@ -25,7 +25,7 @@ import {
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { compileOwnershipStmt } from "./drcLower";
-import { emitZeroValue, regClassOf, allocFor } from "./valueCopy";
+import { emitZeroValue, regClassOf, allocFor, zeroIsNil } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 import { hasFlag } from "../../checker/symbol";
 
@@ -188,8 +188,9 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			s.moveTempSource = d.initializer;
 		}
 	} else {
-		const reg = emitZeroValue(s, node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
+		if (global >= 0 && zeroIsNil(node.nodeType)) return;
+		const reg = emitZeroValue(s, node.nodeType);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
