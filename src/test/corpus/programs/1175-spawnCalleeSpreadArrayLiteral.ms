@@ -2,8 +2,9 @@
 // @stdout: counts 3 4 3
 
 actor Sink {
+	seen: int32 = 0;
 	take(line: string): void {
-		console.log(line);
+		this.seen += line.length as int32;
 	}
 }
 
