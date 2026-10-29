@@ -129,13 +129,6 @@ case "$HOST_CPU" in
 esac
 HOST_TARGET="${HOST_OS}-${HOST_CPU}"
 
-for t in "${TARGETS[@]}"; do
-    if [ "${t%%-*}" = darwin ] && [ "$HOST_OS" != darwin ]; then
-        echo "error: $t cannot be cross-built: the macOS SDK needs a Mac. Build darwin-* targets on a Mac."
-        exit 1
-    fi
-done
-
 # Map install.sh target names to msc --os/--cpu flags
 target_to_msc_flags() {
     local os="${1%-*}"
