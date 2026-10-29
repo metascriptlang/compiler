@@ -9,6 +9,7 @@ test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 		'function reject(n: Node): void { error("rejected input", n); } reject(node);',
 		'function reject(n: Node): Node[] { error("rejected input", n); return []; } const values = reject(node);',
 		'function reject(n: Node): void { error("rejected input", n); } try { reject(node); } catch (e) {}',
+		'function reject(n: Node): void { error("rejected input", n); } function relay(n: Node): void { const spare = [1, 2]; try { reject(n); } catch (e) {} } relay(node);',
 	];
 	for (const body of bodies) {
 		const source = 'import { Node } from "std/meta"; macro requireValid(node: Node): Node { '
