@@ -6,17 +6,18 @@ import {
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData, makeLoc,
-	VariableDeclData, DestructuringDeclData, DeclKind, ObjectPatternData, ObjectPatternPropData,
+	VariableDeclData, DestructuringDeclData, DeclKind, ObjectPatternData,
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
-	docLine, docHardLine, docIfBreak, docNil, docJoin, docBreakParent,
+	docLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
+import { objectPatternContent, breaksPatternProperties } from "./expressions";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
@@ -180,12 +181,12 @@ function aliasWithInnerComments(node: Node, options: FormatOptions): string {
 function typeAliasAssignment(head: string, distinct: string, d: TypeAliasDeclData, typeExpr: Node | null, options: FormatOptions): Doc {
 	const text = distinct + d.aliasType;
 	if (isComplexTypeAliasGenerics(genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams))) {
-		return assembleAssignment(docText(head), " =", AssignmentLayout.BreakLeftHandSide, docText(text));
+		return assembleAssignment([docText(head)], " =", AssignmentLayout.BreakLeftHandSide, docText(text));
 	}
 	const structural = distinct == "" ? structuralType(typeExpr, d.aliasType, options) : null;
-	if (structural != null) return assembleAssignment(docText(head), " =", AssignmentLayout.Fluid, structural);
+	if (structural != null) return assembleAssignment([docText(head)], " =", AssignmentLayout.Fluid, structural);
 	if (distinct == "" && isUnbreakableTypeText(d.aliasType)) {
-		return assembleAssignment(docText(head), " =", AssignmentLayout.Fluid, docText(text));
+		return assembleAssignment([docText(head)], " =", AssignmentLayout.Fluid, docText(text));
 	}
 	return docText(head + " = " + text);
 }
@@ -504,7 +505,7 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(printTypeAnnotation(node.typeExpr, optional && !keptType ? unoptionalized(d.propType) : d.propType, options));
 	}
 	const init = d.propInitializer;
-	const printed = init != null ? printAssignmentLike(docGroup(parts), " =", init, callPrintNode(init, options), plainShape(), options) : docGroup(parts);
+	const printed = init != null ? printAssignmentLike([docGroup(parts)], " =", init, callPrintNode(init, options), plainShape(), options) : docGroup(parts);
 	return docGroup([printed, docText(";")]);
 }
 
@@ -626,28 +627,10 @@ function declarationList(keyword: string, node: Node, options: FormatOptions): D
 	return docGroup(parts);
 }
 
-function patternDoc(pattern: Node, options: FormatOptions, grouped: boolean): Doc {
-	if (pattern.kind != NodeKind.ObjectPattern) return callPrintNode(pattern, options);
-	const d = pattern.data as ObjectPatternData;
-	if (d.patternProps.length == 0) return docText("{}");
-	let forced = false;
-	const items: Doc[] = [];
-	for (let i = 0; i < d.patternProps.length; i += 1) {
-		const prop = d.patternProps[i];
-		if (i > 0) {
-			items.push(docText(","));
-			items.push(docLine());
-		}
-		items.push(callPrintNode(prop, options));
-		if (prop.kind == NodeKind.ObjectPatternProp) {
-			const alias = (prop.data as ObjectPatternPropData).propAlias;
-			if (alias != null && alias.kind == NodeKind.ObjectPattern && (alias.data as ObjectPatternData).patternProps.length > 0) forced = true;
-		}
-	}
-	const comma = d.hasRestProp || !wantsTrailingComma(options, CommaContext.Collection) ? docNil() : docIfBreak(docText(","), docNil());
-	const inner: Doc[] = [docText("{"), docIndent([docLine(), ...items]), comma, docLine(), docText("}")];
-	if (grouped) return forced ? docGroupBreak(inner) : docGroup(inner);
-	return forced ? docGroup([docBreakParent(), ...inner]) : docGroup(inner);
+function patternParts(pattern: Node, options: FormatOptions): Doc[] {
+	if (pattern.kind != NodeKind.ObjectPattern || (pattern.data as ObjectPatternData).patternProps.length == 0) return [callPrintNode(pattern, options)];
+	const content = objectPatternContent(pattern, options);
+	return breaksPatternProperties(pattern.data as ObjectPatternData) ? [docGroupBreak(content)] : content;
 }
 
 function declarator(node: Node, options: FormatOptions): Doc {
@@ -655,7 +638,7 @@ function declarator(node: Node, options: FormatOptions): Doc {
 		const dd = node.data as DestructuringDeclData;
 		const complex = dd.destrPattern.kind == NodeKind.ObjectPattern && isComplexObjectPattern(dd.destrPattern);
 		const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: complex, inChain: false };
-		return printAssignmentLike(patternDoc(dd.destrPattern, options, !complex), " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
+		return printAssignmentLike(patternParts(dd.destrPattern, options), " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
 	}
 	const d = node.data as VariableDeclData;
 	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";
@@ -669,5 +652,5 @@ function declarator(node: Node, options: FormatOptions): Doc {
 	if (init == null) return left;
 	const breakLeft = isComplexTypeAnnotation(d.declType) || (init.kind == NodeKind.ArrowFunction && isBreakableTypeAnnotation(d.declType));
 	const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: breakLeft, inChain: false };
-	return printAssignmentLike(left, " =", init, callPrintNode(init, options), shape, options);
+	return printAssignmentLike([left], " =", init, callPrintNode(init, options), shape, options);
 }

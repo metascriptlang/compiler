@@ -145,14 +145,13 @@ export function assignmentLayout(shape: AssignmentShape, right: Node | null, opt
 }
 
 // `operator` carries its own leading space (" =") or none (":").
-export function printAssignmentLike(left: Doc, operator: string, right: Node | null, rightDoc: Doc, shape: AssignmentShape, options: FormatOptions): Doc {
+export function printAssignmentLike(left: Doc[], operator: string, right: Node | null, rightDoc: Doc, shape: AssignmentShape, options: FormatOptions): Doc {
 	return assembleAssignment(left, operator, assignmentLayout(shape, right, options), rightDoc);
 }
 
-export function assembleAssignment(left: Doc, operator: string, layout: AssignmentLayout, rightDoc: Doc): Doc {
-	if (layout == AssignmentLayout.OnlyLeft) return left;
-	const leftDoc = layout == AssignmentLayout.BreakLeftHandSide ? left : docGroup([left]);
-	const head: Doc[] = [leftDoc, docText(operator)];
+export function assembleAssignment(left: Doc[], operator: string, layout: AssignmentLayout, rightDoc: Doc): Doc {
+	if (layout == AssignmentLayout.OnlyLeft) return docGroup(left);
+	const head: Doc[] = layout == AssignmentLayout.BreakLeftHandSide ? [...left, docText(operator)] : [docGroup(left), docText(operator)];
 	if (layout == AssignmentLayout.Chain) return docGroup([...head, docLine(), rightDoc]);
 	if (layout == AssignmentLayout.ChainTail) return docGroup([...head, docIndent([docLine(), rightDoc])]);
 	if (layout == AssignmentLayout.Fluid) return docGroup([...head, ...fluidTail(rightDoc)]);

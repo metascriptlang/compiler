@@ -653,27 +653,35 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	return docGroup([docText("["), docGroup(elements), docText("]")]);
 }
 
-export function printObjectPattern(node: Node, options: FormatOptions): Doc {
+export function breaksPatternProperties(d: ObjectPatternData): boolean {
+	for (const prop of d.patternProps) {
+		if (prop.kind != NodeKind.ObjectPatternProp) continue;
+		const pd = prop.data as ObjectPatternPropData;
+		const nested = pd.propAlias != null && (pd.propAlias.kind == NodeKind.ObjectPattern || pd.propAlias.kind == NodeKind.ArrayPattern);
+		if (nested && pd.propDefault == null) return true;
+	}
+	return false;
+}
+
+export function objectPatternContent(node: Node, options: FormatOptions): Doc[] {
 	const d = node.data as ObjectPatternData;
-	if (d.patternProps.length == 0) return docText("{}");
 	const inner: Doc[] = [docLine()];
-	let expand = false;
 	for (let i = 0; i < d.patternProps.length; i += 1) {
 		if (i > 0) {
 			inner.push(docText(","));
 			inner.push(docLine());
 		}
-		const prop = d.patternProps[i];
-		inner.push(callPrintNode(prop, options));
-		if (prop.kind == NodeKind.ObjectPatternProp) {
-			const pd = prop.data as ObjectPatternPropData;
-			const nested = pd.propAlias != null && (pd.propAlias.kind == NodeKind.ObjectPattern || pd.propAlias.kind == NodeKind.ArrayPattern);
-			if (nested && pd.propDefault == null) expand = true;
-		}
+		inner.push(callPrintNode(d.patternProps[i], options));
 	}
 	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) inner.push(docIfBreak(docText(","), docNil()));
-	const parts: Doc[] = [docText("{"), docIndent(inner), docLine(), docText("}")];
-	return expand ? docGroupBreak(parts) : docGroup(parts);
+	return [docText("{"), docIndent(inner), docLine(), docText("}")];
+}
+
+export function printObjectPattern(node: Node, options: FormatOptions): Doc {
+	const d = node.data as ObjectPatternData;
+	if (d.patternProps.length == 0) return docText("{}");
+	const parts = objectPatternContent(node, options);
+	return breaksPatternProperties(d) ? docGroupBreak(parts) : docGroup(parts);
 }
 
 export function printObjectPatternProp(node: Node, options: FormatOptions): Doc {

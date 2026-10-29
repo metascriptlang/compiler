@@ -36,4 +36,6 @@ test "fmt: an object pattern ignores the source line break and breaks when it do
 test "fmt: an object pattern holding a nested pattern expands" {
 	assert fmt("const { a3, b3: { c3 } } = obj;\n") == "const {\n\ta3,\n\tb3: { c3 },\n} = obj;\n";
 	assert fmt("const { a4, b4: [c4] } = obj;\n") == "const {\n\ta4,\n\tb4: [c4],\n} = obj;\n";
+	assert fmt("const { a7, b7: {} } = obj;\n") == "const {\n\ta7,\n\tb7: {},\n} = obj;\n";
+	assert fmt("const { a8, b8: [] } = obj;\n") == "const {\n\ta8,\n\tb8: [],\n} = obj;\n";
 }
