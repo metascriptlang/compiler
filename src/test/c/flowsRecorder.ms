@@ -12,7 +12,7 @@ const C_PASSES = [
 	"lowerStringConcatFlatten", "lowerOptionalChain", "lowerNullishCoalesce", "materializeMaybeReads",
 	"lowerStringTruthiness", "lowerRestParams", "lowerDestructuring", "lowerForLoop", "lowerForOf",
 	"lowerTryExpr", "lowerResultConstructors", "lowerTypeof", "lowerSwitch", "lowerMatch", "lowerTryExpr#2",
-	"retargetJumps", "lowerTailCall", "lowerParamReassign", "lowerAwaitSpill", "lowerNamespaceValues",
+	"retargetJumps", "lowerTailCall", "lowerParamReassign", "lowerReturnThroughFinally", "lowerAwaitSpill", "lowerNamespaceValues",
 	"lowerActorPre", "lowerSpawnGroup", "lowerPointerAddresses", "lowerAsync", "lowerAsyncBridge",
 	"lowerGenerator", "lowerSpawn", "lowerAwaitSpill#2", "lowerAwait", "lowerFieldInitializers", "lowerActor",
 	"lowerVarHoist", "lowerRvalueBridge", "lowerExtensionMethod", "lowerCtorInit", "lowerNewExpr",

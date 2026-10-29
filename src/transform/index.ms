@@ -66,6 +66,7 @@ import { lowerSwitch } from "./lowering/switchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerReturnThroughFinally } from "./lowering/returnThroughFinallyLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
@@ -206,6 +207,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerTailCall(result, ctx);
 	flowLap("pass.lowerTailCall");
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); flowLap("pass.lowerParamReassign"); }
+	if (!jsBackend) { result = lowerReturnThroughFinally(result, ctx); flowLap("pass.lowerReturnThroughFinally"); }
 	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); flowLap("pass.lowerAsyncModuleBody"); }
 	result = lowerAwaitSpill(result, ctx);
 	flowLap("pass.lowerAwaitSpill");

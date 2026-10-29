@@ -48,6 +48,7 @@ import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerReturnThroughFinally } from "./lowering/returnThroughFinallyLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -115,6 +116,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (placed) result = lowerParamReassign(result, ctx);
+	if (placed) result = lowerReturnThroughFinally(result, ctx);
 	result = lowerActorClasses(result, ctx);
 	result = lowerAwaitSpill(result, ctx);
 	result = lowerAsync(result, ctx);
