@@ -1,6 +1,6 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, ProgramData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
@@ -589,6 +589,24 @@ function refuseKeptBorrow(call: Node, argNode: Node, pi: number): void {
 		addError(ctx, `actor method '${(method.data as MethodDeclData).methodName}' keeps its parameter '${param.name}': it ${what} at ${site.location.line}:${site.location.column}, but '${arg}' is only lent for the awaited call\nsend ownership with \`move ${arg}\`, or copy the scalar fields it needs into the actor's state (PARALOCK I21)`,
 			argNode.location.line, argNode.location.column);
 	});
+}
+
+export function refuseKeptWasmCallbacks(ctx: CheckerContext, program: Node): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.ExportDecl) continue;
+		const fn = (stmt.data as ExportDeclData).exportedDecl;
+		if (fn.kind != NodeKind.FunctionDecl || fn.paramSyms == null) continue;
+		for (const param of fn.paramSyms!) {
+			if (param.symbolType == null || peelThrough(param.symbolType!, PEEL_ALIAS).kind != TypeKind.Function) continue;
+			const site = findKeptSite(routineBody(fn), { lent: [param], held: [], seen: [fn] });
+			if (site == null) continue;
+			const what = site.kind == NodeKind.BinaryExpr
+				? "stores it in '" + describeExpr((site.data as BinaryExprData).left) + "'"
+				: "passes it to '" + describeExpr((site.data as CallExprData).callee) + "'";
+			addError(ctx, `wasm-placed function '${(fn.data as FunctionDeclData).fnName}' keeps its callback parameter '${param.name}': it ${what} at ${site.location.line}:${site.location.column}, but a JS callback is only lent for the call\ncall it before returning, or keep the state it needs instead of the callback`,
+				site.location.line, site.location.column);
+		}
+	}
 }
 
 // A spawn thunk BORROWS the enclosing env (the lifted closure is handed

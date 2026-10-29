@@ -44,7 +44,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
-import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
+import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField, refuseKeptWasmCallbacks } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -3724,6 +3724,7 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 				if (md.macroArgs.length > 0) {
 					addError(ctx, "@wasm() takes no arguments: it places the whole module in wasm", d.expr.location.line, d.expr.location.column);
 				}
+				refuseKeptWasmCallbacks(ctx, program);
 				continue;
 			}
 			collectOneDirective(ctx, d.expr);
