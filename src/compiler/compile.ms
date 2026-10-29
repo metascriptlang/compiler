@@ -3750,7 +3750,7 @@ resetLiftedOps();
 
 			const cached = isCCodeCached(p.modPath, modFp);
 			const storeKey = cached ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
-			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, stableCFileFp(p.modPath, moduleStoreSource(cCode)), storeKey, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
+			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, headerSearch(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
 			if (cached) {
 				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);

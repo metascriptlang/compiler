@@ -1375,7 +1375,7 @@ export function restoreNativeObject(srcPath: string, compileCmd: string, key: st
 	return oFile;
 }
 
-export function restoreModuleObject(modPath: string, baseFp: string, cFile: string, key: string, search: HeaderSearch): string {
+export function restoreModuleObject(modPath: string, baseFp: string, key: string, search: HeaderSearch): string {
 	const hit = storeHit(key, search, []);
 	if (hit == null) return "";
 	writeDependencyFile(moduleDepFile(modPath, baseFp), hit.deps);
@@ -1384,7 +1384,7 @@ export function restoreModuleObject(modPath: string, baseFp: string, cFile: stri
 	const oFile = stableOFileFp(modPath, fp);
 	if (!copyIntoLocal(hit.object, oFile)) return "";
 	writeCompileFingerprintFp(modPath, fp);
-	settleModuleVersion(modPath, baseFp, cFile, [oFile]);
+	settleModuleVersion(modPath, baseFp, [oFile]);
 	return oFile;
 }
 
@@ -1868,7 +1868,7 @@ export function moduleObjectFp(modPath: string, baseFp: string): string {
 
 export function publishModuleObject(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
 	const published = publishObjectVersion(modPath, baseFp, cFile, oFile, fp, search);
-	settleModuleVersion(modPath, baseFp, cFile, [oFile, published]);
+	settleModuleVersion(modPath, baseFp, [oFile, published]);
 	return published;
 }
 
@@ -1903,9 +1903,8 @@ function moduleConfigKey(baseFp: string): string {
 	return fpKey(baseFp.slice(baseFp.indexOf(":", 0) + 1, end));
 }
 
-function versionFileNames(depFile: string, cFile: string, objects: string[]): string[] {
+function versionFileNames(depFile: string, objects: string[]): string[] {
 	const names: string[] = [];
-	if (cFile != "") names.push(basename(cFile));
 	const dep = basename(depFile);
 	for (const name of [dep, `${dep}.q`, `presence/${dep}.qs`]) names.push(name);
 	for (const object of objects) {
@@ -1934,7 +1933,7 @@ function isVersionFileOf(stem: string, entry: string): boolean {
 	if (!entry.startsWith(`${stem}.`)) return false;
 	const parts = entry.slice(stem.length + 1, entry.length).split(".");
 	if (!isFpKey(parts[0])) return false;
-	if (parts.length == 2) return parts[1] == "c" || parts[1] == "d" || parts[1] == "o";
+	if (parts.length == 2) return parts[1] == "d" || parts[1] == "o";
 	return parts.length == 3 && ((parts[1] == "d" && parts[2] == "q") || (parts[1] == "o" && parts[2] == "cfp"));
 }
 
@@ -1967,13 +1966,13 @@ function versionLastUsed(names: string[]): float64 {
 	return newest;
 }
 
-export function settleModuleVersion(modPath: string, baseFp: string, cFile: string, objects: string[], now: float64 = nowSeconds()): void {
+export function settleModuleVersion(modPath: string, baseFp: string, objects: string[], now: float64 = nowSeconds()): void {
 	if (modPath == "") return;
 	const stem = cacheStem(modPath);
 	const record = moduleVersionRecord(stem);
 	const config = moduleConfigKey(baseFp);
 	const depName = basename(moduleDepFile(modPath, baseFp));
-	const keep = versionFileNames(moduleDepFile(modPath, baseFp), cFile, objects);
+	const keep = versionFileNames(moduleDepFile(modPath, baseFp), objects);
 	const cutoff = now - LIVE_VERSION_SECONDS;
 	const known: string[][] = [];
 	const lines: string[] = [];
@@ -2934,12 +2933,11 @@ test "a source or dependency that cannot be read leaves the header query record 
 	assert !queryRecord([`${dir}/entry.c`], [`${dir}/dep.h`], search, []).bounded;
 }
 
-function versionFixture(modPath: string, baseFp: string, objectFp: string, cCode: string): string[] {
-	const c = stableCFileFp(modPath, moduleStoreSource(cCode));
+function versionFixture(modPath: string, baseFp: string, objectFp: string): string[] {
 	const o = stableOFileFp(modPath, objectFp);
 	const d = moduleDepFile(modPath, baseFp);
 	ensureDir(`${dirname(d)}/presence`);
-	const files = [c, d, `${d}.q`, `${dirname(d)}/presence/${basename(d)}.qs`, o, `${o}.cfp`];
+	const files = [d, `${d}.q`, `${dirname(d)}/presence/${basename(d)}.qs`, o, `${o}.cfp`];
 	for (const file of files) writeFile(file, "x");
 	return files;
 }
@@ -2955,15 +2953,15 @@ test "a superseded version used inside the live window stays beside the new one"
 	const stem = cacheStem(modPath);
 	const first = moduleCompileFp("int a;", "cc -O0");
 	const second = moduleCompileFp("int b;", "cc -O0");
-	const v1 = versionFixture(modPath, first, `${first}:objects`, "int a;");
-	settleModuleVersion(modPath, first, v1[0], [v1[4]]);
-	const v2 = versionFixture(modPath, second, `${second}:objects`, "int b;");
-	settleModuleVersion(modPath, second, v2[0], [v2[4]]);
+	const v1 = versionFixture(modPath, first, `${first}:objects`);
+	settleModuleVersion(modPath, first, [v1[3]]);
+	const v2 = versionFixture(modPath, second, `${second}:objects`);
+	settleModuleVersion(modPath, second, [v2[3]]);
 	for (const file of v1) assert exists(file);
 	for (const file of v2) assert exists(file);
 	const third = moduleCompileFp("int d;", "cc -O0");
-	const v3 = versionFixture(modPath, third, `${third}:objects`, "int d;");
-	settleModuleVersion(modPath, third, v3[0], [v3[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	const v3 = versionFixture(modPath, third, `${third}:objects`);
+	settleModuleVersion(modPath, third, [v3[3]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of v1) assert !exists(file);
 	for (const file of v2) assert !exists(file);
 	for (const file of v3) assert exists(file);
@@ -2977,17 +2975,17 @@ test "a version unused past the live window goes with nothing but its own files"
 	const first = moduleCompileFp("int a;", "cc -O0");
 	const second = moduleCompileFp("int b;", "cc -O0");
 	const other = moduleCompileFp("int c;", "cc -O2");
-	const v1 = versionFixture(modPath, first, `${first}:objects`, "int a;");
+	const v1 = versionFixture(modPath, first, `${first}:objects`);
 	const bystander = `${getCacheDir()}/${stem}.notakey.o`;
 	const sibling = `${getCacheDir()}/${stem}2.${fpKey(first)}.o`;
 	writeFile(bystander, "x");
 	writeFile(sibling, "x");
-	settleModuleVersion(modPath, first, v1[0], [v1[4]]);
-	const v3 = versionFixture(modPath, other, `${other}:objects`, "int c;");
-	settleModuleVersion(modPath, other, v3[0], [v3[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	settleModuleVersion(modPath, first, [v1[3]]);
+	const v3 = versionFixture(modPath, other, `${other}:objects`);
+	settleModuleVersion(modPath, other, [v3[3]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of v1) assert exists(file);
-	const v2 = versionFixture(modPath, second, `${second}:objects`, "int b;");
-	settleModuleVersion(modPath, second, v2[0], [v2[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	const v2 = versionFixture(modPath, second, `${second}:objects`);
+	settleModuleVersion(modPath, second, [v2[3]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of v2) assert exists(file);
 	for (const file of v3) assert exists(file);
 	for (const file of v1) assert !exists(file);
@@ -3002,15 +3000,15 @@ test "an object of the same version keeps while it was used inside the window an
 	const modPath = `test/settle/objects${performance.now()}.ms`;
 	const stem = cacheStem(modPath);
 	const base = moduleCompileFp("int a;", "cc -O0");
-	const v1 = versionFixture(modPath, base, `${base}:headers-one`, "int a;");
-	const v2 = versionFixture(modPath, base, `${base}:headers-two`, "int a;");
-	settleModuleVersion(modPath, base, v1[0], [v1[4]]);
-	settleModuleVersion(modPath, base, v2[0], [v2[4]]);
+	const v1 = versionFixture(modPath, base, `${base}:headers-one`);
+	const v2 = versionFixture(modPath, base, `${base}:headers-two`);
+	settleModuleVersion(modPath, base, [v1[3]]);
+	settleModuleVersion(modPath, base, [v2[3]]);
+	assert exists(v1[3]);
 	assert exists(v1[4]);
-	assert exists(v1[5]);
-	settleModuleVersion(modPath, base, v2[0], [v2[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	settleModuleVersion(modPath, base, [v2[3]], nowSeconds() + PAST_LIVE_WINDOW);
+	assert !exists(v1[3]);
 	assert !exists(v1[4]);
-	assert !exists(v1[5]);
 	for (const file of v2) assert exists(file);
 	removeFixture(v2);
 	removeFixture([moduleVersionRecord(stem)]);
@@ -3024,15 +3022,15 @@ test "a cache hit refreshes its version so the publish of another version keeps 
 	const idle = moduleCompileFp("int b;", "cc -O0");
 	const next = moduleCompileFp("int c;", "cc -O0");
 	const usedObjectFp = `${used}:objects`;
-	const v1 = versionFixture(modPath, used, usedObjectFp, "int a;");
-	const v2 = versionFixture(modPath, idle, `${idle}:objects`, "int b;");
-	writeFile(v1[5], usedObjectFp);
-	settleModuleVersion(modPath, used, v1[0], [v1[4]]);
-	settleModuleVersion(modPath, idle, v2[0], [v2[4]]);
+	const v1 = versionFixture(modPath, used, usedObjectFp);
+	const v2 = versionFixture(modPath, idle, `${idle}:objects`);
+	writeFile(v1[4], usedObjectFp);
+	settleModuleVersion(modPath, used, [v1[3]]);
+	settleModuleVersion(modPath, idle, [v2[3]]);
 	assert execFileCapture("touch", ["-t", "200001010000", ...v1, ...v2]).ok;
 	assert isCCodeCached(modPath, usedObjectFp);
-	const v3 = versionFixture(modPath, next, `${next}:objects`, "int c;");
-	settleModuleVersion(modPath, next, v3[0], [v3[4]]);
+	const v3 = versionFixture(modPath, next, `${next}:objects`);
+	settleModuleVersion(modPath, next, [v3[3]]);
 	for (const file of v1) assert exists(file);
 	for (const file of v2) assert !exists(file);
 	for (const file of v3) assert exists(file);
@@ -3041,17 +3039,40 @@ test "a cache hit refreshes its version so the publish of another version keeps 
 	removeFixture([moduleVersionRecord(stem)]);
 }
 
+test "a removed version leaves the C source every config shares by its content" {
+	const modPath = `test/settle/shared${performance.now()}.ms`;
+	const stem = cacheStem(modPath);
+	const c = stableCFileFp(modPath, moduleStoreSource("int a;"));
+	writeFile(c, "int a;");
+	const debug = moduleCompileFp("int a;", "cc -O0");
+	const next = moduleCompileFp("int c;", "cc -O0");
+	const v1 = versionFixture(modPath, debug, `${debug}:objects`);
+	settleModuleVersion(modPath, debug, [v1[3]]);
+	const v2 = versionFixture(modPath, next, `${next}:objects`);
+	settleModuleVersion(modPath, next, [v2[3]], nowSeconds() + PAST_LIVE_WINDOW);
+	for (const file of v1) assert !exists(file);
+	assert exists(c);
+	removeFixture([moduleVersionRecord(stem)]);
+	_cacheListing = null;
+	const later = moduleCompileFp("int d;", "cc -O0");
+	const v3 = versionFixture(modPath, later, `${later}:objects`);
+	settleModuleVersion(modPath, later, [v3[3]], nowSeconds() + PAST_LIVE_WINDOW);
+	for (const file of v2) assert !exists(file);
+	assert exists(c);
+	removeFixture([c, ...v3, moduleVersionRecord(stem)]);
+}
+
 test "the first version recorded for a module also removes the versions an older compiler left once they are unused" {
 	const modPath = `test/settle/legacy${performance.now()}.ms`;
 	const stem = cacheStem(modPath);
 	const old = moduleCompileFp("int a;", "cc -O0");
 	const current = moduleCompileFp("int b;", "cc -O0");
-	const legacy = versionFixture(modPath, old, `${old}:objects`, "int a;");
-	const live = versionFixture(modPath, current, `${current}:objects`, "int b;");
+	const legacy = versionFixture(modPath, old, `${old}:objects`);
+	const live = versionFixture(modPath, current, `${current}:objects`);
 	const bystander = `${getCacheDir()}/${stem}.link.cache`;
 	writeFile(bystander, "x");
 	_cacheListing = null;
-	settleModuleVersion(modPath, current, live[0], [live[4]], nowSeconds() + PAST_LIVE_WINDOW);
+	settleModuleVersion(modPath, current, [live[3]], nowSeconds() + PAST_LIVE_WINDOW);
 	for (const file of legacy) assert !exists(file);
 	for (const file of live) assert exists(file);
 	assert exists(bystander);
@@ -3062,7 +3083,7 @@ test "the first version recorded for a module also removes the versions an older
 test "a version file name is recognised only in the shapes the compiler writes" {
 	const key = fpKey("x");
 	const stem = "a_d_b_x_ms";
-	assert isVersionFileOf(stem, `${stem}.${key}.c`);
+	assert !isVersionFileOf(stem, `${stem}.${key}.c`);
 	assert isVersionFileOf(stem, `${stem}.${key}.d.q`);
 	assert isVersionFileOf(stem, `${stem}.${key}.o`);
 	assert isVersionFileOf(stem, `${stem}.${key}.o.cfp`);

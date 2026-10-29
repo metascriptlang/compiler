@@ -389,7 +389,7 @@ function runEditLoop(loop: EditLoop, index: number): void {
 	console.log(`${loop.name}: local cache ${liveKb} KB before edit ${EDIT_STEPS} (versions inside the live window), ${cacheKb(`${dir}/out/${loop.mode}/.cache`)} KB after it (earlier versions unused for hours)`);
 	if (backdated) {
 		const versions = loop.modules.map((m) => `${m} ${localVersions(dir, loop.mode, m)}`);
-		results.push({ name: `local: ${loop.name}: versions kept`, expected: loop.modules.map((m) => `${m} c=1 d=1 cfp=1`).join(", "), actual: versions.join(", ") });
+		results.push({ name: `local: ${loop.name}: versions kept`, expected: loop.modules.map((m) => `${m} c=${loop.edited.includes(m) ? EDIT_STEPS + 1 : 1} d=1 cfp=1`).join(", "), actual: versions.join(", ") });
 	}
 	env.set("MSC_CACHE_DIR", `${dir}/truth-cache`);
 	env.set("MSC_NO_GLOBAL_CACHE", "1");
