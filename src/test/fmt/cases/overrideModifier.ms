@@ -19,5 +19,5 @@ test "fmt: override keeps its place after static and before async and the genera
 test "fmt: a method named override stays an ordinary method" {
 	const src = "class C {\n\toverride(): string {\n\t\treturn \"x\";\n\t}\n}\n";
 	assert assertFmtLossless(src);
-	assert assertFmtContains(src, "  override(): string");
+	assert assertFmtContains(src, "\toverride(): string");
 }
