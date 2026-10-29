@@ -364,9 +364,6 @@ export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
 	return arr;
 }
 
-export function sort<T>(this arr: T[]): T[] {
-	return arr.sort((a: T, b: T): number => a < b ? -1 : (a > b ? 1 : 0));
-}
 
 /**
  * Calls a function on every element in order and returns the results as a new array.

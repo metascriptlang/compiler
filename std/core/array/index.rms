@@ -154,9 +154,6 @@ export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
 	return arr;
 }
 
-export function sort<T>(this arr: T[]): T[] {
-	return arr.sort((a: T, b: T): number => a < b ? -1 : (a > b ? 1 : 0));
-}
 
 export function join(this arr: Vec<string>, sep: string): string {
 	let out = "";

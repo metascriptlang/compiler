@@ -9,17 +9,17 @@ class P {
 	}
 }
 const nums: number[] = [3, 1, 2];
-const inferred = [3, 1, 2];
+const more: number[] = [3, 1, 2];
 const words = ["b", "c", "a"];
 const ps: P[] = [new P(2), new P(1), new P(3)];
 const sortedNums = nums.sort();
-const sortedInferred = inferred.sort();
+const sortedMore = more.sort();
 const sortedWords = words.sort();
 const sortedPs = ps.sort((a, b) => a.n - b.n);
-console.log(`same=${sortedNums === nums},${sortedInferred === inferred},${sortedWords === words},${sortedPs === ps}`);
+console.log(`same=${sortedNums === nums},${sortedMore === more},${sortedWords === words},${sortedPs === ps}`);
 const reversedNums = nums.reverse();
 const reversedWords = words.reverse();
-console.log(`${sortedInferred.join(",")}|${reversedNums.join(",")}|${sortedWords.reverse().reverse().join(",")}|${reversedWords.join(",")}`);
+console.log(`${sortedMore.join(",")}|${reversedNums.join(",")}|${sortedWords.reverse().reverse().join(",")}|${reversedWords.join(",")}`);
 const base = [3, 1, 2];
 console.log(`${base.join(",")}|${base.slice().reverse().join(",")}|${["a", "b", "c"].slice(1).join(",")}`);
 console.log(`${ps.map((p) => p.n).join(",")}|${ps.reverse().map((p) => p.n).join(",")}`);
