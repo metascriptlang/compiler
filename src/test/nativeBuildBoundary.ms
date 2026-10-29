@@ -41,7 +41,7 @@ const cacheRootSharingGroups = [
 const cacheRootGroups = [
 	...cacheRootPathGroups, ...cacheRootSharingGroups, "cache-roots-refuse-args",
 	"cache-roots-refuse-config", "cache-roots-refuse-hidden", "cache-local-preservation",
-	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink",
+	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
 	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
@@ -503,6 +503,29 @@ function runCacheLocalPreservation(): void {
 					try readFile(`${local}/.schema-fpkey`) catch "missing");
 			}
 		}
+	});
+}
+
+function runCacheSharedSource(): void {
+	if (windows) return;
+	withCacheRootFixture("cache-shared-source", (dir: string): void => {
+		env.set("MSC_NO_GLOBAL_CACHE", "1");
+		put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+		put(`${dir}/main.ms`, "import { label } from \"./lib\";\nconsole.log(label());\n");
+		put(`${dir}/lib.ms`, "export function label(): string {\n\tlet s = \"base\";\n\twhen (alt) {\n\t\ts = s + \" alt\";\n\t}\n\treturn s;\n}\n");
+		need(build(dir, "alt-first", "first", ["-d:alt"]) == 0, "first alt build");
+		const ageCache = ["out/debug/.cache", "-type", "f", "-exec", "touch", "-t", "200001010000", "{}", "+"];
+		need(command(dir, "age", "find", ageCache).code == 0, "age the local cache");
+		const holdCc = `${dir}/hold-cc`;
+		put(holdCc, "#!/bin/sh\n"
+			+ "case \"$*\" in *_lib_x_ms.*.c*)\n"
+			+ `\t[ -e "${dir}/settled" ] || { (cd "${dir}" && "${compiler}" build main.ms --cc=clang --output=plain > "${dir}/settle.log" 2>&1); echo $? > "${dir}/settled"; } ;;\n`
+			+ "esac\n"
+			+ "exec clang \"$@\"\n");
+		need(chmod(holdCc, 493).ok, "chmod hold-cc");
+		const held = build(dir, "alt-held", "held", ["-d:alt"], holdCc);
+		record("a build that settles another version of a module mid-compile exits", "0", (try readFile(`${dir}/settled`) catch "missing").trim());
+		record("a build whose shared C file was reused while stale still finds it", "0", `${held}`);
 	});
 }
 
@@ -1877,6 +1900,7 @@ if (group == "cache-roots-refuse-config" || group == "all") runCacheRootConfigRe
 if (group == "cache-roots-refuse-hidden" || group == "all") runCacheRootConfigRefusals(true);
 if (group == "cache-local-preservation" || group == "all") runCacheLocalPreservation();
 if (group == "cache-symlink" || group == "all") runCacheSymlink();
+if (group == "cache-shared-source" || group == "all") runCacheSharedSource();
 if (group == "cache-roots-native-build" || group == "all") runCacheRootNative(false);
 if (group == "cache-roots-native-test" || group == "all") runCacheRootNative(true);
 if (group == "argv" || group == "all") runArgv();
