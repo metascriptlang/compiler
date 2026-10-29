@@ -146,6 +146,35 @@ function isTypeSeparator(kind: TokenKind): boolean {
 	return kind == TokenKind.Pipe || kind == TokenKind.Amp;
 }
 
+function enclosingOpener(a: Token[], i: int32): int32 {
+	let depth = 0;
+	for (let k = i - 1; k >= 0; k -= 1) {
+		const kind = a[k].kind;
+		if (isCloser(kind)) depth += 1;
+		else if (kind == TokenKind.LParen || kind == TokenKind.LBracket || kind == TokenKind.LBrace) {
+			if (depth == 0) return k;
+			depth -= 1;
+		}
+	}
+	return -1;
+}
+
+function inTypeLiteral(a: Token[], i: int32): boolean {
+	const open = enclosingOpener(a, i);
+	if (open <= 0 || a[open].kind != TokenKind.LBrace) return false;
+	const before = a[open - 1].kind;
+	if (!isTypePosition(before) && !isTypeSeparator(before) && before != TokenKind.LBracket) return false;
+	let depth = 0;
+	for (let k = open + 1; k < i; k += 1) {
+		const kind = a[k].kind;
+		if (kind == TokenKind.LParen || kind == TokenKind.LBracket || kind == TokenKind.LBrace) depth += 1;
+		else if (isCloser(kind)) depth -= 1;
+		else if (depth == 0 && kind == TokenKind.Assign) return false;
+		else if (depth == 0 && (kind == TokenKind.Let || kind == TokenKind.Const || kind == TokenKind.Var) && a[k + 1].kind != TokenKind.Colon && a[k + 1].kind != TokenKind.Question) return false;
+	}
+	return true;
+}
+
 function addsLeadingSeparator(b: Token[], j: int32): boolean {
 	return j > 0 && isTypeSeparator(b[j].kind) && isTypePosition(b[j - 1].kind);
 }
@@ -196,7 +225,7 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 			j += 1;
 			continue;
 		}
-		if (!sameToken(a[i], b[j]) && a[i].kind == TokenKind.Comma && semicolonBefore[j] && i + 1 < a.length && sameToken(a[i + 1], b[j])) {
+		if (!sameToken(a[i], b[j]) && a[i].kind == TokenKind.Comma && semicolonBefore[j] && i + 1 < a.length && sameToken(a[i + 1], b[j]) && inTypeLiteral(a, i)) {
 			i += 1;
 			continue;
 		}
@@ -306,6 +335,13 @@ test "lossless: an object key may lose the quotes it did not need" {
 test "lossless: an object type member separator may become a semicolon" {
 	assert checkLossless("type T = { a: number, b: string };", "type T = { a: number; b: string };\n").ok;
 	assert !checkLossless("const o = { a: 1, b: 2 };", "const o = { a: 1 b: 2 };\n").ok;
+	assert checkLossless("function f(x: { a: number, b: string }): Array<{ c: number, d: string }> {}", "function f(x: { a: number; b: string }): Array<{ c: number; d: string }> {}\n").ok;
+}
+
+test "lossless: a declarator comma never becomes a statement semicolon" {
+	assert !checkLossless("let a = 1, b = 2;", "let a = 1; b = 2;\n").ok;
+	assert !checkLossless("switch (k) { case 1: { let a, b; } }", "switch (k) { case 1: { let a; b; } }\n").ok;
+	assert !checkLossless("l: { const a = 1, b = 2; }", "l: { const a = 1; b = 2; }\n").ok;
 }
 
 test "lossless: a broken union may gain a leading bar and a hugged one lose it" {
