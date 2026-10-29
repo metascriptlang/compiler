@@ -3750,19 +3750,18 @@ Structs and classes are printed in a **colored** JSON-like debug format with ANS
 
 #### String Concatenation (`+`) — Limited Auto-Coercion
 
-The `+` operator auto-coerces only **numbers** and **booleans** to strings:
+The `+` operator auto-coerces only **numbers**, **booleans** and **enums** to strings:
 
 ```ms
 const s1 = "value: " + 42;       // OK → "value: 42"
 const s2 = "flag: " + true;      // OK → "flag: true"
-const s3 = "color: " + color;    // ERROR — enum not auto-coerced
+const s3 = "color: " + color;    // OK → "color: Home" (the member name)
 const s4 = "person: " + person;  // ERROR — struct not auto-coerced
 ```
 
-For enums, structs, and classes in string concatenation, call `.toString()` explicitly:
+For structs and classes in string concatenation, call `.toString()` explicitly; an enum needs no call:
 
 ```ms
-const s3 = "color: " + color.toString();
 const s4 = "person: " + person.toString();
 ```
 
@@ -3846,11 +3845,11 @@ The custom `toString` takes priority over the default debug format everywhere �
 | number | auto | auto | yes | yes |
 | boolean | auto | auto | yes | yes |
 | string | identity | identity | identity | identity |
-| enum | auto (variant name) | explicit `.toString()` needed | yes | yes |
+| enum | auto (variant name) | auto (variant name) | yes | yes |
 | struct | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 | class | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 
-A template interpolation `${v}` is `String(v)`: an enum interpolates as its variant name, also with explicit values, as a struct field, inside a nested template and as an operand of `+` after a string, on C, `--danger`, JS and split JS (corpus `enumInTemplateTextsAsItsName`, measured 2026-10-30 on a candidate of this slice; before it JS printed the number). The Raiser VM still prints the ordinal (card `2026-09-25-raiser-enum-to-string-prints-the-number`), and `s += v` with an enum `v` does not compile on C (not measured further). The language has no string enums.
+A template interpolation `${v}` is `String(v)`: an enum interpolates as its variant name, also with explicit values, as a struct field, inside a nested template and as an operand of `+` after a string, on C, `--danger`, JS and split JS (corpus `enumInTemplateTextsAsItsName`, measured 2026-10-30 on a candidate of this slice; before it JS printed the number). The Raiser VM still prints the ordinal (card `2026-09-25-raiser-enum-to-string-prints-the-number`), and `"str" + v` and `s += v` give the same name (corpus `enumCompoundAppendTextsAsItsName`; `"str" + k` measured 2026-10-30 on a candidate of this slice: `strHome` on C and JS, `str1` on the Raiser VM; `s += k` on a local, a field and in a loop, with `s += 7` and `s += true` unchanged: C, `--danger`, JS and split JS agree). Not measured: `s += k` on the Raiser, a union of enums. The language has no string enums.
 
 #### Explicit `.toItems()` — Iterator Protocol for `for...of`
 
