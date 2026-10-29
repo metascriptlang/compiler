@@ -150,6 +150,11 @@ export function isParamPatternDecl(s: Node): boolean {
 		&& init.location.line == s.location.line && init.location.column == s.location.column;
 }
 
+function isEmptyStatement(node: Node, options: FormatOptions): boolean {
+	return options.source != "" && (node.data as BlockStmtData).statements.length == 0
+		&& sourceByteAt(options.source, node.location.line, node.location.column) == ";".code;
+}
+
 let collapsibleBlock: Node | null = null;
 
 export function printCollapsibleBody(body: Node, options: FormatOptions): Doc {
@@ -164,6 +169,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	const items = listItems(node, d.statements);
 	const orphans = danglingOf(node);
 	if (items.length == 0) {
+		if (isEmptyStatement(node, options)) return docText(";");
 		if (orphans.length > 0) return boxed("{", [danglingBlock(orphans)], "}");
 		if (collapsible) return docText("{}");
 		return docGroup([docText("{"), docHardLine(), docText("}")]);
@@ -229,6 +235,12 @@ function printBody(body: Node, options: FormatOptions, collapsible: boolean): Do
 	return collapsible ? printCollapsibleBody(printed, options) : callPrintNode(printed, options);
 }
 
+function bodyGap(body: Node, options: FormatOptions): Doc {
+	const single = bracelessStatement(body, options);
+	const printed = single != null ? single : body;
+	return docText(printed.kind == NodeKind.BlockStmt && isEmptyStatement(printed, options) ? "" : " ");
+}
+
 function commentsBeforeElse(d: IfStmtData, options: FormatOptions): SourceComment[] {
 	const alt = d.alternate!;
 	const out: SourceComment[] = [];
@@ -258,7 +270,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [
 		docText("if "),
 		...parenthesizedHeader(callPrintNode(d.condition, options)),
-		docText(" "),
+		bodyGap(d.consequent, options),
 		printBody(d.consequent, options, false),
 	];
 	if (hasElse) {
@@ -270,8 +282,14 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		const braceless = bracelessStatement(d.consequent, options);
 		const elseOnOwnLine = beforeElse.length > 0
 			|| (braceless != null && alt.location.line > lastLineOf(braceless));
-		parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
-		parts.push(alt.kind == NodeKind.IfStmt ? callPrintNode(alt, options) : printBody(alt, options, false));
+		parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else")]) : docText(" else"));
+		if (alt.kind == NodeKind.IfStmt) {
+			parts.push(docText(" "));
+			parts.push(callPrintNode(alt, options));
+		} else {
+			parts.push(bodyGap(alt, options));
+			parts.push(printBody(alt, options, false));
+		}
 	}
 	return docGroup(parts);
 }
@@ -281,7 +299,7 @@ export function printWhileStmt(node: Node, options: FormatOptions): Doc {
 	return docGroup([
 		docText("while "),
 		...parenthesizedHeader(callPrintNode(d.whileCondition, options)),
-		docText(" "),
+		bodyGap(d.whileBody, options),
 		printBody(d.whileBody, options, true),
 	]);
 }
@@ -295,7 +313,8 @@ export function printForStmt(node: Node, options: FormatOptions): Doc {
 		callPrintNode(d.forCondition, options),
 		docText("; "),
 		callPrintNode(d.forUpdate, options),
-		docText(") "),
+		docText(")"),
+		bodyGap(d.forBody, options),
 		printBody(d.forBody, options, true),
 	]);
 }
@@ -312,7 +331,8 @@ export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 		target,
 		docText(" of "),
 		callPrintNode(d.forOfIterable, options),
-		docText(") "),
+		docText(")"),
+		bodyGap(d.forOfBody, options),
 		printBody(d.forOfBody, options, true),
 	]);
 }
@@ -323,7 +343,8 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 	return docGroup([
 		docText("for (" + binding + " " + d.forInBinding + " in "),
 		callPrintNode(d.forInObject, options),
-		docText(") "),
+		docText(")"),
+		bodyGap(d.forInBody, options),
 		printBody(d.forInBody, options, true),
 	]);
 }
@@ -331,7 +352,8 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DoWhileStmtData;
 	const parts: Doc[] = [
-		docText("do "),
+		docText("do"),
+		bodyGap(d.doBody, options),
 		printCollapsibleBody(d.doBody, options),
 		docText(" while "),
 		...parenthesizedHeader(callPrintNode(d.doCondition, options)),
