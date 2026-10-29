@@ -793,15 +793,10 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 		emit(gen, ")");
 	}
 	emit(gen, " => ");
-	if (d.arrowBody.kind == NodeKind.ObjectLiteral) {
-		emit(gen, "(");
-		emitNode(gen, d.arrowBody);
-		emit(gen, ")");
-	} else {
-		// Expression body is an implicit return: a captured value type must
-		// copy out (Nim's `result = expr` copies), or callers mutate the env.
-		emitCopyOnRead(gen, d.arrowBody);
-	}
+	const expressionBody = d.arrowBody.kind != NodeKind.BlockStmt;
+	if (expressionBody) emit(gen, "(");
+	emitCopyOnRead(gen, d.arrowBody);
+	if (expressionBody) emit(gen, ")");
 }
 
 // ===== Function Expression =====
