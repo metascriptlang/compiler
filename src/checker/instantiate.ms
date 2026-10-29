@@ -485,6 +485,9 @@ function sameInstanceTypeBody(a: Type, b: Type): boolean {
 		return sameInstanceType(a.typeExtra, b.typeExtra) && sameInstanceArgs(a.typeChildren, b.typeChildren);
 	}
 	if (isMaybeType(a) && isMaybeType(b)) return sameInstanceType(a.typeReturn, b.typeReturn);
+	if (a.kind == TypeKind.Union && (a.typeName != "" || b.typeName != "")) {
+		if (a.typeName != b.typeName || (a.sym != null ? a.sym.modulePath : "") != (b.sym != null ? b.sym.modulePath : "")) return false;
+	}
 	if (a.kind == TypeKind.Struct || a.kind == TypeKind.Enum || a.kind == TypeKind.Distinct) {
 		if (a.sym != null || b.sym != null) {
 			if (a.sym == null || a.sym != b.sym) return false;
