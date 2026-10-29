@@ -1,7 +1,8 @@
-// @skip-js: the js Buffer throws or reads undefined outside the bounds; the C Buffer returns 0 or the offset and writes nothing
+// @skip-js: the js Buffer reads undefined outside the bounds of a search, fill or string write; the C Buffer clamps them
+// note: a field read or write outside the buffer or the integer width throws a RangeError and writes nothing
 // @xfail(raiser): error: Undefined variable 'Buffer'
-// @stdout: bounds entries=1620 digest=484407731
-// @stdout: byteLength rejects=96 rejectedMessages=96 accepted=48 unexpected=0 untouched=true
+// @stdout: bounds entries=1800 digest=441247178
+// @stdout: byteLength rejects=96 rejectedMessages=96 accepted=24 outside=24 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
 // @stdout: ranges entries=224 digest=470707350
 // @stdout: strings entries=2880 digest=522388381
@@ -36,33 +37,53 @@ function patterned(length: int32, salt: int32): Buffer {
 
 const OFFSETS: number[] = [-9, -1, -0.5, 0, 0.75, 2.5, 3, 4, 5, 6, 7, 8, 9, 100, 4611686018427387904];
 
+function attempt(call: () => number): void {
+	try {
+		note(call());
+	} catch (error) {
+		log += `${error.message};`;
+		entries += 1;
+	}
+}
+
+function attemptText(call: () => string): void {
+	try {
+		log += `${call()};`;
+	} catch (error) {
+		log += `${error.message};`;
+	}
+	entries += 1;
+}
+
 function checkFieldBounds(): void {
 	for (const length of [0, 1, 4, 8]) {
 		const value = patterned(length, 1);
 		for (const at of OFFSETS) {
-			note(value.readUInt8(at));
-			note(value.readInt8(at));
-			note(value.readUInt16LE(at));
-			note(value.readInt16BE(at));
-			note(value.readUInt32BE(at));
-			note(value.readInt32LE(at));
-			note(value.readFloatLE(at));
-			note(value.readDoubleBE(at));
-			log += `${value.readBigUInt64LE(at)} ${value.readBigInt64BE(at)};`;
+			attempt(() => value.readUInt8(at));
+			attempt(() => value.readInt8(at));
+			attempt(() => value.readUInt16LE(at));
+			attempt(() => value.readInt16BE(at));
+			attempt(() => value.readUInt32BE(at));
+			attempt(() => value.readInt32LE(at));
+			attempt(() => value.readFloatLE(at));
+			attempt(() => value.readDoubleBE(at));
+			attemptText(() => `${value.readBigUInt64LE(at)} ${value.readBigInt64BE(at)}`);
 			for (const width of [1, 2, 6]) {
-				note(value.readUIntLE(at, width));
-				note(value.readIntBE(at, width));
+				attempt(() => value.readUIntLE(at, width));
+				attempt(() => value.readIntBE(at, width));
 			}
 			const out = patterned(length, 2);
-			note(out.writeUInt8(511, at));
-			note(out.writeInt16LE(-2, at));
-			note(out.writeUInt32BE(4294967296 + 258, at));
-			note(out.writeDoubleLE(1.25, at));
-			note(out.writeFloatBE(-3.5, at));
-			note(out.writeBigInt64LE(-3n, at));
+			attempt(() => out.writeUInt8(511, at));
+			attempt(() => out.writeUInt8(255, at));
+			attempt(() => out.writeInt16LE(-2, at));
+			attempt(() => out.writeUInt32BE(4294967296 + 258, at));
+			attempt(() => out.writeUInt32BE(258, at));
+			attempt(() => out.writeDoubleLE(1.25, at));
+			attempt(() => out.writeFloatBE(-3.5, at));
+			attempt(() => out.writeBigInt64LE(-3n, at));
 			for (const width of [1, 3, 6]) {
-				note(out.writeUIntBE(258, at, width));
-				note(out.writeIntLE(-258, at, width));
+				attempt(() => out.writeUIntBE(258, at, width));
+				attempt(() => out.writeIntLE(-258, at, width));
 			}
 			out.set(at, 300);
 			noteBytes(out);
@@ -160,6 +181,7 @@ function checkByteLength(): void {
 	let rejects: int32 = 0;
 	let rejectedMessages: int32 = 0;
 	let accepted: int32 = 0;
+	let outside: int32 = 0;
 	let unexpected: int32 = 0;
 	let untouched = true;
 	for (const length of [0, 8]) {
@@ -182,13 +204,14 @@ function checkByteLength(): void {
 					call(patterned(length, 9), width);
 					accepted += 1;
 				} catch (error) {
-					unexpected += 1;
+					if (error.message == "Attempt to access memory outside buffer bounds") outside += 1;
+					else unexpected += 1;
 				}
 			}
 		}
 	}
 	console.log(
-		`byteLength rejects=${rejects} rejectedMessages=${rejectedMessages} accepted=${accepted} unexpected=${unexpected} untouched=${untouched}`,
+		`byteLength rejects=${rejects} rejectedMessages=${rejectedMessages} accepted=${accepted} outside=${outside} unexpected=${unexpected} untouched=${untouched}`,
 	);
 }
 
