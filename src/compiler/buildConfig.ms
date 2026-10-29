@@ -115,23 +115,8 @@ export function defaultCcSection(): CcSection {
 	return { compiler: "", flags: f, linkFlags: lf, targetKeys: tk, targetValues: tv };
 }
 
-// Well-known cross-compiler binary for common os-cpu targets.
-// Covers 90% of cross-compile use cases without explicit config.
-function defaultCompilerForTarget(targetOs: string, cpuTarget: string): string {
-	const key = `${targetOs}-${cpuTarget}`;
-	if (key == "linux-amd64") return "x86_64-unknown-linux-gnu-gcc";
-	if (key == "linux-arm64") return "aarch64-unknown-linux-gnu-gcc";
-	if (key == "linux-386") return "i686-unknown-linux-gnu-gcc";
-	if (key == "linux-riscv64") return "riscv64-unknown-linux-gnu-gcc";
-	if (key == "linux-mips64") return "mips64-unknown-linux-gnu-gcc";
-	if (key == "windows-amd64") return "x86_64-w64-mingw32-gcc";
-	if (key == "windows-386") return "i686-w64-mingw32-gcc";
-	if (key == "windows-arm64") return "aarch64-w64-mingw32-gcc";
-	return "";
-}
-
 // Resolve CcSection for a specific os-cpu target.
-// Priority: explicit per-target config > cc.compiler default > well-known default.
+// Priority: explicit per-target config > cc.compiler default.
 // Cross detected via `targetOs !== platform || cpuTarget !== ""`.
 export function resolveCcForTarget(cc: CcSection, targetOs: string, cpuTarget: string): CcTargetSection {
 	let entry = "";
@@ -152,10 +137,6 @@ export function resolveCcForTarget(cc: CcSection, targetOs: string, cpuTarget: s
 				break;
 			}
 			i += 1;
-		}
-		// Fallback to well-known cross-compiler if nothing configured
-		if (compiler == "") {
-			compiler = defaultCompilerForTarget(targetOs, cpuTarget);
 		}
 	}
 
