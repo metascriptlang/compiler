@@ -90,6 +90,12 @@ export function continuesIdentifier(token: Token): boolean {
 	};
 }
 
+// `move` and `sizeof` take a place or a type, never a signed number, so a sign
+// after them is the binary operator on a plain identifier.
+export function continuesIdentifierOrSign(token: Token): boolean {
+	return token.kind == TokenKind.Plus || token.kind == TokenKind.Minus || continuesIdentifier(token);
+}
+
 // Returns true if the token is an identifier or a contextual keyword
 // that can be used in identifier positions (variable names, fields, etc.)
 export function isIdentLike(token: Token): boolean {

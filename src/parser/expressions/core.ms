@@ -1,11 +1,11 @@
 // Core Expression Parser - Pratt parsing with operator precedence
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { ArrowShape, arrowShape, parseArrowFunction, tryParseArrowFunction, parseBareIdentArrow } from "./arrow";
@@ -476,14 +476,14 @@ function parsePrimaryNode(state: ParserState): ExprResult {
 	}
 
 	// Move expression: move x, move x.field, move arr[i]
-	if (token.kind == TokenKind.Move && !continuesIdentifier(peek(state, 1))) {
+	if (token.kind == TokenKind.Move && !continuesIdentifierOrSign(peek(state, 1))) {
 		advance(state);
 		const moveOperand = try parseExprWithPrec(state, 0);
 		return Result.ok(createNode(NodeKind.MoveExpr, { moveArg: moveOperand }, token));
 	}
 
 	// Sizeof expression: sizeof Type
-	if (token.kind == TokenKind.Sizeof) {
+	if (token.kind == TokenKind.Sizeof && !continuesIdentifierOrSign(peek(state, 1))) {
 		advance(state);
 		const sizeofType = captureTypeText(state);
 		if (sizeofType == "") {
@@ -688,6 +688,38 @@ test "update kind" { assert exprKind("x++") == NodeKind.UpdateExpr; }
 test "await kind" { assert exprKind("await p") == NodeKind.AwaitExpr; }
 
 test "move kind" { assert exprKind("move x") == NodeKind.MoveExpr; }
+
+test "move as a bare argument is an identifier" {
+	const d = exprNode("g(t, move)").data as CallExprData;
+	assert d.arguments[1].kind == NodeKind.Identifier;
+}
+
+test "move before an operand stays a move argument" {
+	const d = exprNode("g(move x)").data as CallExprData;
+	assert d.arguments[0].kind == NodeKind.MoveExpr;
+}
+
+test "move as a member object" { assert exprKind("move.a") == NodeKind.MemberExpr; }
+
+test "move compared is an operand" { assert exprKind("move == x") == NodeKind.BinaryExpr; }
+
+test "move added to is an operand" { assert exprKind("move + 1") == NodeKind.BinaryExpr; }
+
+test "move subtracted from is an operand" { assert exprKind("move - 1") == NodeKind.BinaryExpr; }
+
+test "move returned is an identifier" {
+	assert parseOk("() => { return move; }");
+	assert parseOk("() => { return g(t, move); }");
+}
+
+test "sizeof as a bare argument is an identifier" {
+	const d = exprNode("g(t, sizeof)").data as CallExprData;
+	assert d.arguments[1].kind == NodeKind.Identifier;
+}
+
+test "sizeof before a type stays sizeof" { assert exprKind("sizeof int32") == NodeKind.SizeofExpr; }
+
+test "sizeof added to is an operand" { assert exprKind("sizeof + 1") == NodeKind.BinaryExpr; }
 
 test "yield kind" { assert exprKind("yield x") == NodeKind.YieldExpr; }
 
