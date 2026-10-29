@@ -142,9 +142,7 @@ void msNotifyFutureComplete(void);
  * Used by dual-path msWaitForReady on worker threads (no event loop). */
 void msWorkerWaitOnFuture(void* fut);
 
-/* Polls the calling thread's I/O engine for up to timeoutMs, waking early when wakeFd is readable;
- * returns the events seen. Installed by runtime/io/engineSelect.c. */
-typedef int (*msIoPollFn)(int timeoutMs, int wakeFd);
-void msSetIoPollHook(msIoPollFn hook);
+typedef int (*msIoPollFn)(void);
+void msDispatcherWatchIoEngine(int engineFd, msIoPollFn poll);
 
 #endif /* MS_DISPATCH_H */

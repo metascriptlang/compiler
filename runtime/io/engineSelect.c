@@ -13,19 +13,12 @@
 #if MS_IO_HAS_ENGINE && !defined(_WIN32)
 #include "runtime/promise/dispatch.h"
 
-static _Thread_local int tlEngineWatchedFd = -1;
-
-static int msIoPollThreadEngine(int timeoutMs, int wakeFd) {
+static int msIoPollThreadEngine(void) {
 	msIoEngine* e = msGetIoEngineIfExists();
-	if (e == NULL) return 0;
-	if (tlEngineWatchedFd != wakeFd) {
-		msIoEngineAddWakeFd(e, wakeFd);
-		tlEngineWatchedFd = wakeFd;
-	}
-	return msIoEnginePoll(e, timeoutMs);
+	return e == NULL ? 0 : msIoEnginePoll(e, 0);
 }
 
-static void msIoEngineCreated(void) { msSetIoPollHook(msIoPollThreadEngine); }
+static void msIoEngineCreated(int engineFd) { msDispatcherWatchIoEngine(engineFd, msIoPollThreadEngine); }
 #endif
 
 

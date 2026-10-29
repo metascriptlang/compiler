@@ -109,7 +109,7 @@ msIoEngine* msGetIoEngine(void) {
 		_tlEngine = msIoEngineCreate();
 		if (_tlEngine != NULL) {
 			msOnThreadDestruction(msIoEngineThreadDestroy);
-			msIoEngineCreated();
+			msIoEngineCreated(msSelectorGetFd(_tlEngine->selector));
 		}
 	}
 	return _tlEngine;

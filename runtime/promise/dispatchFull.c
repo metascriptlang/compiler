@@ -18,6 +18,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
@@ -29,8 +30,6 @@ static _Atomic(msActorPollFn) msActorPollHook = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
-static _Atomic(msIoPollFn) msIoPollHook = NULL;
-void msSetIoPollHook(msIoPollFn hook) { atomic_store_explicit(&msIoPollHook, hook, memory_order_release); }
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -775,6 +774,21 @@ msDispatcher* msGetDispatcher(void) {
 	return gDispatcher;
 }
 
+static MS_THREAD_LOCAL int msIoEngineFd = -1;
+static MS_THREAD_LOCAL msIoPollFn msIoEnginePollFn = NULL;
+
+void msDispatcherWatchIoEngine(int engineFd, msIoPollFn poll) {
+	if (msIsPoolWorker || engineFd < 0) return;
+	msDispatcher* d = msGetDispatcher();
+	if (d->selector == NULL) return;
+	if (msSelectorRegister(d->selector, engineFd, MS_EVENT_READ, NULL) < 0) {
+		fprintf(stderr, "internal: the dispatcher selector cannot watch the io engine fd %d: %s\n", engineFd, strerror(errno));
+		abort();
+	}
+	msIoEngineFd = engineFd;
+	msIoEnginePollFn = poll;
+}
+
 #endif /* _WIN32 */
 
 /* Check if dispatcher exists (without creating one) */
@@ -1017,20 +1031,19 @@ static bool msRunOnceIn(int timeoutMs) {
 	int wakeFd = msThreadChannel()->wake[0];
 	if (msCompletionQueueDrain()) didWork = true;  /* pre-poll: process without blocking */
 	if (d->selector != NULL) {
-		int waitMs = didWork ? 0 : adj;
-		msIoPollFn ioPoll = !msIsPoolWorker && msMainIoOps != 0 ? atomic_load_explicit(&msIoPollHook, memory_order_acquire) : NULL;
-		if (ioPoll != NULL) {
-			if (ioPoll(waitMs, wakeFd) > 0) didWork = true;
-			waitMs = 0;
-		}
 		msReadyEvent readyBuf[64];
-		int nready = msSelectorPoll(d->selector, waitMs, readyBuf, 64);
+		int nready = msSelectorPoll(d->selector, didWork ? 0 : adj, readyBuf, 64);
+		bool ioEngineReady = false;
 		for (int i = 0; i < nready; i++) {
 			didWork = true;
 			/* Wake pipe: drain bytes, actual data is in MPSC queue */
 			if (readyBuf[i].fd == wakeFd) {
 				char buf[64];
 				(void)read(wakeFd, buf, sizeof(buf));
+				continue;
+			}
+			if (readyBuf[i].fd == msIoEngineFd) {
+				ioEngineReady = true;
 				continue;
 			}
 			/* I/O events (unchanged) */
@@ -1040,6 +1053,7 @@ static bool msRunOnceIn(int timeoutMs) {
 				msFutureCompleteVoid(ud);
 			}
 		}
+		if (ioEngineReady) (void)msIoEnginePollFn();
 		/* Post-poll: drain completions that arrived during selector block */
 		if (msCompletionQueueDrain()) didWork = true;
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {
