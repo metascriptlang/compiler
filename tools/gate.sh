@@ -138,6 +138,7 @@ environment and the candidate binary are all unchanged; any other ending drops t
 exit: 0 no new red · 1 new red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait, once the queue is passed, until the CPU sampled now has a fifth of the gate's core share idle (default 1800, 0 = refuse at once, < 0 = skip the check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
+      GATE_PAR_FILE, GATE_WORKERS_FILE  files a gate host rewrites; each phase rereads them for GATE_PAR and the corpus build width
       MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
       GATE_ADOPT=0 skips the candidate emit that keys a whole run's pass records; for a host whose cache does not outlive the gate
@@ -1650,6 +1651,18 @@ emit_width_self_test() (
   return $bad
 )
 
+reread_share_self_test() (
+  local d bad=0 GATE_PAR=6 PAR=6 corpus_build_limit=6 GATE_PAR_FILE GATE_WORKERS_FILE
+  d=$(mktemp -d) || return 1
+  GATE_PAR_FILE="$d/par" GATE_WORKERS_FILE="$d/workers"
+  reread_share >/dev/null; [ "$GATE_PAR $PAR $corpus_build_limit" = "6 6 6" ] || { printf 'FAIL reread share: absent files changed the share\n'; bad=1; }
+  echo 2 >"$GATE_PAR_FILE"; echo 11 >"$GATE_WORKERS_FILE"
+  reread_share >/dev/null; [ "$GATE_PAR $corpus_build_limit" = "2 11" ] && [ "$PAR" -le 2 ] || { printf 'FAIL reread share: a written share of 2 lanes and 11 workers gave %s %s %s\n' "$GATE_PAR" "$PAR" "$corpus_build_limit"; bad=1; }
+  echo 0 >"$GATE_PAR_FILE"; reread_share >/dev/null; [ "$GATE_PAR" = 2 ] || { printf 'FAIL reread share: a share of 0 lanes was taken\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
@@ -1913,6 +1926,7 @@ CASES
   emit_env_self_test || bad=1
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
+  reread_share_self_test || bad=1
   slow_starts_self_test || bad=1
   resume_self_test || bad=1
   stable_emit_self_test || bad=1
@@ -2314,6 +2328,16 @@ take_slot() {
   done
 }
 
+# A gate host rebalances lanes among its running gates; each phase starts with the share last written for this gate,
+# because a share fixed at the gate's start kept a gate admitted beside five waiting slices at 6 lanes for its whole run.
+reread_share() {
+  local file_par file_workers
+  if [ -n "${GATE_PAR_FILE:-}" ] && file_par=$(cat "$GATE_PAR_FILE" 2>/dev/null) && [ "$file_par" -ge 1 ] 2>/dev/null && [ "$file_par" != "${GATE_PAR:-}" ]; then
+    say "gate: $file_par lanes from $GATE_PAR_FILE (was ${GATE_PAR:-unset})"; GATE_PAR=$file_par; PAR=$(cap_jobs "$GATE_PAR") || return
+  fi
+  if [ -n "${GATE_WORKERS_FILE:-}" ] && file_workers=$(cat "$GATE_WORKERS_FILE" 2>/dev/null) && [ "$file_workers" -ge 1 ] 2>/dev/null; then corpus_build_limit=$file_workers; fi
+}
+
 with_slot() {
   local s rc
   s=$(take_slot)
@@ -2417,6 +2441,7 @@ rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open
 
 for phase in "${PHASES[@]}"; do
+  reread_share || exit $?
   todo=""
   for lane in $phase; do case " $lanes " in *" $lane "*) todo="$todo $lane" ;; esac; done
   [ -n "$todo" ] || continue
