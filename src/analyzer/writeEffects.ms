@@ -686,6 +686,14 @@ function hookRoutines(w: WriteEffects, t: Type, seen: HashSet<Type>, out: Symbol
 	if (t.typeExtra != null) hookRoutines(w, t.typeExtra, seen, out);
 }
 
+function isHookOfReceiver(w: WriteEffects, s: WriteSummary, params: Symbol[] | null): boolean {
+	if (s.sym == null || params == null || params.length == 0 || !LIFECYCLE_HOOK_NAMES.includes(s.sym!.name)) return false;
+	let t = params[0].symbolType;
+	while (t != null && (t.kind == TypeKind.Var || t.kind == TypeKind.Ref) && t.typeReturn != null) t = t.typeReturn;
+	const owner = t != null ? nominalTypeSym(t) : null;
+	return owner != null && ownerHooks(w, owner).includes(s.sym!);
+}
+
 function ownerHooks(w: WriteEffects, owner: Symbol): Symbol[] {
 	const known = w.tables.ownerHookCache.get(owner);
 	if (known != null) return known;
@@ -782,6 +790,7 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 	}
 	for (const a of fnArgs) linkFunctionValue(w, s, a, params, assigned, d);
 	const fresh = freshLocals(w, s, d);
+	if (isHookOfReceiver(w, s, params)) fresh.add(params![0]);
 	for (const t of targets) writeTarget(w, s, t, params, inCtor, fresh);
 	for (const b of stores) {
 		if (!freshBase(b, fresh) && !freesNothing(w, arrayElementType(b.nodeType))) addSlot(s, heldSlot(w, ELEMENT_SLOT, b.nodeType));
