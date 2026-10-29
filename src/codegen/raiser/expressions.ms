@@ -27,12 +27,12 @@ import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
-import { SymbolFlag, classDeclNodeOf, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
-	isLocalString,
+	isLocalString, declareLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
@@ -867,6 +867,8 @@ function releaseCells(s: RaiserCompState, regs: int32[]): void {
 
 function compileCellAddress(s: RaiserCompState, hidden: Node, value: Node): int32 {
 	const held = reservedCell(s, hidden);
+	const valueClass = regClassOf(s, value.nodeType);
+	if (held < 0 && !inRefFile(valueClass)) return compileFrameTempAddress(s, value, valueClass);
 	const cell = allocBlock(s, [RaiserRegClass.Ref, regClassOf(s, value.nodeType)]);
 	const slot = cell + 1;
 	const reg = compileExpr(s, value);
@@ -877,6 +879,16 @@ function compileCellAddress(s: RaiserCompState, hidden: Node, value: Node): int3
 	emitLoadConst(s, zero, raiserInt(0));
 	const dest = allocDyn(s);
 	emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, cell, zero));
+	return dest;
+}
+
+function compileFrameTempAddress(s: RaiserCompState, value: Node, valueClass: RaiserRegClass): int32 {
+	const reg = compileExpr(s, value);
+	const slot = allocReg(s, valueClass);
+	emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+	declareLocal(s, makeSymbol(":addressed", SymbolKind.Temp, value.nodeType, false), slot);
+	const dest = allocDyn(s);
+	emitInst(s, raiserABC(RaiserOpcode.AddrReg, dest, slot, 0));
 	return dest;
 }
 
