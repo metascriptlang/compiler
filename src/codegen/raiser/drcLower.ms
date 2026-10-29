@@ -102,10 +102,34 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 }
 
 function emitKeptCopy(s: RaiserCompState, name: string, place: Node): void {
-	const source = refRegister(s, name, place);
+	const temp = moveTempOf(s, place);
+	const source = temp >= 0 ? temp : refRegister(s, name, place);
 	const copied = emitValueCopy(s, source, place.nodeType);
 	if (copied == source) emitInst(s, raiserABC(RaiserOpcode.RcInc, source, 0, 0));
+	else if (temp >= 0) emitInst(s, raiserABC(RaiserOpcode.Move, temp, copied, 0));
 	else emitPlaceStore(s, name, place, copied);
+}
+
+function moveTempOf(s: RaiserCompState, place: Node): int32 {
+	const bound = s.moveTempAt == codeLen(s) && s.moveTempSource != null && samePlace(s.moveTempSource, place);
+	s.moveTempAt = -1;
+	return bound ? s.moveTempReg : -1;
+}
+
+function samePlace(a: Node, b: Node): boolean {
+	if (a.kind != b.kind) return false;
+	return match (a.kind) {
+		NodeKind.Identifier => a.resolvedSym != null && a.resolvedSym === b.resolvedSym,
+		NodeKind.MemberExpr => (a.data as MemberExprData).property == (b.data as MemberExprData).property && samePlace((a.data as MemberExprData).object, (b.data as MemberExprData).object),
+		NodeKind.ArrayAccess => samePlace((a.data as ArrayAccessData).array, (b.data as ArrayAccessData).array) && sameIndex((a.data as ArrayAccessData).index, (b.data as ArrayAccessData).index),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => samePlace((a.data as HiddenDerefData).expr, (b.data as HiddenDerefData).expr),
+		_ => false,
+	};
+}
+
+function sameIndex(a: Node, b: Node): boolean {
+	if (a.kind == NodeKind.NumberLiteral && b.kind == NodeKind.NumberLiteral) return (a.data as NumberLiteralData).value == (b.data as NumberLiteralData).value;
+	return samePlace(a, b);
 }
 
 function emitRebind(s: RaiserCompState, name: string, dest: Node, incoming: int32, oldSource: int32): void {
