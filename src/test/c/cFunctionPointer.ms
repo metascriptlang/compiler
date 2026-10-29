@@ -162,3 +162,18 @@ test "C: a Readonly<Ptr<uint8>> parameter fills a header const uint8 pointer slo
 	assert !c.startsWith("ERROR"), c;
 	assert c.contains("const uint8_t*"), c;
 }
+
+const PUSH = "import { Unary } from \"./sort.h\";\nfunction twice(n: int32): int32 { return n * 2; }\n";
+
+test "C: a routine pushed onto an array of a header's function pointer stays a plain pointer" {
+	const c = compileC(PUSH + "const xs: Unary[] = [];\nxs.push(twice);\nconsole.log(xs[0](5));\n");
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("msGenericArrayPush("), c;
+	assert !c.contains("msClosure){ .fn = (void*)twice"), c;
+}
+
+test "C: a routine passed to a sink parameter of a header's function pointer stays a plain pointer" {
+	const c = compileC(PUSH + "function put(sink f: Unary): int32 { return f(5); }\nfunction hold<T>(sink v: T): T { return v; }\nconsole.log(put(twice));\nconst g: Unary = hold<Unary>(twice);\nconsole.log(g(5));\n");
+	assert !c.startsWith("ERROR"), c;
+	assert !c.contains("msClosure){ .fn = (void*)twice"), c;
+}
