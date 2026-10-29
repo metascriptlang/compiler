@@ -595,12 +595,27 @@ export function printDestructuringDecl(node: Node, options: FormatOptions): Doc 
 	return declarationList(d.destrIsConst ? "const" : "let", node, options);
 }
 
+function hasInitializer(declaration: Node): boolean {
+	if (declaration.kind == NodeKind.DestructuringDecl) return (declaration.data as DestructuringDeclData).destrInit != null;
+	return (declaration.data as VariableDeclData).initializer != null;
+}
+
 function declarationList(keyword: string, node: Node, options: FormatOptions): Doc {
 	const rest = takeListDeclarators();
-	const parts: Doc[] = [docText(keyword + " "), declarator(node, options)];
-	for (const r of rest) {
-		parts.push(docText(", "));
-		parts.push(declarator(r, options));
+	const parts: Doc[] = [docText(keyword + " ")];
+	if (rest.length == 0) {
+		parts.push(declarator(node, options));
+	} else {
+		let initialized = hasInitializer(node);
+		for (const r of rest) initialized = initialized || hasInitializer(r);
+		const separator = initialized ? docHardLine() : docLine();
+		const list: Doc[] = [declarator(node, options), docText(",")];
+		for (let i = 0; i < rest.length; i += 1) {
+			list.push(separator);
+			list.push(declarator(rest[i], options));
+			if (i < rest.length - 1) list.push(docText(","));
+		}
+		parts.push(docIndent(list));
 	}
 	if (options.semi) parts.push(docText(";"));
 	return docGroup(parts);

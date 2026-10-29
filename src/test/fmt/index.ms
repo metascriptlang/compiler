@@ -139,3 +139,4 @@ import "./cases/callArguments";
 import "./cases/memberChain";
 import "./cases/assignmentLayout";
 import "./cases/typeLayout";
+import "./cases/declaratorList";
