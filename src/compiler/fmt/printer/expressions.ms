@@ -18,7 +18,7 @@ import {
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
-import { callPrintNode, printedAncestor } from "./callbacks";
+import { callPrintNode, printedAncestor, keepsWrittenParens } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
@@ -26,6 +26,14 @@ import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, 
 import { printTypeAnnotation } from "./types";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
+	const printed = printBinaryBody(node, options);
+	const parent = printedAncestor(1);
+	const coalesceUnderConditional = (node.data as BinaryExprData).operator == "??" && parent != null && parent.kind == NodeKind.ConditionalExpr;
+	if (coalesceUnderConditional && !node.flags.has(NodeFlag.Parenthesized)) return docGroup([docText("("), printed, docText(")")]);
+	return printed;
+}
+
+function printBinaryBody(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
 	if (template != "") return docText(template);
 	const d = node.data as BinaryExprData;
@@ -41,7 +49,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	let bottom = node;
 	while (true) {
 		const left = (bottom.data as BinaryExprData).left;
-		if (left == null || left.flags.has(NodeFlag.Parenthesized) || !isBinaryLike(left, options)) break;
+		if (left == null || !isBinaryLike(left, options)) break;
 		if (!shouldFlatten((bottom.data as BinaryExprData).operator, (left.data as BinaryExprData).operator)) break;
 		spine.push(left);
 		bottom = left;
@@ -188,7 +196,18 @@ function bindsAsOperandHead(parent: Node | null, node: Node): boolean {
 // Lower-precedence non-binary kinds (TypeAssertion, ConditionalExpr,
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
-	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
+	if (child == null || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
+	const written = child.flags.has(NodeFlag.Parenthesized);
+	if (child.kind == NodeKind.BinaryExpr && isBinaryLikeOp((child.data as BinaryExprData).operator) && isBinaryLikeOp(parentOp)) {
+		const needs = binaryChildNeedsParens((child.data as BinaryExprData).operator, parentOp, isRight);
+		if (written && needs) return callPrintNode(child, options);
+		const flags = child.flags;
+		child.flags = flags.excl(NodeFlag.Parenthesized);
+		const printed = callPrintNode(child, options);
+		child.flags = flags;
+		return needs ? docGroup([docText("("), printed, docText(")")]) : printed;
+	}
+	if (written) return callPrintNode(child, options);
 	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && assertionNeedsParens(child, parentOp, isRight)) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
@@ -210,9 +229,25 @@ function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, opt
 	return callPrintNode(child, options);
 }
 
+function isBitwiseOp(op: string): boolean {
+	return op == "&" || op == "^" || op == "|";
+}
+
+function binaryChildNeedsParens(op: string, parentOp: string, isRight: boolean): boolean {
+	if (isLogicalOp(op) && isLogicalOp(parentOp)) return op != parentOp || isRight;
+	const prec = opPrecedence(op);
+	const parentPrec = opPrecedence(parentOp);
+	if (parentPrec > prec) return true;
+	if (isRight && parentPrec == prec) return true;
+	if (isBitwiseOp(parentOp) || parentPrec == SHIFT_PREC) return true;
+	if (parentPrec < prec && op == "%") return parentPrec == ADDITIVE_PREC;
+	return parentPrec == prec && !shouldFlatten(parentOp, op);
+}
+
 const AS_PREC = 40;
 const EQUALITY_PREC = 30;
 const SHIFT_PREC = 45;
+const ADDITIVE_PREC = 50;
 const MULTIPLICATIVE_PREC = 60;
 const UNBOUND_PREC = 100;
 

@@ -2,14 +2,14 @@
 // a chain of nested conditionals breaking together as one group.
 
 import {
-	Node, NodeKind, NodeFlag, ConditionalExprData, CallExprData, MemberExprData, ArrayAccessData, TypeAssertionData,
+	Node, NodeKind, ConditionalExprData, CallExprData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	BinaryExprData, UnaryExprData, YieldExprData, ReturnStmtData, ThrowStmtData, VariableDeclData, DestructuringDeclData,
 	NewExprData, PropertyDeclData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { FormatOptions } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc";
-import { callPrintNode, printedAncestor, pushPrinted, popPrinted } from "./callbacks";
+import { callPrintNode, printedAncestor, pushPrinted, popPrinted, keepsWrittenParensUnder } from "./callbacks";
 import { hasCommentsOutside } from "./commentDocs";
 
 enum Slot {
@@ -27,7 +27,7 @@ function slotOf(node: Node, parent: Node | null): Slot {
 }
 
 function printsInline(child: Node): boolean {
-	return child.kind == NodeKind.ConditionalExpr && !child.flags.has(NodeFlag.Parenthesized) && !hasCommentsOutside(child);
+	return child.kind == NodeKind.ConditionalExpr && !keepsWrittenParensUnder(child, printedAncestor(0)) && !hasCommentsOutside(child);
 }
 
 function branchParts(child: Node, slot: Slot, options: FormatOptions): Doc[] {

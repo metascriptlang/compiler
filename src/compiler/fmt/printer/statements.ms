@@ -196,10 +196,7 @@ function isBinaryLike(node: Node): boolean {
 
 function returnedArgument(arg: Node, options: FormatOptions): Doc {
 	if (!isBinaryLike(arg)) return callPrintNode(arg, options);
-	const written = arg.flags;
-	arg.flags = written.excl(NodeFlag.Parenthesized);
 	const printed = callPrintNode(arg, options);
-	arg.flags = written;
 	return docGroup([docIfBreak(docText("("), docNil()), docIndent([docSoftLine(), printed]), docSoftLine(), docIfBreak(docText(")"), docNil())]);
 }
 

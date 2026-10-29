@@ -8,7 +8,7 @@ import { useComments, withComments, markWithin } from "./commentDocs";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup } from "../doc";
 import { formatDocAt } from "../layout";
-import { registerNodePrinter, callPrintNode } from "./callbacks";
+import { registerNodePrinter, callPrintNode, keepsWrittenParens } from "./callbacks";
 import {
 	printJsxElement, printJsxFragment, printJsxText, printJsxExpressionContainer,
 	printJsxAttribute, printJsxSpreadAttribute,
@@ -187,7 +187,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		},
 	};
 
-	const groupDoc = node.flags.has(NodeFlag.Parenthesized) ? docGroup([docText("("), innerDoc, docText(")")]) : innerDoc;
+	const groupDoc = keepsWrittenParens(node) ? docGroup([docText("("), innerDoc, docText(")")]) : innerDoc;
 	const declDoc = node.flags.has(NodeFlag.ExternC) ? docGroup([docText("extern "), groupDoc]) : groupDoc;
 	return withComments(node, declDoc);
 }
