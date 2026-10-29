@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -3079,6 +3079,10 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 		if (resultArr == null || resultArr.kind != TypeKind.Array) throw new Error(`internal: typed Promise.all call does not resolve to an array: ${typeDisplayNameUnprofiled(node.nodeType)}`);
 		const typedName = ensurePromiseAllInstance(g, resultArr);
 		if (typedName != "") finalCallee = typedName;
+	}
+	const firstKind = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
+	if ((firstKind == "PromiseRaceFor" || firstKind == "PromiseAnyFor") && node.nodeType != null) {
+		finalCallee = ensurePromiseFirstInstance(g, node.nodeType) + (firstKind == "PromiseRaceFor" ? "Race" : "Any");
 	}
 
 	emitNrvoOrValueCall(g, p, ctx, node, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));

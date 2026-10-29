@@ -2177,6 +2177,23 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	addNewline(b);
 }
 
+export function ensurePromiseFirstInstance(g: CGen, promiseT: Readonly<Type>): string {
+	const innerType = awaitedType(promiseT);
+	if (innerType == null || innerType.kind == TypeKind.Void) throw new Error(`internal: typed Promise.race/any over ${typeDisplayNameUnprofiled(promiseT)}`);
+	const futType = genFutureType(g, promiseT);
+	const boxed = promiseAllShape(innerType) == PromiseAllShape.Boxed;
+	const innerDesc = getTypeDesc(g, innerType);
+	const name = "msPromiseFirst_" + mangle(innerDesc);
+	const b = sec(g, CSection.GlobalVars);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
+	if (boxed) addLine(b, "MS_PROMISE_FIRST_FOR(" + name + ", msFuture_ptr, sizeof(" + innerDesc + "))");
+	else addLine(b, "MS_PROMISE_FIRST_FOR(" + name + ", " + futType.substring(0, futType.length - 1) + ", 0)");
+	addLine(b, "#endif");
+	addNewline(b);
+	return name;
+}
+
 // Emit the MS_DEFINE_FUTURE_THEN_BOXED instance for a boxed value type and return its
 // name. The drop is the type's destructor hook.
 function futureDropHook(g: CGen, facts: Readonly<CEmissionFacts>, innerType: Readonly<Type>): string {

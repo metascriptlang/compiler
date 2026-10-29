@@ -248,6 +248,23 @@ function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext)
 	return typedCall;
 }
 
+function lowerPromiseFirst(node: Node, builtinKind: string, loc: SourceLocation, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	if (cd.arguments.length < 1) return node;
+	const innerT = awaitedType(node.nodeType);
+	if (innerT == null || innerT.kind == TypeKind.Void || innerT.kind == TypeKind.Never || innerT.kind == TypeKind.Array) return node;
+	const kind = builtinKind + "For";
+	const typedCallee = makeTypedIdentResolved(generatedProcSym("ms" + kind), null, loc);
+	const typedSym = typedCallee.resolvedSym;
+	if (typedSym.builtinKind != "" && typedSym.builtinKind != kind) {
+		throw new Error(`internal: typed ${builtinKind} 'ms${kind}' is already the builtin '${typedSym.builtinKind}'`);
+	}
+	typedSym.builtinKind = kind;
+	const typedCall = makeCall(typedCallee, [cd.arguments[0], makeValueShareFn(innerT, ctx, loc), makeFutureDropClosure(innerT, ctx, loc)], loc);
+	typedCall.nodeType = node.nodeType;
+	return typedCall;
+}
+
 // ===== Public dispatch =====
 
 // Dispatch a builtin Promise/WaitFor call. Returns the rewritten Node if
@@ -265,6 +282,7 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
 	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc), ctx, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
+	if (builtinKind == "PromiseRace" || builtinKind == "PromiseAny") return lowerPromiseFirst(node, builtinKind, loc, ctx);
 	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
 	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;
 	return null as unknown as Node;
