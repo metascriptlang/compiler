@@ -380,7 +380,7 @@ function frameReject(status: int32): FrameResult {
 export function frameRequest(
 	headers: HttpHeaders,
 	method: HttpMethod,
-	bufferAfterHeaders: string,
+	bufferAfterHeaders: Readonly<Span<uint8>>,
 	maxBodySize: int32,
 ): FrameResult {
 	if (getHeaderValues(headers, "content-length").length > 1) return frameReject(400);
@@ -398,7 +398,7 @@ export function frameRequest(
 	if (hasCL && te) return frameReject(400);
 
 	if (te) {
-		const r = tryDecodeChunked(bufferAfterHeaders.asBytes());
+		const r = tryDecodeChunked(bufferAfterHeaders);
 		if (r.kind == "ready") {
 			// HTTP byte-oriented: cap by byte length, not UTF-16 unit count.
 			if ((r.body.length as int32) > maxBodySize) return frameReject(413);
@@ -410,10 +410,8 @@ export function frameRequest(
 
 	if (hasCL) {
 		if (cl > maxBodySize) return frameReject(413);
-		// Content-Length is byte count per RFC 7230; compare against byteLength,
-		// not .length (UTF-16 code units), or UTF-8 bodies loop forever.
-		if ((bufferAfterHeaders.byteLength() as int32) < cl) return frameNeedMore();
-		return frameReady([...bufferAfterHeaders.asBytes()[0..cl]], cl);
+		if ((bufferAfterHeaders.length as int32) < cl) return frameNeedMore();
+		return frameReady([...bufferAfterHeaders[0..cl]], cl);
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.
@@ -681,7 +679,7 @@ test "parseUrl with query only" {
 test "frameRequest CL exact match" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
-	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "hello".asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "hello";
 	assert r.bytesConsumed == 5;
@@ -690,14 +688,14 @@ test "frameRequest CL exact match" {
 test "frameRequest CL truncated → needMore" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "10");
-	const r = frameRequest(h, HttpMethod.POST, "hel", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "hel".asBytes(), 1024 as int32);
 	assert r.kind == "needMore";
 }
 
 test "frameRequest CL over maxBodySize → 413" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "9999");
-	const r = frameRequest(h, HttpMethod.POST, "", 100 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "".asBytes(), 100 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 413;
 }
@@ -705,7 +703,7 @@ test "frameRequest CL over maxBodySize → 413" {
 test "frameRequest CL=0" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "0");
-	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "".asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "";
 	assert r.bytesConsumed == 0;
@@ -715,7 +713,7 @@ test "frameRequest pipelined POST extra bytes ignored" {
 	// CL says 5, buffer holds 5 + next request — only first 5 framed
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
-	const r = frameRequest(h, HttpMethod.POST, "helloGET /next HTTP/1.1\r\n\r\n", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "helloGET /next HTTP/1.1\r\n\r\n".asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "hello";
 	assert r.bytesConsumed == 5;
@@ -723,14 +721,14 @@ test "frameRequest pipelined POST extra bytes ignored" {
 
 test "frameRequest GET no body → ready empty" {
 	const h = createHeaders();
-	const r = frameRequest(h, HttpMethod.GET, "", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.GET, "".asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "";
 }
 
 test "frameRequest POST without CL or TE → 411" {
 	const h = createHeaders();
-	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 411;
 }
@@ -739,7 +737,7 @@ test "frameRequest smuggling CL+TE → 400" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
 	addHeader(h, "Transfer-Encoding", "chunked");
-	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "hello".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }
@@ -751,7 +749,7 @@ test "frameRequest multiple CL → 400" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
 	addHeader(h, "Content-Length", "10");
-	const r = frameRequest(h, HttpMethod.POST, "hello12345", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "hello12345".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }
@@ -764,7 +762,7 @@ test "frameRequest multiple CL → 400" {
 test "frameRequest TE chunked,gzip → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked, gzip");
-	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }
@@ -772,7 +770,7 @@ test "frameRequest TE chunked,gzip → 400" {
 test "frameRequest TE gzip,chunked → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "gzip, chunked");
-	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }
@@ -781,7 +779,7 @@ test "frameRequest TE chunked uppercase → ready (case-insensitive)" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "Chunked");
 	const data = "5\r\nhello\r\n0\r\n\r\n";
-	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, data.asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "hello";
 }
@@ -790,7 +788,7 @@ test "frameRequest TE chunked with whitespace → ready" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "  chunked  ");
 	const data = "5\r\nhello\r\n0\r\n\r\n";
-	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, data.asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "hello";
 }
@@ -799,7 +797,7 @@ test "frameRequest multiple TE headers → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
 	addHeader(h, "Transfer-Encoding", "gzip");
-	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }
@@ -808,7 +806,7 @@ test "frameRequest chunked basic" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
 	const data = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
-	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, data.asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert wellFormedString(r.body) == "hello world";
 	assert r.bytesConsumed == data.length as int32;
@@ -817,14 +815,14 @@ test "frameRequest chunked basic" {
 test "frameRequest chunked truncated → needMore" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
-	const r = frameRequest(h, HttpMethod.POST, "5\r\nhel", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "5\r\nhel".asBytes(), 1024 as int32);
 	assert r.kind == "needMore";
 }
 
 test "frameRequest chunked malformed hex → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
-	const r = frameRequest(h, HttpMethod.POST, "ZZ\r\nhello\r\n0\r\n\r\n", 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, "ZZ\r\nhello\r\n0\r\n\r\n".asBytes(), 1024 as int32);
 	assert r.kind == "reject";
 	assert r.rejectStatus == 400;
 }

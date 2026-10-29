@@ -508,7 +508,7 @@ test "frameRequest keeps a content-length body of every byte value and ignores t
 	for (let i = 0; i < 256; i++) all.push(i);
 	const h = hdrs.createHeaders();
 	hdrs.addHeader(h, "content-length", "256");
-	const r = frameRequest(h, HttpMethod.POST, wireBytes([...all, 0x47, 0x45, 0x54]), 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, wireBytes([...all, 0x47, 0x45, 0x54]).asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert r.body.length == 256;
 	for (let i = 0; i < 256; i++) assert r.body[i] == i;
@@ -518,7 +518,7 @@ test "frameRequest keeps a chunked body cut inside a character" {
 	const h = hdrs.createHeaders();
 	hdrs.addHeader(h, "transfer-encoding", "chunked");
 	const wire = wireBytes([0x31, 13, 10, 0xE2, 13, 10, 0x32, 13, 10, 0x82, 0xAC, 13, 10, 0x30, 13, 10, 13, 10]);
-	const r = frameRequest(h, HttpMethod.POST, wire, 1024 as int32);
+	const r = frameRequest(h, HttpMethod.POST, wire.asBytes(), 1024 as int32);
 	assert r.kind == "ready";
 	assert r.body.toHex() == "e282ac";
 }
@@ -918,10 +918,9 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 		parseHeadersInline(client.data, endPos, client.request.headers);
 
 		// 3) Frame body — recv more until ready / reject
-		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, client.data.asBytes()[endPos..client.data.byteLength()], cfg.maxBodySize);
 		while (alive && frame.kind == "needMore") {
-			if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
+			if (client.data.byteLength() - endPos > cfg.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
@@ -930,8 +929,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
-					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, client.data.asBytes()[endPos..client.data.byteLength()], cfg.maxBodySize);
 				}
 			}
 		}
@@ -955,7 +953,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 
 		// 6) Advance buffer past consumed bytes (pipelining-safe)
 		const totalConsumed = (endPos + frame.bytesConsumed) as int32;
-		if (totalConsumed < client.data.length) {
+		if (totalConsumed < client.data.byteLength()) {
 			client.data.shiftLeft(totalConsumed);
 		} else {
 			client.data.setLength(0);
@@ -1052,25 +1050,23 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		// 3. Frame body — recv more bytes until ready/reject.
 		// DoS guard: cap raw bytes after concat. Chunked has no upfront size,
 		// so without this an attacker can stream chunks without terminator
-		// → bufferAfter unbounded → eventual OOM.
+		// → the buffered body grows unbounded → eventual OOM.
 		//
 		// V1 LIMITATION: tryDecodeChunked is called each iteration on the FULL
-		// bufferAfter (re-decode from start), giving O(n²) per request. Even
+		// buffered body (re-decode from start), giving O(n²) per request. Even
 		// with this cap, a 1MB chunked attack amplifies RSS by ~400x via string
 		// concat churn before 413 fires. Functional DoS is blocked; tight
 		// memory bound needs an incremental chunked decoder (v2).
-		let bufferAfter = data.slice(endPos, data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, data.asBytes()[endPos..data.byteLength()], server.maxBodySize);
 		while (frame.kind == "needMore") {
 			const more = msNetRecv(fd, server.maxHeaderSize);
 			if (more.length == 0) return false;  // peer closed mid-body
-			bufferAfter = bufferAfter + more;
-			// Byte-oriented cap — see frameRequest for the same rationale.
-			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
+			data = data + more;
+			if (data.byteLength() - endPos > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				return false;
 			}
-			frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+			frame = frameRequest(client.request.headers, methodInt as HttpMethod, data.asBytes()[endPos..data.byteLength()], server.maxBodySize);
 		}
 		if (frame.kind == "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
@@ -1138,10 +1134,9 @@ function dispatchUringRecv(cfg: Readonly<LoopConfig>, client: ClientState, fd: i
 	resetResponse(client, fd);
 	parseHeadersInline(client.data, client.headersEndPos, client.request.headers);
 
-	const bufferAfter = client.data.slice(client.headersEndPos, client.data.length);
-	const frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
+	const frame = frameRequest(client.request.headers, methodInt as HttpMethod, client.data.asBytes()[client.headersEndPos..client.data.byteLength()], cfg.maxBodySize);
 	if (frame.kind == "needMore") {
-		if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
+		if (client.data.byteLength() - client.headersEndPos > cfg.maxBodySize) {
 			msNetSend(fd, buildErrorResponse(413));
 			msNetClose(fd);
 			return CONN_CLOSED;
@@ -1159,7 +1154,7 @@ function dispatchUringRecv(cfg: Readonly<LoopConfig>, client: ClientState, fd: i
 	handler(client.request, client.response);
 
 	const totalConsumed = (client.headersEndPos + frame.bytesConsumed) as int32;
-	if (totalConsumed < client.data.length) {
+	if (totalConsumed < client.data.byteLength()) {
 		client.data.shiftLeft(totalConsumed);
 	} else {
 		client.data.setLength(0);
@@ -1361,10 +1356,9 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 		parseHeadersInline(client.data, endPos, client.request.headers);
 
 		// 3) Frame body
-		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, client.data.asBytes()[endPos..client.data.byteLength()], cfg.maxBodySize);
 		while (alive && frame.kind == "needMore") {
-			if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
+			if (client.data.byteLength() - endPos > cfg.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
@@ -1373,8 +1367,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
-					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, client.data.asBytes()[endPos..client.data.byteLength()], cfg.maxBodySize);
 				}
 			}
 		}
@@ -1398,7 +1391,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 
 		// 6) Advance buffer
 		const totalConsumed = (endPos + frame.bytesConsumed) as int32;
-		if (totalConsumed < client.data.length) {
+		if (totalConsumed < client.data.byteLength()) {
 			client.data.shiftLeft(totalConsumed);
 		} else {
 			client.data.setLength(0);
