@@ -47,8 +47,10 @@ after another, and compare every red against src/test/known-red.json.
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
   --local        with --record: write the reds the shared set lacks to this machine's
-                 ~/.metascript/known-red.local.json instead; a red only one host
-                 sees is recorded there, never in the tracked set
+                 ~/.metascript/known-red.local.json instead, which a gate host replaces
+                 every gate; a red only one platform or host shows is not recorded: it
+                 gets a compiler inbox card (~/metascript/.inbox/compiler/), and --record
+                 runs on macOS on a clean main
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --select       print the corpus programs whose emitted C or JS differs from the merge base
@@ -109,12 +111,15 @@ the run: whether this change or an earlier commit on main fixed it, dropping the
 entry only makes the set stricter. A GREEN run writes the tracked set without
 those entries to out/gate/known-red.pruned.json, and tools/wt.sh land commits it
 as "test: drop known-red entries that are green" before main moves. A stale entry
-of the machine-local file is named with the command that refreshes it instead,
-because every worktree on the host reads that file.
+of the machine-local file is named with its file instead, because every worktree
+on the host reads that file and a gate host replaces it every gate.
 
 Every entry needs a non-empty "note" saying why it is still red or naming the
 card that owns it; an empty one stops the run before any lane. --record writes
 new entries with an empty note, so the run that records is the run that fills them.
+A row the change adds (absent at the merge base with --base, in any section) also
+needs "approved": the date and the person's words accepting it; without one the run
+is RED before any lane, even when known-red.json is the only changed path.
 
 The "flaky" section names programs that fail at random (a hang, a timeout), by
 program rather than by lane. Their reds are counted and printed but are never new,
@@ -689,6 +694,15 @@ known_file_of() {
   fi
 }
 
+known_unapproved() {
+  local mb
+  mb=$(git merge-base "$1" HEAD) || return
+  jq -r --slurpfile was <(git show "${mb}:src/test/known-red.json" 2>/dev/null || echo '{}') '
+    ($was[0] // {}) as $w | to_entries[] | .key as $l | .value | to_entries[] | .key as $n
+    | select((($w[$l] // {}) | has($n)) | not) | select((.value.approved // "") == "")
+    | "  needs approval: \($l) · \($n)"' "$KNOWN"
+}
+
 known_format() {
   jq -r '
     "{\n" + ([to_entries | sort_by(.key)[] |
@@ -749,7 +763,7 @@ stale_known_self_test() (
   [ "$(known_format <"$w/out/gate/known-red.pruned.json")" = "$(cat "$w/out/gate/known-red.pruned.json")" ] \
     || { printf 'FAIL stale known: the pruned set is not in the --record layout\n'; bad=1; }
   [ "$(jq -c . "$d/local.json")" = '{"fmt":{"d.ms":{"since":"y","note":"host"}}}' ] || { printf 'FAIL stale known: the machine-local file was rewritten\n'; bad=1; }
-  [[ "$out" == *"--record --local"* ]] || { printf 'FAIL stale known: no refresh command for the machine-local entry\n'; bad=1; }
+  [[ "$out" == *"~/metascript/.inbox/compiler/"* ]] || { printf 'FAIL stale known: the machine-local entry does not point at the compiler inbox\n'; bad=1; }
   out=$(run $'LOSSY b.ms: x\nLOSSY e.ms: x'); rc=$?
   [ "$rc" -eq 1 ] && [[ "$out" == *"new: e.ms"* ]] || { printf 'FAIL stale known: a new red beside a known-now-green exited %s\n' "$rc"; bad=1; }
   [ ! -e "$w/out/gate/known-red.pruned.json" ] || { printf 'FAIL stale known: a RED run left a pruned set for the land to commit\n'; bad=1; }
@@ -2001,6 +2015,7 @@ CASES
   test_one_self_test || bad=1
   bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
   bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
+  bash "$TOP/tools/gateKnownApprovalTest.sh" || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -2107,6 +2122,14 @@ explain() {
   esac
 }
 
+if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
+  unapproved=$(known_unapproved "$base") || die "cannot compare src/test/known-red.json with its copy at the merge base with $base"
+  if [ -n "$unapproved" ]; then
+    printf '%s\n' "$unapproved"
+    say "gate: RED (known red(s) added without the person's yes: record it in \"approved\" as the date and their words)"
+    exit 1
+  fi
+fi
 if [ -z "$lanes" ]; then
   say "gate: GREEN (no lane: $(printf '%s\n' "$paths" | grep -c . | tr -d ' ') changed path(s), none reach the compiler or a tool)"
   exit 0
@@ -2118,7 +2141,7 @@ cap_jobs 1 "${GATE_PAR:-}" "$corpus_build_limit" >/dev/null
 
 [ "$record_local" -eq 0 ] || [ "$record" -eq 1 ] || die "--local only modifies --record"
 if [ "$record" -eq 1 ] && [ "$record_local" -eq 0 ] && [ "$(uname -s)" != Darwin ]; then
-  die "--record rewrites the tracked set, which macOS records; on this host record its own reds with --record --local"
+  die "--record rewrites the tracked set, which runs on macOS on a clean main; a red only one platform or host shows is not recorded: it gets a compiler inbox card (~/metascript/.inbox/compiler/)"
 fi
 if [ "$record" -eq 1 ]; then
   base=main
@@ -2659,7 +2682,7 @@ if [ -s "$OUT/stale" ] && [ "$verdict" = GREEN ]; then
   prune_known "$OUT/stale" "$OUT/known-red.pruned.json" || die "writing $OUT/known-red.pruned.json failed"
   [ ! -f "$OUT/known-red.pruned.json" ] \
     || say "  src/test/known-red.json without them: ${OUT#"$TOP"/}/known-red.pruned.json; tools/wt.sh land commits it as \"test: drop known-red entries that are green\""
-  [ "$stale_local" -eq 0 ] || say "  $KNOWN_LOCAL: refresh this host's set with tools/gate.sh --record --local on a clean main"
+  [ "$stale_local" -eq 0 ] || say "  $KNOWN_LOCAL: a gate host replaces this file every gate; a red only one platform or host shows gets a compiler inbox card (~/metascript/.inbox/compiler/), and --record runs on macOS on a clean main"
 fi
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"

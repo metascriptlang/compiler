@@ -35,8 +35,8 @@ check() {
   fi
 }
 check 'empty flaky list retains new failures' '{}' 1
-check 'an unrelated flaky entry retains new failures' '{"flaky":{"other.ms":{"since":"fixture","note":"fixture"}}}' 1
-check 'only a matching flaky entry is classified out' '{"flaky":{"new.ms":{"since":"fixture","note":"fixture"}}}' 0
+check 'an unrelated flaky entry retains new failures' '{"flaky":{"other.ms":{"since":"fixture","note":"fixture","approved":"fixture"}}}' 1
+check 'only a matching flaky entry is classified out' '{"flaky":{"new.ms":{"since":"fixture","note":"fixture","approved":"fixture"}}}' 0
 check 'a local unrelated flaky entry retains new failures' '{}' 1 '{"flaky":{"other.ms":{"since":"fixture","note":"fixture"}}}'
 check 'a local matching flaky entry is classified out' '{}' 0 '{"flaky":{"new.ms":{"since":"fixture","note":"fixture"}}}'
 printf 'failure filter: 5 checks, status %s\n' "$bad"
