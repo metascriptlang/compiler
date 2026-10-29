@@ -122,6 +122,17 @@ function namedTypeHasHooks(t: Type, lctx: LiftCtx): boolean {
 	return nameSetContains(lctx.generated, opTypeKey(t)) || hasLiftedOp(t, AttachedOp.AttachedDestructor);
 }
 
+function fieldTypeHasHooks(t: Type, typeName: string, hook: string, lctx: LiftCtx): boolean {
+	if (namedTypeHasHooks(t, lctx)) return true;
+	if (walksCells(hook) || t.kind != TypeKind.Struct || !nameSetContains(lctx.generating, opTypeKey(t))) return false;
+	if (t.sym != null && (t.sym.symbolKind == SymbolKind.Class || t.sym.symbolKind == SymbolKind.Actor || t.sym.symbolKind == SymbolKind.Interface)) return false;
+	const cName = hookCName(typeName, t, lctx);
+	for (const h of ["destroy", "copy", "sink", "wasMoved"]) {
+		liftedOp(t, attachedOpOf(h), cName + hookSuffix(h), null);
+	}
+	return true;
+}
+
 // Unwrap a GenericInstance to (mangledName, concreteStructBody) for hook generation.
 // Returns empty mangledName when body not yet instantiated — callers fall through.
 //
@@ -810,7 +821,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType, lctx)) {
+					if (fieldTypeHasHooks(fieldType, resolvedName, hook, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -875,7 +886,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (unwrapped.mangledName != "") {
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(unwrapped.body, lctx)) {
+					if (fieldTypeHasHooks(unwrapped.body, unwrapped.mangledName, hook, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -916,7 +927,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			} else if (fieldType.typeName != "") {
 				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					if (namedTypeHasHooks(fieldType, lctx)) {
+					if (fieldTypeHasHooks(fieldType, fieldType.typeName, hook, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
