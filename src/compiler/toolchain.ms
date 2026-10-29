@@ -529,6 +529,27 @@ test "selecting a bundle reads its identity and leaves payload verification to t
 	}
 }
 
+test "a wasm bundle build keeps the console startup for every app mode and refuses only HCR" {
+	const root = selectionProbe(true);
+	assert root != "";
+	assert writeFile(join(root, "runtime/wasm32-wasi.cfg"), "").ok;
+	for (const appMode of ["console", "lib", "staticlib"]) {
+		const opts = newCliOptions();
+		opts.targetOs = "wasm";
+		opts.appMode = appMode;
+		assert selectNativeToolchain(opts, root, "").ok;
+		assert opts.ccBinary.contains("--config=");
+	}
+	const hcr = newCliOptions();
+	hcr.targetOs = "wasm";
+	hcr.isHcr = true;
+	const refused = selectNativeToolchain(hcr, root, "");
+	assert !refused.ok;
+	assert refused.error.contains("wasm32-wasi.cfg does not supply HCR startup");
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
+}
+
 test "a bundle with an unreadable identity is refused at selection" {
 	const root = selectionProbe(true);
 	assert root != "";
