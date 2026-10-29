@@ -27,7 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
-import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
+import { isBuiltinDirective, inlineDecorator, isWasmPlacementStmt } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -3719,6 +3719,13 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind == NodeKind.ExprStmt) {
 			const d = stmt.data as ExprStmtData;
+			if (isWasmPlacementStmt(stmt)) {
+				const md = d.expr.data as MacroInvocationData;
+				if (md.macroArgs.length > 0) {
+					addError(ctx, "@wasm() takes no arguments: it places the whole module in wasm", d.expr.location.line, d.expr.location.column);
+				}
+				continue;
+			}
 			collectOneDirective(ctx, d.expr);
 		} else if (stmt.kind == NodeKind.DecoratedDecl) {
 			const dd = stmt.data as DecoratedDeclData;

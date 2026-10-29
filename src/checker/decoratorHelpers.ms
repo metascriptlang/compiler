@@ -1,6 +1,6 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
 import { markUsedIn, CheckerContext, sgRecordSym, addError, findExportedSymbol } from "./context";
 import { lookupSymbol } from "./symbol";
 import { findChar } from "../utils/string";
@@ -23,6 +23,12 @@ const passThroughDirectives: string[] = [
 	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
+
+export function isWasmPlacementStmt(stmt: Node): boolean {
+	if (stmt.kind != NodeKind.ExprStmt) return false;
+	const expr = (stmt.data as ExprStmtData).expr;
+	return expr != null && expr.kind == NodeKind.MacroInvocation && (expr.data as MacroInvocationData).macroName == "wasm";
+}
 
 export function isBuiltinDirective(name: string): boolean {
 	for (const n of passThroughDirectives) {
