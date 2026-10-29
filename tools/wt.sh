@@ -57,6 +57,21 @@ inbox_tally() {
   printf '\n'
   inbox_kinds "$dir" "$n"
   inbox_pins "$dir" "$n"
+  inbox_synced "$dir"
+}
+
+# Cards whose landed fix the installed msc already carries: only their "Done when" and a pin stand between them and deletion.
+inbox_synced() {
+  local dir=$1 built f sha names
+  built=$(awk '$1 == "binary" {print $2}' "$HOME/.metascript/BUILD" 2>/dev/null)
+  [ -n "$built" ] || return 0
+  names=$(for f in "$dir"/*.md; do
+    sha=$(sed -n '1,/^State:/s/^State:[ \t]*landed \([0-9a-f]\{7,40\}\).*/\1/p' "$f")
+    [ -n "$sha" ] && git -C "$MAIN" merge-base --is-ancestor "$sha" "$built" 2>/dev/null && basename "$f" .md
+  done)
+  [ -n "$names" ] || return 0
+  printf 'synced: %d landed card(s) are in the installed msc (%s); run each "Done when", fill its pin, then delete it and answer its Parked at sites; oldest: %s\n' \
+    "$(printf '%s\n' "$names" | wc -l | tr -d ' ')" "${built:0:10}" "$(printf '%s\n' "$names" | head -3 | paste -sd, - | sed 's/,/, /g')"
 }
 
 inbox_pins() {
