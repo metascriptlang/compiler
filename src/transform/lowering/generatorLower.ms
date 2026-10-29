@@ -1071,8 +1071,9 @@ export function convertDeclsToAssigns(stmts: Node[], lifted: SymSet, loc: Source
 			const lhs = makeIdentResolved(stmt.resolvedSym!, loc);
 			let init = (stmt.data as VariableDeclData).initializer;
 			if (init == null) {
-				init = makeNull(loc);
-				init.nodeType = stmt.nodeType;
+				const declared = stmt.nodeType != null ? stmt.nodeType : stmt.resolvedSym!.symbolType;
+				init = makeDefaultValue(declared, loc);
+				if (init.kind == NodeKind.NullLiteral) init.nodeType = stmt.nodeType;
 			}
 			stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
 		} else {
