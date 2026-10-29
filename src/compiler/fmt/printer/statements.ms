@@ -2,7 +2,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, ProgramData, BlockStmtData,
-	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
+	ExprStmtData, BinaryExprData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
@@ -10,8 +10,9 @@ import {
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList, docIfBreak, docNil } from "../doc";
 import { callPrintNode } from "./callbacks";
+import { isAssignOp } from "../../../ast/operators";
 import { printTypeAnnotation, isObjectTypeAnnotation } from "./types";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
@@ -185,12 +186,29 @@ export function printExprStmt(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function parenthesizedHeader(inner: Doc): Doc[] {
+	return [docText("("), docGroup([docIndent([docSoftLine(), inner]), docSoftLine()]), docText(")")];
+}
+
+function isBinaryLike(node: Node): boolean {
+	return node.kind == NodeKind.BinaryExpr && !isAssignOp((node.data as BinaryExprData).operator);
+}
+
+function returnedArgument(arg: Node, options: FormatOptions): Doc {
+	if (!isBinaryLike(arg)) return callPrintNode(arg, options);
+	const written = arg.flags;
+	arg.flags = written.excl(NodeFlag.Parenthesized);
+	const printed = callPrintNode(arg, options);
+	arg.flags = written;
+	return docGroup([docIfBreak(docText("("), docNil()), docIndent([docSoftLine(), printed]), docSoftLine(), docIfBreak(docText(")"), docNil())]);
+}
+
 export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ReturnStmtData;
 	const parts: Doc[] = [docText("return")];
 	if (d.argument != null) {
 		parts.push(docText(" "));
-		parts.push(callPrintNode(d.argument, options));
+		parts.push(returnedArgument(d.argument, options));
 	}
 	if (options.semi) {
 		parts.push(docText(";"));
@@ -241,9 +259,9 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const hasElse = d.alternate != null && !isUnwrittenElse(d.alternate, options);
 	const beforeElse = hasElse ? commentsBeforeElse(d, options) : [];
 	const parts: Doc[] = [
-		docText("if ("),
-		callPrintNode(d.condition, options),
-		docText(") "),
+		docText("if "),
+		...parenthesizedHeader(callPrintNode(d.condition, options)),
+		docText(" "),
 		printBody(d.consequent, options, false),
 	];
 	if (hasElse) {
@@ -264,9 +282,9 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 export function printWhileStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as WhileStmtData;
 	return docGroup([
-		docText("while ("),
-		callPrintNode(d.whileCondition, options),
-		docText(") "),
+		docText("while "),
+		...parenthesizedHeader(callPrintNode(d.whileCondition, options)),
+		docText(" "),
 		printBody(d.whileBody, options, true),
 	]);
 }
@@ -318,9 +336,8 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [
 		docText("do "),
 		printCollapsibleBody(d.doBody, options),
-		docText(" while ("),
-		callPrintNode(d.doCondition, options),
-		docText(")"),
+		docText(" while "),
+		...parenthesizedHeader(callPrintNode(d.doCondition, options)),
 	];
 	if (options.semi) {
 		parts.push(docText(";"));
@@ -330,7 +347,7 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 
 export function printSwitchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SwitchStmtData;
-	const head = [docText("switch ("), callPrintNode(d.switchDisc, options), docText(") ")];
+	const head = [docText("switch "), ...parenthesizedHeader(callPrintNode(d.switchDisc, options)), docText(" ")];
 	if (d.switchCases.length == 0) {
 		const orphans = danglingOf(node);
 		return docGroup([...head, orphans.length == 0 ? docText("{}") : boxed("{", [danglingBlock(orphans)], "}")]);
@@ -398,7 +415,7 @@ export function printMatchStmt(node: Node, options: FormatOptions): Doc {
 
 export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ThrowStmtData;
-	const parts: Doc[] = [docText("throw "), callPrintNode(d.throwArg, options)];
+	const parts: Doc[] = [docText("throw "), returnedArgument(d.throwArg, options)];
 	if (options.semi) {
 		parts.push(docText(";"));
 	}
