@@ -48,7 +48,7 @@ import {
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
 } from "../../raiser/hostRegistry";
 import {
-	unboxString, unboxInt, unboxFloat,
+	unboxString, unboxInt, unboxFloat, unboxBool,
 	boxString, boxInt, boxFloat, boxBool,
 	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
@@ -67,6 +67,7 @@ import {
 import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { rawString } from "std/core/buffer/bytes";
+import { utf8Text } from "std/core/string/bytes";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
@@ -973,6 +974,17 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 	return raiserArray(handle);
 }
 
+function _bridgeMsRawString(args: RaiserValue[]): RaiserValue {
+	const heapOrNull = activeHostArrayHeap();
+	if (heapOrNull == null) return raiserNil();
+	const heap: RaiserArrayHeap = heapOrNull;
+	const handle = args[0].intVal;
+	const len = heapArrayLen(heap, handle);
+	const bytes: uint8[] = [];
+	for (let i = 0; i < len; i = i + 1) bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
+	return boxString(rawString(bytes));
+}
+
 function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
 	if (heapOrNull == null) return raiserNil();
@@ -1133,6 +1145,10 @@ function _bridgeMsStringByteIndexOf(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsStringByteLastIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
+}
+
+function _bridgeMsUtf8Text(args: RaiserValue[]): RaiserValue {
+	return boxString(utf8Text(unboxString(args[0]), unboxBool(args[1])));
 }
 
 function _bridgeMsStringIsAscii(args: RaiserValue[]): RaiserValue {
@@ -1447,12 +1463,14 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
 	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
 	registerHostFn("msStringIsAscii",       _bridgeMsStringIsAscii, HostCapability.Pure);
+	registerHostFn("msUtf8Text",            _bridgeMsUtf8Text, HostCapability.Pure);
 	registerHostFn("msMemChr",              _bridgeMsMemChr, HostCapability.Pure);
 	registerHostFn("msMemEqAt",             _bridgeMsMemEqAt, HostCapability.Pure);
 	registerHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
 	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
+	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
 	registerHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
 	registerHostFn("ceil",  _bridgeCeil, HostCapability.Pure);

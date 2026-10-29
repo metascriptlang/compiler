@@ -23,6 +23,8 @@ export function byteEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly
 
 export extern function byteIsAscii(s: string): boolean from "msStringIsAscii";
 
+export extern function utf8Text(raw: string, surrogates: boolean): string from "msUtf8Text";
+
 export function wellFormedString(data: Readonly<Span<uint8>>): string {
 	return data.asString();
 }
