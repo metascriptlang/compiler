@@ -514,7 +514,7 @@ export function symbolKey(sym: Readonly<Symbol>): string {
 	if (sym.typeParamOwner != null) return `${symbolKey(sym.typeParamOwner)}#${sym.disamb}`;
 	const local = hasFlag(sym, SymbolFlag.Anon) || hasFlag(sym, SymbolFlag.StaticLocal)
 		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Temp
-		|| (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global))
+		|| (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global) && !hasFlag(sym, SymbolFlag.ImportC))
 		|| (sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam);
 	if (local || sym.modulePath == "") throw new Error(`internal: ${sym.symbolKind} '${sym.name}' of '${sym.modulePath}' is local to its module and has no key another module can name`);
 	return `${sym.name}.${sym.instantiatedFrom != null ? 0 : sym.disamb}.${sym.modulePath}`;
@@ -726,4 +726,20 @@ test "an unknown routine flag word is an internal error" {
 		message = (e as Error).message;
 	}
 	assert message == "internal: unknown function flag 'asyncish'", message;
+}
+
+test "an imported C variable is keyed by its module and name, and a function's local has no key" {
+	const limit = makeSymbol("limit", SymbolKind.Variable, null, false);
+	limit.modulePath = "/src/lib.ms";
+	setFlag(limit, SymbolFlag.ImportC);
+	assert symbolKey(limit) == "limit.0./src/lib.ms", symbolKey(limit);
+	const local = makeSymbol("count", SymbolKind.Variable, null, true);
+	local.modulePath = "/src/lib.ms";
+	let message = "";
+	try {
+		message = symbolKey(local);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.startsWith("internal: "), message;
 }
