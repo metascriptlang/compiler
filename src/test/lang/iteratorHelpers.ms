@@ -696,6 +696,22 @@ test "iterator helpers: a stored helper closed after its first next closes the s
 	assert t.next().done && m.next().done;
 }
 
+test "iterator helpers: a stored helper closed before its first next closes the source once and never pulls it" {
+	const log: string[] = [];
+	const t = counter("t", 3, log).take(2);
+	closeNow(t);
+	closeNow(t);
+	const m = counter("m", 3, log)
+		.map((x: int32, i: number): int32 => x)
+		.filter((x: int32, i: number): boolean => true);
+	closeNow(m);
+	closeNow(m);
+	const f = counter("f", 3, log).flatMap((x: int32, i: number): Iterator<int32> => counter("inner", x, log));
+	closeNow(f);
+	assert t.next().done && m.next().done && f.next().done;
+	assert log.join(",") == "t.return,m.return,f.return";
+}
+
 test "iterator consumer: a chain expands in place when an imported module expands the same instance" {
 	const nums: int32[] = [1, 2, 3];
 	assert doubledSum(nums) == 12;
