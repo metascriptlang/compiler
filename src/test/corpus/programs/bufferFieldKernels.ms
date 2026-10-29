@@ -96,7 +96,7 @@ function checkWrites(): void {
 			const whole = value as number;
 			if (value >= -128 && value <= 255) {
 				note(out.writeUInt8(low8, at));
-				note(out.writeInt8(whole, at));
+				note(out.writeInt8(value <= 127 ? whole : whole - 256, at));
 			}
 			note(out.writeUInt16LE(low16, at));
 			note(out.writeUInt16BE(low16, at + 1));
