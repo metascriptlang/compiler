@@ -2,7 +2,7 @@
 // AST statement nodes → bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol,
+	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol, SymbolFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
@@ -27,6 +27,7 @@ import { forEachChild } from "../../ast/visitor";
 import { compileOwnershipStmt } from "./drcLower";
 import { emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
+import { hasFlag } from "../../checker/symbol";
 
 // --- Statement compilation ---
 
@@ -175,13 +176,17 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			return;
 		}
 		const declaredClass = node.nodeType == null ? classOfReg(s, reg) : regClassOf(s, node.nodeType);
+		let local = reg;
 		if (regIsFixedLocal(s, reg) || classOfReg(s, reg) != declaredClass) {
-			const slot = allocReg(s, declaredClass);
-			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
-			declareLocal(s, declaredSymbol(node, d.declName), slot, isStr);
-			return;
+			local = allocReg(s, declaredClass);
+			emitInst(s, raiserABC(RaiserOpcode.Move, local, reg, 0));
 		}
-		declareLocal(s, declaredSymbol(node, d.declName), reg, isStr);
+		declareLocal(s, declaredSymbol(node, d.declName), local, isStr);
+		if (isMoveTempFromPlace(node, d.initializer)) {
+			s.moveTempAt = codeLen(s);
+			s.moveTempReg = local;
+			s.moveTempSource = d.initializer;
+		}
 	} else {
 		const reg = emitZeroValue(s, node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
@@ -198,6 +203,13 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), reg);
 	}
+}
+
+function isMoveTempFromPlace(node: Node, initializer: Node): boolean {
+	const sym = node.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.SinkTemp)) return false;
+	const k = initializer.kind;
+	return k == NodeKind.MemberExpr || k == NodeKind.ArrayAccess || k == NodeKind.HiddenDeref;
 }
 
 // --- If Statement ---
