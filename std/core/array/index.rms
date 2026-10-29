@@ -187,7 +187,7 @@ export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
 	return out;
 }
 
-export function slice<T>(this arr: Vec<T>, start: number, end: number = 9007199254740991): T[] {
+export function slice<T>(this arr: Vec<T>, start: number = 0, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -202,7 +202,7 @@ export function slice<T>(this arr: Vec<T>, start: number, end: number = 90071992
 	return out;
 }
 
-export function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] {
+export function slice(this view: Readonly<Span<uint8>>, start: number = 0, end: number = 9007199254740991): uint8[] {
 	const n = view.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
