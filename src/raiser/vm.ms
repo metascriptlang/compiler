@@ -1925,7 +1925,10 @@ function vmHandleFutureRead(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	const source = getDyn(vm, func.blocks[ic + 3] as int32);
 	if (source.kind != RaiserValueKind.Future) {
 		if (ib == 2) setRegBool(vm, ia, true);
-		else if (ib == 0) setRegConform(vm, ia, source);
+		else if (ib == 0) {
+			rcIncref(vm.arrayHeap, vm.objectHeap, source);
+			setRegConform(vm, ia, source);
+		}
 		return;
 	}
 	if (!futureHandleValid(vm, source.intVal)) {
@@ -1966,6 +1969,7 @@ function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const v = getDyn(vm, ib);
 	if (v.kind != RaiserValueKind.Future) {
 		if (awaitPaysTick(vm)) return;
+		rcIncref(vm.arrayHeap, vm.objectHeap, v);
 		setRegConform(vm, ia, v);
 		return;
 	}
