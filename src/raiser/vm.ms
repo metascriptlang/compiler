@@ -5292,12 +5292,9 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			return;
 		}
 		const error = heapAllocObject(vm.objectHeap);
-		const name = heapAllocString(vm.arrayHeap, "Error");
-		const message = heapAllocString(vm.arrayHeap, raised);
-		vmIncref(vm, name);
-		vmIncref(vm, message);
-		heapObjectSetField(vm.objectHeap, error, "name", name);
-		heapObjectSetField(vm.objectHeap, error, "message", message);
+		vm.objectHeap.objects[handleIndex(error)].rc = 0;
+		heapObjectSetField(vm.arrayHeap, vm.objectHeap, error, "name", heapAllocString(vm.arrayHeap, "Error"));
+		heapObjectSetField(vm.arrayHeap, vm.objectHeap, error, "message", heapAllocString(vm.arrayHeap, raised));
 		setException(vm, raiserObject(error));
 		unwindStep(vm);
 		return;
