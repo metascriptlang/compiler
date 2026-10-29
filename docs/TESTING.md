@@ -378,6 +378,30 @@ Traps, measured 2026-07-28 unless a line says otherwise:
   source-importing checker test asks JS to compile the compiler itself; a
   JS behavior claim needs a standalone language/corpus consumer instead.
 
+## Edit-loop check costs
+
+Measured per-file costs of edit-loop checks, and the checks that do not fit the 60 s budget (`src/test/CLAUDE.md` §Edit loop).
+
+- **`MSC_FLOWS=<file>` splits a test run** into graph, phases A/B/C, cc, link and the run of the test binary. `msc test src/analyzer/inject.ms --tests-in-dir` on lc-1 alone, tree 54af0f26a, ms:
+
+  | run | graph | A | B | C | cc | link | test run | total |
+  |---|---|---|---|---|---|---|---|---|
+  | default, warm | 9538 | 18564 | 3610 | 1178 | 31 | 922 | 3056 | 36900 |
+  | `--release`, warm | 9228 | 17044 | 3548 | 1085 | 22 | 123 | 379 | 31431 |
+  | default, cold | 9887 | 18340 | 4119 | 1663 | 28219 | 926 | 7121 | 70276 |
+  | `--release`, cold | 9828 | 20222 | 5421 | 3569 | 80089 | 145 | 847 | 120121 |
+
+  The front end (graph and phase A) is three quarters of a warm check. `--release` saves 5.5 s warm and costs 52 s of clang cold, so test builds stay at the default.
+- **`msc test <file> --tests-in-dir` per owner, lc-1 alone, tree 3f19df9e0, seconds cold / warm:** `src/test/lang/accessorContexts.ms` 4.9 / 2.4, `src/codegen/c/types.ms` 53 / 25, `src/checker/checkPass.ms` 87 / 47, `src/test/js/accessCheck.ms` 81 / 55, `src/codegen/raiser/eval.ms` 98 / 62, `src/compiler/compile.ms` 138 / 79. One corpus program with `MSCORPUS_RAISER=1` took 9.8 / 4.1.
+- **Cold over-budget observation, 2026-10-26:** `msc test src/test/c/spawnCaptureCursor.ms --tests-in-dir` took 66.96 s cold on gc-sd (Linux, 16 vCPU), then 47.74 s warm. Cold source: `bb03b63af` plus the tests in `25412d9e2` (8 passed / 2 expected new assertion failures); warm candidate tree `1d6aacfba9f72f4e09f606630ff21b9d858baabd` passed 10/10. The test body took 6.63 s cold; most of the cost preceded execution.
+- **Cold over-budget observation, 2026-10-26:** `msc test src/test/c/referenceTransfer.ms --tests-in-dir` took 61.53 s cold on gc-sd (Linux, 16 vCPU), then 38.55 s warm. Matched `bb03b63af` builder with the regression tests in `f545e18c3` gave 3 passed / 1 expected new assertion failure; the combined capture/materialization candidate passed 4/4. Logs: `~/metascript/.scratch/pi-capturefollow-01a1795d/remote-evidence/evidence/{old-transfer,new-transfer}.log`.
+- **Over budget now, warm:**
+  - `src/compiler/compile.ms`: 79 s.
+  - `src/codegen/raiser/eval.ms`: 62 s, mostly `numericCondsFailure`.
+  - `src/compiler/lsp/handlers/lifecycle.ms`: 76 s warm, 151 s first run after a candidate build (lc-1, 2026-10-27, tree 103e61415).
+  - `src/compiler/lsp/server.ms`: 82 s warm, 105 s first run; it runs `lifecycle.ms`'s tests too (same run).
+  - A first run of a compiler-module test is over 60 s for every file that imports most of the compiler, because its test build redoes the front end of that graph. Making the front end reachability-driven, as the reference transforms a routine only when codegen first needs it, saves an estimated 3–4 s: the `inject.ms` test build still reaches 72% of the function-body nodes. The remaining lever is reusing each module's front-end output across builds.
+
 ## Emit-diff selector — corpus confidence for narrow fixes
 
 Measured 2026-09-05 on the bug130 fix (checker identity-fit for narrowed

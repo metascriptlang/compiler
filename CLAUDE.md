@@ -8,6 +8,8 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 
 ## Build Commands
 
+A command reference, not a plan: pick the check from [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running. Every command here except `msc check` and the editor plugin is a heavy job (workspace `CLAUDE.md` §Shared machines): run it through `~/metascript/.gate-host/run-remote.sh`, building the candidate in the same call, or with `MAC_ONLY=1` when it needs macOS.
+
 ```bash
 # Edit loop: one check per changed contract, each under 60 s. Which check when: src/test/CLAUDE.md §Running
 msc test src/utils/string.ms --tests-in-dir   # one module's tests; without the flag it also runs every import's tests
@@ -28,10 +30,7 @@ msc build examples/actorSpawnBasic.ms --target=c
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
 msc build src/index.ms --danger --output=msc
 
-# Edit loop candidate: drop thin-LTO. The link then takes ~0.2s
-# instead of ~15s — thin-LTO produces machine code only at link, so every
-# rebuild re-pays it even when clang hits the object cache. Same -O3.
-# Numbers + method: docs/BUILD-PERF.md "Measured 2026-09-26".
+# Edit loop candidate: thin-LTO off, so the link takes ~0.2 s instead of ~15 s at the same -O3 (docs/BUILD-PERF.md).
 msc build src/index.ms --danger --lto=off --output=msc
 
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
@@ -43,10 +42,7 @@ msc build src/index.ms --danger --lto=off --output=msc
 bash tools/editor-plugin/build.sh --install   # after grammar/highlights edits
 ```
 
-Before moving a cache directory, sharing build artifacts between jobs or measuring reuse, read
-[`docs/BUILD-CACHE.md`](docs/BUILD-CACHE.md): each job keeps its own local cache, worktrees
-share only through the global store, and that store has a measured false hit and an age sweep
-that deletes files it does not own.
+Before moving a cache directory, sharing build artifacts between jobs or measuring reuse, read [`docs/BUILD-CACHE.md`](docs/BUILD-CACHE.md), because it records which reuse is proven valid, a measured false hit, and an age sweep of the global store that deletes files it does not own.
 
 Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
@@ -54,13 +50,13 @@ Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
 Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`): default=`-O0 -g`, `--release`=`-O2`, `--danger`=`-O3`.
 
-`--lto` is capability-resolved after the compiler is known (`resolveLto`): `--release` and `--danger` take thin LTO where the resolved compiler can link it (on the self-host `msc check` workload `--release` runs 6.7% fewer instructions with it, measured 2026-10-26); where it cannot, `--danger` drops it with a stderr notice and `--release` drops it silently; and an explicit `--lto=` against a proven-broken pair fails loud.
+`--lto` is resolved after the compiler is known (`resolveLto`): `--release` and `--danger` take thin LTO where the resolved compiler can link it; where it cannot, `--danger` drops it with a stderr notice and `--release` drops it silently; an explicit `--lto=` against a proven-broken pair fails loud.
 
 ```bash
 msc build src/index.ms --danger --cc=clang --output=msc   # macOS
 ```
 
-**Do not re-litigate**: macOS/zig and Windows/zig cannot LTO (verified 2026-07-30 and 2026-08-31, target-scoped, no flag fixes it from our side); GNU gcc never gets LTO by default and spells it `-flto=auto`. The gain is **LTO, not clang** — clang and zig are equivalent code generators. Capability table: `src/compiler/cc.ms` (`ltoBroken`). Evidence + measurement method: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
+**Treat macOS/zig and Windows/zig LTO as settled** by `ltoBroken`, and reopen it only with a new measurement on a changed toolchain, because they cannot LTO target-wide and no flag on our side fixes it; GNU gcc never gets LTO by default and spells it `-flto=auto`. The gain is **LTO, not clang**: clang and zig are equivalent code generators. Capability table: `src/compiler/cc.ms` (`ltoBroken`). Evidence and method: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
 
 ## Pipeline
 
@@ -70,38 +66,25 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 
 All five phases run the self-host build. Parse: recursive descent + Pratt over `NodeKind` / `TokenKind` (`std/meta/node.ms`, `std/meta/token.ms`). TypeCheck: 3-pass (collect, resolve, check), cross-module via ExportRegistry. Transform: one ordered pass list in `src/transform/index.ms`, JS-only passes behind `jsBackend`, the C-only tail in `src/transform/native/index.ms`. Analyzer: DRC injection (`src/analyzer/inject.ms`: cross-scope last-read, branch-aware optimizer). Codegen: C primary, JS secondary.
 
-`generatorLower` runs BEFORE `lambdaLifting` (reversed from the standard reference's order) — intentional: generator creates `$state` + FunctionExpr, lambda lifting then captures `$state` into env. The reversed order keeps the two transforms decoupled; where it would change the result, the split restores the reference's outcome — a nested routine is rebuilt at each resume instead of stored in the frame (`hoistStateRoutines`).
+`generatorLower` runs BEFORE `lambdaLifting` (reversed from the standard reference's order) on purpose: generator creates `$state` + FunctionExpr, lambda lifting then captures `$state` into env, which keeps the two transforms decoupled. Where the order would change the result, the split restores the reference's outcome: a nested routine is rebuilt at each resume instead of stored in the frame (`hoistStateRoutines`).
 
 Architecture detail: [`docs/PIPELINE.md`](docs/PIPELINE.md). File tree + patterns: [`docs/PROJECT-STRUCTURE.md`](docs/PROJECT-STRUCTURE.md).
 
 ## CRITICAL: Codegen Must Be Thin/Dumb
 
-**`src/codegen/c/` is a dumb emitter.** It only dumps what earlier phases already processed. If you find yourself adding logic to C codegen, STOP.
+**`src/codegen/c/` is a dumb emitter.** It only dumps what earlier phases already processed. If you find yourself adding logic to C codegen, STOP, because a bug that surfaces in codegen almost always lives earlier, in Transform or the Checker.
 
-**The rule**: before adding ANY codegen logic, check the standard reference implementation. If it handles the concern before codegen, we must too. Evidence: of 7 C-backend failures traced 2026-03-04, **6 were bugs in Transform/Checker** that merely surfaced in codegen; only 1 (exception runtime types) belonged in codegen.
-
-**Checklist**: (1) reference does it in transform or earlier → Transform. (2) type resolution → Checker. (3) desugaring/lowering → `src/transform/`. (4) pure C syntax emission → only then codegen.
-
-## Writing MetaScript
-
-When writing or reviewing `.ms`, read the relevant sections of
-[`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md), this repository's official authoring
-standard, so one source decides style, ownership idioms and boundary practice. It supersedes
-older workspace authoring guidance for this repository; an unrelated task does not require a
-whole-file reread. Use [`docs/LANG.md`](docs/LANG.md) for detailed language contracts.
+**Before adding ANY codegen logic, check the standard reference implementation**: (1) reference does it in transform or earlier → Transform. (2) type resolution → Checker. (3) desugaring/lowering → `src/transform/`. (4) pure C syntax emission → only then codegen.
 
 ## Entry points
 
-- Nothing auto-calls `main`; the program is the entry module's top-level code. CLI and
-  test-target call sites follow [`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md#program-entry-tests-and-shutdown).
-- Exit means the event loop is empty. `msDrainUntilIdle()` finishes pending work and
-  `msReportOrphanFailures()` turns unhandled rejections into exit 1; `process.exit()` skips both.
-- For `--app=lib` hosts, call the entry module's init functions rather than the program-wide
-  `MsMain()`. Read [`docs/BARE.md`](docs/BARE.md) before changing host or init behavior.
+- Nothing auto-calls `main`; the program is the entry module's top-level code. CLI and test-target call sites follow [`docs/LANG-PREFERENCE.md`](docs/LANG-PREFERENCE.md#program-entry-tests-and-shutdown).
+- Exit means the event loop is empty. `msDrainUntilIdle()` finishes pending work and `msReportOrphanFailures()` turns unhandled rejections into exit 1; `process.exit()` skips both.
+- For `--app=lib` hosts, call the entry module's init functions rather than the program-wide `MsMain()`. Read [`docs/BARE.md`](docs/BARE.md) before changing host or init behavior.
 
 ## Runtime C — avoid variadic struct args
 
-When adding helpers in `runtime/core/`, **do not pass 16-byte structs (e.g. `msString`) through `...` variadics**. LLVM/Zig miscompile this on `aarch64-windows-gnu` (AAPCS64 instead of the Microsoft ARM64 variadic ABI): args 4+ read from misaligned stack slots, symptom is a silent crash at module init. Applies to any struct ≥16 bytes or containing pointers; scalars are fine.
+When adding helpers in `runtime/core/`, **do not pass 16-byte structs (e.g. `msString`) through `...` variadics**, because LLVM/Zig miscompile this on `aarch64-windows-gnu` (AAPCS64 instead of the Microsoft ARM64 variadic ABI): args 4+ read from misaligned stack slots and the program crashes silently at module init. Applies to any struct ≥16 bytes or containing pointers; scalars are fine.
 
 ```c
 msString msStringConcatMany(int64_t count, ...);              // BAD
@@ -112,44 +95,39 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 ## Git Rules
 
-- **One worktree per feature or named arc, many sessions on it** — the unit has a name and a card; `claude --worktree <name>` (or `~/nerdtools/claude/tools/wt.sh new <name>` by hand) creates branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready, and re-enters the same worktree on every later session; from branch-off to done the arc's work happens only there.
-- **A second worktree needs a reason** — (1) two pieces run at the same time in different sessions and write no common path, or (2) a stray change that belongs to no open arc, which gets a short `fix-<name>` worktree, lands and is retired. Sequential steps of one arc are commits in its worktree, never new worktrees.
-- **Wait for dependencies, not filenames** — inspect ahead worktrees' diffs and affected callers before editing (`~/nerdtools/claude/tools/wt.sh ls`, then `git diff main...wt/<other> -- <paths>`). Wait for their land when this work consumes their unlanded behavior or would independently change the same invariant or hunk; otherwise independent changes may proceed in separate worktrees, even in one file. Record shared-path owners and the evidence of independence in the card, keep one writer per checkout, and retain the existing rebase, gate and verdict-reuse rules, because file overlap alone neither proves nor excludes a dependency.
-- **A step is a commit** — a step of an arc ends at its commit and the next step starts right away in the same worktree; a land costs a full gate (about 50 minutes in the queue) and holds the machine, so no step waits for one.
-- **Land when something outside the worktree needs the commits, not when a slice is done** — a finished, measured slice is ready to land, not due to land: keep its commits and start the next slice. Land when `main` needs the fix now (a security hole, a red other worktrees hit), another repo needs it through `tools/syncLocalBinary.ms`, the session ends, or the worktree has neither landed nor rebased for two days while `main` moved; every slice committed by then shares that one gate. `land` rebases onto `main`, so the worktree stays current and keeps going after the land.
-- **The card is `$MSC_WT_ROOT/<name>.md`** — `~/nerdtools/claude/tools/wt.sh new` seeds it; its State is written for a reader who has seen none of the arc: no stage codes, and the step in flight can be started without opening another file. The SessionStart hook prints it (`~/nerdtools/claude/tools/wt.sh card` by hand) with the compiler inbox tallied by `State:`; `~/nerdtools/claude/tools/wt.sh ls` shows each goal, marks a worktree without one `NO CARD` and lists every card left without a branch. A fresh card gets its Goal and "Done when" before the first commit. Its `Layer:`, `Kind:` and `Mechanism:` lines are filled when the fix is understood, in the words the report uses, so the classification outlives the session and the inbox tallies by kind.
-- **The main checkout only receives lands** — `~/nerdtools/claude/tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
-- **A gate verdict survives any clean rebase** — when `main` moves during the gate or after a remote gate (`~/metascript/.wt/verdicts/<name>`), `land` rebases onto it and lands without a second gate, even when the move changed the slice's files; only a change to the slice's own lines (a new commit, a rebase resolved by hand) re-gates. The next gate on `main` catches an interaction between slices, and chasing every move costs a gate per land.
-- **A worktree is retired from outside it, with `~/nerdtools/claude/tools/wt.sh rm`** — a session cannot remove the worktree it runs in (its own processes hold it), so it reports the land and leaves the worktree; `rm` names what it would lose, `--force` discards only that; find idle ones with `~/nerdtools/claude/tools/wt.sh ls --stale`.
-- **Data flows one way, repo → `~/.metascript/`** — through `tools/syncLocalBinary.ms` only, run from a clean worktree of `main` (it refuses uncommitted work under `src`, `std`, `runtime` and a binary older than `src`) and recording the commit in `~/.metascript/BUILD`; nothing mirrors into a checkout.
-- **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
-- **Decide what verification a change needs before you land it** — name what the change can alter and which lane observes that: who reads the changed code, which test or corpus program reaches it. When a lane can observe it, send it to the gate train (workspace `CLAUDE.md` §Worktrees; the Mac land queue only for what Linux cannot verify), because a train gates it once against the base it lands on, together with every other slice ready at that moment. When none can (a string only `msc --version` prints, a comment, a doc), say so with that evidence and land with `land --no-gate` once the person agrees; the flag records that the gate did not run, and the person owns that call because the gate is the shared safety net.
+How a slice reaches `main` (ready check, gate queue, RED and GREEN) is in the workspace `CLAUDE.md` §Worktrees and landing and `~/metascript/.gate-host/README.md`. This repository adds:
 
-## Verification — edit loop, land gate, release ladder
+- **One worktree per feature or named arc, many sessions on it, one writer at a time.** `claude --worktree <name>` (or `~/nerdtools/claude/tools/wt.sh new <name>`) creates branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready, and re-enters the same worktree on every later session.
+- **A second worktree needs a reason**: two pieces run at the same time in different sessions and write no common path, or a stray change that belongs to no open arc, which gets a short `fix-<name>` worktree, lands and is retired. Sequential steps of one arc are commits in its worktree.
+- **Wait for dependencies, not filenames.** Inspect ahead worktrees' diffs and affected callers before editing (`wt.sh ls`, then `git diff main...wt/<other> -- <paths>`). Wait for their land when this work consumes their unlanded behavior or would independently change the same invariant or hunk; otherwise proceed in separate worktrees, even in one file, because file overlap alone neither proves nor excludes a dependency. Record shared-path owners and the evidence of independence in the card.
+- **A step is a commit**, and it gets no gate of its own: the slice it belongs to is gated once.
+- **Submit a slice the moment it is finished and passes its ready check** (workspace `CLAUDE.md` §Worktrees and landing): do not hold finished slices for a milestone or until something outside needs them, because each slice now gets its own gate on an idle host while held slices pile into big lands that go red more often. While a slice waits in the queue, its worktree takes no commit and no tracked edit; read, trace and draft new files for the next slice meanwhile.
+- **The card is `~/metascript/.wt/<name>.md`** (`$MSC_WT_ROOT` overrides the folder); `wt.sh new` seeds it. Its State is written for a reader who has seen none of the arc, with no stage codes, so the step in flight can be started without opening another file. A fresh card gets its Goal and "Done when" before the first commit; its `Layer:`, `Kind:` and `Mechanism:` lines are filled when the fix is understood, in the report's words, so the inbox tallies by kind.
+- **The main checkout only receives lands.** `wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
+- **A worktree is retired from outside it** with `wt.sh rm`, because a session cannot remove the worktree it runs in; `rm` names what it would lose and `--force` discards only that. `wt.sh ls --stale` finds idle ones.
+- **Data flows one way, repo → `~/.metascript/`**, through `tools/syncLocalBinary.ms` only, run from a clean worktree of `main` (it refuses uncommitted work under `src`, `std`, `runtime` and a binary older than `src`) and recording the commit in `~/.metascript/BUILD`.
+- **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)**; release, fix and merge work each get their own worktree.
+- **Name what a change can alter before you land it**: who reads the changed code, which test or corpus program reaches it. When a lane can observe it, it goes through the gate queue. When none can (a string only `msc --version` prints, a comment, a doc), say so with that evidence and land with `land --no-gate` once the person agrees, even where the shared worktree playbook would land it without asking, because the gate is the shared safety net and the flag records that it did not run.
 
-Three flows, chosen by when they run. Read [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running before you test, run or measure anything: it owns which flow applies, the check for each kind of change and its measured cost.
+## The land gate — `tools/gate.sh`
 
-- **Edit loop**: while a slice is in work, one check per changed contract, each under 60 s after the candidate build; it ends with the ready check (`~/metascript/docs/GLOSSARY.md`).
-- **Land gate**: once per land, `tools/gate.sh` on the gate train; lanes run only here and in the release ladder.
-- **Release ladder**: `tools/gate.sh --release` and the fixpoint check when cutting a release per `docs/GIT-FLOW.md`. Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for it.
+Which flow a run belongs to, and the check for each kind of change, is in [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running; read it before you test, run or measure anything. The land gate itself:
 
-How the land gate works:
-
-- **One command picks and runs the lanes** — `tools/gate.sh` maps changed paths to lanes (a path is its stand-in for what the change can reach; the decision above is yours) and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why, `--release` runs the release ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
-- **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
-- **The machine is shared** — gates queue machine-wide FIFO in `~/.metascript/gates`; once admitted, a gate checks load before its phases and shares its worker/slot budget among concurrent lanes. Do not start a second heavy lane beside it. Measured phase and queue time: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
-- **The object cache stays** — no `rm -rf out` before a build or a suite, because wiping it triggers the cold-build link race. A fingerprint is only as complete as its recorded inputs; [cache rules and measured limits](docs/BUILD-CACHE.md) distinguish reuse from proven validity. Investigate a named stale-cache symptom instead of resetting another job's state.
-- **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
-- **The corpus lanes run on what the change can alter** — the gate emits all programs with the merge-base compiler and candidate, selecting changed C/JS hashes, emit failures on either side, and touched programs. It runs them whole under `--lanes` / `--release`, or for blind paths such as `runtime/`, `std/`, `vendor/` and the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
-- **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
+- **One command picks and runs the lanes.** `tools/gate.sh` maps changed paths to lanes and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why; `--release` runs the release ladder. A path is only its stand-in for what the change can reach; the decision is yours.
+- **Known red is `src/test/known-red.json`.** Each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate, and a rerun on the same state answers nothing. Rows are written by `MAC_ONLY=1 tools/gate.sh --record` (`--lanes` limits it), which runs only on macOS from a checkout that matches `main` on the tested paths; it leaves each new row's note empty and the next gate refuses that, so fill the note with the row's card. **A row a slice adds needs the person's yes**, recorded in the row as `"approved": "<date> <their words>"`; the gate is RED before any lane on an added row without it, because a row hides that red from every later gate. A `known-now-green` row never fails a gate; dropping it (with the next Mac `--record`, since only a land gated on the Mac commits the pruned set) or editing a note needs no yes. A red only one platform or host shows is never a row: it gets a compiler inbox card (as RTX's glibc 2.43 reds did).
+- **`tools/gate.sh` queues machine-wide FIFO** in `~/.metascript/gates` on the machine it runs on and checks free cores before its phases (gate hosts turn the FIFO off and admit by `gate-item.sh`). Never run one by hand on a gate host or the Mac to get a verdict: only the gate queue's gate writes one (workspace `CLAUDE.md` §Worktrees and landing).
+- **The object cache stays**: no `rm -rf out` before a build or a suite, because wiping it triggers the cold-build link race. Investigate a named stale-cache symptom instead of resetting another job's state ([cache rules](docs/BUILD-CACHE.md)).
+- **Adjacent lands share one gate**: commits that belong together land as one branch.
+- **The corpus lanes run on what the change can alter**: the gate emits every program with the merge-base compiler and the candidate and runs the programs whose C or JS differs, those that failed to emit on either side, and those touched. It runs them all under `--lanes` / `--release`, or for blind paths such as `runtime/`, `std/`, `vendor/` and the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
+- **Control and probe binaries answer one question**: build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
 
 ## Docs Rule — never edit `docs/*.md` from reading alone
 
-**Before changing any status claim in `docs/`, run it and measure it.** Reading the checker, grepping for a handler, or finding the code path is NOT verification — it tells you code exists, not that it works or what it costs. Write the smallest `.ms` that exercises the claim, `msc run` / `msc build` it, and quote the real output in the edit.
+**Before changing any status claim in `docs/`, run it and measure it**, because reading the checker or finding the code path tells you code exists, not that it works or what it costs. Write the smallest `.ms` that exercises the claim, `msc run` / `msc build` it, and quote the real output in the edit.
 
-1. **A doc's `TODO` / `PAUSED` / `NOT YET` is a hypothesis, not a fact.** They get written the moment someone is blocked and are never revisited. Every such claim probed on 2026-08-10 was already false, some by 3 months.
-2. **Never generalize from one probe variant.** Vary the axis you are claiming about and put the matrix in the doc. One probe per claim is how you write a confident wrong number.
-3. **Say what you did NOT verify.** A corrected table with unverified neighbours is more dangerous than an obviously stale one — it looks freshly audited.
+1. **A doc's `TODO` / `PAUSED` / `NOT YET` is a hypothesis, not a fact**: they are written when someone is blocked and rarely revisited.
+2. **Never generalize from one probe variant.** Vary the axis you are claiming about and put the matrix in the doc.
+3. **Say what you did NOT verify**, because a corrected table with unverified neighbours looks freshly audited.
 
 ## When to Stop and Ask
 
@@ -162,9 +140,9 @@ How the land gate works:
 
 ## Commits
 
-- **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `~/nerdtools/claude/tools/wt.sh land`, and nothing is pushed without a yes.
-- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own pin has gone red on the old compiler and green on one candidate build, on C plus `--target=js` for that one file; the lanes belong to the land gate, not to each commit.
+- **The agent commits, the person pushes**: a session commits in its own worktree through `/split-commit`; `main` moves only through `wt.sh land`, and nothing is pushed without a yes.
+- **Checked before every commit**: `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s), and the step's own pin has gone red on the old compiler and green on one candidate build, in the backend variants `src/test/CLAUDE.md` §Edit loop requires. Lanes belong to the land gate.
 
-IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
+IMPORTANT: never name a reference project or cite its `file:line` in source code or its comments, because the line-by-line mapping to a reference compiler lives outside the repo (`paper/NIM-REF.md`); a comment cites the entry by ID instead (`NIM-REF CK-46`), and naming a design inspiration in `docs/` is fine.
 
 @paper/local.md
