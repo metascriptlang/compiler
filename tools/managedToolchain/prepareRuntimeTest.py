@@ -190,7 +190,7 @@ class FeatureTranslationTest(unittest.TestCase):
                                  (["-amx-transpose"], {"cpu": "sapphirerapids"}),
                                  (["-amx-transpose"], {"zig": "0.16.1"}),
                                  (["-amx-transpose"], {"major": "21"}),
-                                 (["-amx-transpose"], {"major": "23"}),
+                                 (["-amx-transpose"], {"major": "24"}),
                                  (["-amx-transpose"], {"target": "wasm32-wasi"})):
             self.assertEqual(self.split(features, **kwargs), (features, []), msg=(features, kwargs))
 
@@ -201,13 +201,25 @@ class FeatureTranslationTest(unittest.TestCase):
             self.assertEqual((carried, [e["feature"] for e in notCarried]), (["+neon"], [feature]))
             self.assertEqual(notCarried[0]["target"], arm)
             for other in ((arm, "apple-m1", "0.16.0", "22"), (arm, "generic", "0.17.0", "22"),
-                          (arm, "generic", "0.16.0", "21"), (arm, "generic", "0.16.0", "23"),
+                          (arm, "generic", "0.16.0", "21"), (arm, "generic", "0.16.0", "24"),
                           ("aarch64-linux-gnu", "generic", "0.16.0", "22"),
                           ("aarch64-linux-musl", "generic", "0.16.0", "22"),
                           ("x86_64-linux-gnu.2.31", "generic", "0.16.0", "22")):
                 self.assertEqual(pr.translateFeatures([feature], *other)[0], [feature], msg=(feature, other))
         self.assertEqual(pr.translateFeatures(["+tme", "-sve", "-bogus"], arm, "generic", "0.16.0", "22")[0],
                          ["+tme", "-sve", "-bogus"])
+
+    def test_an_engine_23_leaves_out_what_it_no_longer_defines_and_keeps_the_rest(self):
+        self.assertEqual(self.split(["-amx-tf32", "-amx-transpose", "-false-deps-lzcnt-tzcnt", "-amx-tile", "+sse2"],
+                                    major="23"), (["-amx-tile", "+sse2"],
+                                                  ["-amx-tf32", "-amx-transpose", "-false-deps-lzcnt-tzcnt"]))
+        self.assertEqual(self.split(["-amx-tf32", "-false-deps-lzcnt-tzcnt"], major="22"),
+                         (["-amx-tf32", "-false-deps-lzcnt-tzcnt"], []))
+        arm = ["-hcx", "-pcdphint", "-tme", "-zcz", "-zcz-gp", "-no-zcz-fp", "-sve", "+neon"]
+        for target in ("aarch64-linux-gnu.2.31", "aarch64-windows-gnu"):
+            self.assertEqual(pr.translateFeatures(arm, target, "generic", "0.16.0", "23")[0], ["-sve", "+neon"])
+        self.assertEqual(pr.translateFeatures(["-hcx", "-pcdphint"], "aarch64-windows-gnu", "generic", "0.16.0", "22")[0],
+                         ["-hcx", "-pcdphint"])
 
     def test_the_aarch64_linux_entries_are_the_windows_ones_for_the_same_cpu(self):
         windows = [e for e in pr.REMOVED_DISABLED_FEATURES if e["target"] == "aarch64-windows-gnu"]
@@ -221,7 +233,7 @@ class FeatureTranslationTest(unittest.TestCase):
             self.assertTrue(entry["absentMacroPrefix"] or entry["target"].startswith("aarch64-"))
             self.assertGreaterEqual(len(entry["sources"]), 2)
             for source in entry["sources"]:
-                self.assertRegex(source, r"^https://(raw\.githubusercontent|github)\.com/llvm/llvm-project/(blob/)?llvmorg-2[12]\.\d+\.\d+/")
+                self.assertRegex(source, r"^https://(raw\.githubusercontent|github)\.com/llvm/llvm-project/(blob/)?llvmorg-2[123]\.\d+\.\d+/")
 
 
 class ConfigCheckTest(TempCase):
