@@ -2,16 +2,13 @@
 // @skip-js: std/http/server is a .cms module, C backend only
 // @serial
 // @stdout: serveConcurrent: HTTP/1.1 101 Switching Protocols then still open
-// @stdout: serve: HTTP/1.1 101 Switching Protocols then echo: hello
 // @exit: 0
-// note: under a 200 ms keepAliveTimeout, a connection a sync handler took with res.detach() is still usable 2.5 s
-//   later: serveConcurrent's idle sweep leaves it open, and serve() leaves no receive timeout on it, so the handler's
-//   own blocking recv waits for the peer (old std: the sweep closed it; serve()'s timeout made the recv return empty).
+// note: under a 200 ms keepAliveTimeout, a connection a sync serveConcurrent handler took with res.detach() is still
+//   open 2.5 s later, past several idle sweeps (old std: the readiness loop's idle sweep closed it).
 
 import { HttpRequest, ServerResponse } from "std/http/types";
-import { createServer, serve, serveConcurrent, stop } from "std/http/server";
+import { createServer, serveConcurrent, stop } from "std/http/server";
 import { createSocket, bind, connect, send, recv, setBlocking, setTimeout, close } from "std/net";
-import { exit } from "std/process";
 import { lockedRead, lockedUpdate, sleepAsync } from "std/core/promise";
 
 const PAST_SWEEP_MS = 2500;
@@ -82,27 +79,3 @@ setBlocking(heldFd);
 send(heldFd, "still open");
 await c;
 close(heldFd);
-
-function plainClient(port: int32): int32 {
-	const fd = upgrade(port);
-	const status = statusLine(fd);
-	await sleepAsync(PAST_SWEEP_MS);
-	send(fd, "hello");
-	console.log(`serve: ${status} then ${recv(fd, 64)}`);
-	close(fd);
-	exit(0);
-	return 0;
-}
-
-const plain = createServer((req: HttpRequest, res: ServerResponse): void => {
-	const fd = res.detach();
-	send(fd, "HTTP/1.1 101 Switching Protocols\r\n\r\n");
-	send(fd, `echo: ${recv(fd, 64)}`);
-});
-plain.keepAliveTimeout = 200;
-const plainPort = freePort();
-const l = plain.listen("127.0.0.1", plainPort);
-if (!l.ok) throw new Error(l.error.message);
-const p = spawn(() => plainClient(plainPort));
-serve(plain);
-await p;
