@@ -266,14 +266,15 @@ export function raiserStructSlotUnion(t: Readonly<Type>): boolean {
 	return structs > 0;
 }
 
-// A Raiser union whose members are class refs, closures, strings or scalars stays the member's own value, with no tag
-// beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
+// A Raiser union whose members are class refs, closures, strings, arrays, tuples or scalars stays the member's own
+// value, with no tag beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
 export function raiserBareUnion(t: Type): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
 	for (const child of t.typeChildren) {
 		if (child.kind == TypeKind.Ref) {
 			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
-		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function && !isPrimitiveKind(child.kind)) {
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function
+				&& child.kind != TypeKind.Array && child.kind != TypeKind.SizedArray && child.kind != TypeKind.Tuple && !isPrimitiveKind(child.kind)) {
 			return false;
 		}
 	}
