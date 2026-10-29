@@ -1672,6 +1672,14 @@ function setRelation(formal: Type, actual: Type): TypeRelation {
 	if (elemRel == TypeRelation.Exact || elemRel == TypeRelation.Generic || elemRel == TypeRelation.FromLiteral) return elemRel;
 	return TypeRelation.None;
 }
+function widensIntoMaybe(formal: Type, actual: Type): boolean {
+	return isMaybeType(formal) && !isMaybeType(actual) && formal.typeReturn != null;
+}
+
+function maybeWideningRelation(formal: Type, actual: Type): TypeRelation {
+	return typeRelation(formal.typeReturn, actual) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
+}
+
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (formal == null || actual == null) return typeRelationInner(formal, actual);
 	if (formal.kind == TypeKind.Cursor && formal.typeReturn != null) return typeRelation(formal.typeReturn, actual);
@@ -1713,6 +1721,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return match (formal.kind) {
 			TypeKind.Struct => {
 				if (formal == actual || sameStructType(formal, actual)) return TypeRelation.Exact;
+				if (widensIntoMaybe(formal, actual)) return maybeWideningRelation(formal, actual);
 				if (isObjectAssignable(actual, formal) && missingRoutine(actual, formal) == "") return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
@@ -1884,9 +1893,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (actual.kind == TypeKind.EnumLiteral && isNumeric(formal)) {
 		return TypeRelation.IntConv;
 	}
-	if (isMaybeType(formal) && !isMaybeType(actual) && formal.typeReturn != null) {
-		return typeRelation(formal.typeReturn, actual) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
-	}
+	if (widensIntoMaybe(formal, actual)) return maybeWideningRelation(formal, actual);
 	// Union target: best match
 	if (formal.kind == TypeKind.Union) {
 		let best = TypeRelation.None;
