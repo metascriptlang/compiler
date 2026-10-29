@@ -23,6 +23,16 @@ test "a static extension read as a value names its routine" {
 	assert made(6).n == 6;
 }
 
+function applyNum(f: (x: number) => number, x: number): number { return f(x); }
+
+test "a prelude static read as a value calls the built-in" {
+	assert applyNum(Math.floor, 3.7) == 3.0;
+	assert applyNum(Math.abs, -2.5) == 2.5;
+	const isInt = Number.isInteger;
+	assert isInt(4);
+	assert !isInt(4.5);
+}
+
 interface Port {
 	open: (n: int32) => int32;
 	size: int32;
