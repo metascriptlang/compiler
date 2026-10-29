@@ -79,6 +79,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
+import { hasWasmPlacement } from "./wasmBoundary/placement";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -1603,6 +1604,13 @@ function isJsIdentifierName(name: string): boolean {
 	return true;
 }
 
+// The one place the wasm half of a placed program joins a js build: the manifest of the placed modules,
+// buildWasmHalf, and the bindings that replace each placed module's body in the bundle (the Phase 2 loop
+// of cmdBuildJS, where result.code is appended) all enter from here.
+function placeWasmModules(placed: string[]): void {
+	throw new Error(`internal: wasm placement of ${placed.length} module(s) (${placed[0]}) has no manifest and bindings yet`);
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1657,6 +1665,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const unitPaths: string[] = [];
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
+	const placedPaths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -1667,6 +1676,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
+		if (opts.wasmPlacement && hasWasmPlacement(program)) placedPaths.push(modPath);
 
 		// Collect external imports from @import registry
 		for (const entry of ctx.jsImportRegistry) {
@@ -1699,6 +1709,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
+	if (placedPaths.length > 0) placeWasmModules(placedPaths);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
