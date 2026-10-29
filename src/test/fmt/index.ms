@@ -147,3 +147,4 @@ import "./cases/objectExpansion";
 import "./cases/binaryChains";
 import "./cases/staticMembers";
 import "./cases/assignmentExpr";
+import "./cases/propertyAssignment";

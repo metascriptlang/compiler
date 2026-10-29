@@ -19,7 +19,7 @@ import {
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
 import { callPrintNode, printedAncestor } from "./callbacks";
-import { AssignmentShape, printAssignmentLike } from "./assignment";
+import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
 
@@ -316,6 +316,11 @@ export function printArrayAccess(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
+function objectProperty(left: Doc[], keyWidth: int32, value: Node, options: FormatOptions): Doc {
+	const shape: AssignmentShape = { leftIsShort: isShortKey(keyWidth, options), breakLeftHandSide: false, inChain: false };
+	return printAssignmentLike(left, ":", value, callPrintNode(value, options), shape, options);
+}
+
 // Check if an object key needs quoting — not a valid identifier (contains
 // hyphens, dots, starts with digit, empty).
 function needsQuote(key: string): boolean {
@@ -353,7 +358,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
-			entryDoc = docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
+			entryDoc = prop != null ? objectProperty([docText(writtenKey)], writtenKey.length, prop, options) : docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
 		} else if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
 			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
@@ -364,10 +369,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 				entryDoc = docText(d.keys[i]);
 			} else {
 				const keyStr = needsQuote(d.keys[i]) ? "\"" + d.keys[i] + "\"" : d.keys[i];
-				entryDoc = docGroup([
-					docText(keyStr + ": "),
-					callPrintNode(prop, options),
-				]);
+				entryDoc = prop != null ? objectProperty([docText(keyStr)], keyStr.length, prop, options) : docGroup([docText(keyStr + ": "), callPrintNode(prop, options)]);
 			}
 		} else {
 			entryDoc = callPrintNode(prop, options);
@@ -564,7 +566,9 @@ export function printSpreadExpr(node: Node, options: FormatOptions): Doc {
 
 export function printComputedProperty(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ComputedPropertyData;
-	return docGroup([docText("["), callPrintNode(d.computedKey, options), docText("]: "), callPrintNode(d.computedValue, options)]);
+	const key = d.computedKey;
+	const width = key.kind == NodeKind.Identifier ? (key.data as IdentifierData).name.length + 2 : options.tabWidth + 3;
+	return objectProperty([docText("["), callPrintNode(key, options), docText("]")], width, d.computedValue, options);
 }
 
 function isUnaryLevel(node: Node): boolean {
