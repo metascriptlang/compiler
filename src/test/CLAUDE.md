@@ -13,6 +13,7 @@ When measuring TypeScript compatibility, read [`compat/typescript/README.md`](co
 | Pipeline | `c/*.ms`, `js/*.ms` | emitted C/JS through `compileToC` / `compileToJS` — pin the load-bearing tokens, pair with a `lang/` test that runs the code |
 | Phase handoff | `handoff/*.ms` | contracts between adjacent phases |
 | Corpus | `corpus/programs/<invariant>.ms` or `<invariant>/main.ms` | standalone programs byte-compared across lanes — the contract lives in the `// @…` directive head |
+| Mixed placement | `wasmmix/programs/<name>/main.ms` | one program built all-C, all-JS and mixed (`@wasm();` module in wasm), stdout byte-equal across the three; `MSC=<path> msc run src/test/wasmmix/run.ms`, pure parts tested in `wasmmix/spec.ms` |
 | Lifecycle guard | `guard/*.ms` | one DRC-ledger invariant per file, trusted only after it was proven red (`guard/README.md`) |
 
 - **Register each runnable test module** in its `lang/`, `handoff/`, `c/` or `js/` index. Corpus and lifecycle-guard runners discover standalone entries; imported fixture modules are not entries.
