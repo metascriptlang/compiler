@@ -1,5 +1,5 @@
-import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
-import { stringType, isStringLike } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, TypeKind, BinaryExprData, CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
+import { stringType, isStringLike, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, makeMember, runtimeRef, isRuntimeProcCall } from "../util";
@@ -8,6 +8,25 @@ import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } fro
 export function lowerStringConcatFlatten(program: Node, ctx: TransformContext): Node {
 	walkNode(program, flattenConcat);
 	return program;
+}
+
+export function lowerEnumOperandText(program: Node, ctx: TransformContext): Node {
+	walkNode(program, stringifyEnumOperands);
+	return program;
+}
+
+function isEnumTyped(node: Node): boolean {
+	return node.nodeType != null && literalBase(node.nodeType).kind == TypeKind.Enum;
+}
+
+function stringifyEnumOperands(node: Node): Node {
+	if (node.kind != NodeKind.BinaryExpr) return node;
+	const d = node.data as BinaryExprData;
+	if (d.operator == "+") {
+		if (isEnumTyped(d.left) && isStringConcatChain(d.right)) d.left = coerceToString(d.left, d.left.location);
+		if (isEnumTyped(d.right) && isStringConcatChain(d.left)) d.right = coerceToString(d.right, d.right.location);
+	}
+	return node;
 }
 
 function isStringLeaf(node: Node): boolean {

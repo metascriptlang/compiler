@@ -47,7 +47,7 @@ import { lowerAccessJS } from "./coercion/accessJS";
 import { lowerFloat32JS } from "./coercion/float32JS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
-import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
+import { lowerStringConcatFlatten, lowerEnumOperandText } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
@@ -165,6 +165,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 		flowLap("pass.lowerArraySpread");
 	}
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); flowLap("pass.lowerStringConcatFlatten"); }
+	if (jsBackend) { result = lowerEnumOperandText(result, ctx); flowLap("pass.lowerEnumOperandText"); }
 	if (runs(result, ctx, fact(ModuleFact.OptionalChain), "pass.lowerOptionalChain")) result = lowerOptionalChain(result, ctx);
 	flowLap("pass.lowerOptionalChain");
 	if (runs(result, ctx, fact(ModuleFact.Nullish), "pass.lowerNullishCoalesce")) result = lowerNullishCoalesce(result, ctx);
