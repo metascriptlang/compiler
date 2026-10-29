@@ -2,7 +2,6 @@
 // @stdout: interval 3
 // @stdout: task 7
 // @stdout: all 6
-// @xfail(raiser): raiser runtime error: Unknown host function: msSetTimeout
 // note: every source that can still settle an awaited promise keeps the program alive: a timer resolving a promise, an interval, a task that sleeps on its worker, and Promise.all over such tasks. None of them may end it with the unsettled-await exit 13.
 
 const v = await new Promise<int32>((resolve) => { setTimeout(() => { resolve(5); }, 120); });
