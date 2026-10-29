@@ -49,6 +49,7 @@ export interface CliOptions {
 	mode: number;
 	ccCompiler: number;
 	ccBinary: string;          // --cc=<path>: explicit C compiler binary (cross-compile)
+	ccConfigOwnsTarget: boolean;
 	targetOs: string;          // Target OS. Always set; defaults to host platform.
 	                           // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                           // Cross-compile detected by callsites via `targetOs !== platform`.
@@ -161,6 +162,7 @@ export function newCliOptions(): CliOptions {
 		mode: MODE_DEBUG,
 		ccCompiler: 0,
 		ccBinary: "",
+		ccConfigOwnsTarget: false,
 		targetOs: platform,
 		cpuTarget: "",
 		targetInfo: hostTargetInfo(),

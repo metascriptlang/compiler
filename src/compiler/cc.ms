@@ -713,7 +713,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// clang/gcc: --target=cpu-vendor-os-abi
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
-	if ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "") {
+	if (!opts.ccConfigOwnsTarget && ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "")) {
 		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
 		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
 		if (ct != "") flags = appendFlag(flags, ct);
