@@ -50,14 +50,14 @@ void* msPromiseRace(msRefArray* futures);
 /* ===== Promise.resolve / Promise.reject ===== */
 
 /* Create pre-completed future (Reference: newFuture[T]() + complete(val)) */
-static inline msFuture* msPromiseResolve(void* val) {
+static inline void* msPromiseResolve(void* val) {
 	msFuture* f = (msFuture*)msFutureCreate();
 	msFutureComplete(f, val);
 	return f;
 }
 
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
-static inline msFuture* msPromiseReject(void* err) {
+static inline void* msPromiseReject(void* err) {
 	msFuture* f = (msFuture*)msFutureCreate();
 	msIncref(err);
 	msFutureFail(f, err);
