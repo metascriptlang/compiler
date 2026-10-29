@@ -140,3 +140,44 @@ shown(1);
 	assert occurrences(messages, "must be consumed by a macro") == 0, messages.join("\n");
 	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
 }
+
+const converterModule = `export enum A { X }
+export enum B { Y }
+export enum C { Z }
+export converter aToB(e: A): B { return B.Y; }
+export converter aToC(e: A): C { return C.Z; }
+`;
+
+test "compileTimeNameUse: a converter that try applies counts as a use; an unused converter import still warns" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/conv.ms", entrySource: converterModule },
+		{ entryPath: "src/main.ms", entrySource: `import { A, B, aToB, aToC } from "./conv";
+function f(): Result<int32, A> { return Result.err(A.X); }
+function g(): Result<int32, B> {
+	const n = try f();
+	return Result.ok(n);
+}
+console.log(g().ok);
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert occurrences(messages, "'aToB' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'aToC' is imported but never used") == 1, messages.join("\n");
+}
+
+test "compileTimeNameUse: a converter applied at an argument and at an assignment counts as a use, also through a re-export" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/conv.ms", entrySource: converterModule },
+		{ entryPath: "src/reexport.ms", entrySource: `export { A, B, C, aToB, aToC } from "./conv";
+` },
+		{ entryPath: "src/main.ms", entrySource: `import { A, B, C, aToB, aToC } from "./reexport";
+function take(b: B): int32 { return 1; }
+const a: A = A.X;
+const c: C = a;
+console.log(take(a));
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert occurrences(messages, "'aToB' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'aToC' is imported but never used") == 0, messages.join("\n");
+}
