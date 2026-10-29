@@ -682,6 +682,20 @@ export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], 
 }
 
 // ===== Shared Env Setup (reference parity: getEnvTypeForOwner + rawClosureCreation) =====
+function freshSharedEnvName(state: LiftState): string {
+	const base = `$Env_${state.currentFnName}_shared`;
+	let name = base;
+	for (let n = 1; envStructNamed(state, name); n += 1) name = `${base}${n}`;
+	return name;
+}
+
+function envStructNamed(state: LiftState, name: string): boolean {
+	for (const decl of state.envStructs) {
+		if (decl.nodeType!.sym!.name == name) return true;
+	}
+	return false;
+}
+
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
@@ -696,7 +710,7 @@ export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet
 	const nestedReads = allCaptures;
 	allCaptures = frameCaptures;
 	state.sharedEnvActive = true;
-	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
+	state.sharedEnvName = freshSharedEnvName(state);
 	state.sharedEnvVarSym = freshEnvVarSym(state.ctx, `_env_${state.currentFnName}_`, null);
 	state.sharedEnvCapturedSyms = allCaptures;
 	state.sharedEnvCapturedIdents = allCapturedIdents;
