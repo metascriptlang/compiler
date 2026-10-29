@@ -3958,7 +3958,14 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			vmError(vm, raised);
 			return;
 		}
-		setException(vm, heapAllocString(vm.arrayHeap, raised));
+		const error = heapAllocObject(vm.objectHeap);
+		const name = heapAllocString(vm.arrayHeap, "Error");
+		const message = heapAllocString(vm.arrayHeap, raised);
+		vmIncref(vm, name);
+		vmIncref(vm, message);
+		heapObjectSetField(vm.objectHeap, error, "name", name);
+		heapObjectSetField(vm.objectHeap, error, "message", message);
+		setException(vm, raiserObject(error));
 		unwindStep(vm);
 		return;
 	}
@@ -5225,15 +5232,15 @@ function execHostRaiseInCatch(fatal: boolean): RaiserVM {
 			raiserAx(RaiserOpcode.Jump, 4),
 			raiserABx(RaiserOpcode.Catch, 1, 4),
 			raiserABx(RaiserOpcode.Try, 0, 3),
+			raiserABC(RaiserOpcode.LoadField, 1, 1, 2),
 			raiserABC(RaiserOpcode.Print, 1, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 0),
 			raiserABC(RaiserOpcode.Finally, 8, 0, 0),
 			raiserABx(RaiserOpcode.LoadConst, 2, 1),
 			raiserABC(RaiserOpcode.Print, 2, 0, 0),
 			raiserABC(RaiserOpcode.FinallyEnd, 8, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserConstString("raise"), raiserConstString("finally")]
+		[raiserConstString("raise"), raiserConstString("finally"), raiserConstString("message")]
 	));
 }
 
@@ -5271,9 +5278,10 @@ test "a recoverable host error with a new message each run adds nothing to the c
 			raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 			raiserAx(RaiserOpcode.Jump, 1),
 			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserABC(RaiserOpcode.LoadField, 1, 1, 1),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserConstString("raise")]
+		[raiserConstString("raise"), raiserConstString("message")]
 	);
 	const before = constStringCount();
 	let last = "";
