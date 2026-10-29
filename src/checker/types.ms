@@ -4600,6 +4600,13 @@ function canonicalSubstitutedUnion(copy: Type): Type {
 	for (const m of copy.typeChildren) {
 		if (m != null && m.kind == TypeKind.Union) return createUnion(copy.typeChildren);
 	}
+	if (!hasGenericParams(copy)) {
+		const kept: Type[] = [];
+		for (const m of copy.typeChildren) {
+			if (m != null && m.kind != TypeKind.Never && !kept.some((k: Type): boolean => k == m || (k.kind == m.kind && (isNumeric(m) || m.kind == TypeKind.String || m.kind == TypeKind.Boolean || m.kind == TypeKind.Char)))) kept.push(m);
+		}
+		if (kept.length != copy.typeChildren.length) return kept.length == 0 ? neverType() : kept.length == 1 ? kept[0] : createUnion(kept);
+	}
 	sortUnionMembers(copy.typeChildren);
 	return copy;
 }
