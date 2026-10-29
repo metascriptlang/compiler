@@ -491,7 +491,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	const name = nativeRuntimeConfig(opts.targetOs, cpu);
 	const config = join(bundle.root, `runtime/${name}`);
 	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${opts.targetOs}/${cpu} is not installed in ${bundle.root}`);
-	if ((opts.isHcr || opts.appMode != "console") && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply ${opts.isHcr ? "HCR" : opts.appMode} startup`);
+	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	return Result.ok(null);
 }
