@@ -216,6 +216,14 @@ export function setOuterCheckContext(
 	_comptimeOuter.preludeCtx = preludeCtx;
 }
 
+export function clearOuterCheckContext(): void {
+	if (_comptimeOuter == null) return;
+	_comptimeOuter.registry = null as unknown as ExportRegistry;
+	_comptimeOuter.graph = null as unknown as ModuleGraph;
+	_comptimeOuter.module = null as unknown as Module;
+	_comptimeOuter.preludeCtx = null as unknown as CheckerContext;
+}
+
 // Test-only resets.
 export function _resetComptimeOuterCtxForTests(): void {
 	_comptimeOuter = null;

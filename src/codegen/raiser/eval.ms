@@ -32,7 +32,7 @@ import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
@@ -88,8 +88,9 @@ function transformForEngine(program: Node): Node {
 	ensureHostTableLoaded();
 	registerTypeQueryHostFns();
 	const outer = getComptimeOuterCtx();
-	const savedOuterProgram = outer != null ? outer.program : null;
-	const savedOuterPrelude = outer != null ? outer.preludeCtx : null as unknown as CheckerContext;
+	const saved: ComptimeOuterCtx | null = outer != null
+		? { program: outer.program, registry: outer.registry, graph: outer.graph, module: outer.module, preludeCtx: outer.preludeCtx }
+		: null;
 	const hasFullOuterCtx = outer != null
 		&& outer.registry != null
 		&& outer.graph != null
@@ -105,10 +106,7 @@ function transformForEngine(program: Node): Node {
 		transformed = transformForRaiser(program, checkerCtx);
 	} finally {
 		setEngineCheckMode(prevEngineMode);
-		if (outer != null) {
-			outer.program = savedOuterProgram;
-			outer.preludeCtx = savedOuterPrelude;
-		}
+		if (saved != null) setComptimeOuterCtx(saved);
 	}
 	return transformed;
 }
