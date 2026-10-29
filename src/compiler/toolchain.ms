@@ -2,10 +2,10 @@
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, writeFile, removeAll, symlink } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, changeStamp, changedTime, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { sha256, toHex } from "std/crypto/sha256";
-import { nowSeconds } from "../utils/stampDirs";
+import { nowSeconds, markUsed } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
@@ -269,11 +269,17 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 	}
 	const memo = stampRoot == "" ? "" : `${stampRoot}/${bundleDigest(root)}.bundle`;
 	const seal = bundleSeal(root, identity, lines);
-	if (seal == "" || memo == "" || (try readFile(memo) catch "") != seal) {
+	if (!bundleMemoHit(memo, seal)) {
 		const verified = try verifyBundlePayload(root, identity, version, lines);
 		if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
 	}
 	return Result.ok({ root, version, identity });
+}
+
+function bundleMemoHit(memo: string, seal: string): boolean {
+	if (seal == "" || memo == "" || (try readFile(memo) catch "") != seal) return false;
+	markUsed(memo, nowSeconds());
+	return true;
 }
 
 function bundleDigest(text: string): string {
@@ -385,6 +391,21 @@ test "a matching bundle seal never skips payload containment" {
 	assert removeAll(root).ok;
 	assert removeAll(stamps).ok;
 	assert remove(outside).ok;
+}
+
+test "a bundle memo that answers is refreshed, so the stale-entry collector keeps a memo used every day" {
+	if (platform == "windows") return;
+	const stamps = join(cwd(), `out/bundleMemoProbe-${performance.now()}`);
+	assert ensureDir(stamps).ok;
+	const memo = join(stamps, "digest.bundle");
+	assert writeFile(memo, "seal").ok;
+	assert backdate(stamps, ["digest.bundle"]);
+	assert !bundleMemoHit(memo, "other");
+	assert modifiedTime(memo) < nowSeconds() - 3600;
+	assert bundleMemoHit(memo, "seal");
+	assert modifiedTime(memo) > nowSeconds() - 60;
+	assert (try readFile(memo) catch "") == "seal";
+	assert removeAll(stamps).ok;
 }
 
 test "a bundle with a missing or freshly written payload seals nothing" {
