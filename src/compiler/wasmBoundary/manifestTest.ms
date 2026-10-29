@@ -53,7 +53,7 @@ export function takesArray(xs: int32[]): int32 { return 0; }
 export function takesBox(b: Box): int32 { return 0; }
 export function maybe(x: int32 | null): int32 { return 0; }
 export function wide(): Box { return new Box(); }
-export function cbString(cb: (s: string) => int32): int32 { return 0; }
+export function cbString(cb: (n: int32) => string): int32 { return 0; }
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["takesArray", "takesBox", "maybe", "wide", "cbString"]));
 	assert m.functions.length == 0;
