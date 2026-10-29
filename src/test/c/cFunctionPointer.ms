@@ -115,3 +115,49 @@ test "C: a module-level function cast to Ptr<void> still compiles" {
 	const c = compileC(CAST + "setOpt(1, add as Ptr<void>);\n");
 	assert !c.startsWith("ERROR"), c;
 }
+
+const CONST_SLOTS_HEADER = "test/cFunctionPointer/constSlots.h";
+const CONST_SLOTS = "typedef struct Pair { int a; int b; int c; int d; } Pair;\n"
+	+ "typedef void (*PairSink)(void *, const Pair *);\n"
+	+ "typedef void (*ByteSink)(void *, const unsigned char *, unsigned long);\n"
+	+ "void runPairSink(PairSink f);\n"
+	+ "void runByteSink(ByteSink f);\n";
+
+function compileConstSlots(main: string): string {
+	const t = createDefineTable();
+	applyDefineSwitch(t, "-d:c");
+	applyDefineSwitch(t, "-d:backend=c");
+	setParserDefines(t);
+	const entries: MapEntry[] = [{ entryPath: CONST_SLOTS_HEADER, entrySource: CONST_SLOTS }, { entryPath: MAIN, entrySource: main }];
+	const out = compileProjectToC(entries, MAIN);
+	resetParserDefines();
+	return out;
+}
+
+const PAIR_IMPORT = "import { runPairSink, Pair } from \"./constSlots.h\";\n";
+const BYTE_IMPORT = "import { runByteSink } from \"./constSlots.h\";\n";
+
+test "C: a by-value struct parameter against a header const T* slot is refused, naming Readonly<Ptr<T>>" {
+	const c = compileConstSlots(PAIR_IMPORT + "function sink(u: Ptr<void> | null, p: Pair): void {}\nrunPairSink(sink);\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("Readonly<Ptr<Pair>>"), c;
+}
+
+test "C: a by-value byte parameter against a header const uint8 pointer slot is refused, naming Readonly<Ptr<uint8>>" {
+	const c = compileConstSlots(BYTE_IMPORT + "function sink(u: Ptr<void> | null, b: uint8, n: uint64): void {}\nrunByteSink(sink);\n");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("Readonly<Ptr<uint8>>"), c;
+}
+
+test "C: a Readonly<Ptr<T>> parameter fills a header const T* slot and is emitted const" {
+	const c = compileConstSlots(PAIR_IMPORT + "function sink(u: Ptr<void> | null, p: Readonly<Ptr<Pair>> | null): void {}\nrunPairSink(sink);\n");
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("const Pair*"), c;
+}
+
+test "C: a Readonly<Ptr<uint8>> parameter fills a header const uint8 pointer slot and slices" {
+	const c = compileConstSlots(BYTE_IMPORT + "function sink(u: Ptr<void> | null, p: Readonly<Ptr<uint8>> | null, n: uint64): void {\n"
+		+ "\tif (p === null) return;\n\tlet total = 0;\n\tfor (const b of p[0..n]) { total += b; }\n}\nrunByteSink(sink);\n");
+	assert !c.startsWith("ERROR"), c;
+	assert c.contains("const uint8_t*"), c;
+}
