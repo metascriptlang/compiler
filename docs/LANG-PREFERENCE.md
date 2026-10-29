@@ -81,7 +81,7 @@ Quick navigation:
 - `match` for discrete cases, `if` for conditions, `for..of` for sequences, indexed `for`
   when the index matters, `while` for condition-driven work. Do not write `switch`.
 - `Result<T, E>` for recoverable failure; `T | null` for absence; `boolean` for yes/no queries.
-- Use named exports, descriptive camelCase names, tabs and code lines at most 100 columns wide.
+- Use named exports, descriptive camelCase names, tabs and code lines at most 80 columns wide.
   The entry module's top-level code runs; a function named `main` is not called automatically.
 
 ## 2. Files, APIs and formatting
@@ -94,8 +94,8 @@ that surface. Do not make every helper public or create a class just to namespac
 
 Use camelCase for files, variables, fields and functions; PascalCase for types and enum members;
 UPPER_SNAKE_CASE for true module constants. Spell out domain names instead of saving characters.
-Use tabs for indentation, semicolons and braces. Keep code at most 100 display columns wide;
-a tab stop is four columns, not one character. When a construct no longer fits, put one field,
+Use tabs for indentation, semicolons and braces. Keep code at most 80 display columns wide;
+a tab counts as two columns, as `msc fmt` measures it. When a construct no longer fits, put one field,
 argument, import or parameter per line with a trailing comma. Enum declarations put one member
 per line with trailing commas even when short. Break a binary expression after its operator;
 start a continued method chain with the dot on the following line. Prefer early guards to deep
@@ -2081,7 +2081,7 @@ Apply the items the change reaches; this is not a demand to run every target for
 - [ ] Library imports do not accidentally launch the application, and CLI tests guard startup.
 - [ ] Target/build differences are explicit; benchmarks use representative optimized work and
   preserve inputs, toolchain and semantics.
-- [ ] Names, tabs, 100-column wrapping, trailing commas and enum formatting follow §2, without
+- [ ] Names, tabs, 80-column wrapping, trailing commas and enum formatting follow §2, without
   unrelated scaffolding or formatting churn.
 
 `assert condition, "context"` belongs inside a test block; the checked compiler refuses it outside
