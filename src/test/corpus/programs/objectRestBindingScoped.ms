@@ -1,5 +1,5 @@
-// @stdout: s10 s11 s12 | s1s1 | s1 | 2 7
-// note: the object a rest pattern binds is fresh, so a loop, an array that holds it, an alias and a return each release it once on every lane, whether its fields are strings or plain data.
+// @stdout: s10 s11 s12 | s1s1 | s1 | 2 7 | z z s1
+// note: the object a rest pattern binds is fresh and shared by its aliases, as a literal is, so a loop, an array that holds it, an alias and a return each release it once on every lane, whether its fields are strings or plain data.
 interface Tagged { count: int32; label: string; }
 interface Plain { n: int32; m: int32; }
 
@@ -24,10 +24,17 @@ function returned(b: Tagged): string {
 	return rest.label;
 }
 
+function aliased(b: Tagged): string {
+	const { count, ...rest } = b;
+	const same = rest;
+	same.label = "z";
+	return `${rest.label} ${same.label} ${b.label}`;
+}
+
 function plain(p: Plain): string {
 	const { n, ...rest } = p;
 	return `${n} ${rest.m}`;
 }
 
 const tagged: Tagged = { count: 3, label: "s" + String(1) };
-console.log(`${loop(tagged)} | ${held(tagged)} | ${returned(tagged)} | ${plain({ n: 2, m: 7 })}`);
+console.log(`${loop(tagged)} | ${held(tagged)} | ${returned(tagged)} | ${plain({ n: 2, m: 7 })} | ${aliased(tagged)}`);
