@@ -1,4 +1,4 @@
-import { EncodingBytes, EncodingIndex } from "std/crypto/encodingOutput";
+import { EncodingBytes, EncodingIndex } from "std/core/encoding/output";
 
 // Length of the well-formed sequence at `i`, or minus the length of its longest valid prefix
 // (at least one byte), which decodes to one U+FFFD (WHATWG UTF-8 decode, maximal subparts).

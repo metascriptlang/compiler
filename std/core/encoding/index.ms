@@ -1,7 +1,7 @@
 import {
 	EncodingIndex, emptyEncoding, newEncodingOutput, newDecodingOutput,
 	encodingOutputBytes, freshEncodingOutputBytes,
-} from "./encodingOutput";
+} from "./output";
 
 @inline
 export function encodeHex(this data: Readonly<Span<uint8>>): string {

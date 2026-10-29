@@ -1,8 +1,8 @@
 @include("runtime/core/buffer.h");
 
 import { Math } from "std/core/math";
-import { encodeHex, encodeBase64 } from "std/crypto/encoding";
-import { newEncodingOutput, freshEncodingOutputBytes } from "std/crypto/encodingOutput";
+import { encodeHex, encodeBase64 } from "std/core/encoding";
+import { newEncodingOutput, freshEncodingOutputBytes } from "std/core/encoding/output";
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 import { asciiWords, utf8String } from "../string/bytes";
 

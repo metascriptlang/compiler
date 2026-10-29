@@ -286,8 +286,8 @@ export function isHashSupported(algorithm: string): boolean {
 
 // ===== Encoding =====
 
-import { encodeHex, decodeHexString, encodeBase64, decodeBase64String } from "./encoding";
-import { emptyEncoding } from "./encodingOutput";
+import { encodeHex, decodeHexString, encodeBase64, decodeBase64String } from "../core/encoding";
+import { emptyEncoding } from "../core/encoding/output";
 
 export function toHex(data: Bytes): string {
 	if (typeof data == "string") {

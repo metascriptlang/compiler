@@ -1,8 +1,8 @@
 // Buffer text codecs with the decoding rules of Node's Buffer: hex stops at the first pair that is
 // not two hex digits; base64 takes both alphabets, skips any other byte and stops at `=`.
 
-import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../../crypto/encodingOutput";
-import { hexDigitValue } from "../../crypto/encoding";
+import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../encoding/output";
+import { hexDigitValue } from "../encoding";
 
 const equalsSign: uint8 = 61;
 

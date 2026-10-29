@@ -3,7 +3,7 @@
 // rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
 
 import { wellFormedPrefix, repairedLength, writeRepaired } from "./utf8Repair";
-import { newEncodingOutput } from "std/crypto/encodingOutput";
+import { newEncodingOutput } from "std/core/encoding/output";
 
 // ===== WTF-8 byte tier =====
 

@@ -13,7 +13,7 @@
 // copyTo, never stored or returned.
 
 import { Math } from "std/core/math";
-import { encodeHex, encodeBase64 } from "std/crypto/encoding";
+import { encodeHex, encodeBase64 } from "std/core/encoding";
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 
 export type Buffer = uint8[];
