@@ -32,7 +32,7 @@ import {
 	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand } from "./expressions";
+import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -116,7 +116,7 @@ function runtimeParamSyms(decl: Node, name: string): Symbol[] {
 	return kept;
 }
 
-export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null, routine: Symbol | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
@@ -126,9 +126,10 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 		declareLocal(s, paramSym, allocFor(s, paramSym.symbolType));
 	}
 
-	// Expression-body functions (e.g., arrow `(x) => x * 2` lifted to FunctionDecl):
-	// body is a bare expression, not a statement — compile as return <expr>.
-	if (isExpressionBody(body)) {
+	const hostName = routine != null ? runtimeHostName(routine) : "";
+	if (hostName != "") {
+		emitRet(s, compileHostForward(s, hostName, paramSyms, routine!.symbolType != null ? routine!.symbolType.typeReturn : null));
+	} else if (isExpressionBody(body)) {
 		const exprReg = compileExpr(s, body);
 		emitRet(s, exprReg);
 	} else {
@@ -228,7 +229,7 @@ function compileClassConstructor(
 // each an ABSOLUTE index (base + local position) so Call/closure funcIdx resolve
 // image-wide with no relocation. Returns the
 // absolute index assigned to `wantFn` (-1 if not present).
-interface RaiserReservedSlot { idx: number; fnName: string; paramSyms: Symbol[]; body: Node; }
+interface RaiserReservedSlot { idx: number; fnName: string; paramSyms: Symbol[]; body: Node; routine: Symbol | null; }
 interface RaiserReservedCtor { idx: number; initIdx: number; className: string; classBody: Node[]; ctorSyms: Symbol[]; ctorBody: Node | null; classSym: Symbol | null; }
 
 export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
@@ -249,7 +250,7 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 				wantIdx = idx;
 				if (wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
 			}
-			reserved.push({ idx, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody });
+			reserved.push({ idx, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody, routine: fnNode.resolvedSym });
 		}
 		const classNode = unwrapToClassDecl(pd.programStmts[i]);
 		if (classNode != null) {
@@ -274,7 +275,7 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 					const idx = image.functions.length;
 					image.functions.push(raiserPlaceholderFunc());
 					funcMap.symbolIndices.set(declaredSymbol(member, methodKey), idx);
-					reserved.push({ idx, fnName: methodKey, paramSyms: paramSymbolsOf(member, methodKey), body: md.methodBody });
+					reserved.push({ idx, fnName: methodKey, paramSyms: paramSymbolsOf(member, methodKey), body: md.methodBody, routine: null });
 				} else if (member.kind == NodeKind.ConstructorDecl) {
 					const ctd = member.data as ConstructorDeclData;
 					ctorSyms = paramSymbolsOf(member, `${cd.className} constructor`);
@@ -293,7 +294,7 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 
 	for (let i = 0; i < reserved.length; i += 1) {
 		const r = reserved[i];
-		const func = compileFuncBody(funcMap, r.fnName, r.paramSyms, r.body);
+		const func = compileFuncBody(funcMap, r.fnName, r.paramSyms, r.body, null, r.routine);
 		image.functions[r.idx] = func;
 	}
 	for (const c of ctors) {
@@ -328,6 +329,7 @@ interface RaiserProjectDecl {
 	className: string;
 	classBody: Node[];
 	ctorBody: Node;
+	routine: Symbol | null;
 }
 
 function hasGlobal(globals: RaiserGlobalMap, symbol: Symbol): boolean {
@@ -396,7 +398,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 				const fd = fnNode.data as FunctionDeclData;
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
 				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
-				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode, routine: fnNode.resolvedSym });
 				if (modules[mi].modulePath == exportsOf && pd.programStmts[i].kind == NodeKind.ExportDecl) {
 					exports.push({ name: fd.fnName, funcIdx: funcIdx as int32, arity: paramSyms.length });
 				}
@@ -420,7 +422,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 						const md = cd.classBody[ci].data as MethodDeclData;
 						const methodKey = `${cd.className}_${md.methodName}`;
 						globalFuncMap.symbolIndices.set(declaredSymbol(cd.classBody[ci], methodKey), funcIdx);
-						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: methodKey, paramSyms: paramSymbolsOf(cd.classBody[ci], methodKey), body: md.methodBody, className: "", classBody: noNodes, ctorBody: nullNode });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: methodKey, paramSyms: paramSymbolsOf(cd.classBody[ci], methodKey), body: md.methodBody, className: "", classBody: noNodes, ctorBody: nullNode, routine: null });
 						funcIdx += 1;
 					}
 				}
@@ -432,21 +434,21 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 						globalFuncMap.ctorIndices.set(classSym, funcIdx);
 						const ctd = cd.classBody[ci].data as ConstructorDeclData;
 						const ctorSyms = paramSymbolsOf(cd.classBody[ci], `${cd.className} constructor`);
-						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody, routine: null });
 						funcIdx += 1;
 						globalFuncMap.initIndices.set(classSym, funcIdx);
 						globalFuncMap.symbolIndices.set(declaredSymbol(cd.classBody[ci], `${cd.className} constructor`), funcIdx);
-						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody, routine: null });
 						funcIdx += 1;
 					}
 				}
 				if (!hasCtor) {
 					const ctorKey = cd.className + "_new";
 					globalFuncMap.ctorIndices.set(classSym, funcIdx);
-					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode, routine: null });
 					funcIdx += 1;
 					globalFuncMap.initIndices.set(classSym, funcIdx);
-					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode, routine: null });
 					funcIdx += 1;
 				}
 			}
@@ -473,7 +475,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		} else if (dcl.isCtor) {
 			functions[idx] = compileClassConstructor(globalFuncMap, dcl.className, dcl.classBody, dcl.paramSyms, dcl.ctorBody, globals, dcl.classSym);
 		} else {
-			functions[idx] = compileFuncBody(globalFuncMap, dcl.fnName, dcl.paramSyms, dcl.body, globals);
+			functions[idx] = compileFuncBody(globalFuncMap, dcl.fnName, dcl.paramSyms, dcl.body, globals, dcl.routine);
 		}
 		setRaiserModulePath(prevModule);
 	};

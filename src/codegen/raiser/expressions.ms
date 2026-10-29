@@ -43,12 +43,11 @@ import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 // (transformForEngine), so resolve the bridge NOW and report a missing one
 // at the call site with a span — the procIsCallback-resolved-at-codegen
 // shape, one phase earlier than the reference needs it.
-function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
-	if (lookupHost(sym.nativeName) == null) {
-		queueRaiserCompileError(
-			`no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`,
-			callee.location.line, callee.location.column);
-	}
+function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
+	if (lookupHost(sym.nativeName) != null) return "";
+	const msg = `no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`;
+	queueRaiserCompileError(msg, callee.location.line, callee.location.column);
+	return msg;
 }
 
 let _stdRoot = "";
@@ -69,7 +68,16 @@ function holdsValue(sym: Symbol): boolean {
 		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Property;
 }
 
-function runtimeHostName(sym: Symbol): string {
+export function compileHostForward(s: RaiserCompState, hostName: string, params: Symbol[], resultType: Type | null): int32 {
+	const classes: RaiserRegClass[] = [regClassOf(s, resultType)];
+	for (const p of params) classes.push(regClassOf(s, p.symbolType));
+	const dest = allocBlock(s, classes);
+	for (let i = 0; i < params.length; i += 1) emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, resolveLocal(s, params[i]), 0));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, addConst(s, raiserConstString(hostName)), params.length));
+	return dest;
+}
+
+export function runtimeHostName(sym: Symbol): string {
 	if (holdsValue(sym)) return "";
 	if (sym.nativeName != "") return sym.nativeName;
 	const routine = stdRoutineName(sym);
@@ -599,6 +607,8 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			}
 			const funcIdx = resolveRoutine(s, node.resolvedSym);
 			if (funcIdx >= 0) {
+				const missing = node.resolvedSym!.nativeName != "" ? checkHostBridgeCoverage(node.resolvedSym!, node) : "";
+				if (missing != "") return emitTrapValue(s, missing, node.nodeType);
 				const r = allocWord(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
 				return r;
