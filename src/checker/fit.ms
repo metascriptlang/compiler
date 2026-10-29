@@ -2757,7 +2757,12 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 	const exactSlot = unionSlotOf(formal, exprType);
 	const vi = exactSlot >= 0 || formal.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
-	if (vi != exactSlot) expr = classUpcast(expr, formal.typeChildren[vi]);
+	if (vi != exactSlot) {
+		expr = classUpcast(expr, formal.typeChildren[vi]);
+	} else if (formal.kind == TypeKind.Union && isClassRef(exprType)) {
+		const upcast = tryStructUpcast(expr, formal.typeChildren[vi], exprType);
+		if (upcast != null as unknown as Node) expr = upcast;
+	}
 	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	// A by-value slot READS a ref operand and copies it, never consumes it:
