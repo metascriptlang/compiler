@@ -21,6 +21,12 @@ order with no wrapper or change to the caller's command line. The caller's own `
 directory so the driver searches no host MinGW directory. The clang GNU driver picks `ld.lld`'s
 MinGW mode itself.
 
+Every import library Zig makes on demand from mingw-w64's `.def` files is built here for the caller's `-lNAME`:
+`.def.in` files go through the engine's clang preprocessor for the target, and `llvm-dlltool` writes `libNAME.a` in
+each variant directory, the directory the config passes with `-L`. An architecture directory overrides `lib-common`,
+and a name Zig's own link line already carries stays Zig's file. `uuid`, `dxguid` and the other GUID libraries of
+STATIC_LIBRARIES get an empty archive, because Zig takes their definitions from the `libmingw32.lib` it links.
+
 Only the removed disabled CPU features of prepareRuntime.REMOVED_DISABLED_FEATURES are left out of
 the config; any other unknown feature stays and the proof fails on the engine's warning. The two
 targets differ in the data of TARGETS alone (Zig's target and cpu, the lld-link machine, the PE machine).
@@ -37,6 +43,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 import prepareEngine as pe
 import prepareRuntime as pr
@@ -53,14 +60,23 @@ LINK_IGNORED = ("-lldmingw", "-ERRORLIMIT:0", "-NOLOGO", "-DEBUG", "-BUILD-ID:NO
                 "-MLLVM:-float-abi=hard")
 LINK_PREFIXES = ("-PDB:", "-PDBALTPATH:", "-OUT:", "-IMPLIB:")
 USER_LIBRARIES = ["-lws2_32", "-lbcrypt", "-lmswsock"]
+MINGW_LIBRARIES = ["-lgdi32", "-ld3d11", "-ldxgi", "-ldwmapi", "-lole32", "-lshlwapi", "-luuid", "-ldxguid"]
 LIBRARY_STEM = re.compile(r"^[A-Za-z0-9_.+-]+$")
+DEFINITION = re.compile(r"^(.+)\.def(\.in)?$")
+FRAGMENT_SUFFIX = "-common"
+EMPTY_ARCHIVE = b"!<arch>\n"
+STATIC_LIBRARIES = ("amstrmid", "bits", "dloadhelper", "dmoguids", "dxerr8", "dxerr9", "dxguid", "largeint", "mfuuid",
+                    "portabledeviceguids", "strmiids", "uuid", "wbemuuid", "wmcodecdspuuid")
+DLLTOOL_JOBS = 8
 
 # What differs between the targets: the compile line's target and cpu, lld-link's -MACHINE, the PE machine.
 TARGETS = {
     TARGET: {"zigTarget": "x86_64-unknown-windows-gnu", "cpu": "x86-64", "linkMachine": "X64",
-             "machine": MACHINE_AMD64, "machineName": "AMD64"},
+             "machine": MACHINE_AMD64, "machineName": "AMD64", "dlltoolMachine": "i386:x86-64",
+             "definitionDirectory": "lib64"},
     ARM64_TARGET: {"zigTarget": "aarch64-unknown-windows-gnu", "cpu": "generic", "linkMachine": "ARM64",
-                   "machine": MACHINE_ARM64, "machineName": "ARM64"},
+                   "machine": MACHINE_ARM64, "machineName": "ARM64", "dlltoolMachine": "arm64",
+                   "definitionDirectory": "libarm64"},
 }
 # A variant's directory is `<target><suffix>` and its config `<target><suffix>.cfg`.
 VARIANTS = {
@@ -150,6 +166,8 @@ def runZig(zig, target, variant, work, cache):
     environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
                    "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
+    if sys.platform == "win32":
+        environment.update({"SystemRoot": os.environ["SystemRoot"], "TEMP": private, "TMP": private})
     command = [zig, "cc", "-target", target, "-O2"] + spec["zigArgs"] + [
         os.path.join(pr.FIXTURES, spec["fixture"])] + USER_LIBRARIES + ["-o", output]
     try:
@@ -221,8 +239,82 @@ def copyTargetHeaders(isystem, output, zigLib, copied):
     return [n for n in names if n in copied], [n for n in names if n not in copied]
 
 
+def mingwDefinitions(mingw, target):
+    """{library name: path of its .def or .def.in} for target: lib-common, overridden by the target's own directory
+    when Zig ships one. A `*-common` file is a fragment other definitions include, never a library."""
+    found = {}
+    for directory in ("lib-common", TARGETS[target]["definitionDirectory"]):
+        root = os.path.join(mingw, directory)
+        local = {}
+        for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+            match = DEFINITION.match(name)
+            if not match or match.group(1).endswith(FRAGMENT_SUFFIX):
+                continue
+            if match.group(1) in local:
+                raise pe.EngineError("%s: two definitions of %s" % (root, match.group(1)))
+            local[match.group(1)] = os.path.join(root, name)
+        found.update(local)
+    return found
+
+
+def buildImportLibrary(engine, mingw, target, name, source, work):
+    """lib<name>.a of one definition file, in work. Returns its path."""
+    definition = source
+    if source.endswith(".in"):
+        definition = os.path.join(work, name + ".def")
+        pe.run([os.path.join(engine, "bin", "clang"), "--no-default-config", "-E", "-P", "-x", "c", "-nostdinc",
+                "-target", TARGETS[target]["zigTarget"], "-I", os.path.join(mingw, "def-include"), source,
+                "-o", definition])
+    library = os.path.join(work, "lib%s.a" % name)
+    pe.run([os.path.join(engine, "bin", "llvm-dlltool"), "-m", TARGETS[target]["dlltoolMachine"], "-d", definition,
+            "-l", library])
+    return library
+
+
+def buildMingwLibraries(engine, zigLib, target, work, skip):
+    """Every `-lNAME` library Zig makes for target that skip does not name, as `lib<NAME>.a` files in the new directory
+    work. Returns [{"name", "source", "path"}] sorted by name; `source` is relative to Zig's mingw directory, None
+    for an empty archive."""
+    mingw = os.path.join(zigLib, "libc", "mingw")
+    dlltool = os.path.join(engine, "bin", "llvm-dlltool")
+    if not (os.path.isfile(dlltool) or os.path.isfile(dlltool + ".exe")):
+        raise pe.EngineError("engine %s has no llvm-dlltool; the import libraries cannot be built" % engine)
+    definitions = sorted((n, s) for n, s in mingwDefinitions(mingw, target).items() if n not in skip)
+    clash = sorted(n for n, _ in definitions if n in STATIC_LIBRARIES)
+    if clash:
+        raise pe.EngineError("%s: %s have a definition file and are also static libraries" % (target, clash))
+    os.makedirs(work)
+    with ThreadPoolExecutor(DLLTOOL_JOBS) as pool:
+        built = list(pool.map(lambda item: buildImportLibrary(engine, mingw, target, item[0], item[1], work),
+                              definitions))
+    libraries = [{"name": n, "source": os.path.relpath(s, mingw).replace(os.sep, "/"), "path": p}
+                 for (n, s), p in zip(definitions, built)]
+    for name in STATIC_LIBRARIES:
+        path = os.path.join(work, "lib%s.a" % name)
+        with open(path, "wb") as f:
+            f.write(EMPTY_ARCHIVE)
+        libraries.append({"name": name, "source": None, "path": path})
+    return sorted(libraries, key=lambda library: library["name"])
+
+
+def copyMingwLibraries(libraries, output, directory):
+    """Copy the built libraries into output/directory. Returns [{"name", "source", "sha256", "bytes"}]."""
+    records = []
+    for library in libraries:
+        name = pr.checkName("lib%s.a" % library["name"])
+        copy = os.path.join(output, directory, name)
+        if os.path.lexists(copy):
+            raise pe.EngineError("%s: the library %s collides with a runtime input" % (directory, name))
+        shutil.copyfile(library["path"], copy)
+        os.chmod(copy, 0o644)
+        records.append({"name": name, "source": library["source"], "sha256": pe.sha256File(copy),
+                        "bytes": os.path.getsize(copy)})
+    return records
+
+
 def produceTarget(zig, zigVersion, engine, target, work, cache, output, copied, major):
-    """Both variants of one target. Returns (zigLib, directories, absent, records)."""
+    """Both variants of one target. Returns (zigLib, directories, absent, records, {variant directory: library
+    records})."""
     produced = {variant: produceVariant(zig, target, variant, work, cache) for variant in VARIANTS}
     first = produced["exe"][0]
     if produced["dll"][0]["isystem"] != first["isystem"]:
@@ -231,10 +323,13 @@ def produceTarget(zig, zigVersion, engine, target, work, cache, output, copied, 
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
     directories, absent = copyTargetHeaders(first["isystem"], output, zigLib, copied)
-    records = []
+    skip = {stem for _, _, stems in produced.values() for stem in stems}
+    libraries = buildMingwLibraries(engine, zigLib, target, os.path.join(work, target + "-mingw"), skip)
+    records, libraryRecords = [], {}
     for variant, (compile_, link, stems) in produced.items():
         directory = variantDirectory(target, variant)
         inputs = pr.copyInputs([("input", p) for p in link["inputs"]], output, directory, engine)
+        libraryRecords[directory] = copyMingwLibraries(libraries, output, directory)
         carried, notCarried = pr.translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
         pe.writeText(os.path.join(output, variantConfig(target, variant)),
                      renderWindowsConfig(variant, dict(compile_, features=carried), link, directories, stems, major,
@@ -249,23 +344,24 @@ def produceTarget(zig, zigVersion, engine, target, work, cache, output, copied, 
             "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags, "
                                   "-DEBUG/-PDB/-BREPRO/-IMPLIB outputs (the caller asks for them)",
         })
-    return zigLib, directories, absent, records
+    return zigLib, directories, absent, records, libraryRecords
 
 
 def produceTargets(zig, zigVersion, engine, targets, work, output, major):
     """Every target in the one private cache. Returns (include directories copied, {target: absent names},
-    records, notice files)."""
+    records, notice files, {variant directory: library records})."""
     cache = os.path.join(work, "global")
     os.makedirs(cache)
-    copied, absent, records, zigLibs = set(), {}, [], set()
+    copied, absent, records, zigLibs, libraries = set(), {}, [], set(), {}
     for target in targets:
-        zigLib, directories, absent[target], produced = produceTarget(
+        zigLib, directories, absent[target], produced, built = produceTarget(
             zig, zigVersion, engine, target, work, cache, output, copied, major)
         zigLibs.add(zigLib)
         records += produced
+        libraries.update(built)
     if len(zigLibs) != 1:
         raise pe.EngineError("the targets name different Zig lib directories %s" % sorted(zigLibs))
-    return sorted(copied), absent, records, pr.copyNotices(output, zigLibs.pop(), SPEC)
+    return sorted(copied), absent, records, pr.copyNotices(output, zigLibs.pop(), SPEC), libraries
 
 
 def selectWindowsTargets(names):
@@ -291,10 +387,10 @@ def prepareWindowsRuntime(zig, engine, windows, targets=None):
     partial = tempfile.mkdtemp(prefix=os.path.basename(windows) + ".partial-", dir=os.path.dirname(windows))
     work = tempfile.mkdtemp(prefix="prepareWindowsRuntime-")
     try:
-        directories, absent, records, notices = produceTargets(zig, zigId["version"], engine, targets, work, partial,
-                                                              major)
+        directories, absent, records, notices, libraries = produceTargets(
+            zig, zigId["version"], engine, targets, work, partial, major)
         verifyConfigs(engine, partial, records, work)
-        writeProvenance(partial, zigId, host, version, targets, directories, absent, records, notices)
+        writeProvenance(partial, zigId, host, version, targets, directories, absent, records, notices, libraries)
         os.chmod(partial, 0o755)
         pr.renameNoReplace(partial, windows)
     except BaseException:
@@ -322,7 +418,7 @@ def prepareRuntimeDirectory(zig, engine, output, targets=None):
     return output, records
 
 
-def writeProvenance(windows, zigId, host, engineVersion, targets, directories, absent, records, notices):
+def writeProvenance(windows, zigId, host, engineVersion, targets, directories, absent, records, notices, libraries):
     receipt = {
         "kind": "local-zig-windows-runtime-proof",
         "statement": "Produced by running a locally installed Zig once for an executable and once for a DLL per "
@@ -331,7 +427,7 @@ def writeProvenance(windows, zigId, host, engineVersion, targets, directories, a
         "zig": zigId, "producerHost": host, "engineVersion": engineVersion,
         "targets": targets, "engineRelative": ENGINE_RELATIVE,
         "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
-        "variants": records, "notices": notices, "limits": LIMITS,
+        "variants": records, "mingwLibraries": libraries, "notices": notices, "limits": LIMITS,
         "linkerFlavor": "clang GNU driver, ld.lld in MinGW mode; no lld-link and no wrapper",
     }
     os.makedirs(os.path.join(windows, "notices"), exist_ok=True)
@@ -410,7 +506,7 @@ def peProblem(variant, info, target=TARGET):
 
 def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes, target=TARGET):
     """Compile and link both fixtures of target through their configs: the plain link, the link with the caller's
-    own `-lws2_32 -lmswsock -lbcrypt` and `-shared` again, a DLL with an import library, and an executable
+    own `-lws2_32 -lmswsock -lbcrypt` and `-shared` again, the link with MINGW_LIBRARIES, a DLL with an import library, and an executable
     with a PDB. Any nonzero exit or any stderr is an error. Returns {name: path of the linked file}."""
     outputs = {}
     for variant, spec in VARIANTS.items():
@@ -422,7 +518,9 @@ def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes, target=TA
         steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
                  ("link", [clang] + config + [obj, "-o", os.path.join(work, variant + suffix)]),
                  ("link with the caller's libraries", [clang] + config + shared + [obj] + USER_LIBRARIES
-                  + ["-o", os.path.join(work, variant + "Libs" + suffix)])]
+                  + ["-o", os.path.join(work, variant + "Libs" + suffix)]),
+                 ("link with mingw import libraries", [clang] + config + shared + [obj] + MINGW_LIBRARIES
+                  + ["-o", os.path.join(work, variant + "Mingw" + suffix)])]
         if variant == "dll":
             steps.append(("import library", [clang] + config + shared + [
                 obj, "-Wl,--out-implib," + os.path.join(work, "dll.lib"), "-o", os.path.join(work, "dllImplib.dll")]))
