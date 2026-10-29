@@ -4,14 +4,15 @@
 export function splitLines(s: string): string[] {
 	const lines: string[] = [];
 	let start = 0;
-	for (let i = 0; i < s.byteLength; i = i + 1) {
-		if (s[i] == "\n") {
-			const end = i > start && s[i - 1] == "\r" ? i - 1 : i;
-			lines.push(s.slice(start, end));
+	for (let i = 0; i < s.length; i = i + 1) {
+		const ch = s.charAt(i);
+		if (ch == "\n" || ch == "\r") {
+			lines.push(s.slice(start, i));
+			if (ch == "\r" && i + 1 < s.length && s.charAt(i + 1) == "\n") i += 1;
 			start = i + 1;
 		}
 	}
-	lines.push(s.slice(start, s.byteLength));
+	lines.push(s.slice(start, s.length));
 	return lines;
 }
 

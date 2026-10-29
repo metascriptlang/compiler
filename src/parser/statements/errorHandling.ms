@@ -100,7 +100,7 @@ test "throw string" { assert programOk("throw \"error\";"); }
 test "throw expr" { assert programOk("throw error;"); }
 
 test "throw refuses a line terminator before its expression" {
-	for (const separator of ["\n", "\r\n", "\r", "// comment\n", "/* comment\n */"]) {
+	for (const separator of ["\n", "\r\n", "\r", "\u2028", "\u2029", "// comment\n", "/* comment\n */", "// comment\u2028", "/* comment\u2029 */"]) {
 		assert !programOk(`throw ${separator}error;`);
 	}
 }

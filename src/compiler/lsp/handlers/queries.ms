@@ -33,7 +33,7 @@ import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc,
 } from "./shared";
 import { LineIndex } from "../../../utils/sourceLines";
-import { lspCharacterIn } from "../position";
+import { lspPositionIn, lspSourcePosition } from "../position";
 
 // ===== Hover =====
 
@@ -107,8 +107,8 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
 	const fileSource = dbGetSource(db, path);
-	const hoverLine = pos.line - 1;
 	const lines = LineIndex.build(fileSource);
+	const clientLines = LineIndex.buildLsp(fileSource);
 	// The range is the identifier under the cursor, wherever inside it the cursor sits.
 	const lineStart = sgGetLineOffset(fileSource, pos.line) - 1;
 	let startCol = pos.col1;
@@ -116,9 +116,9 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	let endCol = startCol;
 	while (lineStart + endCol < fileSource.byteLength && sgIsIdentByte(fileSource.byteAt(lineStart + endCol))) endCol += 1;
 	if (endCol == startCol) endCol = startCol + suggest.name.byteLength;
-	const hoverCol = lspCharacterIn(lines, fileSource, pos.line, startCol);
-	const hoverEndCol = lspCharacterIn(lines, fileSource, pos.line, endCol);
-	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
+	const from = lspPositionIn(lines, clientLines, fileSource, pos.line, startCol);
+	const to = lspPositionIn(lines, clientLines, fileSource, pos.line, endCol);
+	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, from.line, from.character, to.character));
 }
 
 // ===== Document Symbol =====
@@ -141,18 +141,17 @@ function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): int32 {
 	};
 }
 
-function formatDocumentSymbolArray(symbols: SgDocumentSymbol[]): string {
+function formatDocumentSymbolArray(symbols: SgDocumentSymbol[], source: string, lines: LineIndex, clientLines: LineIndex): string {
 	const items: string[] = [];
 	for (const sym of symbols) {
 		const kindNum = lspDocumentSymbolKind(sym.kind, sym.isMutable);
-		const symLine = sym.location.line - 1;
-		const symCol = sym.location.column;
-		const endCol = symCol + sym.name.byteLength;
+		const from = lspPositionIn(lines, clientLines, source, sym.location.line, sym.location.column);
+		const to = lspPositionIn(lines, clientLines, source, sym.location.line, sym.location.column + sym.name.byteLength);
 		let childrenJson = "";
 		if (sym.children.length > 0) {
-			childrenJson = formatDocumentSymbolArray(sym.children);
+			childrenJson = formatDocumentSymbolArray(sym.children, source, lines, clientLines);
 		}
-		items.push(lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol, childrenJson));
+		items.push(lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, from.line, from.character, to.character, childrenJson));
 	}
 	return "[" + items.join(",") + "]";
 }
@@ -168,7 +167,8 @@ export function handleDocumentSymbol(id: string, params: string, db: TransAmDb):
 	if (ctx == null) return lspResponse(id, "[]");
 
 	const symbols = sgCollectSymbolsInFile(ctx, program);
-	return lspResponse(id, formatDocumentSymbolArray(symbols));
+	const source = dbGetSource(db, path);
+	return lspResponse(id, formatDocumentSymbolArray(symbols, source, LineIndex.build(source), LineIndex.buildLsp(source)));
 }
 
 // ===== Signature Help =====
@@ -254,8 +254,9 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	const range = lspGetObjectField(params, "range");
 	const rangeStart = lspGetObjectField(range, "start");
 	const rangeEnd = lspGetObjectField(range, "end");
-	const startLine = (lspGetNumberField(rangeStart, "line") as int32) + 1;
-	const endLine = (lspGetNumberField(rangeEnd, "line") as int32) + 1;
+	const source = dbGetSource(db, path);
+	const startLine = lspSourcePosition(source, (lspGetNumberField(rangeStart, "line") as int32) + 1, lspGetNumberField(rangeStart, "character") as int32).line;
+	const endLine = lspSourcePosition(source, (lspGetNumberField(rangeEnd, "line") as int32) + 1, lspGetNumberField(rangeEnd, "character") as int32).line;
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) return lspResponse(id, "[]");
@@ -266,12 +267,12 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	if (program == null) return lspResponse(id, "[]");
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
-	const source = dbGetSource(db, path);
 
 	if (hintsList.length == 0) return lspResponse(id, "[]");
 
 	const hints: string[] = [];
 	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	for (const h of hintsList) {
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		// Exception hints map to Type kind (1) with paddingLeft
@@ -287,7 +288,8 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// following argument expression.
 		const padLeft = h.hintKind == SgInlayHintKind.Exception;
 		const padRight = h.hintKind == SgInlayHintKind.Parameter;
-		hints.push(lspFmtInlayHint(h.line - 1, lspCharacterIn(lines, source, h.line, h.col), h.label, lspKind, padLeft, padRight));
+		const at = lspPositionIn(lines, clientLines, source, h.line, h.col);
+		hints.push(lspFmtInlayHint(at.line, at.character, h.label, lspKind, padLeft, padRight));
 	}
 	return lspResponse(id, "[" + hints.join(",") + "]");
 }
@@ -306,14 +308,14 @@ function lspRefKey(ref: SgSymbolRef): int64 {
 function pushUniqueLocations(items: string[], uri: string, source: string, refs: SgSymbolRef[]): void {
 	const seen: HashSet<int64> = new HashSet<int64>();
 	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	for (const ref of refs) {
 		const key = lspRefKey(ref);
 		if (seen.has(key)) continue;
 		seen.add(key);
-		items.push(lspFmtLocation(
-			uri, ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
-			ref.line - 1, lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)),
-		));
+		const from = lspPositionIn(lines, clientLines, source, ref.line, ref.col);
+		const to = lspPositionIn(lines, clientLines, source, ref.line, lspRefEnd(ref));
+		items.push(lspFmtLocation(uri, from.line, from.character, to.line, to.character));
 	}
 }
 
@@ -368,11 +370,11 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	const highlights: string[] = [];
 	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	for (const ref of refs) {
-		highlights.push(lspFmtDocumentHighlight(
-			ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
-			lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)), 1,
-		));
+		const from = lspPositionIn(lines, clientLines, source, ref.line, ref.col);
+		const to = lspPositionIn(lines, clientLines, source, ref.line, lspRefEnd(ref));
+		highlights.push(lspFmtDocumentHighlight(from.line, from.character, to.character, 1));
 	}
 	return lspResponse(id, "[" + highlights.join(",") + "]");
 }
@@ -383,11 +385,11 @@ function buildTextEdits(refs: SgSymbolRef[], newName: string, source: string): s
 	if (refs.length == 0) return "";
 	const edits: string[] = [];
 	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	for (const ref of refs) {
-		edits.push(lspFmtTextEdit(
-			ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
-			lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)), newName,
-		));
+		const from = lspPositionIn(lines, clientLines, source, ref.line, ref.col);
+		const to = lspPositionIn(lines, clientLines, source, ref.line, lspRefEnd(ref));
+		edits.push(lspFmtTextEdit(from.line, from.character, to.character, newName));
 	}
 	return "[" + edits.join(",") + "]";
 }

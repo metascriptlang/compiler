@@ -17,7 +17,9 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection, targetMemoryMode } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
-import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { LineIndex } from "../../../utils/sourceLines";
+import { lspPositionIn } from "../position";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
 import { splitLines, detectLineIndent, indentFault, IndentFault } from "./formatLint";
@@ -138,16 +140,17 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	const source = dbGetSource(db, path);
 
 	const entries: string[] = [];
+	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 
 	if (ctx != null) {
 		for (const d of sgCollectDiagnostics(ctx)) {
-			const line = d.line - 1;
-			const col = lspCharacter(source, d.line, d.column);
-			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
-			const hasEnd = d.endColumn > 0 && (endLine > line || d.endColumn > d.column);
-			const endCol = hasEnd ? lspCharacter(source, endLine + 1, d.endColumn) : col + 1;
+			const from = lspPositionIn(lines, clientLines, source, d.line, d.column);
+			const endLine = d.endLine > 0 ? d.endLine : d.line;
+			const hasEnd = d.endColumn > 0 && (endLine > d.line || d.endColumn > d.column);
+			const to = hasEnd ? lspPositionIn(lines, clientLines, source, endLine, d.endColumn) : { line: from.line, character: from.character + 1 };
 			entries.push(lspFmtDiagnosticRange(
-				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
+				from.line, from.character, to.line, to.character, d.severity, d.message, "metascript", 0, d.tags
 			));
 		}
 	}
@@ -164,10 +167,9 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			for (const hit of fsHits) {
 				const loc = freestandingAsyncLoc(hit);
 				if (loc == null) continue;
-				const fsLine = loc.line > 0 ? loc.line - 1 : 0;
-				const fsCol = loc.column > 0 ? loc.column - 1 : 0;
+				const at = lspPositionIn(lines, clientLines, source, loc.line, loc.column);
 				entries.push(lspFmtDiagnostic(
-					fsLine, fsCol, fsCol + 1, 2, FREESTANDING_ASYNC_MSG, "metascript", 0, 0
+					at.line, at.character, at.character + 1, 2, FREESTANDING_ASYNC_MSG, "metascript", 0, 0
 				));
 			}
 		}
@@ -198,9 +200,9 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 							}
 							hops.push(lspBasename(path));
 							const cyclePath = hops.join(" -> ");
-							const circLine = circStmt.location != null ? circStmt.location.line - 1 : 0;
+							const at = lspPositionIn(lines, clientLines, source, circStmt.location != null ? circStmt.location.line : 1, 1);
 							entries.push(lspFmtDiagnostic(
-								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0, 0
+								at.line, at.character, at.character + 1, 2, "Circular import: " + cyclePath, "metascript", 0, 0
 							));
 						}
 					}
@@ -218,8 +220,8 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		const buildSource = dbGetSource(db, path);
 		const buildWarnings = validateBuildConfig(dirname(path), buildSource);
 		for (const w of buildWarnings) {
-			const wLine = w.line > 0 ? w.line - 1 : 0;
-			entries.push(lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0, 0));
+			const at = lspPositionIn(lines, clientLines, source, w.line as int32, 1);
+			entries.push(lspFmtDiagnostic(at.line, at.character, at.character + 999, 2, w.message, "msc", 0, 0));
 		}
 	}
 

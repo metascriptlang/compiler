@@ -16,9 +16,9 @@ import { findExportedSymbol } from "../../../checker/context";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { Node, SourceLocation, makeLoc, Symbol, SymbolKind, NodeKind, TypeKind, EnumDeclData, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
-import { lspCharacter, lspCharacterIn } from "../position";
+import { lspPosition, lspPositionAt } from "../position";
 import { dbResolveImport } from "../../transam/index";
-import { isAlphanumeric } from "../../../lexer/chars";
+import { isAlphanumeric, newlineWidth } from "../../../lexer/chars";
 import { LineIndex, lineStart, lineOf } from "../../../utils/sourceLines";
 
 
@@ -38,24 +38,23 @@ function findWord(src: string, word: string, from: int32, to: int32): int32 {
 }
 
 function lineEnd(src: string, start: int32): int32 {
-	const newline = src.byteIndexOf("\n", start);
-	return newline < 0 ? src.byteLength : newline;
+	let end = start;
+	while (end < src.byteLength && newlineWidth(src, end) == 0) end += 1;
+	return end;
 }
 
 // 0-based line and LSP character of a byte offset.
 function locationAt(src: string, offset: int32): SourceLocation {
-	const lines = LineIndex.build(src);
-	const line = lines.lineOf(offset);
-	return makeLoc(line - 1, lspCharacterIn(lines, src, line, offset - lines.lineStart(line) + 1));
+	const at = lspPositionAt(LineIndex.buildLsp(src), src, offset);
+	return makeLoc(at.line, at.character);
 }
 
-// Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
-function lspFindNameCol(src: string, targetLine: int32, name: string): int32 {
+function findNameByteColumn(src: string, targetLine: int32, name: string): int32 {
 	if (targetLine < 0) return -1;
 	const lines = LineIndex.build(src);
 	const start = lines.lineStart(targetLine + 1);
 	const at = findWord(src, name, start, lineEnd(src, start));
-	return at < 0 ? -1 : lspCharacterIn(lines, src, targetLine + 1, at - start + 1);
+	return at < 0 ? -1 : at - start;
 }
 
 // Find a field declaration (`name:` or `name?`) in the lines after `startLine`, stopping at the
@@ -73,14 +72,14 @@ function lspFindFieldLine(src: string, startLine: int32, fieldName: string): Sou
 				next++;
 			}
 			if (next < src.byteLength && (src.byteAt(next) == ":".code || src.byteAt(next) == "?".code)) {
-				return makeLoc(line, lspCharacterIn(lines, src, line + 1, at - start + 1));
+				return makeLoc(line, at - start);
 			}
 			at = findWord(src, fieldName, at + 1, end);
 		}
 		const brace = src.byteIndexOf("}", start);
 		if (brace >= 0 && brace < end) return makeLoc(-1, -1);
 		line++;
-		start = end + 1;
+		start = lines.lineStart(line + 1);
 	}
 	return makeLoc(-1, -1);
 }
@@ -196,12 +195,11 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 		// Refine line/col using source text
 		if (defSrc != "") {
-			defCol = lspCharacter(defSrc, defLine + 1, defCol + 1);
 			if (suggest.kind == SymbolKind.EnumMember) {
 				const memberLoc = lspEnumMemberDecl(suggest.sym, suggest.name);
 				if (memberLoc.line > 0) {
 					defLine = memberLoc.line - 1;
-					defCol = lspCharacter(defSrc, memberLoc.line, memberLoc.column);
+					defCol = memberLoc.column - 1;
 				}
 			} else if (suggest.kind == SymbolKind.Property) {
 				const fieldLoc = lspFindFieldLine(defSrc, defLine, suggest.name);
@@ -209,13 +207,16 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 					defLine = fieldLoc.line;
 					defCol = fieldLoc.column;
 				} else {
-					const nameCol = lspFindNameCol(defSrc, defLine, suggest.name);
+					const nameCol = findNameByteColumn(defSrc, defLine, suggest.name);
 					if (nameCol >= 0) defCol = nameCol;
 				}
 			} else {
-				const nameCol = lspFindNameCol(defSrc, defLine, suggest.name);
+				const nameCol = findNameByteColumn(defSrc, defLine, suggest.name);
 				if (nameCol >= 0) defCol = nameCol;
 			}
+			const at = lspPosition(defSrc, defLine + 1, defCol + 1);
+			defLine = at.line;
+			defCol = at.character;
 		}
 		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.length);
 		return lspResponse(id, "[" + location + "]");
@@ -237,13 +238,15 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	lspEnsureFileLoaded(db, declPath);
 
 	const targetUri = lspPathToUri(declPath);
-	const tLine = exported.sym.location.line - 1;
+	let tLine = exported.sym.location.line - 1;
 	let tCol = exported.sym.location.column - 1;
 	const targetSrc = dbGetSource(db, declPath);
 	if (targetSrc != "") {
-		tCol = lspCharacter(targetSrc, tLine + 1, tCol + 1);
-		const tNameCol = lspFindNameCol(targetSrc, tLine, specifier.name);
+		const tNameCol = findNameByteColumn(targetSrc, tLine, specifier.name);
 		if (tNameCol >= 0) tCol = tNameCol;
+		const at = lspPosition(targetSrc, tLine + 1, tCol + 1);
+		tLine = at.line;
+		tCol = at.character;
 	}
 	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + specifier.name.length) + "]");
 }
@@ -287,12 +290,13 @@ test "findWord offsets are bytes after multibyte text" {
 	assert findWord(src, "", 0, src.byteLength) == -1;
 }
 
-test "lspFindNameCol reports the LSP character after multibyte text" {
+test "definition name lookup keeps byte coordinates until the protocol boundary" {
 	const src = "let é = name;\nname";
-	assert lspFindNameCol(src, 0, "name") == 8;
-	assert lspFindNameCol(src, 1, "name") == 0;
-	assert lspFindNameCol(src, 2, "name") == -1;
-	assert lspFindNameCol(src, -1, "name") == -1;
+	assert findNameByteColumn(src, 0, "name") == 9;
+	assert lspPosition(src, 1, findNameByteColumn(src, 0, "name") + 1).character == 8;
+	assert findNameByteColumn(src, 1, "name") == 0;
+	assert findNameByteColumn(src, 2, "name") == -1;
+	assert findNameByteColumn(src, -1, "name") == -1;
 }
 
 test "lspFindFieldLine stops at the closing brace" {

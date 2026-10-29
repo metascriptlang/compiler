@@ -9,8 +9,8 @@ import { writeStderr } from "std/io";
 import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
-import { lspByteColumn } from "../position";
-import { Symbol } from "../../../ast/node";
+import { lspSourcePosition } from "../position";
+import { Symbol, makeLoc } from "../../../ast/node";
 
 export { lspCharacter } from "../position";
 
@@ -100,8 +100,8 @@ export function lspExtractPosition(params: string, db: TransAmDb | null = null):
 	const position = lspGetObjectField(params, "position");
 	const line = (lspGetNumberField(position, "line") as int32) + 1;
 	const character = lspGetNumberField(position, "character") as int32;
-	const col1 = db != null ? lspByteColumn(dbGetSource(db, lspUriToPath(uri)), line, character) : character + 1;
-	return { uri, line, col: col1 - 1, col1 };
+	const at = db != null ? lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character) : makeLoc(line, character + 1);
+	return { uri, line: at.line, col: at.column - 1, col1: at.column };
 }
 
 // Get raw source text from Trans-Am DB for a given path.

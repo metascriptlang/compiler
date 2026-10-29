@@ -2,7 +2,7 @@
 
 import { TokenKind, identToKeyword } from "./token";
 import { LexerState, JsxMode, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";
-import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./chars";
+import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit, newlineWidth } from "./chars";
 
 // ===== Number Scanning =====
 
@@ -173,13 +173,9 @@ function scanEscape(s: LexerState): string {
 		advanceChar(s);
 		return "";
 	}
-	if (first == "\n".code) {
-		advanceChar(s);
-		return "";
-	}
-	if (first == "\r".code) {
-		advanceChar(s);
-		if (peek(s) == "\n".code) advanceChar(s);
+	const newline = newlineWidth(s.source, s.pos);
+	if (newline > 0) {
+		skip(s, newline);
 		return "";
 	}
 
@@ -273,7 +269,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 				hasInterpolation = true;
 				break;
 			}
-			if (tc == "\n".code || tc == "\r".code) { hasNewline = true; break; }
+			if (newlineWidth(s.source, tempPos) > 0) { hasNewline = true; break; }
 			tempPos = tempPos + 1;
 		}
 		if (!hasInterpolation && !hasNewline && tempPos < s.source.byteLength) {
@@ -372,7 +368,7 @@ export function scanLineComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes //
 	const runStart = s.pos;
-	while (s.pos < s.source.byteLength && peek(s) != "\n".code && peek(s) != "\r".code) {
+	while (s.pos < s.source.byteLength && newlineWidth(s.source, s.pos) == 0) {
 		advanceChar(s);
 	}
 	addComment(s, "//" + s.source.byteSlice(runStart, s.pos), startLine, startCol);
@@ -408,7 +404,7 @@ function scanRegex(s: LexerState): void {
 	let closed = false;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch == "\n".code || ch == "\r".code) break;
+		if (newlineWidth(s.source, s.pos) > 0) break;
 		if (ch == "/".code && !inClass) {
 			advanceChar(s);
 			closed = true;
@@ -416,6 +412,7 @@ function scanRegex(s: LexerState): void {
 		}
 		if (ch == "\\".code) {
 			advanceChar(s);
+			if (newlineWidth(s.source, s.pos) > 0) break;
 			if (s.pos < s.source.byteLength) advanceChar(s);
 			continue;
 		}

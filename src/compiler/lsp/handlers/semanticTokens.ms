@@ -5,18 +5,20 @@ import { lspJsonNumber, lspGetField, lspGetObjectField, lspUriToPath, lspRespons
 import { lspFmtSemanticTokens } from "../format";
 import { SgSemanticToken, sgCollectSemanticTokens, sgSortTokens } from "../../../checker/suggest";
 import { dbGetSource, lspDocumentUri } from "./shared";
-import { LineIndex, lineStart } from "../../../utils/sourceLines";
+import { LineIndex } from "../../../utils/sourceLines";
+import { lspPositionIn } from "../position";
 
 function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): string {
 	sgSortTokens(tokens);
 	let prevLine = 0;
 	let prevCol = 0;
 	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	const fields: string[] = [];
 	for (const t of tokens) {
-		const line = t.line - 1;
-		const start = lines.lineStart(t.line);
-		const col = source.byteSlice(start, start + t.col - 1).length;
+		const at = lspPositionIn(lines, clientLines, source, t.line, t.col);
+		const line = at.line;
+		const col = at.character;
 		const deltaLine = line - prevLine;
 		const deltaStart = deltaLine == 0 ? col - prevCol : col;
 		fields.push(lspJsonNumber(deltaLine));

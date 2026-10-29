@@ -1,6 +1,7 @@
 // Lexer State — Token accumulation and source navigation
 
 import { Token, TokenKind, startsExprAfter } from "./token";
+import { newlineWidth } from "./chars";
 
 // Lexer mode stack frame (docs/JSX-ROADMAP.md "Architecture decision").
 // Tag = inside `<… >` opening tag; Children = between `>` and `</`; Closing = inside `</…>`;
@@ -46,6 +47,9 @@ export function advanceChar(s: LexerState): int32 {
 		s.column = 1;
 	} else if (ch == "\n".code) {
 		if (s.pos < 2 || s.source.byteAt(s.pos - 2) != "\r".code) s.line += 1;
+		s.column = 1;
+	} else if ((ch == 0xA8 || ch == 0xA9) && newlineWidth(s.source, s.pos - 3) == 3) {
+		s.line += 1;
 		s.column = 1;
 	} else {
 		s.column += 1;

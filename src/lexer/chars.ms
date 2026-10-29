@@ -13,6 +13,17 @@ export function isNewline(ch: int32): boolean {
 	return ch == "\n".code;
 }
 
+export function newlineWidth(source: string, offset: int32): int32 {
+	const length = source.byteLength;
+	if (offset < 0 || offset >= length) return 0;
+	const first = source.byteAt(offset);
+	if (first == "\r".code) return offset + 1 < length && source.byteAt(offset + 1) == "\n".code ? 2 : 1;
+	if (first == "\n".code) return 1;
+	if (offset + 2 >= length || first != 0xE2 || source.byteAt(offset + 1) != 0x80) return 0;
+	const last = source.byteAt(offset + 2);
+	return last == 0xA8 || last == 0xA9 ? 3 : 0;
+}
+
 export function whitespaceWidth(source: string, offset: int32): int32 {
 	const length = source.byteLength;
 	if (offset < 0 || offset >= length) return 0;
@@ -25,7 +36,7 @@ export function whitespaceWidth(source: string, offset: int32): int32 {
 	const third = source.byteAt(offset + 2);
 	if ((first == 0xE1 && second == 0x9A && third == 0x80) ||
 		(first == 0xE2 && second == 0x80 &&
-			((third >= 0x80 && third <= 0x8B) || third == 0xAF)) ||
+			((third >= 0x80 && third <= 0x8B) || third == 0xA8 || third == 0xA9 || third == 0xAF)) ||
 		(first == 0xE2 && second == 0x81 && third == 0x9F) ||
 		(first == 0xE3 && second == 0x80 && third == 0x80) ||
 		(first == 0xEF && second == 0xBB && third == 0xBF)) return 3;

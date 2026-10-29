@@ -17,6 +17,7 @@ import { JSXElementData, JSXAttributeData, JSXSpreadAttributeData, TypeObjectDat
 import { peelToStructOrUnion, positionalFieldsOf, hasGenericParams, createUnifyBindings, unifyType, substituteBound } from "./types";
 import { declaringSymOf, fieldDeclarer, aliasObjectBody } from "./visibility";
 import { nonNullMemberOfNullable } from "./compat";
+import { lineOffset, lineText } from "../utils/sourceLines";
 
 // ===== Data Types =====
 
@@ -717,13 +718,7 @@ export function sgBuiltinDoc(name: string, containerName: string): string {
 // Returns "" if line is out of range.
 function sgExtractLine(source: string, line: int32): string {
 	if (line < 1) return "";
-	const start = sgGetLineOffset(source, line);
-	if (start >= source.byteLength) return "";
-	let end = start;
-	while (end < source.byteLength && source.byteAt(end) != "\n".code) {
-		end = end + 1;
-	}
-	return source.byteSlice(start, end);
+	return lineText(source, line);
 }
 
 // Strip leading whitespace from a string.
@@ -1038,26 +1033,12 @@ export function sgIsIdentByte(c: int32): boolean {
 }
 
 export function sgGetLineOffset(source: string, line: int32): int32 {
-	// line is 1-indexed. Returns offset of the first char on that line.
-	let offset = 0;
-	let currentLine = 1;
-	while (offset < source.byteLength && currentLine < line) {
-		if (source.byteAt(offset) == "\n".code) {
-			currentLine = currentLine + 1;
-		}
-		offset = offset + 1;
-	}
-	return offset;
+	return lineOffset(source, line);
 }
 
 // Extract full line text for a 1-based line number.
 function sgGetLineText(source: string, line: int32): string {
-	const lineOffset = sgGetLineOffset(source, line);
-	let lineEnd = lineOffset;
-	while (lineEnd < source.byteLength && source.byteAt(lineEnd) != "\n".code) {
-		lineEnd = lineEnd + 1;
-	}
-	return source.byteSlice(lineOffset, lineEnd);
+	return lineText(source, line);
 }
 
 function sgStartsWith(s: string, prefix: string): boolean {

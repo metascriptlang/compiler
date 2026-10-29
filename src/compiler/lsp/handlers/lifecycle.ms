@@ -23,7 +23,8 @@ import {
 	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
-import { lineOffset } from "../../fmt/edit";
+import { LineIndex, lineStart } from "../../../utils/sourceLines";
+import { lspByteColumnIn } from "../position";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
@@ -1970,8 +1971,11 @@ function applyRangeFormatting(source: string, line: number, character: number): 
 		const range = lspGetObjectField(items[i], "range");
 		const s = lspGetObjectField(range, "start");
 		const e = lspGetObjectField(range, "end");
-		const from = lineOffset(out, (lspGetNumberField(s, "line") as int32) + 1) + (lspGetNumberField(s, "character") as int32);
-		const to = lineOffset(out, (lspGetNumberField(e, "line") as int32) + 1) + (lspGetNumberField(e, "character") as int32);
+		const lines = LineIndex.buildLsp(out);
+		const startLine = (lspGetNumberField(s, "line") as int32) + 1;
+		const endLine = (lspGetNumberField(e, "line") as int32) + 1;
+		const from = lines.lineStart(startLine) + lspByteColumnIn(lines, out, startLine, lspGetNumberField(s, "character") as int32) - 1;
+		const to = lines.lineStart(endLine) + lspByteColumnIn(lines, out, endLine, lspGetNumberField(e, "character") as int32) - 1;
 		out = out.byteSlice(0, from) + lspGetField(items[i], "newText") + out.byteSlice(to, out.byteLength);
 		i = i - 1;
 	}

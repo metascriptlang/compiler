@@ -266,7 +266,9 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 export function hasPrecedingLineBreak(state: ParserState): boolean {
 	let pos = state.position - 1;
 	while (pos >= 0 && state.tokens[pos].kind == TokenKind.Comment) pos -= 1;
-	return pos < 0 || current(state).line > state.tokens[pos].line;
+	if (pos < 0) return true;
+	const previous = state.tokens[pos];
+	return current(state).line > (previous.endLine > 0 ? previous.endLine : previous.line);
 }
 
 export function consumeSemicolon(state: ParserState): void {

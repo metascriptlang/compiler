@@ -603,7 +603,7 @@ test "while" { assert programOk("while (x) { y; }"); }
 test "return expr" { assert programOk("function f(x) { return x + 1; }"); }
 
 test "a line terminator after return leaves its argument empty" {
-	for (const separator of ["\n", "\r\n", "\r", "// comment\n", "/* comment\n */"]) {
+	for (const separator of ["\n", "\r\n", "\r", "\u2028", "\u2029", "// comment\n", "/* comment\n */", "// comment\u2028", "/* comment\u2029 */"]) {
 		const pr = parseSource(`return ${separator}next();`);
 		assert pr.ok;
 		const statements = (pr.value.data as ProgramData).programStmts;
@@ -620,6 +620,13 @@ test "return keeps a same-line expression or opening parenthesis" {
 		const statement = (pr.value.data as ProgramData).programStmts[0];
 		assert statement.kind == NodeKind.ReturnStmt;
 		assert (statement.data as ReturnStmtData).argument != null;
+	}
+}
+
+test "a newline inside a literal does not invent trivia after its closing quote" {
+	for (const separator of ["\u2028", "\u2029"]) {
+		assert !programOk("const value = 'a" + separator + "b' const other = 1;");
+		assert programOk("const value = 'a" + separator + "b'; const other = 1;");
 	}
 }
 

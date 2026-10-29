@@ -57,6 +57,7 @@ import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
 import { getDynamicField, asInt32 } from "std/serialize/json/accessors";
 import { lspParseContentLength, lspJsonString, lspUriToPath } from "../../compiler/lsp/protocol";
+import { lspSourcePosition } from "../../compiler/lsp/position";
 import {
 	LspScenario,
 	LspReplay,
@@ -530,26 +531,6 @@ function firstDifference(what: string, expected: string[], got: string[]): strin
 	return "";
 }
 
-function lineText(text: string, line: int32): string {
-	const lines = text.split("\n");
-	if (line < 0 || line >= lines.length) return "";
-	const t = lines[line];
-	return t.endsWith("\r") ? t.byteSlice(0, t.byteLength - 1) : t;
-}
-
-// The 0-based byte offset of a UTF-16 column within one line.
-function byteColumn(line: string, character: int32): int32 {
-	let units = 0;
-	let i = 0;
-	while (i < line.byteLength && units < character) {
-		const b = line.byteAt(i);
-		const size = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4;
-		units += size == 4 ? 2 : 1;
-		i += size;
-	}
-	return i as int32;
-}
-
 // The warm compiler diagnostics as batch prints them: "line:byteColumn severity message", 1-based.
 function warmCompilerDiagnostics(s: Session, uri: string, text: string): Result<string[], string> {
 	const last = lastPublish(s, uri);
@@ -563,8 +544,8 @@ function warmCompilerDiagnostics(s: Session, uri: string, text: string): Result<
 		const start = d.getDynamicField("range").getDynamicField("start");
 		const line = start.getDynamicField("line").asInt32(-1);
 		const character = start.getDynamicField("character").asInt32(-1);
-		const column = byteColumn(lineText(text, line), character) + 1;
-		out.push(`${line + 1}:${column} ${level == 1 ? "error" : "warning"} ${textField(d, "message")}`);
+		const at = lspSourcePosition(text, line + 1, character);
+		out.push(`${at.line}:${at.column} ${level == 1 ? "error" : "warning"} ${textField(d, "message")}`);
 	}
 	return Result.ok(out);
 }

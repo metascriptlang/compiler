@@ -784,3 +784,48 @@ test "jsx template interpolation brace stays inside the container" {
 	assert lexKindAt("<p>{`${ <b/> }`}</p>", 9) == TokenKind.TemplateTail;
 	assert lexKindAt("<p>{`${ <b/> }`}</p>", 11) == TokenKind.JsxClose;
 }
+
+test "Unicode line separators split tokens and advance byte positions" {
+	for (const separator of ["\u2028", "\u2029"]) {
+		const result = lex("const a = 1;" + separator + "const b = 2;");
+		assert result.ok;
+		const token = result.value[5];
+		assert token.kind == TokenKind.Const;
+		assert token.line == 2 && token.column == 1;
+		assert token.endLine == 2 && token.endColumn == 6;
+	}
+}
+
+test "Unicode line separators end line comments and advance block comments" {
+	for (const separator of ["\u2028", "\u2029"]) {
+		const line = lex("// hidden" + separator + "const b = 2;");
+		assert line.ok;
+		assert line.value[0].value == "// hidden";
+		assert line.value[1].kind == TokenKind.Const && line.value[1].line == 2;
+		const block = lex("/* left" + separator + "right */ const b = 2;");
+		assert block.ok;
+		assert block.value[0].endLine == 2 && block.value[1].line == 2;
+	}
+}
+
+test "Unicode line separators preserve raw string and template data but cook continuations" {
+	for (const separator of ["\u2028", "\u2029"]) {
+		for (const quote of ["'", "\"", "`"]) {
+			const raw = lex(quote + "a" + separator + "b" + quote);
+			assert raw.ok;
+			assert raw.value[0].value == "a" + separator + "b";
+			assert raw.value[0].line == 1 && raw.value[0].endLine == 2;
+			const continued = lex(quote + "a\\" + separator + "b" + quote);
+			assert continued.ok;
+			assert continued.value[0].value == "ab";
+			assert continued.value[0].endLine == 2;
+		}
+	}
+}
+
+test "regular expressions refuse every raw and escaped line terminator" {
+	for (const separator of ["\n", "\r", "\r\n", "\u2028", "\u2029"]) {
+		assert !lexOk("/a" + separator + "b/");
+		assert !lexOk("/a\\" + separator + "b/");
+	}
+}

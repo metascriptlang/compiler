@@ -27,7 +27,8 @@ import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
 import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, Symbol, SymbolKind } from "../../../ast/node";
 import { forEachChild } from "../../../ast/visitor";
-import { lineOffset } from "../../../utils/sourceLines";
+import { lineOffset, LineIndex } from "../../../utils/sourceLines";
+import { lspPositionIn } from "../position";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
@@ -201,6 +202,8 @@ function lspCrossModuleCandidates(
 	program: Node, source: string, kind: SgCompletionKind, inScopeSet: HashSet<string>
 ): string[] {
 	const items: string[] = [];
+	const lines = LineIndex.build(source);
+	const clientLines = LineIndex.buildLsp(source);
 	if (db.exportRegistry == null) return items;
 	const isTypeCtx = kind == SgCompletionKind.TypeAnnotation;
 
@@ -227,7 +230,9 @@ function lspCrossModuleCandidates(
 			}
 			// Compute import edit — included in initial response AND cached for resolve
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
-			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const from = lspPositionIn(lines, clientLines, source, edit.line + 1, edit.col + 1);
+			const to = lspPositionIn(lines, clientLines, source, edit.line + 1, edit.endCol + 1);
+			const editJson = "[" + lspFmtMultiLineTextEdit(from.line, from.character, to.line, to.character, edit.newText) + "]";
 			const detail = sgTypeToString(sym.sym.symbolType) + " (from " + importSpec + ")";
 			const key = resolveKey(entry.modulePath, sym.name);
 			cacheResolveEdit(key, editJson);
@@ -265,7 +270,9 @@ function lspCrossModuleCandidates(
 			if (modPath == "" || modPath == currentPath) continue;
 			const importSpec = lspModulePathToImportSpec(db, currentPath, modPath);
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
-			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const from = lspPositionIn(lines, clientLines, source, edit.line + 1, edit.col + 1);
+			const to = lspPositionIn(lines, clientLines, source, edit.line + 1, edit.endCol + 1);
+			const editJson = "[" + lspFmtMultiLineTextEdit(from.line, from.character, to.line, to.character, edit.newText) + "]";
 			const detail = sgTypeToString(sym.symbolType) + " (from " + importSpec + ")";
 			const key = resolveKey(modPath, sym.name);
 			cacheResolveEdit(key, editJson);

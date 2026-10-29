@@ -88,6 +88,7 @@ import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
+import { lineText } from "../utils/sourceLines";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -226,11 +227,7 @@ function reportGraphErrors(graph: ModuleGraph): void {
 // Get a specific line from source text (1-based line number)
 function getSourceLine(source: string, lineNum: number): string {
 	if (source.byteLength == 0 || lineNum <= 0) return "";
-	const lines = source.split("\n");
-	const idx = (lineNum as int32) - 1;
-	if (idx < 0 || idx >= lines.length) return "";
-	const line = lines[idx];
-	return line.endsWith("\r") ? line.slice(0, line.length - 1) : line;
+	return lineText(source, lineNum as int32);
 }
 
 function printDiag(line: string): void {

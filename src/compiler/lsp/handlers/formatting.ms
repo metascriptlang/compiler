@@ -10,7 +10,7 @@ import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../form
 import { formatNode } from "../../fmt/printer";
 import { FmtPos, StatementRun, formatRunEdits, rangeStatements, applyEdit, lineOffset } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
-import { lspByteColumn, lspByteColumnIn, lspCharacterIn } from "../position";
+import { lspByteColumnIn, lspSourcePosition, lspPositionAt as positionAtByte, LspPosition } from "../position";
 import { checkLossless } from "../../fmt/lossless";
 import { ByteEdit, diffTextEdits } from "../../fmt/textEdit";
 import { registerCoreParsers } from "../../../parser/statements/core";
@@ -76,10 +76,11 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			const fmtLines = splitLines(_codeActionFmtResult);
 
 			if (startLine < fmtLines.length && fmtLines[startLine] != line) {
-				const lineNo = (startLine + 1) as int32;
+				const from = lspSourcePosition(source, (startLine + 1) as int32, 0);
+				const to = lspSourcePosition(source, (startLine + 1) as int32, line.length);
 				const proposed = applyEdit(source, {
-					start: { line: lineNo, column: 1 },
-					end: { line: lineNo, column: line.byteLength + 1 },
+					start: { line: from.line, column: from.column },
+					end: { line: to.line, column: to.column },
 					newText: fmtLines[startLine],
 				});
 				if (!checkLossless(source, proposed).ok) return lspResponse(id, "[]");
@@ -125,23 +126,17 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	return lspResponse(id, "[" + edits.value + "]");
 }
 
-interface LspPosition {
-	line: int32;
-	character: int32;
-}
-
 function lspPositionAt(lines: LineIndex, source: string, offset: int32): Result<LspPosition, string> {
 	if (offset < 0 || offset > source.byteLength) return Result.err(`Formatting edit offset ${offset} is outside the document`);
-	const line = lines.lineOf(offset);
-	const column = offset - lines.lineStart(line) + 1;
-	const character = lspCharacterIn(lines, source, line, column);
-	if (lspByteColumnIn(lines, source, line, character) != column) return Result.err(`Formatting edit offset ${offset} has no UTF-16 position`);
-	return Result.ok({ line: line - 1, character });
+	const position = positionAtByte(lines, source, offset);
+	const column = offset - lines.lineStart(position.line + 1) + 1;
+	if (lspByteColumnIn(lines, source, position.line + 1, position.character) != column) return Result.err(`Formatting edit offset ${offset} has no UTF-16 position`);
+	return Result.ok(position);
 }
 
 // Edits are byte offsets into a slice of `source` starting at `base`.
 function textEditsJson(source: string, edits: ByteEdit[], base: int32): Result<string, string> {
-	const lines = LineIndex.build(source);
+	const lines = LineIndex.buildLsp(source);
 	const items: string[] = [];
 	for (const edit of edits) {
 		const from = try lspPositionAt(lines, source, base + edit.start);
@@ -155,7 +150,8 @@ function formattingBytePosition(source: string, position: string): Result<FmtPos
 	const line = (lspGetNumberField(position, "line") + 1) as int32;
 	const character = lspGetNumberField(position, "character") as int32;
 	if (line < 1 || character < 0) return Result.err("Formatting position requires non-negative line and character");
-	return Result.ok({ line, column: lspByteColumn(source, line, character) });
+	const at = lspSourcePosition(source, line, character);
+	return Result.ok({ line: at.line, column: at.column });
 }
 
 export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
@@ -298,13 +294,11 @@ test "safe quickfix edits preserve surrounding text and still parse and check" {
 }
 
 function clientUtf16Offset(source: string, line: int32, character: int32): int32 {
-	const lines = source.split("\n");
+	const lines = splitLines(source);
 	if (line < 0 || line >= lines.length || character < 0) throw new Error("Invalid client position");
-	const text = lines[line];
-	const length = text.endsWith("\r") ? text.length - 1 : text.length;
-	let offset = character > length ? length : character;
-	for (let i = 0; i < line; i += 1) offset += lines[i].length + 1;
-	return offset;
+	const length = lines[line].length;
+	const start = LineIndex.buildLsp(source).lineStart(line + 1);
+	return source.byteSlice(0, start).length + (character > length ? length : character);
 }
 
 function applyClientUtf16Edit(source: string, edit: string): string {
@@ -549,6 +543,14 @@ test "document formatting turns CRLF into LF with one edit per line break and on
 	assert edits.length == 4;
 }
 
+test "document formatting projects all compiler terminators to client edits after an astral literal" {
+	for (const separator of ["\n", "\r\n", "\r", "\u2028", "\u2029"]) {
+		const source = "export const icon = \"😀\";" + separator + "export const   value=icon;\n";
+		const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
+		assert applyClientUtf16Edits(source, edits) == "export const icon = \"😀\";\nexport const value = icon;\n";
+	}
+}
+
 function rangeFormatted(source: string, startLine: int32, startCharacter: int32, endLine: int32, endCharacter: int32): string {
 	const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"range":{"start":{"line":${startLine},"character":${startCharacter}},"end":{"line":${endLine},"character":${endCharacter}}}}`;
 	const result = applyClientUtf16Edits(source, formattingItems(handleRangeFormatting("1", params, formattingDb(source))));
@@ -558,6 +560,18 @@ function rangeFormatted(source: string, startLine: int32, startCharacter: int32,
 
 const TWO_LOOSE = "export function f(): int32 {\n\tconst  x=1;\n\tconst   y=2;\n\treturn x+y;\n}\n";
 const TWO_TIDY = "export function f(): int32 {\n\tconst x = 1;\n\tconst y = 2;\n\treturn x+y;\n}\n";
+
+test "range formatting projects a client line containing a Unicode separator into compiler lines" {
+	for (const separator of ["\n", "\r\n", "\r", "\u2028", "\u2029"]) {
+		const prefix = "export const icon = \"😀\";";
+		const statement = "export const   value=icon;";
+		const source = prefix + separator + statement + "\n";
+		const unicode = separator == "\u2028" || separator == "\u2029";
+		const line = unicode ? 0 : 1;
+		const character = unicode ? prefix.length + separator.length : 0;
+		assert rangeFormatted(source, line, character, line, character + statement.length) == prefix + separator + "export const value = icon;\n";
+	}
+}
 
 test "range over two statements formats both and leaves the third alone" {
 	assert rangeFormatted(TWO_LOOSE, 1, 0, 2, 14) == TWO_TIDY;

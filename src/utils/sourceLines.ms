@@ -1,17 +1,31 @@
 // Source-text positions: lines are 1-based, offsets are bytes. The line start offsets are computed
 // once per source, so a lookup does not rescan the text.
 
+import { newlineWidth } from "../lexer/chars";
+
 export struct LineIndex {
 	starts: int32[];
 	length: int32;
 }
 
-export function build(this typeof LineIndex, source: string): LineIndex {
+function buildLines(source: string, unicode: boolean): LineIndex {
 	const starts: int32[] = [0];
 	for (let i: int32 = 0; i < source.byteLength; i++) {
-		if (source.byteAt(i) == "\n".code) starts.push(i + 1);
+		const width = newlineWidth(source, i);
+		if (width > 0 && (unicode || width < 3)) {
+			i += width - 1;
+			starts.push(i + 1);
+		}
 	}
 	return { starts, length: source.byteLength };
+}
+
+export function build(this typeof LineIndex, source: string): LineIndex {
+	return buildLines(source, true);
+}
+
+export function buildLsp(this typeof LineIndex, source: string): LineIndex {
+	return buildLines(source, false);
 }
 
 // Offset of the first byte of `line`; a line past the last one starts at the end of the source.
@@ -36,10 +50,18 @@ export function lineOffset(source: string, line: int32): int32 {
 	let current = 1;
 	let pos = 0;
 	while (pos < source.byteLength && current < line) {
-		if (source.byteAt(pos) == "\n".code) current += 1;
-		pos += 1;
+		const width = newlineWidth(source, pos);
+		if (width > 0) current += 1;
+		pos += width > 0 ? width : 1;
 	}
 	return pos;
+}
+
+export function lineText(source: string, line: int32): string {
+	const start = lineOffset(source, line);
+	let end = start;
+	while (end < source.byteLength && newlineWidth(source, end) == 0) end += 1;
+	return source.byteSlice(start, end);
 }
 
 test "a line starts after the newline that ends the one before" {
@@ -89,5 +111,42 @@ test "lineOffset answers what the index answers for every line, in range and bey
 		for (let line: int32 = -1; line <= ix.starts.length + 2; line++) {
 			assert lineOffset(source, line) == ix.lineStart(line);
 		}
+	}
+}
+
+test "compiler line offsets count every complete ECMAScript terminator" {
+	for (const separator of ["\n", "\r", "\r\n", "\u2028", "\u2029"]) {
+		const source = "é" + separator + "right" + separator;
+		const lines = LineIndex.build(source);
+		assert lines.starts.length == 3;
+		assert lines.lineStart(2) == 2 + separator.byteLength;
+		assert lines.lineOf(2 + separator.byteLength) == 2;
+		for (let line = 0; line <= 4; line += 1) {
+			assert lineOffset(source, line) == lines.lineStart(line);
+		}
+	}
+}
+
+test "LSP line offsets keep Unicode separators on the client line" {
+	for (const separator of ["\u2028", "\u2029"]) {
+		const source = "left" + separator + "right";
+		const lines = LineIndex.buildLsp(source);
+		assert lines.starts.length == 1;
+		assert lines.lineOf(4 + separator.byteLength) == 1;
+	}
+	for (const separator of ["\n", "\r", "\r\n"]) {
+		const lines = LineIndex.buildLsp("left" + separator + "right");
+		assert lines.starts.length == 2;
+		assert lines.lineStart(2) == 4 + separator.byteLength;
+	}
+}
+
+test "compiler line text excludes all terminators without changing UTF-8 data" {
+	for (const separator of ["\n", "\r", "\r\n", "\u2028", "\u2029"]) {
+		const source = "é" + separator + "😀" + separator;
+		assert lineText(source, 1) == "é";
+		assert lineText(source, 2) == "😀";
+		assert lineText(source, 3) == "";
+		assert lineText(source, 4) == "";
 	}
 }

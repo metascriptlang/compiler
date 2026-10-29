@@ -1835,6 +1835,65 @@ export function scenarioSlug(name: string): string {
 	return out;
 }
 
+function unicodeLinePositions(): LspScenario {
+	const separators = ["\n", "\r\n", "\r", "\u2028", "\u2029"];
+	const prefix = "const glyph = \"😀\";";
+	const drains: string[][] = [initializeDrain()];
+	const probes: LspProbe[] = [];
+	for (let i = 0; i < separators.length; i += 1) {
+		const uri = PROJECT_URI + "unicode/" + i + ".ms";
+		const source = prefix + separators[i] + "const target = glyph;";
+		const line = i >= 3 ? 0 : 1;
+		const character = i >= 3 ? 36 : 16;
+		const id = 100 + i * 10;
+		const doc = `{"textDocument":{"uri":${lspJsonString(uri)}}}`;
+		drains.push(frames([
+			notification("textDocument/didOpen", openParams(uri, source)),
+			request("" + id, "textDocument/hover", positionParams(uri, line, character)),
+			request("" + (id + 1), "textDocument/definition", positionParams(uri, line, character)),
+			request("" + (id + 2), "textDocument/rename", renameParams(uri, line, character, "face")),
+			request("" + (id + 3), "textDocument/semanticTokens/full", doc),
+			request("" + (id + 4), "textDocument/documentSymbol", doc),
+		]));
+		probes.push({ uri, line, character });
+	}
+	const changes: string[] = [];
+	for (let i = 0; i < separators.length; i += 1) {
+		changes.push(notification("textDocument/didChange", changeParams(PROJECT_URI + "unicode/" + i + ".ms", 2, prefix + separators[i] + "const target = missing;")));
+	}
+	drains.push(frames(changes));
+	drains.push(frames([request("2", "shutdown", "null"), notification("exit", "null")]));
+	return {
+		name: "compiler Unicode lines project to client UTF-16 lines in both directions",
+		batching: "any",
+		drains,
+		check: (r: LspReplay) => {
+			for (let i = 0; i < separators.length; i += 1) {
+				const uri = PROJECT_URI + "unicode/" + i + ".ms";
+				const line = i >= 3 ? 0 : 1;
+				const column = i >= 3 ? 35 : 15;
+				const declaration = i >= 3 ? 26 : 6;
+				const key = "n:" + (100 + i * 10);
+				const all = published(r, uri);
+				const diagnostic = all.length > 0 ? all[all.length - 1].at(0) : jsonNull();
+				const failure = firstFailure([
+					sameText("hover " + i, `${line}:${column}-${line}:${column + 5}`, spanOf(answerResult(r, key))),
+					sameText("definition " + i, "0:6-0:11", definitionSpan(r, "n:" + (101 + i * 10))),
+					sameText("rename " + i, `0:6-0:11 face; ${line}:${column}-${line}:${column + 5} face`, renameRows(r, "n:" + (102 + i * 10), uri)),
+					sameRows("tokens " + i, ["0:6+5 variable declaration+readonly", `${line}:${declaration}+6 variable declaration+readonly`, `${line}:${column}+5 variable readonly`], semanticRows(r, "n:" + (103 + i * 10))),
+					sameText("document symbol " + i, "" + line, field(answerResult(r, "n:" + (104 + i * 10)).at(1), "range.start.line")),
+					sameText("diagnostic " + i, `${line}:${column}-${line}:${column + 1}`, spanOf(diagnostic)),
+				]);
+				if (failure != "") return failure;
+			}
+			return "";
+		},
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [5, 6], probes },
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -1889,6 +1948,7 @@ export function lspScenarios(): LspScenario[] {
 		semanticTokensClassifyReadsAndDeclarations(),
 		rewiredImportsFollowEdits(),
 		closingAnOverlayRestoresDisk(),
+		unicodeLinePositions(),
 	];
 }
 
