@@ -11,7 +11,7 @@
 
 @include("./ffi.h");
 
-struct Info { cb: uint32; mode: int16; size: uint64; }
+extern struct Info from "Corpus800Info" { cb: uint32; mode: int16; size: uint64; }
 
 extern function corpus800SetU32(out v: uint32): void;
 extern function corpus800AddI64(ref v: int64): void;
