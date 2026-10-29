@@ -911,7 +911,7 @@ function arrayRelocatesByMove(): void {
 	}
 	const cases = [["_ref_Node_", "msIncref"], ["__Cell_", "Copy("]];
 	for (const c of cases) {
-		for (const prefix of ["TXX_splice_", "TXX_reverse_", "TXX_shift_", "mergeRuns_", "TXX_sortBy_"]) {
+		for (const prefix of ["TXX_splice_", "TXX_reverseInPlace_", "TXX_shift_", "mergeRuns_", "TXX_sortBy_"]) {
 			const bodies = instanceBodies(text, prefix, c[0]);
 			if (bodies.length == 0) {
 				fail(tag, `no ${prefix} instance over ${c[0]} emitted`);

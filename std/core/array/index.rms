@@ -78,6 +78,11 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number, ite
 }
 
 export function reverse<T>(this arr: T[]): T[] {
+	arr.reverseInPlace();
+	return arr;
+}
+
+function reverseInPlace<T>(this arr: T[]): void {
 	let lo: int64 = 0;
 	let hi = (arr.length as int64) - 1;
 	while (lo < hi) {
@@ -87,7 +92,6 @@ export function reverse<T>(this arr: T[]): T[] {
 		lo = lo + 1;
 		hi = hi - 1;
 	}
-	return arr;
 }
 
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
