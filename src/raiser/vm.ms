@@ -1746,7 +1746,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 		futureComplete(vm, s.resultFuture, value);
 		if (value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) releaseMovedOut(vm, value.intVal);
 	}
-	if (vm.current != 0) releaseEntryRefs(vm);
+	releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
 	return vm.current != 0;
 }
@@ -1777,7 +1777,7 @@ function frameRefRoots(vm: RaiserVM, s: RaiserStrand, running: boolean, roots: R
 	}
 }
 
-function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string, extraName: string = "module state error"): void {
+function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], extraNames: string[], where: string): void {
 	if (vm.comptime || !vm.auditLedger || vm.error != "") return;
 	vmLedgerCollect(vm);
 	const roots: RaiserValue[] = [];
@@ -1791,7 +1791,7 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 		if (s != running) { roots.push(s.currentException); names.push(`strand ${s.id} current exception`); }
 	}
 	for (const g of held[0].globals) { roots.push(g); names.push("global"); }
-	for (const e of extra) { roots.push(e); names.push(extraName); }
+	for (let i = 0; i < extra.length; i += 1) { roots.push(extra[i]); names.push(extraNames[i]); }
 	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where, names);
 	if (verdict != "") vmError(vm, verdict);
 }
@@ -1804,14 +1804,15 @@ function vmLedgerCollect(vm: RaiserVM): void {
 function vmProgramLedger(vm: RaiserVM): void {
 	const main = vm.sched.strands.items[0];
 	const ev = vm.sched.modules;
-	const extra: RaiserValue[] = [];
-	for (const st of ev.states) extra.push(st.error);
-	for (const job of ev.pending) extra.push(job.error);
+	const extra: RaiserValue[] = [vm.exitValue];
+	const names: string[] = ["the program's result"];
+	for (const st of ev.states) { extra.push(st.error); names.push("module state error"); }
+	for (const job of ev.pending) { extra.push(job.error); names.push("module state error"); }
 	const sharing: RaiserStrand[] = [main];
 	for (const s of vm.sched.strands.items) {
 		if (s != main && s.arrayHeap == main.arrayHeap) sharing.push(s);
 	}
-	vmLedger(vm, sharing, extra, "program");
+	vmLedger(vm, sharing, extra, names, "program");
 }
 
 function vmHasRunnable(vm: RaiserVM): boolean {
