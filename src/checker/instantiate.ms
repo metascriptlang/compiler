@@ -1306,7 +1306,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 // Reference parity: on-demand proc instantiation (same pattern as standard generateInstance).
 // For classes with constructors, we generate a standalone FunctionDecl named ClassName_new.
 
-export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol | null {
+export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, newSite: SourceLocation | null = null): Symbol | null {
 	// Refuse unresolved types
 	for (const ct of concreteTypes) {
 		if (ct == null || ct.kind == TypeKind.GenericParam || isUnresolvedType(ct)) return null;
@@ -1347,7 +1347,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	substStruct.sym = instSym;
 	cacheInstance(host.typeInstCache, classSym, instSym, params, dedup.types);
 	const classBody: Node[] = instanceFieldInits(classData, params, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc, newSite));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
@@ -1399,7 +1399,7 @@ function instanceStruct(structBase: Type, mangledClass: string, params: Type[], 
 	return substStruct;
 }
 
-function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, params: Type[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, params: Type[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation, newSite: SourceLocation | null): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -1465,10 +1465,15 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
+		const errBefore = bodyCtx.errors.length;
 		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, ctorDeclNode);
+		if (newSite != null && bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
+			addError(ctx, "in instantiation of '" + classSym.name + displayTypeArgs(types) + "': " + bodyCtx.errors[errBefore].message, newSite.line, newSite.column);
+			while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();
+		}
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
 		removeInjectedSyms(bodyCtx, injectedSyms);

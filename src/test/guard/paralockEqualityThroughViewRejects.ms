@@ -22,7 +22,7 @@ function same(a: Readonly<Line>, b: Readonly<Line>): boolean { return a == b; } 
 function differ(a: Readonly<Line>, b: Line): boolean { return a != b; } // GUARD-REFUSED
 
 const a: Line = { text: "a", runs: [] };
-const m = new Map<Line, int32>();
-m.set(a, 1); // GUARD-REFUSED
+const m = new Map<Line, int32>(); // GUARD-REFUSED
+m.set(a, 1);
 m.set({ text: "a", runs: [3] }, 2);
 console.log(`${m.size} ${same(a, a)} ${differ(a, { text: "b", runs: [] })}`);

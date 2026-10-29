@@ -194,7 +194,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, newNode: Node, callee: Node,
 	instantiateGenericBody(instType, genericParams);
 	let instance: Symbol | null = null;
 	if (!refused && (baseSym.symbolKind == SymbolKind.Class || hasFlag(baseSym, SymbolFlag.HasConstructor))) {
-		instance = instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
+		instance = instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx, newNode.location);
 	}
 	return { type: isRefBase ? createRef(instType) : instType, instance };
 }
