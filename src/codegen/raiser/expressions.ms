@@ -2059,8 +2059,8 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
-	if (asyncKind == "FutureRead" || asyncKind == "FutureCheck" || asyncKind == "FutureFinished") {
-		const mode = asyncKind == "FutureRead" ? 0 : asyncKind == "FutureCheck" ? 1 : 2;
+	if (asyncKind == "FutureRead" || asyncKind == "FutureCheck" || asyncKind == "FutureFinished" || asyncKind == "FutureTake") {
+		const mode = asyncKind == "FutureRead" ? 0 : asyncKind == "FutureCheck" ? 1 : asyncKind == "FutureFinished" ? 2 : 3;
 		const dest = callBlock(s, node.nodeType, d.arguments, null);
 		emitCallArgs(s, dest, d.arguments);
 		emitInst(s, raiserABC(RaiserOpcode.FutureRead, dest, mode, d.arguments.length));
@@ -2956,6 +2956,7 @@ function futureRuntimeKind(sym: Symbol | null): string {
 	if (n == "msFutureFinished") return "FutureFinished";
 	if (n == "msFutureCheckErr") return "FutureCheck";
 	if (n.startsWith("msFutureRead")) return "FutureRead";
+	if (n == "msFutureTakeRaw") return "FutureTake";
 	return "";
 }
 
