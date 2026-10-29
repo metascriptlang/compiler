@@ -721,7 +721,7 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			const actorRefType = createRef(actorBody);
 			const ctorTypeChildren: Type[] = [actorRefType];
 			if (m.nodeType != null && m.nodeType.typeChildren != null) {
-				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(tc);
+				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(mayHoldCycleRoot(tc, ctx) ? createSink(tc) : tc);
 			}
 			fnNode.nodeType = createFunction(ctorTypeChildren, ctorParams, voidType());
 			const ctorSym = mintSym(ctx, SymbolKind.Function, name + "_constructor", fnNode.nodeType);
