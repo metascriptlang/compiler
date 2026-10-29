@@ -195,9 +195,9 @@ record_select_off() {
 }
 tool_ids() {
   local t v
-  for t in cc clang gcc zig node; do
+  for t in cc clang gcc node; do
     command -v "$t" >/dev/null 2>&1 || { printf '%s absent\n' "$t"; continue; }
-    if [ "$t" = zig ]; then v=$(zig version 2>&1 | head -1); else v=$("$t" --version 2>&1 | head -1); fi
+    v=$("$t" --version 2>&1 | head -1)
     printf '%s %s %s\n' "$t" "$(command -v "$t")" "$v"
   done
   printf 'toolchain %s\n' "$(cat "${MSC_NATIVE_TOOLCHAIN:-$TOP/msc-toolchain}/IDENTITY" 2>/dev/null || echo absent)"

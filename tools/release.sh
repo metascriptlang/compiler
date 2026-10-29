@@ -8,7 +8,7 @@
 #   ./tools/release.sh --upload              # Build all + upload to GitHub
 #   ./tools/release.sh --upload darwin-arm64 # Build one + upload
 #
-# Requires: msc, zig, tar, gh (for --upload)
+# Requires: msc, zip, gh (for --upload)
 # Output: dist/msc-<version>-<os>-<arch>.tar.gz
 #
 # Archive naming matches install.sh expectations:
@@ -86,7 +86,7 @@ for t in "${TARGETS[@]}"; do
 done
 
 # Check prerequisites
-for cmd in msc zig zip; do
+for cmd in msc zip; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "error: $cmd is required but not found in PATH"
         exit 1
@@ -128,6 +128,13 @@ case "$HOST_CPU" in
     aarch64) HOST_CPU="arm64" ;;
 esac
 HOST_TARGET="${HOST_OS}-${HOST_CPU}"
+
+for t in "${TARGETS[@]}"; do
+    if [ "${t%%-*}" = darwin ] && [ "$HOST_OS" != darwin ]; then
+        echo "error: $t cannot be cross-built: the macOS SDK needs a Mac. Build darwin-* targets on a Mac."
+        exit 1
+    fi
+done
 
 # Map install.sh target names to msc --os/--cpu flags
 target_to_msc_flags() {
@@ -265,7 +272,7 @@ build_target() {
     local cross_flags=""
     if [ "$target" != "$HOST_TARGET" ]; then
         cross_flags=$(target_to_msc_flags "$target")
-        echo "  cross-compile: $HOST_TARGET -> $target (zig cc)"
+        echo "  cross-compile: $HOST_TARGET -> $target (msc native toolchain bundle)"
     else
         echo "  native build"
     fi
