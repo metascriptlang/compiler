@@ -546,6 +546,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	const modifiers = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
 		+ (d.methodIsStatic ? "static " : "")
 		+ (node.flags.has(NodeFlag.Abstract) ? "abstract " : "")
+		+ (flagHas(d.methodFlags, "override") ? "override " : "")
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "");
