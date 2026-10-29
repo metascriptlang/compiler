@@ -74,7 +74,7 @@ import { createServer, sendText, sendJson, serve } from "std/http/server";
 function main(): void {
 	const server = createServer((req: HttpRequest, res: ServerResponse): void => {
 		// Reads request body — exercises the body framer.
-		sendJson(res, req.bodyText());
+		sendJson(res, req.bytes.length.toString());
 	});
 	const lr = server.listen("127.0.0.1", 9999);
 	if (!lr.ok) { return; }
