@@ -150,3 +150,4 @@ import "./cases/assignmentExpr";
 import "./cases/propertyAssignment";
 import "./cases/binaryAssignmentIndent";
 import "./cases/conditionalLayout";
+import "./cases/functionExpressionTypes";
