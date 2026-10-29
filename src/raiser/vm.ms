@@ -1164,9 +1164,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 		heapArrayPush(f.valueArrayHeap, arr, item);
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, item);
 	}
-	const owned = raiserArray(arr);
-	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
-	f.value = owned;
+	f.value = raiserArray(arr);
 	futureSettled(vm, handle);
 }
 
