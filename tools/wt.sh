@@ -504,13 +504,18 @@ mac_gate_allowed() {
   die "land: a Linux gate host is up and every macOS-only line sits in a .ms module, so this land goes through the gate queue: after its ready check (~/metascript/.gate-host/gate-queue ready-check $name <host>), submit it with ~/metascript/.gate-host/gate-queue submit $name and wait with ~/metascript/.gate-host/gate-queue wait $name (~/metascript/.gate-host/README.md, Ready); the gate's verdict names the platform-check.sh run the Mac adds. When the person approves the Mac for it (a Linux host red, no gate host free), run again with MSC_LAND_MAC=1."
 }
 
-# A gate verdict that needs a platform (needs=macos) counts only beside platform-check.sh's verdict for the same patch.
+# A gate verdict that needs a platform (needs=macos) counts only beside platform-check.sh's verdict for the same patch. On the
+# Mac, a verdict whose macOS-only lines include a file outside a .ms module gates on the Mac instead, because platform-check.sh
+# has no targeted check for such a file and sends it to the Mac land queue, which then refused on this rule (cw-lane-sm,
+# 2026-10-29).
 platform_verdicts() {
   local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" checked p
   checked=$(sed -n 's/^patch_verbatim=//p' "$f")
   for p in $(sed -n 's/^needs=//p' "$f" | tr ',' ' '); do
-    [ -f "$f.$p" ] && [ "$(sed -n 's/^result=//p' "$f.$p")" = GREEN ] && [ "$(sed -n 's/^patch_verbatim=//p' "$f.$p")" = "$checked" ] \
-      || die "land: the gate verdict $f needs a $p check of the same patch: from this worktree on a $p host run bash ~/metascript/.gate-host/platform-check.sh $(basename "$f") $p"
+    [ -f "$f.$p" ] && [ "$(sed -n 's/^result=//p' "$f.$p")" = GREEN ] && [ "$(sed -n 's/^patch_verbatim=//p' "$f.$p")" = "$checked" ] && continue
+    [ "$p" = macos ] && [ "$(uname -s)" = Darwin ] && sed -n 's/^macos_files=//p' "$f" | tr ' ,' '\n\n' | grep '^.' | grep -qv '\.ms$' \
+      && { say "land: the gate verdict $f names macOS-only lines outside a .ms module, which no targeted check reaches, so the Mac gate runs"; return 1; }
+    die "land: the gate verdict $f needs a $p check of the same patch: from this worktree on a $p host run bash ~/metascript/.gate-host/platform-check.sh $(basename "$f") $p"
   done
 }
 
@@ -615,8 +620,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
   if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && local_verdict "$verdict" "$w" "$old" "$new"; then
     say "land: reusing the green gate of $(awk '{print $3}' "$verdict") for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
-  elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new"); then
-    platform_verdicts "$name"
+  elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new") && platform_verdicts "$name"; then
     say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ]; then
     mac_gate_allowed "$w" "$old" "$new" "$name"

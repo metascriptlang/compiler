@@ -320,6 +320,16 @@ enqueue pv
 rr=$(waitfor pv 60)
 check "S22b with the macOS check of the same patch it lands" '[ "$rr" = 0 ] && onmain pv.txt'
 
+echo "== S22c on the Mac, a remote GREEN whose macOS-only lines sit outside a .ms module gates on the Mac"
+if [ "$(uname -s)" = Darwin ]; then
+  setup; mkwt pc
+  remotegreen pc; printf 'needs=macos\nmacos_files=runtime/io/engine.c\n' >>"$MSC_REMOTE_VERDICTS/pc"
+  enqueue pc
+  rr=$(waitfor pc 60)
+  check "S22c the Mac gate ran and the land is green" '[ "$rr" = 0 ] && onmain pc.txt && grep -q "^wt/pc " "$T/ctl/gates.log"'
+  check "S22c the land names why the Mac gate runs" 'grep -q "no targeted check reaches, so the Mac gate runs" "$MSC_LAND_QUEUE/pc.land.log"'
+fi
+
 echo "== S23 main moved after the remote gate by files the slice leaves alone: still no local gate"
 setup; mkwt rm red
 remotegreen rm
