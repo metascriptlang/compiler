@@ -258,6 +258,15 @@ raiser_stamp() (
 
 compiler_changed() { grep -E '^src/' | grep -vE '^src/test/' >/dev/null; }
 
+raiser_scope() {
+  local triggers
+  triggers=$(printf '%s\n' "$1" | grep -Ev "$INERT" | grep -E "$RAISER_PATHS")
+  raiser_why=$(printf '%s\n' "$triggers" | head -1) raiser_on=0 corpus_key=corpus
+  [ -n "$triggers" ] || return 0
+  raiser_on=1
+  printf '%s\n' "$triggers" | grep -v '^src/test/corpus/programs/' >/dev/null || corpus_key=corpus-plain
+}
+
 tier_touched() {
   awk -v deps="$1" -v top="$2" 'BEGIN { while ((getline d < deps) > 0) mods[d] = 1 }
     (top "/" $0) in mods { hit = 1; exit }
@@ -1202,9 +1211,9 @@ result_keys() {
 }
 
 unrecorded() {
-  local lane=$1 name key
+  local lane=$1 kind=${2:-$1} name key
   local -A key_of
-  while IFS=$'\t' read -r name key; do key_of[$name]=$key; done <"$EMIT/keys.$lane"
+  while IFS=$'\t' read -r name key; do key_of[$name]=$key; done <"$EMIT/keys.$kind"
   : >"$EMIT/hits.$lane"
   while read -r name _; do
     key=${key_of[$name]:-}
@@ -1267,7 +1276,7 @@ select_programs() {
   local t0=$SECONDS n_all run_c run_s keyed line
   result_keys || { select_whole "the candidate's emits or their keys could not be made"; return; }
   n_all=$(grep -c . "$EMIT/programs" | tr -d ' ')
-  unrecorded corpus <"$EMIT/programs" >"$EMIT/only.corpus"
+  unrecorded corpus "$corpus_key" <"$EMIT/programs" >"$EMIT/only.corpus"
   unrecorded san <"$EMIT/programs" >"$EMIT/only.san"
   run_c=$(grep -c . "$EMIT/only.corpus" | tr -d ' ') run_s=$(grep -c . "$EMIT/only.san" | tr -d ' ')
   keyed=$(grep -c . "$EMIT/keys.corpus" | tr -d ' ')
@@ -1562,7 +1571,7 @@ result_cache_self_test() (
 )
 
 result_flow_self_test() (
-  local d bad=0 TOP OUT EMIT EMIT_WORK CAND RESULTS HOME GATE_SELECT_LEDGER KNOWN KNOWN_LOCAL EXE_SUFFIX="" select=1 selected=0 select_label=corpus raiser_on=0 only_csv=""
+  local d bad=0 TOP OUT EMIT EMIT_WORK CAND RESULTS HOME GATE_SELECT_LEDGER KNOWN KNOWN_LOCAL EXE_SUFFIX="" select=1 selected=0 select_label=corpus raiser_on=0 corpus_key=corpus only_csv=""
   d=$(mktemp -d) || return 1
   TOP="$d/repo" OUT="$d/out" EMIT="$d/out/emit" EMIT_WORK="$d/out/emit-work" CAND="$d/out/msc" RESULTS="$d/results" HOME="$d/home"
   GATE_SELECT_LEDGER="$d/select.tsv" KNOWN="$d/known.json" KNOWN_LOCAL="$d/none.json"
@@ -1591,6 +1600,17 @@ FAKE
   [ ! -s "$EMIT/only.corpus" ] || { printf 'FAIL result flow: a whole run recorded no pass for the next narrowed gate\n'; bad=1; }
   rm -rf "$EMIT"; GATE_ADOPT=0 whole_keys >/dev/null
   [ ! -e "$EMIT/keys.ok" ] || { printf 'FAIL result flow: GATE_ADOPT=0 still keyed the run\n'; bad=1; }
+  mkdir -p "$TOP/src/raiser" "$TOP/src/codegen/raiser" "$TOP/src/transform" "$TOP/src/compiler/meta"
+  printf 'vm\n' >"$TOP/src/raiser/vm.ms"; printf 'rl\n' >"$TOP/src/transform/raiserLowering.ms"; printf 'ht\n' >"$TOP/src/compiler/meta/hostTable.ms"
+  rm -rf "$RESULTS" "$EMIT"; select_programs >/dev/null; only_csv=a,b; pass_log; record_passes corpus 0; only_csv=""
+  printf 'one edited\n' >"$TOP/src/test/corpus/programs/a.ms"
+  ran() { if [ -e "$EMIT/keys.ok" ]; then paste -sd, "$EMIT/only.corpus"; else printf 'nothing, select gave up'; fi; }
+  raiser_scope $'src/test/corpus/programs/a.ms\ndocs/TESTING.md'; rm -rf "$EMIT"; select_programs >/dev/null
+  { [ "$raiser_on" = 1 ] && [ "$(ran)" = a ]; } \
+    || { printf 'FAIL result flow: a raiser run reached only by corpus programs ran a program with a plain pass, raiser %s, ran %s\n' "$raiser_on" "$(ran)"; bad=1; }
+  raiser_scope $'src/test/corpus/programs/a.ms\nsrc/raiser/vm.ms'; rm -rf "$EMIT"; select_programs >/dev/null
+  { [ "$raiser_on" = 1 ] && [ "$(ran)" = a,b ]; } \
+    || { printf 'FAIL result flow: a plain pass satisfied a raiser run reached by a raiser source, raiser %s, ran %s\n' "$raiser_on" "$(ran)"; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -2045,11 +2065,9 @@ else
   [ -z "$rcscan_why" ] || rcscan_on=1
 fi
 
-raiser_on=0 raiser_why=""
+raiser_on=0 raiser_why="" corpus_key=corpus
 if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
-else
-  raiser_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RAISER_PATHS" | head -1)
-  [ -z "$raiser_why" ] || raiser_on=1
+else raiser_scope "$paths"
 fi
 
 explain() {
@@ -2067,7 +2085,8 @@ explain() {
     if [ "$rcscan_on" -eq 1 ]; then say "gate: build runs the emit rc scan <- $rcscan_why"; else say "gate: build without the emit rc scan (no change under src/, std/ or runtime/)"; fi ;;
   esac
   case " $lanes " in *" corpus "*)
-    if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
+    if [ "$corpus_key" = corpus-plain ]; then say "gate: corpus runs the raiser lane <- $raiser_why; only corpus programs reach it, so a pass recorded without the raiser lane skips its program"
+    elif [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
   esac
 }
 
