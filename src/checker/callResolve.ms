@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -29,7 +29,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
+import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -5213,6 +5213,62 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow || t.kind == TypeKind.Var;
 }
 
+function distributeDiscriminant(t: Type | null, out: Type[]): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.EnumLiteral || t.kind == TypeKind.BooleanLiteral) { out.push(t); return true; }
+	if (t.kind == TypeKind.Boolean) { out.push(createBooleanLiteral(true)); out.push(createBooleanLiteral(false)); return true; }
+	if (t.kind == TypeKind.Enum) {
+		for (const member of t.typeNames) out.push(createEnumLiteral(t, member));
+		return true;
+	}
+	if (t.kind != TypeKind.Union) return false;
+	for (const member of t.typeChildren) {
+		if (!distributeDiscriminant(member, out)) return false;
+	}
+	return true;
+}
+
+function possibleDiscriminants(node: Node, out: Type[]): boolean {
+	if (node.kind == NodeKind.ConditionalExpr) {
+		const arms = node.data as ConditionalExprData;
+		return possibleDiscriminants(arms.ternaryConsequent, out) && possibleDiscriminants(arms.ternaryAlternate, out);
+	}
+	if (node.kind == NodeKind.BooleanLiteral) { out.push(createBooleanLiteral((node.data as BooleanLiteralData).boolValue)); return true; }
+	const lit = enumMemberLiteralOf(node);
+	if (lit != null) { out.push(lit); return true; }
+	return distributeDiscriminant(node.nodeType, out);
+}
+
+function discriminantValueName(v: Type): string {
+	return v.kind == TypeKind.EnumLiteral ? v.typeName + "." + v.typeNames[0] : v.typeName;
+}
+
+function refuseUnresolvedDiscriminant(ctx: CheckerContext, d: ObjectLiteralData, unionType: Type, discName: string, discIdx: int32, discExpr: Node): void {
+	const at = discExpr.location;
+	const values: Type[] = [];
+	if (!possibleDiscriminants(discExpr, values)) {
+		addError(ctx, "the discriminant '" + discName + "' of a '" + unionType.typeName + "' literal is " + typeDisplayName(discExpr.nodeType) + ", not a member of " + typeDisplayName(unionType.typeExtra) + ": write the member of the variant being built", at.line, at.column);
+		return;
+	}
+	const names: string[] = [];
+	for (const v of values) {
+		const shown = discriminantValueName(v);
+		if (names.includes(shown)) continue;
+		names.push(shown);
+		const vi = v.kind == TypeKind.EnumLiteral ? findVariantByEnumMember(unionType, v) : findVariantByBooleanDiscriminant(unionType, discName, booleanLiteralValue(v));
+		if (vi < 0 || vi >= unionType.typeChildren.length) {
+			addError(ctx, "the discriminant '" + discName + "' can be " + shown + ", which names no variant of '" + unionType.typeName + "'", at.line, at.column);
+			return;
+		}
+		for (let ki = 0; ki < d.keys.length; ki += 1) {
+			if (ki == discIdx || findFieldInVariant(unionType.typeChildren[vi], d.keys[ki]) != null) continue;
+			addError(ctx, "the discriminant '" + discName + "' can be " + shown + ", whose variant " + unionType.typeNames[vi + 1] + " of '" + unionType.typeName + "' has no field '" + d.keys[ki] + "'", at.line, at.column);
+			return;
+		}
+	}
+	addError(ctx, "the discriminant '" + discName + "' can be " + names.join(" or ") + ": a '" + unionType.typeName + "' literal builds the one variant its discriminant names, so write one literal per variant, e.g. cond ? { " + discName + ": A, ... } : { " + discName + ": B, ... }", at.line, at.column);
+}
+
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
 export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null, spreadDisc: Type | null): Type {
@@ -5293,6 +5349,10 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 			fi = fi + 1;
 		}
 		return node.nodeType!;
+	}
+
+	if (discExpr != null && unionType.typeExtra != null && (unionType.typeExtra.kind == TypeKind.Enum || unionType.typeExtra.kind == TypeKind.Boolean)) {
+		refuseUnresolvedDiscriminant(ctx, d, unionType, discName, discIdx, discExpr);
 	}
 
 	// Could not resolve variant — check properties without validation

@@ -77,6 +77,7 @@ import "./scenarios/spreadLiteralUnionMember";
 import "./scenarios/classImplements";
 import "./scenarios/distinctCollectionKey";
 import "./scenarios/spreadLiteralFieldRefusals";
+import "./scenarios/unionLiteralDiscriminant";
 import "./scenarios/restTupleArity";
 import "./scenarios/mappedTypeRefusals";
 import "./scenarios/literalLocalKeepsType";
