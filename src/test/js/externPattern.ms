@@ -152,6 +152,21 @@ test "JS: a plain-named extern stays a function value" {
 	assert js.value.contains("(Math.abs)");
 }
 
+test "JS: an instance pattern extension read without parentheses is a function value, so it is refused" {
+	const js = compileToJS("extern function size(this b: uint8[]): number from \"#.length\";\n"
+		+ "const b: uint8[] = [1, 2, 3];\nconst n = b.size as int32;");
+	assert !js.ok;
+	assert js.error.contains("extern function 'size' is the pattern \"#.length\"");
+}
+
+test "JS: an instance pattern extension called with parentheses emits its pattern" {
+	const js = compileToJS("extern function size(this b: uint8[]): number from \"#.length\";\n"
+		+ "const b: uint8[] = [1, 2, 3];\nconst n = b.size() as int32;");
+	assert js.ok;
+	assert js.value.contains(".length");
+	assert !js.value.contains(".size");
+}
+
 test "JS: a std static pattern extern read through its class is refused" {
 	const js = compileToJSWithStd("function make(f: (n: number) => Buffer): number { return f(3).length; }\n"
 		+ "console.log(make(Buffer.alloc));");
