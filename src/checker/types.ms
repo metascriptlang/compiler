@@ -737,6 +737,16 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 }
 
 // `Readonly<A> | null` is `Readonly<A | null>`: a view stays a view when null joins it.
+function isUnionOfViewsAndNull(t: Readonly<Type>): boolean {
+	if (t.kind != TypeKind.Union) return false;
+	let views = 0;
+	for (const m of t.typeChildren) {
+		if (isReadonlyView(m)) views += 1;
+		else if (m.kind != TypeKind.Null) return false;
+	}
+	return views > 0 && t.typeChildren.length > 1;
+}
+
 function onlyViewsAndNull(members: Type[]): boolean {
 	let views = 0;
 	for (const m of members) {
@@ -5496,7 +5506,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayNameInner(lockedPayloadType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsOwned) && isOwnedRef(t)) return "Owned<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsOwned), open, shapes) + ">";
-	if (!shown.has(TypeFlag.IsReadonly) && isReadonlyView(t)) return "Readonly<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsReadonly), open, shapes) + ">";
+	if (!shown.has(TypeFlag.IsReadonly) && isReadonlyView(t) && !isUnionOfViewsAndNull(t)) return "Readonly<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsReadonly), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsSendable) && isSendableFunction(t)) return "Sendable<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsSendable), open, shapes) + ">";
 	if (isIterator(t)) return "Iterator<" + typeDisplayNameInner(getIteratorYieldType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	// A generic instance erases to its base name, so two different
