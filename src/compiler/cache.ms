@@ -2056,7 +2056,10 @@ export function writeCSource(modPath: string, fp: string, cCode: string): void {
 	// A mismatch rewrites, so the cache heals the way it did before this check.
 	if (exists(path)) {
 		const onDisk = try readFile(path) catch "";
-		if (onDisk == cCode) return;
+		if (onDisk == cCode) {
+			markUsed(path, nowSeconds(), LIVE_REFRESH_SECONDS);
+			return;
+		}
 	}
 	atomicWriteFile(path, cCode);
 }
