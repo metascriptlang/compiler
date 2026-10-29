@@ -200,6 +200,24 @@ function isParen(kind: TokenKind): boolean {
 
 let shapeText: string[] = [];
 
+function writtenTypeSeparatorsFree(text: string): string {
+	let out = "";
+	for (let k = 0; k < text.byteLength; k += 1) {
+		const c = text.byteAt(k);
+		if (c == " ".code || c == ",".code || c == ";".code || (c == "|".code && out == "")) continue;
+		out += text.byteSlice(k, k + 1);
+	}
+	return out;
+}
+
+function isTypeText(name: string): boolean {
+	return name.contains("Type") || name.contains("Generic") || name == "typeArg";
+}
+
+function textField(name: string, s: string): string {
+	return name + "=" + (isTypeText(name) ? writtenTypeSeparatorsFree(s) : s.length.toString() + ":" + s);
+}
+
 const shapeSink: FieldSink = {
 	node: (name: string, n: Node | null): void => { shapeNode(n); },
 	nodes: (name: string, a: Node[] | null): void => { shapeNodes(a); },
@@ -207,8 +225,8 @@ const shapeSink: FieldSink = {
 		if (a != null) for (const row of a) { shapeText.push("["); shapeNodes(row); shapeText.push("]"); }
 	},
 	typ: (name: string, t: Type | null): void => {},
-	str: (name: string, s: string): void => { shapeText.push(name + "=" + s.length.toString() + ":" + s); },
-	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapeText.push(name + "=" + v.length.toString() + ":" + v); },
+	str: (name: string, s: string): void => { if (name != "assertSource") shapeText.push(textField(name, s)); },
+	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapeText.push(textField(name, v)); },
 	integer: (name: string, v: int64): void => { shapeText.push(name + "=" + v.toString()); },
 	float: (name: string, v: float64): void => { shapeText.push(name + "=" + v.toString()); },
 	bool: (name: string, b: boolean): void => { shapeText.push(name + (b ? "+" : "-")); },
@@ -237,21 +255,18 @@ function groupsOptionalChain(n: Node): boolean {
 	}
 }
 
-// Every payload field and flag of a parsed node but locations and the grouping-parentheses flag.
 function shapeNode(n: Node | null): void {
 	if (n == null) {
 		shapeText.push("null");
 		return;
 	}
 	let flags = n.flags as uint32;
+	if (n.flags.has(NodeFlag.CommaWritten)) flags -= 1 << (NodeFlag.CommaWritten as uint32);
 	if (n.flags.has(NodeFlag.Parenthesized)) {
 		flags -= 1 << (NodeFlag.Parenthesized as uint32);
 		if (groupsOptionalChain(n)) shapeText.push("(optional chain)");
 	}
-	shapeText.push("k" + (n.kind as int32).toString() + "f" + flags.toString() + "ta=" + n.typeArg + "{");
-	shapeNode(n.typeExpr);
-	shapeNodes(n.typeExprs);
-	shapeNodes(n.baseExprs);
+	shapeText.push("k" + (n.kind as int32).toString() + "f" + flags.toString() + textField("typeArg", n.typeArg) + "{");
 	nodeFields(n, shapeSink);
 	shapeText.push("}");
 }
@@ -479,6 +494,17 @@ test "lossless: parentheses that move a binding stay refused" {
 	assert !checkLossless("const v = (a?.()).b;", "const v = a?.().b;\n").ok;
 	assert !checkLossless("const v = (a?.b()).c;", "const v = a?.b().c;\n").ok;
 	assert !checkLossless("const v = (a as T).b;", "const v = a as T.b;\n").ok;
+}
+
+test "lossless: an assert keeps its meaning when only the text it quotes is reformatted" {
+	assert checkLossless("assert (a + b) + c == 5;", "assert a + b + c == 5;\n").ok;
+	assert !checkLossless("assert (a + b) * c == 5;", "assert a + b * c == 5;\n").ok;
+}
+
+test "lossless: a dropped parenthesis may share a file with the other accepted rewrites" {
+	assert checkLossless("type T = { a: A, b: B };\nconst v = (a + b) + c;", "type T = { a: A; b: B };\nconst v = a + b + c;\n").ok;
+	assert checkLossless("const o = { 'k': (a), };", "const o = { k: a };\n").ok;
+	assert !checkLossless("let x: (A | B)[];\nconst v = (a);", "let x: A | B[];\nconst v = a;\n").ok;
 }
 
 test "lossless: parentheses in a type annotation stay part of the type" {
