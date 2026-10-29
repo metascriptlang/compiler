@@ -21,7 +21,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, newLoweredSym, freshOwnedSym } from "../context";
 import { makeCall, makeBlock, makeExprStmt, makeReturn, makeMember, makeIdentResolved, makeTypedIdentResolved, makeLocalDecl, runtimeRef, syntheticToken } from "../util";
-import { createFunction, createPromise, voidType, getSysType, isAwaitable, awaitedType } from "../../checker/types";
+import { createFunction, createClosureType, createPromise, voidType, getSysType, isAwaitable, awaitedType } from "../../checker/types";
 import { routineFlagSet, RoutineFlag } from "../../checker/symbol";
 import { bodyContainsAwait } from "./actorLower";
 
@@ -53,7 +53,7 @@ function makeArrow(params: Symbol[], paramTypes: Type[], body: Node, ret: Type, 
 		arrowReturnType: "",
 		arrowDefaults: [] as Node[],
 	}, syntheticToken(loc));
-	arrow.nodeType = createFunction(paramTypes, names, ret);
+	arrow.nodeType = createClosureType(paramTypes, names, ret);
 	arrow.paramSyms = params;
 	return arrow;
 }
@@ -91,7 +91,7 @@ function proxify(method: Node, ctx: TransformContext): void {
 		const promised = createPromise(held);
 		const bodyRet = waits ? promised : held;
 		const replySym = freshOwnedSym(ctx, "reply", promised);
-		const runSym = freshOwnedSym(ctx, "run", createFunction([], [], bodyRet));
+		const runSym = freshOwnedSym(ctx, "run", createClosureType([], [], bodyRet));
 		const ran = makeCall(makeIdentResolved(runSym, loc), [], loc);
 		ran.nodeType = bodyRet;
 		let value = ran;
