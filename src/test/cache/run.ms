@@ -474,10 +474,10 @@ if (only.length == 0 || only.some((name) => RIVALS.includes(name))) runRivals();
 
 const CHECKOUTS = "two checkouts of one project at different paths";
 
-function checkoutBuild(dir: string, trim: boolean): string[] {
+function checkoutBuild(dir: string, trim: boolean, offset: int32 = 4100): string[] {
 	ensureDir(dir);
 	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
-	put(`${dir}/a.ms`, "export function fa(x: int32): int32 { return x + 4100; }\n");
+	put(`${dir}/a.ms`, `export function fa(x: int32): int32 { return x + ${offset}; }\n`);
 	put(`${dir}/main.ms`, "import { fa } from \"./a\";\nconsole.log(`${fa(41)}`);\n");
 	const args = ["build", "main.ms", "--output=app", "--verbose", "--cc=clang"];
 	if (trim) args.push("--trimpath");
@@ -502,6 +502,21 @@ function runCheckouts(): void {
 }
 
 if (only.length == 0 || only.some((name) => CHECKOUTS.includes(name))) runCheckouts();
+
+const LOST = "a store object lost beside its manifest";
+
+function runLostObject(): void {
+	if (windows) return;
+	const base = `${root}/lost`;
+	const first = checkoutBuild(`${base}/a/proj`, true, 4200);
+	const swept = execFileCapture("find", [`${root}/global/store`, "-type", "f", "-name", "*.o", "-print", "-delete"]);
+	const lost = swept.ok ? swept.value.split("\n").filter((line: string): boolean => line != "").length : -1;
+	const second = checkoutBuild(`${base}/b/proj`, true, 4200);
+	const third = checkoutBuild(`${base}/c/proj`, true, 4200);
+	results.push({ name: `store: ${LOST}: the next build publishes the object again and the one after restores it`, expected: `4241 4241 4241 lost every object, restored 0 2`, actual: `${first[0]} ${second[0]} ${third[0]} lost ${lost >= 2 ? "every object" : `${lost}`}, restored ${second[1]} ${third[1]}` });
+}
+
+if (only.length == 0 || only.some((name) => LOST.includes(name))) runLostObject();
 
 let failures = 0;
 console.log(`root ${root}`);

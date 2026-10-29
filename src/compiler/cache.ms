@@ -1395,9 +1395,9 @@ export function publishToStore(key: string, oFile: string, dependencyFile: strin
 	if (manifest == "") return;
 	const dir = `${root}/${key}`;
 	const stem = hashContent(manifest);
-	if (exists(`${dir}/${stem}.m`)) return;
-	ensureDir(dir);
 	const object = `${dir}/${stem}.o`;
+	if (exists(`${dir}/${stem}.m`) && exists(object)) return;
+	ensureDir(dir);
 	const tmp = `${object}.tmp.${performance.now()}`;
 	if (!copyFile(oFile, tmp).ok) return;
 	if (!renameReplace(tmp, object)) {
