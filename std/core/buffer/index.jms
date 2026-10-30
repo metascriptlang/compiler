@@ -1,7 +1,7 @@
 // Buffer on the js target is a plain growable Array of bytes, the
 // representation a `uint8[]` literal has, so push and aliasing match the C
-// side. String methods do not apply here; this module re-provides the byte
-// surface that std/core/buffer adds on top of the C string alias:
+// side. This module provides the JS bodies of the byte surface that
+// std/core/buffer declares:
 //   - hot paths (set/byteAt/search/fill) bind via `from` templates, emitting
 //     native subscripts with zero wrapper frame;
 //   - endian reads and writes go through one scratch DataView;
