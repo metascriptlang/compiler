@@ -60,7 +60,7 @@ import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, ExportedSymInfo, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports, buildExportInfo } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
@@ -135,7 +135,7 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 	const tmpCtx = createTempCollectContext(filePath);
 	collectTopLevelLocal(tmpCtx, pr.value);
 	resolveDeclarations(tmpCtx, pr.value);
-	const exports = collectExports(tmpCtx, filePath);
+	const exports = checkedByPrelude(db, filePath, collectExports(tmpCtx, filePath));
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
@@ -672,7 +672,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 		db.trees.set(exportNodeKey(depId), collected);
 
-		const earlyExports = collectExports(tmpCtx, depPath);
+		const earlyExports = checkedByPrelude(db, depPath, collectExports(tmpCtx, depPath));
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion);
@@ -686,6 +686,28 @@ function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): b
 	updateModuleExports(db.exportRegistry, depPath, collectExports(ctx, depPath));
 	setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 	return true;
+}
+
+// A module the shared prelude holds is body-checked once, there, and the graph never checks it again: its
+// importers must receive that checked copy, not the declaration-only symbols this collection produced.
+function checkedByPrelude(db: TransAmDb, modulePath: string, collected: ExportedSymInfo[]): ExportedSymInfo[] {
+	const prelude = db.preludeCtx;
+	if (prelude == null || !prelude.preludeModuleScopes.has(modulePath)) return collected;
+	const out: ExportedSymInfo[] = [];
+	for (const info of collected) {
+		const held = preludeScopeSymbol(prelude, info.sym.modulePath, info.sym.name);
+		out.push(held != null ? buildExportInfo(held, prelude.extensionRegistry, modulePath, prelude, info.name) : info);
+	}
+	return out;
+}
+
+function preludeScopeSymbol(prelude: CheckerContext, homePath: string, name: string): Symbol | null {
+	const scope = prelude.preludeModuleScopes.get(homePath);
+	if (scope == null) return null;
+	for (const sym of scope) {
+		if (sym.name == name && sym.modulePath == homePath) return sym;
+	}
+	return null;
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)

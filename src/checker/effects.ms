@@ -667,6 +667,9 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
+		if (call.nodeType == null && (callee == null || callee.nodeType == null)) {
+			throw new Error(`internal: the effect walk reached a call at ${call.location.line}:${call.location.column} whose routine body was never checked`);
+		}
 		if (isOwnParam(callee)) return null;
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (e == Effect.SpawnUnsafe && isSendableFunction(valueType)) return null;

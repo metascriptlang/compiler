@@ -3,7 +3,8 @@
 
 import { platform } from "std/process";
 import { Node, NodeKind, VariableDeclData, Symbol, ClassDeclData } from "../ast/node";
-import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym, moduleItemId } from "./context";
+import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym, moduleItemId, findExportedSymbol } from "./context";
+import { forEachChild } from "../ast/visitor";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, bindModulePassesFrom, setSlowTrace } from "./checkPass";
@@ -444,6 +445,33 @@ function stdImportWithoutPreludeChecks(): boolean {
 test "a graph that imports a prelude module without loading the prelude still checks against the full prelude" {
 	assert preludeDeclaresWhatMainBinds(".cms");
 	assert stdImportWithoutPreludeChecks();
+}
+
+function uncheckedCalls(n: Node): int32 {
+	let unchecked: int32 = n.kind == NodeKind.CallExpr && n.resolvedSym == null ? 1 : 0;
+	forEachChild(n, (k: Node): void => { unchecked += uncheckedCalls(k); });
+	return unchecked;
+}
+
+function importedStdBodyIsChecked(): boolean {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const dir = `${scratchRoot}/prelude-held-export`;
+	ensureDir(dir);
+	const mainPath = `${dir}/main.ms`;
+	writeFile(mainPath, "import { Math } from \"std/core/math\";\nimport { utf8String } from \"std/core/string/bytes\";\nconst n = Math.floor(2.5);\nconst s = utf8String(\"a\".asBytes(), false);\n");
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadModule(graph, mainPath, provider, config, 1);
+	const registry = checkModuleGraph(graph, stdPath, ".cms");
+	const bytes = findModule(graph, moduleIdentity(`${stdPath}/core/string/bytes.cms`, config, provider));
+	if (bytes == null) return false;
+	const info = findExportedSymbol(registry, bytes.path, "utf8String");
+	return info != null && info.sym.declNode != null && uncheckedCalls(info.sym.declNode) == 0;
+}
+
+test "an importer of a std module the shared prelude holds receives that module's checked routines" {
+	assert importedStdBodyIsChecked();
 }
 
 test "an extra global import is matched by loader identity, never by spelling" {
