@@ -1,5 +1,6 @@
 import "./basics";
 import "./strings";
+import "./templateLexicalGoal";
 import "./types";
 import "./match";
 import "./controlFlow";

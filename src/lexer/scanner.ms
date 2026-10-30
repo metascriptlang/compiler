@@ -261,6 +261,47 @@ export function scanTemplateContinuation(s: LexerState): void {
 	scanTemplateStringImpl(s, true);
 }
 
+function previousTokenIndex(s: LexerState, index: int32): int32 {
+	while (index >= 0 && s.tokens[index].kind == TokenKind.Comment) index -= 1;
+	return index;
+}
+
+function isOperatorNameGoal(s: LexerState): boolean {
+	const last = previousTokenIndex(s, s.tokens.length - 1);
+	if (last < 0) return false;
+	const kind = s.tokens[last].kind;
+	const head = kind == TokenKind.Star ? previousTokenIndex(s, last - 1) : last;
+	if (head >= 0 && (s.tokens[head].kind == TokenKind.Function ||
+		s.tokens[head].kind == TokenKind.Template)) {
+		const before = previousTokenIndex(s, head - 1);
+		return before < 0 || (s.tokens[before].kind != TokenKind.Dot &&
+			s.tokens[before].kind != TokenKind.QuestionDot);
+	}
+	if (kind == TokenKind.Star) return false;
+	if (kind == TokenKind.At) return true;
+	const before = previousTokenIndex(s, last - 1);
+	if (before >= 0 && s.tokens[before].kind == TokenKind.Extern) {
+		return match (kind) {
+			TokenKind.Class | TokenKind.Const | TokenKind.Var | TokenKind.Let |
+			TokenKind.Type | TokenKind.Enum | TokenKind.Interface | TokenKind.Struct |
+			TokenKind.Macro => true,
+			_ => false,
+		};
+	}
+	if (kind != TokenKind.Dot) return false;
+	let at = previousTokenIndex(s, last - 1);
+	while (at >= 0) {
+		if (s.tokens[at].kind == TokenKind.OperatorIdent ||
+			s.tokens[at].kind == TokenKind.TemplateNoSub) return true;
+		const prefix = previousTokenIndex(s, at - 1);
+		if (prefix < 0) return false;
+		if (s.tokens[prefix].kind == TokenKind.At) return true;
+		if (s.tokens[prefix].kind != TokenKind.Dot) return false;
+		at = previousTokenIndex(s, prefix - 1);
+	}
+	return false;
+}
+
 function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 	const startLine = s.line;
 	const startCol = s.column;
@@ -286,7 +327,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 			const contentLen = tempPos - s.pos;
 			if (contentLen > 0) {
 				const content = s.source.byteSlice(s.pos, tempPos);
-				if (isOperatorName(content)) {
+				if (isOperatorName(content) && isOperatorNameGoal(s)) {
 					s.pos = tempPos;
 					s.column = s.column + contentLen;
 					advanceChar(s); // closing backtick

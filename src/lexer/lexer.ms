@@ -300,22 +300,80 @@ test "template strings" {
 	assert lexLineAt("`a\\rb` z", 1) == 1;
 }
 
-test "operator identifiers" {
-	// Backtick-quoted operator names → OperatorIdent token
-	assert lexFirst("`==`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`==`") == "==";
-	assert lexFirst("`!=`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`!=`") == "!=";
-	assert lexFirst("`+`") == TokenKind.OperatorIdent;
-	assert lexFirst("`[]`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`[]`") == "[]";
-	assert lexFirst("`[]=`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`[]=`") == "[]=";
-	assert lexFirst("`<>`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`<>`") == "<>";
-	// Regular template strings stay as TemplateNoSub
+test "operator identifiers belong to declaration name goals" {
+	for (const name of ["==", "!=", "+", "[]", "[]=", "<>", "\\"]) {
+		const source = "function `" + name + "`";
+		assert lexKindAt(source, 1) == TokenKind.OperatorIdent;
+		assert lexValAt(source, 1) == name;
+		if (name != "\\") {
+			assert lexFirst("`" + name + "`") == TokenKind.TemplateNoSub;
+		}
+	}
 	assert lexFirst("`hello`") == TokenKind.TemplateNoSub;
 	assert lexFirst("`hello world`") == TokenKind.TemplateNoSub;
+}
+
+test "stropping preserves exported generator extern and macro name goals" {
+	const sources = [
+		"export template `\\`",
+		"async function /*a*/ * /*b*/ `\\`",
+		"@`\\`()",
+		"@module.`\\`()",
+		"@module.`+`.child.`\\`()",
+		"extern macro @`\\` from \"native\";",
+	];
+	for (const source of sources) {
+		const scanned = lex(source);
+		assert scanned.ok;
+		let found = false;
+		for (const token of scanned.value) {
+			if (token.kind == TokenKind.OperatorIdent && token.value == "\\") {
+				found = true;
+			}
+		}
+		assert found;
+	}
+	for (const kind of ["class", "const", "var", "let", "type", "enum", "interface", "struct"]) {
+		assert lexKindAt("extern " + kind + " `\\`", 2) == TokenKind.OperatorIdent;
+	}
+}
+
+test "expression templates do not inherit a preceding keyword name goal" {
+	assert lexKindAt("obj.function * `+`", 4) == TokenKind.TemplateNoSub;
+	assert lexKindAt("obj?.function * `+`", 4) == TokenKind.TemplateNoSub;
+	assert lexKindAt("@macro(`+`)", 3) == TokenKind.TemplateNoSub;
+	assert lexKindAt("@module.name(`+`)", 5) == TokenKind.TemplateNoSub;
+}
+
+test "repeated quoted macro segments preserve the final raw operator name" {
+	let source = "@root";
+	let dotted = "root";
+	for (let i = 0; i < 256; i += 1) {
+		source += ".`word`";
+		dotted += ".`+`";
+	}
+	source += ".`\\`()";
+	const named = lex(source);
+	assert named.ok;
+	const lastName = named.value[named.value.length - 4];
+	assert lastName.kind == TokenKind.OperatorIdent;
+	assert lastName.value == "\\";
+	const scanned = lex(dotted);
+	assert scanned.ok;
+	assert scanned.value.length == 514;
+	assert scanned.value[2].kind == TokenKind.TemplateNoSub;
+}
+
+test "an escaped initial backtick precedes a real interpolation" {
+	const scanned = lex("`\\`${7}`");
+	assert scanned.ok;
+	assert scanned.value[0].kind == TokenKind.TemplateHead;
+	assert scanned.value[0].value == "`";
+	assert scanned.value[0].endColumn == 6;
+	assert scanned.value[1].kind == TokenKind.Number;
+	assert scanned.value[2].kind == TokenKind.TemplateTail;
+	assert scanned.value[2].value == "";
+	assert scanned.value[2].endColumn == 9;
 }
 
 test "template interpolation tokens" {
