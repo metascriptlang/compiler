@@ -4,6 +4,7 @@
 import { Buffer } from "std/core/buffer";
 
 @import("node:process", { stdout, stderr });
+@import("node:fs", { readSync });
 
 extern const stdout: { write: (s: string) => void };
 extern const stderr: { write: (s: string) => void };
@@ -16,8 +17,49 @@ export function writeStderr(s: string): void {
 	stderr.write(s);
 }
 
+extern function readSync(fd: number, buf: Buffer, offset: number, length: number, position: number | null): number;
+
+interface StdinState {
+	pending: Buffer;
+	eof: boolean;
+}
+
+const stdinState: StdinState = { pending: Buffer.alloc(0), eof: false };
+
 export function readLine(): string {
-	return "";
+	@emit(`const st = ${stdinState};
+const find = (from) => { for (let i = from; i < st.pending.length; i++) if (st.pending[i] === 10) return i; return -1; };
+let scanned = 0;
+let lf = find(0);
+while (lf < 0 && !st.eof) {
+	scanned = st.pending.length;
+	const chunk = new Uint8Array(65536);
+	let n = 0;
+	for (;;) {
+		try {
+			n = ${readSync}(0, chunk, 0, chunk.length, null);
+			break;
+		} catch (e) {
+			if (e.code === "EOF") { n = 0; break; }
+			if (e.code === "EAGAIN") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); continue; }
+			if (e.code === "EINTR") continue;
+			throw e;
+		}
+	}
+	if (n === 0) { st.eof = true; break; }
+	const joined = new Uint8Array(st.pending.length + n);
+	joined.set(st.pending, 0);
+	joined.set(chunk.subarray(0, n), st.pending.length);
+	st.pending = joined;
+	lf = find(scanned);
+}
+let end = lf < 0 ? st.pending.length : lf;
+const rest = lf < 0 ? st.pending.length : lf + 1;
+if (lf > 0 && st.pending[lf - 1] === 13) end = lf - 1;
+const line = new TextDecoder().decode(st.pending.subarray(0, end));
+st.pending = st.pending.slice(rest);
+return line;`);
+	unreachable;
 }
 
 export function readBytes(n: number): Buffer {
