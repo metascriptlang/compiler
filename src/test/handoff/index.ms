@@ -166,6 +166,7 @@ import "./comptimeCallFold";
 import "./comptimeConversionRange";
 import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
+import "./enumLiteralJoin";
 import "./fieldVisibility";
 import "./constructorVisibility";
 import "./classExtendsInterface";
