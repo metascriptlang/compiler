@@ -964,6 +964,134 @@ FAKE
   return $bad
 )
 
+# A new red counts against the slice only when its diff causes it: the proof LANDING.md asked owners to run by hand (the
+# same test red on a candidate of main) the gate now runs itself. Each new red a rerun can judge runs TRIAGE_RUNS times on
+# this candidate and on main's, both at once; red on main even once, or red here fewer than twice, is not the slice's.
+# On 2026-10-29..30, 66 of 93 reds were not the slice's and each one cost its owner a re-proof and a new gate; a flake now
+# lands on a slice at most ~7% of the time, while a red the diff causes every time stays the slice's.
+TRIAGE_RUNS=3 TRIAGE_MAX=12 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
+TRIAGE_LANES=" corpus san tsan guard hcr tests suite "
+
+triage_subject() {
+  case "$1" in
+    tests|suite) printf '%s\n' "${2%% > *}" ;;
+    *) printf '%s\n' "${2% \[*\]}" ;;
+  esac
+}
+
+# names a rerun can judge: a named test whose own file the diff leaves alone, since a test the slice edits has no main twin
+triage_eligible() {
+  local lane=$1 name subj
+  while IFS= read -r name; do
+    case "$name" in *"no result"|*"no named failure"*|"timed out"|setup:*|"self-host: "*) continue ;; esac
+    subj=$(triage_subject "$lane" "$name")
+    [ -n "$subj" ] || continue
+    printf '%s\n' "$paths" | grep -F -- "$subj" >/dev/null && continue
+    printf '%s\n' "$name"
+  done
+}
+
+# names main slice runs: the names that are not the slice's, each with its evidence
+triage_judge() {
+  local name m s
+  while IFS= read -r name; do
+    m=$(grep -cxF -- "$name" "$2"); s=$(grep -cxF -- "$name" "$3")
+    if [ "$m" -gt 0 ]; then printf '%s\tred on main %s/%s\n' "$name" "$m" "$4"
+    elif [ "$s" -lt 2 ]; then printf '%s\tred %s/%s on this candidate, 0/%s on main\n' "$name" "$s" "$4" "$4"
+    fi
+  done <"$1"
+}
+
+# root of a candidate built from the merge base, shared by the gates on this host by tree; the caller removes <root>.lock
+triage_main() {
+  local mb tree d lock old
+  mb=$(git merge-base "$base" HEAD) && tree=$(git rev-parse "$mb^{tree}") || return 1
+  d="${GATE_MAIN_DIR:-${HOME:-$USERPROFILE}/.metascript/gate-main}/$tree" lock="$d.lock"
+  mkdir -p "${d%/*}" || return 1
+  until mkdir "$lock" 2>/dev/null; do
+    kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null || rm -rf "$lock"
+    sleep 5
+  done
+  echo $$ >"$lock/pid"
+  if [ ! -x "$d/out/gate/msc" ]; then
+    rm -rf "$d"; git worktree prune
+    { git worktree add -q -f --detach "$d" "$mb" && rsync -a --exclude=.git "$TOP/vendor/" "$d/vendor/" && cp -p "$BUILDER" "$d/msc" \
+      && (cd "$d" && ./msc build src/index.ms --danger $CC_FLAG --output=out/gate/msc); } >&2 || { rm -rf "$lock"; return 1; }
+    ls -dt "${d%/*}"/*/ | grep -v '\.lock/$' | tail -n +4 | while read -r old; do [ -d "${old%/}.lock" ] || rm -rf "${old%/}"; done
+  fi
+  printf '%s\n' "$d"
+}
+
+# lane tree compiler builder names runs out: every run's failing names appended to out; fails when a run names nothing it
+# could judge (a harness that did not run is no evidence either way)
+triage_side() {
+  local lane=$1 tree=$2 cmp=$3 bld=$4 runs=$6 out=$7 csv i log rc f
+  csv=$(while IFS= read -r f; do triage_subject "$lane" "$f"; done <"$5" | sort -u | paste -sd, -)
+  : >"$out"
+  for ((i = 1; i <= runs; i++)); do
+    log="$out.$i"
+    (
+      cd "$tree" || exit 2
+      case "$lane" in
+        corpus|san|tsan)
+          env -u FORCE_COLOR NO_COLOR=1 MSCORPUS_ONLY="$csv" MSCORPUS_CELL_TIMEOUT_MS=120000 \
+            $([ "$lane" = san ] && echo MSCORPUS_SAN=1) $([ "$lane" = tsan ] && echo MSCORPUS_TSAN=1) \
+            $([ "$lane" = corpus ] && [ "$raiser_on" -eq 1 ] && echo MSCORPUS_RAISER=1) \
+            MSC="$cmp" "$bld" run src/test/corpus/run.ms ;;
+        guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
+        hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
+        tests|suite)
+          [ "$lane" = tests ] || cmp=$bld
+          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
+      esac
+    ) >"$log" 2>&1; rc=$?
+    (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
+    if [ "$rc" -ne 0 ] && [ ! -s "$log.reds" ]; then printf 'triage: run %s in %s: exit %s with no named failure\n' "$i" "$tree" "$rc"; return 1; fi
+    cat "$log.reds" >>"$out"
+  done
+}
+
+# lane: moves the new reds that are not the slice's from $OUT/<lane>.new to $OUT/<lane>.notyours
+triage_lane() {
+  local lane=$1 n d slice main
+  : >"$OUT/$lane.notyours"
+  [ "$record" -eq 0 ] && [ "$release" -eq 0 ] && [ "${GATE_TRIAGE:-1}" != 0 ] || return 0
+  case "$TRIAGE_LANES" in *" $lane "*) ;; *) return 0 ;; esac
+  triage_eligible "$lane" <"$OUT/$lane.new" >"$OUT/$lane.triage"
+  n=$(grep -c . "$OUT/$lane.triage" | tr -d ' ')
+  [ "$n" -gt 0 ] || return 0
+  if [ "$n" -gt "$TRIAGE_MAX" ]; then say "  triage: $n new reds, more than $TRIAGE_MAX, stay the slice's"; return 0; fi
+  d=$(triage_main 2>>"$OUT/$lane.triage.log") || { say "  triage: no candidate of main could be built here ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; }
+  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$TOP" "$CAND" "$BUILDER" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.slice" >>"$OUT/$lane.triage.log" 2>&1 &
+  slice=$!
+  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$d" "$d/out/gate/msc" "$d/msc" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.main" >>"$OUT/$lane.triage.log" 2>&1 &
+  main=$!
+  wait "$slice"; slice=$?; wait "$main"; main=$?
+  rm -rf "$d/out/corpus" "$d/out/hcr" "$d.lock"
+  if [ "$slice" -ne 0 ] || [ "$main" -ne 0 ]; then say "  triage: a rerun could not judge ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; fi
+  triage_judge "$OUT/$lane.triage" "$OUT/$lane.tri.main" "$OUT/$lane.tri.slice" "$TRIAGE_RUNS" >"$OUT/$lane.notyours"
+  cut -f1 "$OUT/$lane.notyours" | grep -vxF -f - "$OUT/$lane.new" >"$OUT/$lane.new.next"
+  mv "$OUT/$lane.new.next" "$OUT/$lane.new"
+}
+
+triage_self_test() (
+  local d bad=0 got
+  d=$(mktemp -d) || return 1
+  trap 'rm -rf "$d"' EXIT
+  [ "$(triage_subject corpus 'httpServeBinaryBody [danger]')" = httpServeBinaryBody ] || { echo "FAIL triage: corpus subject"; bad=1; }
+  [ "$(triage_subject tests 'src/test/c/json.ms > parses numbers')" = src/test/c/json.ms ] || { echo "FAIL triage: tests subject"; bad=1; }
+  paths=$'src/test/corpus/programs/editedProgram.ms\nsrc/checker/checkPass.ms'
+  got=$(printf '%s\n' 'editedProgram [c]' 'httpServeBinaryBody [c]' 'src/test/c/index.ms > no result' 'guard shard 1/4: exit 1 with no named failure' 'timed out' \
+    | triage_eligible corpus | paste -sd'|' -)
+  [ "$got" = 'httpServeBinaryBody [c]' ] || { echo "FAIL triage: eligible kept '$got'"; bad=1; }
+  printf '%s\n' 'onMain [c]' 'once [c]' 'twice [c]' 'never [c]' >"$d/names"
+  printf '%s\n' 'onMain [c]' >"$d/main"
+  printf '%s\n' 'once [c]' 'twice [c]' 'twice [c]' 'onMain [c]' >"$d/slice"
+  got=$(triage_judge "$d/names" "$d/main" "$d/slice" 3 | cut -f1 | paste -sd'|' -)
+  [ "$got" = 'onMain [c]|once [c]|never [c]' ] || { echo "FAIL triage: judged not the slice's '$got', want onMain, once, never"; bad=1; }
+  return $bad
+)
+
 boot_self_test() {
   local bad=0 d cand got rc
   d=$(mktemp -d) || return 1
@@ -2012,6 +2140,7 @@ CASES
   adopt_self_test || bad=1
   boot_self_test || bad=1
   test_one_self_test || bad=1
+  triage_self_test || bad=1
   bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
   bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
   bash "$TOP/tools/gateKnownApprovalTest.sh" || bad=1
@@ -2641,6 +2770,7 @@ for phase in "${PHASES[@]}"; do
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red.all" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
   known_of "$lane" | scope_known "$lane" | split_flaky drop >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
+  triage_lane "$lane"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
   n_new=$(grep -c . "$OUT/$lane.new" | tr -d ' ')
@@ -2650,8 +2780,10 @@ for phase in "${PHASES[@]}"; do
   fi
   n_fixed=$(grep -c . "$OUT/$lane.fixed" | tr -d ' ')
   n_flaky=$(grep -c . "$OUT/$lane.flaky" | tr -d ' ')
+  n_mine=$(grep -c . "$OUT/$lane.notyours" | tr -d ' ')
   [ -z "$only_csv" ] || reused="$reused on $(printf '%s' "$only_csv" | tr ',' '\n' | grep -c . | tr -d ' ') program(s)"
-  line="gate: $lane$reused $(fmt_secs "${secs:-0}") · $n_red red · $((n_red - n_new)) known · $n_new new"
+  line="gate: $lane$reused $(fmt_secs "${secs:-0}") · $n_red red · $((n_red - n_new - n_mine)) known · $n_new new"
+  [ "$n_mine" -eq 0 ] || line="$line · $n_mine not the slice's"
   [ "$n_fixed" -eq 0 ] || line="$line · $n_fixed known-now-green ($(head -3 "$OUT/$lane.fixed" | paste -sd, - | sed 's/,/, /g'))"
   xp=$(sed -n 's/^.* \([0-9][0-9]*\) xpass$/\1/p' "$log" | tail -1)
   [ -z "$xp" ] || [ "$xp" = 0 ] || line="$line · $xp xpass"
@@ -2659,7 +2791,8 @@ for phase in "${PHASES[@]}"; do
   totals=$(totals_of "$lane" "$log")
   [ -z "$totals" ] || line="$line · $totals case"
   say "$line"
-  red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new))" "$n_new" "$n_flaky" "$ADMIT_WAITED"
+  red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky + n_mine)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new - n_mine))" "$n_new" "$((n_flaky + n_mine))" "$ADMIT_WAITED"
+  while IFS=$'\t' read -r name why; do say "  not the slice's: $name ($why; $OUT/$lane.triage.log)"; done <"$OUT/$lane.notyours"
   ran="$ran $lane"
   [ "$n_new" -gt 0 ] || resume_green "$lane"
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
