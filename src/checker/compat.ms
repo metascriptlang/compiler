@@ -336,13 +336,25 @@ const _assignSources: Cursor<Readonly<Type>>[] = [];
 const _assignTargets: Cursor<Readonly<Type>>[] = [];
 let _isaCount: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount]; }
+function literalHoldsFields(literal: Type, shape: Type): boolean {
+	const s = unwrapRefBase(literal);
+	const t = unwrapRefBase(shape);
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || !isAnonLiteralName(s.typeName)) return false;
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		const at = s.typeNames.indexOf(t.typeNames[i]);
+		if (at < 0 || at >= s.typeChildren.length || i >= t.typeChildren.length) return false;
+		if (!isAssignable(s.typeChildren[at], t.typeChildren[i]) && !literalHoldsFields(s.typeChildren[at], t.typeChildren[i])) return false;
+	}
+	return true;
+}
+
 export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
 	const raw = param.typeExtra;
 	if (raw == null) return null;
 	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
-	return isAssignable(bound, constraint) ? null : constraint;
+	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) ? null : constraint;
 }
 
 export function isAssignable(source: Type | null, target: Type | null): boolean {
