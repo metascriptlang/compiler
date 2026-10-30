@@ -1011,7 +1011,9 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
 
-	if (dbParsed(db, filePath) == null) return null as unknown as CheckerContext;
+	const parsed = dbParsed(db, filePath);
+	if (parsed == null) return null as unknown as CheckerContext;
+	const implText = db.handedToCheck == null ? implDigest(parsed.program) : "";
 
 	const startVersion = getCancelVersion(db.cancelCtx);
 
@@ -1094,7 +1096,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const iface = kept ? ifaceDigest(checkerCtx) : null;
 	const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
-	if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
+	if (kept) storeImpl(db, fileId, implText);
 	db.checkInProgress.delete(filePath);
 	return checkerCtx;
 }
