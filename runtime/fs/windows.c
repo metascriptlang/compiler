@@ -88,20 +88,19 @@ msString msFsReadFile(msString path) {
 	if (sz < 0 || _fseeki64(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
 	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
 	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
-	char* buf = (char*)malloc((size_t)sz + 1);
-	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
+	msString result = msStringNewUninit((int64_t)sz);
 	errno = 0;
-	size_t nread = fread(buf, 1, (size_t)sz, f);
+	size_t nread = fread(result.p->data, 1, (size_t)sz, f);
 	if (nread != (size_t)sz && ferror(f)) {
 		_msFsLastErrno = errno != 0 ? errno : EIO;
-		free(buf);
+		msStringDestroy(result);
 		fclose(f);
 		return MS_EMPTY_STRING;
 	}
 	fclose(f);
-	buf[nread] = '\0';
-	msString result = msStringNew(buf, (int64_t)nread);
-	free(buf);
+	if (nread == 0) { msStringDestroy(result); return MS_EMPTY_STRING; }
+	result.len = (int64_t)nread;
+	result.p->data[nread] = '\0';
 	return result;
 }
 
