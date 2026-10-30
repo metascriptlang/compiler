@@ -1660,18 +1660,32 @@ export function createMaybeType(inner: Type): Type {
 }
 
 function maybePayloadIs(cached: Type, inner: Type): boolean {
-	return sameDeclarationsIn(cached.typeReturn, inner, 0);
+	return sameDeclarationsIn(cached.typeReturn, inner, [], []);
 }
 
-function sameDeclarationsIn(a: Type | null, b: Type | null, depth: int32): boolean {
-	if (a == null || b == null || a == b || depth > 4) return true;
+// A pair already being compared is taken as equal, the coinductive answer for a recursive type; every
+// other pair is compared to the end, so two copies of one declaration never pass for one another.
+function sameDeclarationsIn(a: Type | null, b: Type | null, seenA: Type[], seenB: Type[]): boolean {
+	if (a == null || b == null || a == b) return true;
 	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	for (let i = 0; i < seenA.length; i += 1) {
+		if (seenA[i] == a && seenB[i] == b) return true;
+	}
+	seenA.push(a);
+	seenB.push(b);
+	const same = sameDeclarationParts(a, b, seenA, seenB);
+	seenA.pop();
+	seenB.pop();
+	return same;
+}
+
+function sameDeclarationParts(a: Type, b: Type, seenA: Type[], seenB: Type[]): boolean {
 	if (a.kind == TypeKind.GenericInstance && a.typeExtra != null && b.typeExtra != null
-		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), depth + 1)) return false;
-	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, depth + 1)) return false;
+		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), seenA, seenB)) return false;
+	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, seenA, seenB)) return false;
 	const n = a.typeChildren.length < b.typeChildren.length ? a.typeChildren.length : b.typeChildren.length;
 	for (let i = 0; i < n; i += 1) {
-		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], depth + 1)) return false;
+		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], seenA, seenB)) return false;
 	}
 	return true;
 }
@@ -6823,4 +6837,22 @@ test "a declared generic parameter is keyed by its declaration and position, nev
 	assert typeKey(ofG) != typeKey(declaredParam(box, 0, 3, 8));
 	assert typeKey(ofG) != typeKey(declaredParam(g, 1, 3, 9));
 	assert typeKey(ofG) == typeKey(declaredParam(g, 0, 5, 2)), `${typeKey(ofG)} vs ${typeKey(declaredParam(g, 0, 5, 2))}`;
+}
+
+function nestedArrayOf(inner: Type, depth: int32): Type {
+	let t = inner;
+	for (let i = 0; i < depth; i += 1) t = createArray(t);
+	return t;
+}
+
+test "an optional of a type holding one copy of a generic parameter is never the cached optional of another copy, however deep" {
+	const g = makeSymbol("g", SymbolKind.Function, null, false);
+	g.modulePath = "/src/maybeCopies.ms";
+	for (const depth of [1, 6, 12]) {
+		const first = createMaybeType(nestedArrayOf(declaredParam(g, 0, 3, 7), depth));
+		const secondPayload = nestedArrayOf(declaredParam(g, 0, 3, 7), depth);
+		const second = createMaybeType(secondPayload);
+		assert second != first && second.typeReturn == secondPayload, `depth ${depth}: the second copy got the first copy's optional`;
+		assert createMaybeType(secondPayload) == second, `depth ${depth}: the same payload is not interned`;
+	}
 }
