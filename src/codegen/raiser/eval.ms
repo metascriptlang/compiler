@@ -374,6 +374,19 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 registerMacroEngineCompiler(compileMacroIntoEngine);
 registerEngineStdSymbol((name: string): Symbol | null => stdSymbol(raiserPreludeCtx(), name));
 
+function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
+	const own = seed.sym;
+	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return seed;
+	const dot = own.modulePath.lastIndexOf(".");
+	const raiserPath = own.modulePath.slice(0, dot) + ".rms";
+	const scope = raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
+	if (scope == null) return seed;
+	for (const held of scope) {
+		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0) return { name: seed.name, sym: held };
+	}
+	return seed;
+}
+
 function seedCtxForSym(sym: Symbol): CheckerContext {
 	// A body ctx re-checking a generic instance carries the instantiating module's path over
 	// the defining module's scope; a helper of the instantiating module takes that module's ctx.
@@ -431,7 +444,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeNamed(seedCtx.table)) {
-			if (!isClass || s.name != sym.name) seeds.push(s);
+			if (!isClass || s.name != sym.name) seeds.push(raiserCounterpartSeed(s));
 		}
 		exts = seedExtensionsOf(seedCtx, isClass ? sym : null);
 	}
