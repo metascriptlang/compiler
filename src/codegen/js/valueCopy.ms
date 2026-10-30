@@ -59,34 +59,35 @@ function defaultValueOf(declared: Type | null, open: Type[]): string {
 }
 
 function typeKey(t: Type): string {
-	if (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return typeKey(t.typeReturn as Type);
-	if (t.kind == TypeKind.Struct) {
-		let key = "S:" + t.typeName + "(";
-		let i = 0;
-		while (i < t.typeChildren.length) {
-			const fname = i < t.typeNames.length ? t.typeNames[i] : "";
-			key = key + fname + ":" + typeKey(t.typeChildren[i]) + ",";
-			i += 1;
+	return keyOf(t, []);
+}
+
+function keyOf(t: Type, open: Type[]): string {
+	if (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return keyOf(t.typeReturn as Type, open);
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Union) {
+		const at = open.indexOf(t);
+		if (at >= 0) return "R:" + (open.length - at).toString();
+		open.push(t);
+		let key = (t.kind == TypeKind.Struct ? "S:" : "U:") + t.typeName + "(";
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			const fname = t.kind == TypeKind.Struct && i < t.typeNames.length ? t.typeNames[i] : "";
+			key = key + fname + ":" + keyOf(t.typeChildren[i], open) + ",";
 		}
+		open.pop();
 		return key + ")";
 	}
 	if (t.kind == TypeKind.Tuple) {
 		let key = "T:(";
-		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
-		return key + ")";
-	}
-	if (t.kind == TypeKind.Union) {
-		let key = "U:" + t.typeName + "(";
-		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
+		for (const c of t.typeChildren) key = key + keyOf(c, open) + ",";
 		return key + ")";
 	}
 	if (t.kind == TypeKind.Set) {
 		const repr = setRepr(t);
-		if (repr != null) return "K:" + typeKey(repr);
+		if (repr != null) return "K:" + keyOf(repr, open);
 		if (t.typeValue > 0) return "K:" + t.typeValue.toString();
 	}
-	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + typeKey(t.typeReturn);
-	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + typeKey(t.typeReturn);
+	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + keyOf(t.typeReturn, open);
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + keyOf(t.typeReturn, open);
 	return "p" + (t.kind as int32).toString();
 }
 
