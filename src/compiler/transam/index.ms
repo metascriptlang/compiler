@@ -928,6 +928,15 @@ function recordBoundImportReads(db: TransAmDb, boundId: int32, reached: HashSet<
 	}
 }
 
+// The discarded unit's export Symbols die with it, so a reader that kept them is rechecked
+// against the next unit, as a recompiled module marks its clients dirty.
+function forgetClientsOfDiscardedUnit(db: TransAmDb, fileId: int32): void {
+	dbInvalidateExports(db, fileId);
+	for (const clientId of getTransitiveDependents(db.moduleDeps, fileId)) {
+		cacheRemove(db.cache, createQueryKey(TaQueryKind.TypeCheck, clientId));
+	}
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -1014,6 +1023,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	if (checkCancel(db.cancelCtx, startVersion)) {
 		popFrame(db.depStack);
 		db.checkInProgress.delete(filePath);
+		forgetClientsOfDiscardedUnit(db, fileId);
 		return checkerCtx;
 	}
 
@@ -2652,4 +2662,53 @@ test "a method removed from a class is not an overridden method of its subclass 
 	dbSetFileText(db, "/d/base.ms", "export class C {\n}\n");
 	assert checkMessages(db, "/d/base.ms") == "";
 	assert checkMessages(db, "/d/sub.ms") == "";
+}
+
+function cancelledBoundProject(root: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/shapes.ms`, "export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\n");
+	dbSetFileText(db, `${root}/makers.ms`, 'import { Box, Holder } from "./shapes";\nexport function mkBox(): Box {\n\treturn new Box(4);\n}\nexport function mkHolder(): Holder<Box> {\n\treturn new Holder<Box>(new Box(5));\n}\n');
+	dbSetFileText(db, `${root}/use.ms`, 'import { Box, Holder } from "./shapes";\nimport { mkBox, mkHolder } from "./makers";\nconst b: Box = mkBox();\nconst h: Holder<Box> = mkHolder();\n');
+	const shapes = getFileId(db.fileInput, `${root}/shapes.ms`);
+	const makers = getFileId(db.fileInput, `${root}/makers.ms`);
+	const use = getFileId(db.fileInput, `${root}/use.ms`);
+	recordModuleImport(db.moduleDeps, makers, shapes);
+	recordModuleImport(db.moduleDeps, use, shapes);
+	recordModuleImport(db.moduleDeps, use, makers);
+	return db;
+}
+
+function cancelledFirstCheck(db: TransAmDb, path: string): void {
+	db.cancelCtx.inputPending = () => true;
+	dbTypeCheck(db, path);
+	db.cancelCtx.inputPending = null;
+	resetCancel(db.cancelCtx);
+}
+
+function importerErrorsAfterEdit(db: TransAmDb, root: string): string[] {
+	const use = `${root}/use.ms`;
+	dbSetFileText(db, use, getFileText(db.fileInput, getFileId(db.fileInput, use)) + "// edited\n");
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, use).errors) messages.push(e.message);
+	return messages;
+}
+
+test "a cancelled first check of a bound-only module keeps the class its importer names" {
+	const root = "/cancelBoundShapes";
+	const db = cancelledBoundProject(root);
+	assert dbTypeCheck(db, `${root}/use.ms`).errors.length == 0;
+	cancelledFirstCheck(db, `${root}/shapes.ms`);
+	assert dbTypeCheck(db, `${root}/shapes.ms`).errors.length == 0;
+	const messages = importerErrorsAfterEdit(db, root);
+	assert messages.length == 0, messages.join("; ");
+}
+
+test "a cancelled first check of a bound-only importing module keeps the class its importer names" {
+	const root = "/cancelBoundMakers";
+	const db = cancelledBoundProject(root);
+	assert dbTypeCheck(db, `${root}/use.ms`).errors.length == 0;
+	cancelledFirstCheck(db, `${root}/makers.ms`);
+	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
+	const messages = importerErrorsAfterEdit(db, root);
+	assert messages.length == 0, messages.join("; ");
 }
