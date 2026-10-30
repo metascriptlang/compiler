@@ -28,11 +28,12 @@ ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard 
 LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
 PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
 KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
-# The land gate runs the core only: the lanes that are cheap and catch most reds per hour. Over 141 gates (2026-10-29/30)
-# build, suite, tests and san caught 50 of about 70 real reds in 52 of 85 host-hours, while corpus with its select took
-# 52 h for 13, hcr and boundary 12 h for 5, and cache and solana 7 h for none. The rest runs in the full gate
-# (--release, `gate-queue submit --full`), at a release or when a change is suspect (the person, 2026-10-30).
-LAND_LANES="tools build suite tests lsp fmt corpus san"
+# The land gate keeps the lanes that are very cheap, very important or often red (the person, 2026-10-30), from 3 days
+# of gate logs to 2026-10-30 (median wall, runs with a new red): cheap lsp 0.5m, tools 1.1m, solana 1.5m, fmt 2.6m;
+# important build 5.9m, suite 3.5m, tests 5.4m (15%); often red guard 5.0m (11%), hcr 5.7m (11%), and corpus 17m
+# (23%), which with san runs the programs the slice adds or edits and those the owner names. Left to the full gate
+# (--full, --release): the corpus select 10.5m and cache 10.1m, never red; boundary 8.4m, red 5%; tsan.
+LAND_LANES="tools build suite tests lsp fmt solana guard hcr corpus san"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
