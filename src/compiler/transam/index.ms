@@ -695,24 +695,41 @@ function checkedByPrelude(db: TransAmDb, modulePath: string, collected: Exported
 	if (prelude == null || !prelude.preludeModuleScopes.has(modulePath)) return collected;
 	const out: ExportedSymInfo[] = [];
 	for (const info of collected) {
-		if (!prelude.preludeModuleScopes.has(info.sym.modulePath)) {
+		const routine = info.sym.symbolKind == SymbolKind.Function || info.sym.symbolKind == SymbolKind.Method;
+		if (!routine || !prelude.preludeModuleScopes.has(info.sym.modulePath)) {
 			out.push(info);
 			continue;
 		}
-		const held = preludeScopeSymbol(prelude, info.sym.modulePath, info.sym.name);
+		const held = preludeHeldSymbol(prelude, info);
 		if (held == null) throw new Error(`internal: the shared prelude holds ${info.sym.modulePath} but no symbol '${info.sym.name}' of it, exported by ${modulePath}`);
 		out.push(buildExportInfo(held, prelude.extensionRegistry, modulePath, prelude, info.name));
 	}
 	return out;
 }
 
-function preludeScopeSymbol(prelude: CheckerContext, homePath: string, name: string): Symbol | null {
-	const scope = prelude.preludeModuleScopes.get(homePath);
+// The prelude's own copy of an export: a module-scope symbol, a static member of one, or the extension routine registered for it.
+function preludeHeldSymbol(prelude: CheckerContext, info: ExportedSymInfo): Symbol | null {
+	const home = info.sym.modulePath;
+	const scope = prelude.preludeModuleScopes.get(home);
 	if (scope == null) return null;
 	for (const sym of scope) {
-		if (sym.name == name && sym.modulePath == homePath) return sym;
+		if (sym.name == info.sym.name && sym.modulePath == home) return sym;
+		if (sym.staticFields == null) continue;
+		for (const field of sym.staticFields) {
+			if (field.name == info.sym.name && field.modulePath == home) return field;
+		}
+	}
+	const ext = info.ext;
+	if (ext == null || prelude.extensionRegistry == null) return null;
+	for (const held of prelude.extensionRegistry.methods) {
+		if (held.sym == null || held.methodName != ext.methodName || held.isStatic != ext.isStatic || held.sym.modulePath != home) continue;
+		if (sameDeclaration(held.sym, info.sym)) return held.sym;
 	}
 	return null;
+}
+
+function sameDeclaration(a: Symbol, b: Symbol): boolean {
+	return a.declNode != null && b.declNode != null && a.declNode.location.line == b.declNode.location.line && a.declNode.location.column == b.declNode.location.column;
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
