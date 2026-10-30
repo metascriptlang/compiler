@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryParam, Manifest } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryParam, Manifest, leafLiteral } from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -49,34 +49,90 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 	return `(${names}) => ${toWire(cb.result, call)}`;
 }
 
+function typedArrayOf(kind: BoundaryKind): string {
+	switch (kind) {
+		case BoundaryKind.Bool:
+		case BoundaryKind.U8:
+			return "Uint8Array";
+		case BoundaryKind.I8: return "Int8Array";
+		case BoundaryKind.I16: return "Int16Array";
+		case BoundaryKind.I32: return "Int32Array";
+		case BoundaryKind.U16: return "Uint16Array";
+		case BoundaryKind.U32: return "Uint32Array";
+		case BoundaryKind.I64: return "BigInt64Array";
+		case BoundaryKind.U64: return "BigUint64Array";
+		case BoundaryKind.F32: return "Float32Array";
+		case BoundaryKind.F64: return "Float64Array";
+		default: throw new Error("internal: boundary kind " + kind.toString() + " has no typed array");
+	}
+}
+
+function takerOf(f: BoundaryFunction): string {
+	if (f.result == BoundaryKind.Vec) {
+		return `(p, n) => { r = __msbVecOut(p >>> 0, n, ${typedArrayOf(f.resultElement)}, ${f.resultElement == BoundaryKind.Bool}); }`;
+	}
+	const names: string[] = [];
+	const values: string[] = [];
+	let w = 0;
+	for (const leaf of f.resultLeaves) {
+		if (leaf.kind == BoundaryKind.String) {
+			names.push(`x${w}, x${w + 1}`);
+			values.push(`__msbDec(x${w}, x${w + 1})`);
+			w += 2;
+		} else {
+			names.push(`x${w}`);
+			values.push(fromWire(leaf.kind, `x${w}`));
+			w += 1;
+		}
+	}
+	return `(${names.join(", ")}) => { r = ${leafLiteral(f.resultLeaves, values, 0)}; }`;
+}
+
 function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	const cleanup: string[] = [];
 	const lines: string[] = [];
 	const encoded: string[] = [];
 	const encodes: string[] = [];
-	let sig = "";
-	let args = "";
+	const sigs: string[] = [];
+	const argList: string[] = [];
+	const encode = (name: string, expr: string, fn: string): void => {
+		encoded.push(name);
+		encodes.push(`		${name} = ${fn}(${expr});`);
+		cleanup.push(`if (${name}) __msbMod._free(${name}[0]);`);
+		argList.push(`${name}[0], ${name}[1]`);
+	};
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
-		if (i > 0) { sig += ", "; args += ", "; }
-		sig += `a${i}`;
+		sigs.push(`a${i}`);
 		if (p.kind == BoundaryKind.String) {
-			encoded.push(`e${i}`);
-			encodes.push(`		e${i} = __msbEnc(a${i});`);
-			cleanup.push(`if (e${i}) __msbMod._free(e${i}[0]);`);
-			args += `e${i}[0], e${i}[1]`;
+			encode(`e${i}`, `a${i}`, "__msbEnc");
 		} else if (p.kind == BoundaryKind.Callback) {
 			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`)});`);
 			cleanup.push(`__msb.pop(id${i});`);
-			args += `id${i}`;
+			argList.push(`id${i}`);
+		} else if (p.kind == BoundaryKind.Struct) {
+			for (let j = 0; j < p.leaves.length; j += 1) {
+				const expr = `a${i}.${p.leaves[j].path.join(".")}`;
+				if (p.leaves[j].kind == BoundaryKind.String) encode(`e${i}_${j}`, expr, "__msbEnc");
+				else argList.push(toWire(p.leaves[j].kind, expr));
+			}
+		} else if (p.kind == BoundaryKind.Vec) {
+			encode(`e${i}`, `a${i}, ${typedArrayOf(p.element)}`, "__msbVecIn");
 		} else {
-			args += toWire(p.kind, `a${i}`);
+			argList.push(toWire(p.kind, `a${i}`));
 		}
 	}
-	const call = `__msbMod._${f.exportSymbol}(${args})`;
+	const sig = sigs.join(", ");
+	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
 	let ret = `return ${fromWire(f.result, call)};`;
 	if (f.result == BoundaryKind.Void) ret = `${call};`;
 	if (f.result == BoundaryKind.String) ret = `return __msbDec(${call}, __msbMod._msb_ret_len());`;
+	if (f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
+		lines.push("	let r;");
+		lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
+		cleanup.push("__msb.takes.length = d;");
+		ret = `${call};\n\t\treturn r;`;
+	}
 	const out = [`function ${bundleName}(${sig}) {`];
 	if (cleanup.length == 0) {
 		out.push(`	${ret}`);
@@ -103,8 +159,21 @@ const GLUE = [
 	"const __msbTd = new TextDecoder();",
 	"function __msbAlloc(n) {",
 	"\tconst p = __msbMod._malloc(n);",
-	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy a string of \" + n + \" bytes into wasm memory\");",
+	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
 	"\treturn p;",
+	"}",
+	"function __msbVecIn(a, T) {",
+	"\tconst n = a.length;",
+	"\tconst p = __msbAlloc(n * T.BYTES_PER_ELEMENT || 1);",
+	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
+	"\tfor (let i = 0; i < n; i++) v[i] = a[i];",
+	"\treturn [p, n];",
+	"}",
+	"function __msbVecOut(p, n, T, bool) {",
+	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
+	"\tconst r = new Array(n);",
+	"\tfor (let i = 0; i < n; i++) r[i] = bool ? v[i] !== 0 : v[i];",
+	"\treturn r;",
 	"}",
 	"function __msbEnc(s) {",
 	"\tconst n = s.length;",
@@ -161,6 +230,7 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\treturn {",
 		"\t\tpush(f) { const id = next; next = (next + 1) | 0; live.set(id, f); return id; },",
 		"\t\tpop(id) { live.delete(id); },",
+		"\t\ttakes: [],",
 		"\t\tcb(id, ...a) {",
 		"\t\t\tconst f = live.get(id);",
 		"\t\t\tif (f === undefined) throw new Error(\"callback used after its call returned\");",
@@ -169,8 +239,7 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\t};",
 		"})();",
 		"globalThis.__msb = __msb;",
-		GLUE.join("
-"),
+		GLUE.join("\n"),
 		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default();`,
 		"__msbMod._MsMain();",
 		"",

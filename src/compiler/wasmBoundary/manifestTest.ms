@@ -72,3 +72,41 @@ test "manifest: moduleKeyOf is relative to the entry and injective on separators
 	assert moduleKeyOf("/proj/app/a-b.ms", ENTRY) == "a_x2db";
 	assert moduleKeyOf("/proj/lib/x.ms", ENTRY) == "_x2e_x2e_slib_sx";
 }
+
+test "manifest: a struct crosses as its flattened leaves and a Vec of numbers by its element" {
+	const src = `
+struct Point { x: float64; y: float64; }
+struct Label { at: Point; text: string; count: int32; }
+export function tag(l: Label): Label { return l; }
+export function sum(xs: Vec<float32>): Vec<int32> { const out: Vec<int32> = []; return out; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["tag", "sum"]), ["tag", "sum"]);
+	assert m.errors.length == 0, m.errors.join("; ");
+	const tag = m.functions[0];
+	assert tag.params[0].kind == BoundaryKind.Struct && tag.params[0].mode == BoundaryMode.Copied;
+	const paths: string[] = [];
+	for (const leaf of tag.params[0].leaves) paths.push(leaf.path.join("."));
+	assert paths.join(",") == "at.x,at.y,text,count";
+	assert tag.params[0].leaves[2].kind == BoundaryKind.String && tag.params[0].leaves[3].kind == BoundaryKind.I32;
+	assert tag.result == BoundaryKind.Struct && tag.resultLeaves.length == 4;
+	const sum = m.functions[1];
+	assert sum.params[0].kind == BoundaryKind.Vec && sum.params[0].element == BoundaryKind.F32;
+	assert sum.result == BoundaryKind.Vec && sum.resultElement == BoundaryKind.I32;
+}
+
+test "manifest: a struct with a hook, a nullable field or a Vec of strings fails naming the field" {
+	const src = `
+struct Owned { n: int32; }
+function onDestroy(this o: Owned): void {}
+struct Loose { n: int32 | null; }
+export function own(o: Owned): int32 { return 0; }
+export function loose(l: Loose): int32 { return 0; }
+export function words(ws: Vec<string>): int32 { return 0; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["own", "loose", "words"]), ["own", "loose", "words"]);
+	assert m.functions.length == 0;
+	assert m.errors.length == 3, m.errors.join("; ");
+	assert m.errors[0].includes("'own'") && m.errors[0].includes("lifecycle hook");
+	assert m.errors[1].includes("'loose'") && m.errors[1].includes("field 'n'");
+	assert m.errors[2].includes("'words'") && m.errors[2].includes("Vec");
+}

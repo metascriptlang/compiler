@@ -5,6 +5,10 @@ import { manifestFor } from "./manifest";
 import { wasmEntrySource } from "./wasmSide";
 
 const SOURCE = `
+struct Point { x: float64; y: float64; }
+struct Label { at: Point; text: string; count: int32; }
+export function tag(l: Label): Label { return l; }
+export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
 export function add64(a: int64, b: int64): int64 { return a + b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
 export function isEven(x: uint8): boolean { return x % 2 == 0; }
@@ -71,4 +75,27 @@ test "wasm entry: a callback string parameter passes ptr and len of a value aliv
 	assert s.includes("int32_t msb_cb_i_s(int32_t id, uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false;
 	assert e.exportedFunctions.join(",") == "_msb_calc_report,_malloc,_free,_MsMain";
+}
+
+test "wasm entry: a struct crosses as leaf parameters and returns through one result import" {
+	const e = entryFor(["tag"]);
+	const s = e.source;
+	assert s.includes("export function msb_calc_tag(l_0: float64, l_1: float64, l_2Ptr: uint32, l_2Len: int32, l_3: int32): void {");
+	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrFrom(l_2Ptr, l_2Len), count: l_3 });");
+	assert s.includes("\tmsb_rs_ddsi(r.at.x, r.at.y, msbStrPtr(r.text), r.text.asBytes().length, r.count);");
+	assert s.split("extern function msb_rs_ddsi").length == 2;
+	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (...a) => globalThis.__msb.takes.pop()(...a),");
+	assert e.exportedFunctions.join(",") == "_msb_calc_tag,_malloc,_free,_MsMain";
+}
+
+test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is handed over by msb_rv" {
+	const e = entryFor(["scale"]);
+	const s = e.source;
+	assert s.includes("function msbVecFrom_float32(ptr: uint32, len: int32): Vec<float32> {");
+	assert s.includes("export function msb_calc_scale(xsPtr: uint32, xsLen: int32, k: float32): void {");
+	assert s.includes("\tconst r = msbm0_scale(msbVecFrom_float32(xsPtr, xsLen), k);");
+	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
+	assert e.jsLibrary.includes("\tmsb_rv: (...a) => globalThis.__msb.takes.pop()(...a),");
+	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 }

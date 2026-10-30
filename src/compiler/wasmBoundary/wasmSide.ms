@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryParam, signatureLetter } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryParam, leafLiteral, signatureLetter } from "./manifest";
 
 export interface WasmEntry {
 	source: string;
@@ -60,26 +60,44 @@ function fromWire(kind: BoundaryKind, expr: string): string {
 	return msTypeOf(kind) == wire ? expr : `(${expr} as ${msTypeOf(kind)})`;
 }
 
-function callbackLines(cb: BoundaryCallback): string[] {
-	const letters = cb.signature.slice(2);
-	const result = cb.signature.slice(0, 1);
-	let cParams = "int32_t id";
-	let msParams = "id: int32";
+function importLines(name: string, letters: string, result: string, withId: boolean): string[] {
+	const cParams: string[] = withId ? ["int32_t id"] : [];
+	const msParams: string[] = withId ? ["id: int32"] : [];
 	for (let i = 0; i < letters.length; i += 1) {
 		const l = letters.slice(i, i + 1);
 		if (l == "s") {
-			cParams += `, uint32_t a${i}p, int32_t a${i}l`;
-			msParams += `, a${i}p: uint32, a${i}l: int32`;
+			cParams.push(`uint32_t a${i}p, int32_t a${i}l`);
+			msParams.push(`a${i}p: uint32, a${i}l: int32`);
 			continue;
 		}
-		cParams += `, ${wireCType(l)} a${i}`;
-		msParams += `, a${i}: ${wireMsType(l)}`;
+		cParams.push(`${wireCType(l)} a${i}`);
+		msParams.push(`a${i}: ${wireMsType(l)}`);
 	}
-	const name = "msb_cb_" + cb.signature;
 	const attr = `__attribute__((import_module(\\"env\\"), import_name(\\"${name}\\")))`;
 	return [
-		`@emit("${attr} ${wireCType(result)} ${name}(${cParams});");`,
-		`extern function ${name}(${msParams}): ${wireMsType(result)} from "${name}";`,
+		`@emit("${attr} ${wireCType(result)} ${name}(${cParams.length == 0 ? "void" : cParams.join(", ")});");`,
+		`extern function ${name}(${msParams.join(", ")}): ${wireMsType(result)} from "${name}";`,
+	];
+}
+
+function callbackLines(cb: BoundaryCallback): string[] {
+	return importLines("msb_cb_" + cb.signature, cb.signature.slice(2), cb.signature.slice(0, 1), true);
+}
+
+function leafLetters(leaves: BoundaryLeaf[]): string {
+	let letters = "";
+	for (const leaf of leaves) letters += signatureLetter(leaf.kind);
+	return letters;
+}
+
+function vecFromLines(kind: BoundaryKind): string[] {
+	const t = msTypeOf(kind);
+	return [
+		`function msbVecFrom_${t}(ptr: uint32, len: int32): Vec<${t}> {`,
+		`\tlet out: Vec<${t}> = [];`,
+		`\tfor (const x of (ptr as uint64 as Ptr<${t}>)[0..len]) out.push(x);`,
+		"\treturn out;",
+		"}",
 	];
 }
 
@@ -121,23 +139,64 @@ function stringHelperLines(withResult: boolean): string[] {
 }
 
 function wrapperLines(f: BoundaryFunction, alias: string): string[] {
-	let sig = "";
-	let args = "";
+	const sigs: string[] = [];
+	const argList: string[] = [];
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
-		if (i > 0) { sig += ", "; args += ", "; }
 		if (p.kind == BoundaryKind.String) {
-			sig += `${p.name}Ptr: uint32, ${p.name}Len: int32`;
-			args += `msbStrFrom(${p.name}Ptr, ${p.name}Len)`;
+			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
+			argList.push(`msbStrFrom(${p.name}Ptr, ${p.name}Len)`);
 		} else if (p.kind == BoundaryKind.Callback) {
-			sig += `${p.name}: int32`;
-			args += closureOf(p.callback!, p.name);
+			sigs.push(`${p.name}: int32`);
+			argList.push(closureOf(p.callback!, p.name));
+		} else if (p.kind == BoundaryKind.Struct) {
+			const values: string[] = [];
+			for (let j = 0; j < p.leaves.length; j += 1) {
+				const leaf = `${p.name}_${j}`;
+				if (p.leaves[j].kind == BoundaryKind.String) {
+					sigs.push(`${leaf}Ptr: uint32, ${leaf}Len: int32`);
+					values.push(`msbStrFrom(${leaf}Ptr, ${leaf}Len)`);
+				} else {
+					sigs.push(`${leaf}: ${msTypeOf(p.leaves[j].kind)}`);
+					values.push(leaf);
+				}
+			}
+			argList.push(leafLiteral(p.leaves, values, 0));
+		} else if (p.kind == BoundaryKind.Vec) {
+			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
+			argList.push(`msbVecFrom_${msTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`);
 		} else {
-			sig += `${p.name}: ${msTypeOf(p.kind)}`;
-			args += p.name;
+			sigs.push(`${p.name}: ${msTypeOf(p.kind)}`);
+			argList.push(p.name);
 		}
 	}
-	const call = `${alias}(${args})`;
+	const sig = sigs.join(", ");
+	const call = `${alias}(${argList.join(", ")})`;
+	if (f.result == BoundaryKind.Struct) {
+		const wires: string[] = [];
+		for (const leaf of f.resultLeaves) {
+			const value = `r.${leaf.path.join(".")}`;
+			if (leaf.kind == BoundaryKind.String) wires.push(`msbStrPtr(${value}), ${value}.asBytes().length`);
+			else wires.push(toWire(leaf.kind, value));
+		}
+		return [
+			`@exportName("${f.exportSymbol}")`,
+			`export function ${f.exportSymbol}(${sig}): void {`,
+			`\tconst r = ${call};`,
+			`\tmsb_rs_${leafLetters(f.resultLeaves)}(${wires.join(", ")});`,
+			"}",
+		];
+	}
+	if (f.result == BoundaryKind.Vec) {
+		const t = msTypeOf(f.resultElement);
+		return [
+			`@exportName("${f.exportSymbol}")`,
+			`export function ${f.exportSymbol}(${sig}): void {`,
+			`\tconst r = ${call};`,
+			`\tmsb_rv((r as Span<${t}>) as Ptr<void> as uint64 as int32, r.length as int32);`,
+			"}",
+		];
+	}
 	if (f.result == BoundaryKind.String) {
 		return [
 			`@exportName("${f.exportSymbol}")`,
@@ -174,15 +233,38 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 
 	let hasStringParam = false;
 	let hasStringResult = false;
+	let hasStructString = false;
+	let hasVec = false;
+	let hasVecParam = false;
+	let hasVecResult = false;
+	const vecElements: BoundaryKind[] = [];
+	const resultImports: string[] = [];
 	for (const f of fns) {
 		if (f.result == BoundaryKind.String) hasStringResult = true;
+		if (f.result == BoundaryKind.Vec) {
+			hasVec = true;
+			hasVecResult = true;
+		}
+		if (f.result == BoundaryKind.Struct) {
+			if (leafLetters(f.resultLeaves).includes("s")) hasStructString = true;
+			const name = "msb_rs_" + leafLetters(f.resultLeaves);
+			if (!resultImports.includes(name)) resultImports.push(name);
+		}
 		for (const p of f.params) {
 			if (p.kind == BoundaryKind.String) hasStringParam = true;
 			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.String)) hasStringParam = true;
+			if (p.kind == BoundaryKind.Struct && leafLetters(p.leaves).includes("s")) hasStringParam = true;
+			if (p.kind == BoundaryKind.Vec) {
+				hasVec = true;
+				hasVecParam = true;
+				if (!vecElements.includes(p.element)) vecElements.push(p.element);
+			}
 		}
 	}
-	const hasString = hasStringParam || hasStringResult;
+	if (hasVecResult) resultImports.push("msb_rv");
+	const hasString = hasStringParam || hasStringResult || hasStructString;
 	if (hasString) for (const l of stringHelperLines(hasStringResult)) lines.push(l);
+	for (const k of vecElements) for (const l of vecFromLines(k)) lines.push(l);
 
 	const signatures: string[] = [];
 	for (const f of fns) {
@@ -192,6 +274,10 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 			for (const l of callbackLines(p.callback!)) lines.push(l);
 		}
 	}
+	for (const name of resultImports) {
+		const letters = name == "msb_rv" ? "ii" : name.slice("msb_rs_".length);
+		for (const l of importLines(name, letters, "v", false)) lines.push(l);
+	}
 	for (const f of fns) {
 		for (const l of wrapperLines(f, aliasOf(f))) lines.push(l);
 	}
@@ -199,18 +285,19 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
 	if (hasStringResult) exported.push("_msb_ret_len");
-	if (hasString) {
+	if (hasString || hasVecParam) {
 		exported.push("_malloc");
 		exported.push("_free");
 	}
 	exported.push("_MsMain");
 
 	let jsLibrary = "";
-	if (signatures.length > 0) {
+	if (signatures.length > 0 || resultImports.length > 0) {
 		const entries: string[] = [];
 		for (const s of signatures) entries.push(`\tmsb_cb_${s}: (id, ...a) => globalThis.__msb.cb(id, ...a),`);
+		for (const name of resultImports) entries.push(`\t${name}: (...a) => globalThis.__msb.takes.pop()(...a),`);
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
-	const runtimeMethods = hasString ? ["HEAPU8", "wasmMemory"] : [];
+	const runtimeMethods = hasString || hasVec ? ["HEAPU8", "wasmMemory"] : [];
 	return { source: lines.join("\n") + "\n", exportedFunctions: exported, jsLibrary, runtimeMethods };
 }
