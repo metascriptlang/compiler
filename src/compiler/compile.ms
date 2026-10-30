@@ -83,7 +83,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER, MODE_RELEASE } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
-import { hasWasmPlacement } from "./wasmBoundary/placement";
+import { wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
 import { manifestFor, BoundaryFunction } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
@@ -1836,7 +1836,7 @@ function jsInputDependencies(graph: ModuleGraph, opts: CliOptions): string[] {
 	return dependencies;
 }
 
-function placeWasmModules(placed: string[], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, opts: CliOptions): JsBindings {
+function placeWasmModules(placed: string[], placedNames: string[][], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, opts: CliOptions): JsBindings {
 	const errors = placedModuleErrors(placed, entryPath, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
 		const found = findModuleExports(graphRegistry, path);
@@ -1844,16 +1844,15 @@ function placeWasmModules(placed: string[], graph: ModuleGraph, entryPath: strin
 	};
 	for (const importer of importerPaths) {
 		const mod = findModule(graph, importer);
-		if (mod == null || placed.includes(importer)) continue;
-		for (const e of placedImportErrors(importer, mod.imports, placed, exportsOf)) errors.push(e);
+		if (mod == null) continue;
+		for (const e of placedImportErrors(importer, mod.imports, placed)) errors.push(e);
 	}
 	const functions: BoundaryFunction[] = [];
-	for (const path of placed) {
-		const manifest = manifestFor(path, entryPath, exportsOf(path));
+	for (let i = 0; i < placed.length; i += 1) {
+		const manifest = manifestFor(placed[i], entryPath, exportsOf(placed[i]), placedNames[i]);
 		for (const e of manifest.errors) errors.push(e);
 		for (const f of manifest.functions) functions.push(f);
 	}
-	if (errors.length == 0 && functions.length == 0) errors.push(`the wasm-placed module(s) ${placed.join(", ")} export no function, so nothing crosses the JS/wasm boundary`);
 	if (errors.length > 0) {
 		for (const e of errors) printDiag(`${error("error")}: ${e}`);
 		stopBuild();
@@ -1946,6 +1945,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
 	const placedPaths: string[] = [];
+	const placedNames: string[][] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -1956,7 +1956,11 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
-		if (opts.wasmPlacement && hasWasmPlacement(program)) placedPaths.push(modPath);
+		const wasmNames = opts.wasmPlacement ? wasmFunctionNames(program) : [];
+		if (wasmNames.length > 0) {
+			placedPaths.push(modPath);
+			placedNames.push(wasmNames);
+		}
 
 		// Collect external imports from @import registry
 		for (const entry of ctx.jsImportRegistry) {
@@ -2007,7 +2011,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
 	let wasmBindings: JsBindings = { prelude: "", modules: [] };
-	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, opts);
+	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, placedNames, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, opts);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = placedPaths.length > 0;
@@ -2019,16 +2023,12 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
+		let bound = "";
 		if (placedPaths.includes(modPath)) {
-			let bound = "";
 			for (const m of wasmBindings.modules) {
 				if (m.modulePath == modPath) bound = m.code;
 			}
-			const boundSeparator = `\n// --- Module: ${replaceExt(moduleDisplayPath(modPath), "")} ---\n`;
-			bundle = bundle + boundSeparator + bound;
-			if (opts.sourcemap) bundleLines += countNewlines(boundSeparator) + countNewlines(bound);
-			compiled = compiled + 1;
-			continue;
+			withoutWasmFunctions(unitPrograms[ui]);
 		}
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
@@ -2056,7 +2056,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			moduleSmapLines.push(bundleLines);
 			bundleLines += countNewlines(result.code);
 		}
-		bundle = bundle + result.code;
+		bundle = bundle + result.code + bound;
+		if (opts.sourcemap) bundleLines += countNewlines(bound);
 		compiled = compiled + 1;
 	}
 

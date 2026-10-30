@@ -29,7 +29,7 @@ function importOf(names: string[]): ImportEntry {
 }
 
 test "a string parameter and a string result cross without a manifest error" {
-	const m = manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["greet", "label", "add"]));
+	const m = manifestFor("/p/calc.ms", "/p/app.ms", exportsOf(["greet", "label", "add"]), ["greet", "label", "add"]);
 	assert m.errors.length == 0;
 	assert m.functions.length == 3;
 }
@@ -43,18 +43,13 @@ test "the entry module and a lazily imported module cannot be placed" {
 	lazy.add("/p/calc.ms");
 	const lazyErrors = placedModuleErrors(["/p/calc.ms"], "/p/app.ms", lazy);
 	assert lazyErrors.length == 1;
-	assert lazyErrors[0].includes("'/p/calc.ms' carries @wasm(); but is loaded lazily");
+	assert lazyErrors[0].includes("'/p/calc.ms' has @wasm functions but is loaded lazily");
 }
 
-test "an importer of a placed module may import functions and nothing else" {
-	const exps = exportsOf(["Counter", "add"]);
-	const lookup = (path: string): ExportedSymInfo[] => exps;
-	assert placedImportErrors("/p/app.ms", [importOf(["add"])], ["/p/calc.ms"], lookup).length == 0;
-	const klass = placedImportErrors("/p/app.ms", [importOf(["add", "Counter"])], ["/p/calc.ms"], lookup);
-	assert klass.length == 1;
-	assert klass[0].includes("'/p/app.ms' imports 'Counter' from the wasm-placed module '/p/calc.ms'");
-	const ns = placedImportErrors("/p/app.ms", [importOf(["*"])], ["/p/calc.ms"], lookup);
+test "an importer of a module with @wasm functions imports by name, a class included" {
+	assert placedImportErrors("/p/app.ms", [importOf(["add", "Counter"])], ["/p/calc.ms"]).length == 0;
+	const ns = placedImportErrors("/p/app.ms", [importOf(["*"])], ["/p/calc.ms"]);
 	assert ns.length == 1;
 	assert ns[0].includes("namespace import");
-	assert placedImportErrors("/p/app.ms", [importOf(["Counter"])], ["/p/other.ms"], lookup).length == 0;
+	assert placedImportErrors("/p/app.ms", [importOf(["*"])], ["/p/other.ms"]).length == 0;
 }

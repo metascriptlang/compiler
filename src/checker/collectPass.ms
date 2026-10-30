@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
-import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator, inlineMemberMisuse } from "./decoratorHelpers";
+import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator, inlineMemberMisuse, wasmDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { expandParamProperties, hasParamProperties, isParamProperty } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
@@ -308,6 +308,7 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (info.borrow) markBorrow(ctx, dd, sym);
 	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
 	if (acceptsInline(ctx, dd)) setFlag(sym, SymbolFlag.Inline);
+	if (wasmDecorator(dd.decorators) != null && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.Wasm);
 	if (info.noInline) {
 		if (sym.symbolKind != SymbolKind.Function) addError(ctx, `@noinline applies to a function, not to '${declName}'`, node.location.line, node.location.column);
 		else if (hasFlag(sym, SymbolFlag.Inline)) addError(ctx, `'${declName}' cannot be both @inline and @noinline`, node.location.line, node.location.column);
@@ -953,6 +954,8 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			builtinKind = stdBuiltinKind(ctx, info.builtinName, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
+			const wasmDec = wasmDecorator(dd.decorators);
+			if (wasmDec != null) addError(ctx, "@wasm applies to an exported module-level function: a class method cannot be placed in wasm yet, so place a function that takes the values it needs", wasmDec.location.line, wasmDec.location.column);
 		}
 	}
 	if (methodNode == null) return;

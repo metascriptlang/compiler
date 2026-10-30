@@ -1,5 +1,5 @@
 // wasmmix oracle (M1): each programs/<name>/main.ms runs all-C, all-JS and mixed
-// (a module with `@wasm();` placed in wasm); the three stdouts must be byte-equal
+// (the `@wasm` functions placed in wasm); the three stdouts must be byte-equal
 // and equal the `// @stdout:` lines.
 //
 //   // @stdout: <line>        -> one expected stdout line; repeated in order
@@ -10,7 +10,7 @@
 //
 // Columns: c = `msc run`; js = `build --target=js --wasm-placement=off` then node;
 // mixed = `build --target=js` then node, and the build must write <stem>.wasm.mjs
-// and <stem>.wasm beside the bundle, so a compiler that ignores `@wasm();` is red.
+// and <stem>.wasm beside the bundle, so a compiler that ignores `@wasm` is red.
 // The emcc environment (PATH, VOID_EMSDK_*, EM_CONFIG) is inherited.
 
 import { execFileResult, exit, env, platform } from "std/process";
@@ -67,7 +67,7 @@ function buildAndRun(label: string, entry: string, dir: string, flags: string[],
 	if (!build.ok) { return build; }
 	if (wantWasm) {
 		for (const art of [stem + ".wasm.mjs", stem + ".wasm"]) {
-			if (!exists(art)) { return { name: label, ok: false, out: "", detail: `no .wasm artifact: build succeeded but ${art} was not written (@wasm(); ignored?)` }; }
+			if (!exists(art)) { return { name: label, ok: false, out: "", detail: `no .wasm artifact: build succeeded but ${art} was not written (@wasm ignored?)` }; }
 		}
 	}
 	return runProcess(label, "node", [bundle]);

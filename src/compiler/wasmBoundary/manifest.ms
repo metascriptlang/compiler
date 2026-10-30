@@ -226,14 +226,19 @@ function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol):
 	return { modulePath: c.modulePath, moduleKey: key, name, exportSymbol: `msb_${key}_${name}`, params, result };
 }
 
-export function manifestFor(modulePath: string, entryPath: string, exports: ExportedSymInfo[]): Manifest {
+export function manifestFor(modulePath: string, entryPath: string, exports: ExportedSymInfo[], placed: string[]): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
 	const c: Collector = { errors: [], fnName: "", modulePath };
 	const functions: BoundaryFunction[] = [];
-	for (const e of exports) {
-		if (e.sym.symbolKind != SymbolKind.Function || hasFlag(e.sym, SymbolFlag.OverloadSig)) continue;
-		const f = boundaryFunction(c, key, e.name, e.sym);
-		if (f != null) functions.push(f);
+	for (const name of placed) {
+		let found = false;
+		for (const e of exports) {
+			if (e.name != name || e.sym.symbolKind != SymbolKind.Function || hasFlag(e.sym, SymbolFlag.OverloadSig)) continue;
+			found = true;
+			const f = boundaryFunction(c, key, e.name, e.sym);
+			if (f != null) functions.push(f);
+		}
+		if (!found) throw new Error(`internal: wasm-placed function '${name}' has no export in '${modulePath}'`);
 	}
 	return { functions, errors: c.errors };
 }
