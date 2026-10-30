@@ -1012,17 +1012,20 @@ encoding and keeps its numeric meaning.
 | `hash()` | `int64` | C only; what makes `HashMap<BitSet<E>, V>` work |
 
 Measured 2026-09-15 on the installed `v0.2.54`, identical on C and JS unless a row says otherwise.
-Three spellings look right and are not:
+Two spellings look right and are not:
 
 - `Flag.Used as BitSet<Flag>` compiles and reads the **ordinal as the mask**: ordinal 1 becomes the
   set `{Mutable}`. A one-member set is `(0 as BitSet<Flag>).incl(Flag.Used)`;
   `const s: BitSet<Flag> = Flag.Used` is a type error.
-- Implicit text conversion: `` `${s}` ``, `"x " + s` and `String(s)` fail the C compile and print the
-  representation word on JS (`12` for bits 2 and 3); `console.log(s)` prints `<BitSet>` on C and the
-  word on JS (KNOWN-ISSUES L32). `s.toString()` is right in a template, a concatenation and `+=` on
-  both backends.
 - An integer mask crosses with one cast each way: `(mask as uint8) as BitSet<Flag>` at the band's
   width, and `s as uint32` back.
+
+Implicit text conversion reads `toString()`: `` `${s}` ``, `"x " + s`, `String(s)` and `console.log(s)` print
+`{Used, Cursor}` on C, `--danger`, JS and ESM, `{}` for the empty set and `{A, I}` for a set over nine
+members (corpus `bitSetTextsAsItsMembers`, measured 2026-10-30 on a candidate of this slice). Before it
+these printed `<BitSet>` on C and the representation word on JS (`3` for bits 0 and 1). The Raiser VM prints
+the members as ordinals (`{0, 1}`, card `2026-09-25-raiser-enum-to-string-prints-the-number`). Not measured:
+a set over more than 64 members.
 
 Why it is shaped this way — the cross-language survey, the one TypeScript idiom it costs
 (`(flags & F.X) != 0` becomes `.has()`), the width rules, and the deliberately deferred

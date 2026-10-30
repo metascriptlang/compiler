@@ -782,6 +782,7 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	const t = expr.nodeType;
 	if (t == null || refuseNamespaceText(ctx, expr)) return null;
 	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
+	if (bitSetElemType(skipModifier(t) ?? t) != null) return declaredToString(ctx, expr);
 	const peeled = peelToStructOrUnion(t);
 	const dumped = dumpedShape(t, valueShape(t));
 	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum))) return null;
