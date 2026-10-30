@@ -12,7 +12,7 @@
 #ifndef MS_COMPRESS_DEFLATE_H
 #define MS_COMPRESS_DEFLATE_H
 
-#include "runtime/compress/buffer.h"
+#include "runtime/core/buffer.h"
 #include <stdint.h>
 
 /* Format selectors — must match runtime/compress/inflate.h and the MS enum. */

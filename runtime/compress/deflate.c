@@ -213,7 +213,7 @@ msUint8Array msDeflateDrain(int64_t handle, int32_t maxBytes) {
     size_t take = (size_t)maxBytes;
     if (take == 0 || take > c->queueLen) take = c->queueLen;
 
-    msUint8Array out = msCompressBuffer(c->queue, (int64_t)take);
+    msUint8Array out = msBufferFrom(c->queue, (int64_t)take);
 
     size_t remain = c->queueLen - take;
     if (remain > 0) memmove(c->queue, c->queue + take, remain);
@@ -230,7 +230,7 @@ msUint8Array msDeflateOneShot(const uint8_t* data, int64_t dataLen, int32_t form
     if (st < 0) { msDeflateFree(h); return MS_EMPTY_UINT8_ARRAY; }
 
     struct msDeflateCtx* c = handleToCtx(h);
-    msUint8Array out = msCompressBuffer(c->queue, (int64_t)c->queueLen);
+    msUint8Array out = msBufferFrom(c->queue, (int64_t)c->queueLen);
     msDeflateFree(h);
     return out;
 }

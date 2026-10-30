@@ -15,7 +15,7 @@
 #ifndef MS_COMPRESS_INFLATE_H
 #define MS_COMPRESS_INFLATE_H
 
-#include "runtime/compress/buffer.h"
+#include "runtime/core/buffer.h"
 #include <stdint.h>
 
 /* ===== Format selectors ===== */
