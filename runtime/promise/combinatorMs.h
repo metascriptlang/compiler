@@ -75,7 +75,7 @@ static void msPromiseFirstGenericDeliver(void* result, void* input, void* shareF
 
 static const msPromiseFirstVt msPromiseFirstGenericVt = { .futSize = sizeof(msFuture), .deliver = msPromiseFirstGenericDeliver };
 
-static inline const void* msPromiseFirstGeneric(void) { return &msPromiseFirstGenericVt; }
+static inline void* msPromiseFirstGeneric(void) { return (void*)&msPromiseFirstGenericVt; }
 
 static inline void* msPromiseFirstCreate(const void* vt) {
 	return msAllocTyped(((const msPromiseFirstVt*)vt)->futSize, &msFutureTypeInfo);
