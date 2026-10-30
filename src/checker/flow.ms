@@ -736,6 +736,7 @@ function declaredMembers(declared: Type): Type[] {
 
 function isSubsetOfDeclared(t: Type, declared: Type | null): boolean {
 	if (declared == null || t == declared || sameType(t, declared)) return true;
+	if (declared.kind == TypeKind.Enum && enumMembersHeld(t, declared) != null) return true;
 	const members = declaredMembers(declared);
 	for (const part of declaredMembers(t)) {
 		let found = false;
@@ -922,6 +923,10 @@ export function canonicalizeBranchJoin(t: Type): Type {
 }
 
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent != null && parent.kind == TypeKind.Enum) {
+		const enumJoin = joinEnumMembers(parent, members);
+		if (enumJoin != null) return enumJoin;
+	}
 	if (parent != null && parent.kind == TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
@@ -1810,6 +1815,7 @@ export function resetCapturedAssignments(): void {
 	lastAssignments = new HashMap<Symbol, int32>();
 	closureContainers = new HashMap<Node, Node>();
 	aliasPaths = new HashMap<Node, AliasPath>();
+	enumFacts = new HashMap<Type, EnumFacts>();
 }
 
 function assignmentsIn(container: Node): ContainerAssignments {
@@ -2233,17 +2239,87 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 
 // The members an enum or a union of its members still holds after `!== member`;
 // nothing left is `never`. A read of the reference widens a partial remainder back to the enum.
-const ENUM_REMAINDER_LIMIT = 64;
+// A member set is one interned union over one literal per member, so a remainder costs a scan, not a union build.
+class EnumFacts {
+	literals: Type[] = [];
+	index: HashMap<string, int32> = new HashMap<string, int32>();
+	remainders: HashMap<string, Type> = new HashMap<string, Type>();
+}
+
+let enumFacts = new HashMap<Type, EnumFacts>();
+
+function enumFactsOf(enumType: Type): EnumFacts {
+	const known = enumFacts.get(enumType);
+	if (known != null) return known;
+	const facts = new EnumFacts();
+	for (let i = 0; i < enumType.typeNames.length; i += 1) {
+		facts.literals.push(createEnumLiteral(enumType, enumType.typeNames[i]));
+		facts.index.set(enumType.typeNames[i], i);
+	}
+	enumFacts.set(enumType, facts);
+	return facts;
+}
+
+function enumMask(t: Type, enumType: Type, facts: EnumFacts): boolean[] | null {
+	const held = enumMembersHeld(t, enumType);
+	if (held == null) return null;
+	const mask: boolean[] = [];
+	for (let i = 0; i < facts.literals.length; i += 1) mask.push(false);
+	for (const name of held) {
+		const at = facts.index.get(name);
+		if (at == null) return null;
+		mask[at] = true;
+	}
+	return mask;
+}
+
+function enumRemainder(enumType: Type, facts: EnumFacts, mask: boolean[]): Type {
+	const bits: string[] = [];
+	let held = 0;
+	let only = 0;
+	for (let i = 0; i < mask.length; i += 1) {
+		bits.push(mask[i] ? "1" : "0");
+		if (mask[i]) { held += 1; only = i; }
+	}
+	if (held == 0) return neverType();
+	if (held == mask.length) return enumType;
+	if (held == 1) return facts.literals[only];
+	const key = bits.join("");
+	const known = facts.remainders.get(key);
+	if (known != null) return known;
+	const members: Type[] = [];
+	for (let i = 0; i < mask.length; i += 1) {
+		if (mask[i]) members.push(facts.literals[i]);
+	}
+	const union = createUnionInOrder(members);
+	facts.remainders.set(key, union);
+	return union;
+}
 
 function withoutEnumMember(t: Type, member: Type): Type {
 	const enumType = member.typeReturn;
 	if (enumType == null) return t;
-	const held = enumMembersHeld(t, enumType);
-	if (held == null || held.length > ENUM_REMAINDER_LIMIT || !held.includes(member.typeNames[0])) return t;
-	const rest = held.filter((name) => name != member.typeNames[0]);
-	if (rest.length == 0) return neverType();
-	const literals = rest.map((name) => createEnumLiteral(enumType, name));
-	return literals.length == 1 ? literals[0] : createUnionInOrder(literals);
+	const facts = enumFactsOf(enumType);
+	const mask = enumMask(t, enumType, facts);
+	const at = facts.index.get(member.typeNames[0]);
+	if (mask == null || at == null || !mask[at]) return t;
+	mask[at] = false;
+	return enumRemainder(enumType, facts, mask);
+}
+
+// The join of branches that each hold members of the declared enum: the union of their member sets.
+function joinEnumMembers(declared: Type, members: Type[]): Type | null {
+	const facts = enumFactsOf(declared);
+	const joined: boolean[] = [];
+	for (let i = 0; i < facts.literals.length; i += 1) joined.push(false);
+	for (const m of members) {
+		const mask = enumMask(m, declared, facts);
+		if (mask == null) return null;
+		for (let i = 0; i < mask.length; i += 1) {
+			if (mask[i]) joined[i] = true;
+		}
+	}
+	return enumRemainder(declared, facts, joined);
 }
 
 function enumMembersHeld(t: Type, enumType: Type): string[] | null {
