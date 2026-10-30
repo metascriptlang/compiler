@@ -282,6 +282,23 @@ when (windows) {
 		return Result.ok(directory ? Removal.Tree : Removal.Entry);
 	}
 
+	function linkLikeOf(path: string): Result<boolean, IoError> {
+		if (path.indexOf("\0") >= 0) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		const wide = widePath(path);
+		if (wide == null) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		const attributes = GetFileAttributesW(wide);
+		const failure = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
+		freeWide(wide);
+		if (attributes == INVALID_FILE_ATTRIBUTES) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(failure), path));
+		}
+		return Result.ok((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+	}
+
 	function statOf(path: string, ref st: Stat): boolean {
 		const wide = widePath(path);
 		if (wide == null) return false;
@@ -403,6 +420,20 @@ when (windows) {
 	extern const S_IFMT: uint32;
 	extern const S_IFREG: uint32;
 	extern const S_IFDIR: uint32;
+	extern const S_IFLNK: uint32;
+	extern const EINVAL: int32;
+
+	function linkLikeOf(path: string): Result<boolean, IoError> {
+		if (path.indexOf("\0") >= 0) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		let st: Stat = {};
+		if (cLstat(path as cstring, st) != 0) {
+			const failure = errno;
+			return Result.err(ioErrorFromErrno(failure, path));
+		}
+		return Result.ok((st.st_mode & S_IFMT) == S_IFLNK);
+	}
 
 	function chmodErrno(path: string, mode: int32): int32 {
 		return cChmod(path as cstring, mode) == 0 ? 0 : errno;
@@ -634,6 +665,11 @@ function removeTree(path: string): Result<void, IoError> {
 
 export function symlink(target: string, path: string): Result<void, IoError> {
 	return errnoResult(symlinkErrno(target, path), path, "symlink failed");
+}
+
+// Native final-component query; JS cannot expose every Windows reparse tag.
+export function isLinkLike(path: string): Result<boolean, IoError> {
+	return linkLikeOf(path);
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
