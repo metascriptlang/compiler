@@ -2227,7 +2227,7 @@ test "engine: a refused pointer read keeps its integer register class under ever
 	const widths = ["uint8", "uint32", "uint64"];
 	for (const op of ops) {
 		for (const width of widths) {
-			const ctx = evalOrcVM(`function read(p: Ptr<${width}>, i: int64): ${width} { return p[i] ${op} 3; }`
+			const ctx = evalVM(`function read(p: Ptr<${width}>, i: int64): ${width} { return p[i] ${op} 3; }`
 				+ ` let xs: ${width}[] = [1, 2, 3]; const view: Span<${width}> = xs; console.log(\`\${read(view as Ptr<${width}>, 1)}\`);`);
 			assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), `${op} ${width}: ${ctx.error}`;
 		}
