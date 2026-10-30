@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind, declaredCallType } from "std/meta";
+import { Node, NodeKind, CallExprData, declaredCallType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -26,28 +26,29 @@ function isOptionalField(name: string, optionalFields: string[]): boolean {
 	return false;
 }
 
-export macro jsonValueOf(t: Node): Node {
-	return {
-		kind: NodeKind.CallExpr, line: t.line, column: t.column,
-		callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonValueOfWith" },
-		arguments: [t, { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: true }],
-	};
-}
-
 // A declared `toJSON` is called once and its result serialized without a second
-// hook lookup on the result itself, as SerializeJSONProperty does.
-export macro _jsonValueOfWith(t: Node, hook: Node): Node {
-	const hooked = hook.boolValue ? declaredCallType(t, "toJSON") : null;
+// hook lookup on the result itself, as SerializeJSONProperty does: the expansion
+// re-emits `jsonValueOf` on `_jsonHooked(x.toJSON())`, a prelude identity the next
+// expansion strips, as the other helpers it emits are prelude functions.
+export macro jsonValueOf(arg: Node): Node {
+	const wrapped = arg.kind == NodeKind.CallExpr && (arg as CallExprData).callee.kind == NodeKind.Identifier
+		&& (arg as CallExprData).callee.name == "_jsonHooked";
+	const t: Node = wrapped ? (arg as CallExprData).arguments[0] : arg;
+	const hooked = wrapped ? null : declaredCallType(t, "toJSON");
 	if (hooked != null) {
 		return {
 			kind: NodeKind.CallExpr, line: t.line, column: t.column,
-			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonValueOfWith" },
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonValueOf" },
 			arguments: [{
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: "toJSON", isOptional: false },
-				arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
-				nodeType: hooked,
-			}, { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: false }],
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonHooked" },
+				arguments: [{
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: "toJSON", isOptional: false },
+					arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
+					nodeType: hooked,
+				}],
+			}],
 		};
 	}
 	let tt = implementationOf(t);
