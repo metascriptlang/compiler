@@ -2473,10 +2473,10 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		const optionalNames: string[] = [];
 		let pi = 0;
 		let spreadSeen = false;
-		const inConstContext = ctx.constContext.includes(node);
+		const inConstContext = ctx.constContext.has(node);
 		while (pi < d.properties.length) {
 			const value = d.properties[pi];
-			if (inConstContext && value.kind == NodeKind.ObjectLiteral) ctx.constContext.push(value);
+			if (inConstContext && value.kind == NodeKind.ObjectLiteral) ctx.constContext.add(value);
 			checkExpr(ctx, value, inConstContext ? constLiteralType(value) : null);
 			if (inConstContext && value.kind == NodeKind.ArrayLiteral) refuseConstArray(ctx, value);
 			const readFt = d.properties[pi].nodeType;
@@ -2557,7 +2557,7 @@ function constNumberType(node: Node, negated: boolean): Type | null {
 function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionData): void {
 	const operand = d.asExpr;
 	const literal = constLiteralType(operand);
-	if (operand.kind == NodeKind.ObjectLiteral) ctx.constContext.push(operand);
+	if (operand.kind == NodeKind.ObjectLiteral) ctx.constContext.add(operand);
 	checkExpr(ctx, operand, literal);
 	if (operand.kind == NodeKind.ArrayLiteral) {
 		refuseConstArray(ctx, operand);
