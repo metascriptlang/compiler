@@ -24,9 +24,13 @@ import {
 	cacheGet, cachePut, cacheContains,
 	markQueriesRedForFile
 } from "./cache";
-import { TaFileInputStore, createFileInputStore, setFileText, getFileHash, getLastChange, recordInputChange, setFileDurability } from "./fileInput";
+import { TaFileInputStore, createFileInputStore, setFileText, getFileHash, getLastChange, recordInputChange, setFileDurability, getFileDurability } from "./fileInput";
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
+
+function lowerDurability(a: TaDurability, b: TaDurability): TaDurability {
+	return (a as int32) <= (b as int32) ? a : b;
+}
 
 // ===== tryMarkGreen — can we use the cached value? =====
 
@@ -64,6 +68,7 @@ function markGreen(
 	entry.state = TaQueryState.Yellow;
 
 	// Check each dependency
+	let durability = TaDurability.High;
 	for (const dep of entry.dependencies) {
 		if (dep.depKey.queryKind == TaQueryKind.FileText) {
 			// Input query: check if file content hash changed
@@ -72,6 +77,7 @@ function markGreen(
 				entry.state = TaQueryState.Red;
 				return false;
 			}
+			durability = lowerDurability(durability, getFileDurability(fileInput, dep.depKey.fileId));
 			continue;
 		}
 
@@ -108,10 +114,12 @@ function markGreen(
 				}
 				// Output hash matches — comment/whitespace-only change, stay green
 			}
+			durability = lowerDurability(durability, depEntry.durability);
 		}
 	}
 
 	// All deps verified
+	entry.durability = durability;
 	entry.verifiedAt = currentRevision;
 	entry.state = TaQueryState.Green;
 	return true;
@@ -591,4 +599,16 @@ test "an unchanged high-durability input still skips its walk" {
 	cacheGet(cache, userKey).state = TaQueryState.Red;
 	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies[0].expectedHash = 0;
 	assert tryMarkGreen(cache, input, userKey, 2);
+}
+
+test "a consumer verified after a durability downgrade walks its input on the next write" {
+	const cache = createCacheStore(10);
+	const input = createFileInputStore();
+	const graph = createModuleDepGraph();
+	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	setFileDurability(input, 0, TaDurability.Low, 2);
+	assert tryMarkGreen(cache, input, userKey, 2);
+	setFileText(input, "/durability/dep.ms", "export const value = 3;");
+	recordInputChange(input, 0, 3);
+	assert !tryMarkGreen(cache, input, userKey, 3);
 }
