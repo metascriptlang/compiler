@@ -7,7 +7,7 @@ import { cacheGet } from "./cache";
 import { getFileId } from "./fileInput";
 import { recordModuleImport } from "./moduleDeps";
 import { Node, NodeKind, ProgramData } from "../../ast/node";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, CheckerError } from "../../checker/context";
 import { lookupLocal, symbolKey } from "../../checker/symbol";
 import { typeDisplayName } from "../../checker/types";
 import { ifaceDigest } from "./digest";
@@ -235,5 +235,28 @@ test "a module-level extern variable re-exported by another module digests under
 	check(db, [DEP, USER]);
 	const dep = dbTypeCheck(db, DEP);
 	assert symbolKey(lookupLocal(dep.table, "errnoLike")!) == `errnoLike.0.${DEP}`;
-	assert ifaceDigest(dbTypeCheck(db, USER), [ifaceDigest(dep, [])]) != 0;
+	assert ifaceDigest(dbTypeCheck(db, USER)).contains(`errnoLike.0.${DEP}`);
+}
+
+const SHAPES = "/cut/shapes.ms";
+const MAKER = "/cut/maker.ms";
+const READER = "/cut/reader.ms";
+
+test "a method body edit keeps the exported class Symbol, so a module checked later sees one Box" {
+	for (const generic of [false, true]) {
+		const params = generic ? "<T>" : "";
+		const arg = generic ? "<int32>" : "";
+		const field = generic ? "T" : "int32";
+		const shapes = (body: string): string => `export class Box${params} { v: ${field}; constructor(v: ${field}) { this.v = v; } get(): ${field} { ${body} } }`;
+		const maker = `import { Box } from "./shapes";\nexport function pass(b: Box${arg}): Box${arg} { return b; }`;
+		const reader = `import { Box } from "./shapes";\nimport { pass } from "./maker";\nconst b: Box${arg} = pass(new Box${arg}(1));\nexport const v = b.get();`;
+		const db = openDb([SHAPES, MAKER, READER], [shapes("return this.v;"), maker, reader], [[1, 0], [2, 0], [2, 1]]);
+		assert check(db, [SHAPES, MAKER]) == `${SHAPES},${MAKER}`;
+		const held = lookupLocal(dbTypeCheck(db, SHAPES).table, "Box");
+		dbSetFileText(db, SHAPES, shapes("const w = this.v; return w;"));
+		assert check(db, [SHAPES, MAKER]) == SHAPES;
+		assert lookupLocal(dbTypeCheck(db, SHAPES).table, "Box") == held;
+		const messages = dbTypeCheck(db, READER).errors.map((e: CheckerError): string => e.message).join("; ");
+		assert messages == "", messages;
+	}
 }

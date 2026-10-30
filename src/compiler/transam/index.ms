@@ -1027,10 +1027,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
 	}
 	const kept = db.handedToCheck == null;
-	const iface = kept ? String(ifaceDigest(checkerCtx, [])) : null;
+	const iface = kept ? ifaceDigest(checkerCtx) : null;
 	const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
-	if (kept) storeImpl(db, fileId, String(implDigest(cachedProgram, 0)));
+	if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
 	db.checkInProgress.delete(filePath);
 	return checkerCtx;
 }

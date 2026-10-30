@@ -2,17 +2,18 @@ import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "
 import { makeSymbol, symbolKey } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
 import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod } from "../../checker/context";
-import { combine as mix, hS as mixString, hI as mixInt, hB as mixBool, taHashNode, transAmHashSurface } from "./hash";
+import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceText } from "./hash";
 import { createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, TransAmDb } from "./index";
 import { recordModuleImport } from "./moduleDeps";
 import { getFileId } from "./fileInput";
+import { createQueryKey, TaQueryKind } from "./revision";
+import { cacheGet } from "./cache";
 
 enum TypeShape { Plain, Param, Instance }
 
 class DigestState {
 	modulePath: string;
-	memo: HashMap<Type, int64>;
-	open: HashSet<Type>;
+	ids: HashMap<Type, int32>;
 }
 
 function shapeOf(kind: TypeKind): TypeShape {
@@ -35,148 +36,142 @@ function unhandledKind(kind: TypeKind): TypeShape {
 	throw new Error(`internal: digest: unhandled ${kind.toString()}`);
 }
 
-function mixFlags<E>(h: int64, flags: BitSet<E>): int64 {
-	if (flags.isEmpty()) return mix(h, 0);
-	for (const flag of flags.toItems()) h = mixInt(h, flag as int32);
-	return h;
+function putFlags<E>(out: TaText, flags: BitSet<E>): TaText {
+	const items = flags.toItems();
+	out = putInt(out, items.length);
+	for (const flag of items) out = putInt(out, flag as int32);
+	return out;
 }
 
-function mixStrings(h: int64, strings: string[] | null): int64 {
-	if (strings == null) return mix(h, 0);
-	h = mixInt(h, strings.length);
-	for (const s of strings) h = mixString(h, s);
-	return h;
+function putStrings(out: TaText, strings: string[] | null): TaText {
+	if (strings == null) return hNull(out);
+	out = putInt(out, strings.length);
+	for (const s of strings) out = putString(out, s);
+	return out;
 }
 
-function mixNodes(h: int64, nodes: Node[] | null): int64 {
-	if (nodes == null) return mix(h, 0);
-	h = mixInt(h, nodes.length);
-	for (const node of nodes) h = mix(h, taHashNode(node));
-	return h;
+function putNodes(out: TaText, nodes: Node[] | null): TaText {
+	if (nodes == null) return hNull(out);
+	out = putInt(out, nodes.length);
+	for (const node of nodes) out = putString(out, nodeText(node));
+	return out;
 }
 
-function typeDigest(st: DigestState, t: Type | null): int64 {
-	if (t == null) return 0;
-	const known = st.memo.get(t);
-	if (known != null) return known;
+function putType(st: DigestState, out: TaText, t: Type | null): TaText {
+	if (t == null) return hNull(out);
+	const seen = st.ids.get(t);
+	if (seen != null) return putString(out, `@${seen}`);
+	st.ids.set(t, st.ids.size);
 	const shape = shapeOf(t.kind);
-	let h: int64 = mixString(mixInt(0, t.kind as int32), t.typeName);
+	out = putString(putInt(out, t.kind as int32), t.typeName);
 	if (shape != TypeShape.Param && t.sym != null && t.sym.modulePath != st.modulePath) {
-		h = mixString(h, symbolKey(t.sym));
-		if (shape == TypeShape.Instance) h = mixTypes(st, h, t.typeChildren);
-		st.memo.set(t, h);
-		return h;
+		out = putString(out, symbolKey(t.sym));
+		if (shape == TypeShape.Instance) out = putTypes(st, out, t.typeChildren);
+		return out;
 	}
-	if (st.open.has(t)) return h;
-	st.open.add(t);
-	h = mixStrings(h, t.typeNames);
-	h = mixTypes(st, h, t.typeChildren);
-	if (shape != TypeShape.Instance) h = mix(h, typeDigest(st, t.typeReturn));
-	h = mix(h, typeDigest(st, t.typeExtra));
-	h = mixFlags(h, t.typeFlags.excl(TypeFlag.OpenClass));
-	h = mixInt(h, t.typeValue);
-	h = mixInt(h, t.callConv as int32);
-	for (let i = 0; i < t.attachedOps.length; i += 1) {
-		const hook = t.attachedOps[i];
-		if (hook != null) h = mixString(mixInt(h, i), symbolKey(hook));
-	}
-	h = mixStrings(h, t.optionalFields);
-	h = mix(h, typeDigest(st, t.typeInst));
-	st.open.delete(t);
-	st.memo.set(t, h);
-	return h;
+	out = putStrings(out, t.typeNames);
+	out = putTypes(st, out, t.typeChildren);
+	if (shape != TypeShape.Instance) out = putType(st, out, t.typeReturn);
+	out = putType(st, out, t.typeExtra);
+	out = putFlags(out, t.typeFlags.excl(TypeFlag.OpenClass));
+	out = putInt(out, t.typeValue);
+	out = putInt(out, t.callConv as int32);
+	out = putInt(out, t.attachedOps.length);
+	for (const hook of t.attachedOps) out = hook != null ? putString(out, symbolKey(hook)) : hNull(out);
+	out = putStrings(out, t.optionalFields);
+	return putType(st, out, t.typeInst);
 }
 
-function mixTypes(st: DigestState, h: int64, types: Type[] | null): int64 {
-	if (types == null) return mix(h, 0);
-	h = mixInt(h, types.length);
-	for (const t of types) h = mix(h, typeDigest(st, t));
-	return h;
+function putTypes(st: DigestState, out: TaText, types: Type[] | null): TaText {
+	if (types == null) return hNull(out);
+	out = putInt(out, types.length);
+	for (const t of types) out = putType(st, out, t);
+	return out;
 }
 
-function mixExtension(h: int64, ext: ExtensionMethod | null): int64 {
-	if (ext == null) return mix(h, 0);
-	h = mixString(h, ext.methodName);
-	h = mixBool(h, ext.isStatic);
-	return mixString(h, ext.sourcePath);
+function putExtension(out: TaText, ext: ExtensionMethod | null): TaText {
+	if (ext == null) return hNull(out);
+	out = putString(out, ext.methodName);
+	out = putBool(out, ext.isStatic);
+	return putString(out, ext.sourcePath);
 }
 
-function routineDigest(st: DigestState, sym: Symbol): int64 {
-	let h: int64 = mixInt(0, sym.symbolKind as int32);
-	h = mixInt(h, sym.disamb);
-	h = mixInt(h, sym.overloadIdx);
-	h = mixFlags(h, sym.symFlags.excl(SymbolFlag.Used).excl(SymbolFlag.Consumed).excl(SymbolFlag.OverloadValidated));
-	h = mixString(h, sym.nativeName);
-	h = mixString(h, sym.exportName);
-	h = mixString(h, sym.builtinKind);
-	h = mixString(h, sym.headerPath);
-	h = mixString(h, sym.jsModulePath);
-	h = mixInt(h, sym.mutatedParams);
-	h = mixNodes(h, sym.defaultParams);
-	h = mixTypes(st, h, sym.typeParams);
-	h = mixStrings(h, sym.fieldDecoratorNames);
-	h = mixInt(h, sym.fieldDecorators.length);
-	for (const row of sym.fieldDecorators) h = mixNodes(h, row);
-	h = mixStrings(h, sym.metaKeys);
-	h = mixNodes(h, sym.metaValues);
-	h = mixStrings(h, sym.nonisolatedFields);
-	h = mixInt(h, sym.duVariantSlot);
+function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
+	out = putInt(out, sym.symbolKind as int32);
+	out = putInt(out, sym.disamb);
+	out = putInt(out, sym.overloadIdx);
+	out = putFlags(out, sym.symFlags.excl(SymbolFlag.Used).excl(SymbolFlag.Consumed).excl(SymbolFlag.OverloadValidated));
+	out = putString(out, sym.nativeName);
+	out = putString(out, sym.exportName);
+	out = putString(out, sym.builtinKind);
+	out = putString(out, sym.headerPath);
+	out = putString(out, sym.jsModulePath);
+	out = putInt(out, sym.mutatedParams);
+	out = putNodes(out, sym.defaultParams);
+	out = putTypes(st, out, sym.typeParams);
+	out = putStrings(out, sym.fieldDecoratorNames);
+	out = putInt(out, sym.fieldDecorators.length);
+	for (const row of sym.fieldDecorators) out = putNodes(out, row);
+	out = putStrings(out, sym.metaKeys);
+	out = putNodes(out, sym.metaValues);
+	out = putStrings(out, sym.nonisolatedFields);
+	out = putInt(out, sym.duVariantSlot);
+	out = putInt(out, sym.staticFields.length);
 	for (const field of sym.staticFields) {
-		h = mixString(h, field.name);
-		h = mix(h, typeDigest(st, field.symbolType));
-		h = mixFlags(h, field.symFlags.excl(SymbolFlag.Used));
+		out = putString(out, field.name);
+		out = putType(st, out, field.symbolType);
+		out = putFlags(out, field.symFlags.excl(SymbolFlag.Used));
 	}
-	if (sym.ctorRoutine != null) h = mix(h, typeDigest(st, sym.ctorRoutine.symbolType));
-	h = mix(h, typeDigest(st, sym.symbolType));
-	if (sym.declNode != null) h = mixInt(h, transAmHashSurface(sym.declNode) as int64);
-	return h;
+	out = sym.ctorRoutine != null ? putType(st, out, sym.ctorRoutine.symbolType) : hNull(out);
+	out = putType(st, out, sym.symbolType);
+	return sym.declNode != null ? putString(out, surfaceText(sym.declNode)) : hNull(out);
 }
 
-function exportDigest(st: DigestState, ctx: CheckerContext, sym: Symbol): int64 {
+function putExport(st: DigestState, out: TaText, ctx: CheckerContext, sym: Symbol): TaText {
 	const names = ctx.interfNames.get(sym) ?? [sym.name];
-	let h: int64 = mixStrings(0, names);
-	if (sym.modulePath != ctx.modulePath) return mixString(h, symbolKey(sym));
-	h = mix(h, routineDigest(st, sym));
-	h = mixInt(h, sym.overloads.length);
-	for (const ov of sym.overloads) h = mix(h, routineDigest(st, ov));
+	out = putStrings(out, names);
+	if (sym.modulePath != ctx.modulePath) return putString(out, symbolKey(sym));
+	out = putRoutine(st, out, sym);
+	out = putInt(out, sym.overloads.length);
+	for (const ov of sym.overloads) out = putRoutine(st, out, ov);
 	for (const name of names) {
 		const info = buildExportInfo(sym, ctx.extensionRegistry, ctx.modulePath, ctx, name);
-		h = mixExtension(h, info.ext);
-		for (const ext of info.overloadExts) h = mixExtension(h, ext);
-		h = mix(h, typeDigest(st, info.converterTargetType));
+		out = putExtension(out, info.ext);
+		out = putInt(out, info.overloadExts.length);
+		for (const ext of info.overloadExts) out = putExtension(out, ext);
+		out = putType(st, out, info.converterTargetType);
 	}
-	return h;
+	return out;
 }
 
-export function ifaceDigest(ctx: CheckerContext, depDigests: int64[]): int64 {
-	const st: DigestState = { modulePath: ctx.modulePath, memo: new HashMap<Type, int64>(), open: new HashSet<Type>() };
-	let h: int64 = mixInt(0, ctx.interf.length);
-	for (const sym of ctx.interf) h = mix(h, exportDigest(st, ctx, sym));
-	h = mixString(h, ctx.includeDirectives);
-	h = mixString(h, ctx.compilerFlags);
-	h = mixString(h, ctx.compileDirectives);
-	h = mixInt(h, ctx.jsImportRegistry.length);
-	for (const entry of ctx.jsImportRegistry) h = mixStrings(mixString(h, entry.modulePath), entry.names);
-	h = mixInt(h, errorCount(ctx));
-	for (const dep of depDigests) h = mix(h, dep);
-	return h;
+export function ifaceDigest(ctx: CheckerContext): string {
+	const st: DigestState = { modulePath: ctx.modulePath, ids: new HashMap<Type, int32>() };
+	let out = putInt(createText(), ctx.interf.length);
+	for (const sym of ctx.interf) out = putExport(st, out, ctx, sym);
+	out = putString(out, ctx.includeDirectives);
+	out = putString(out, ctx.compilerFlags);
+	out = putString(out, ctx.compileDirectives);
+	out = putInt(out, ctx.jsImportRegistry.length);
+	for (const entry of ctx.jsImportRegistry) out = putStrings(putString(out, entry.modulePath), entry.names);
+	out = putInt(out, errorCount(ctx));
+	return textOf(out);
 }
 
-export function implDigest(parse: Node, iface: int64): int64 {
-	return mix(taHashNode(parse), iface);
+export function implDigest(parse: Node): string {
+	return nodeText(parse);
 }
 
 const DEP = "/dg/dep.ms";
 const USE = "/dg/use.ms";
 const USE_TEXT = 'import { f } from "./dep";\nexport function g(): int32 { return f(1); }';
 
-function measure(db: TransAmDb): int64[] {
-	const dep = ifaceDigest(dbTypeCheck(db, DEP), []);
-	const use = ifaceDigest(dbTypeCheck(db, USE), [dep]);
-	return [dep, use, implDigest(dbParse(db, DEP), dep), implDigest(dbParse(db, USE), use)];
+function measure(db: TransAmDb): string[] {
+	const dep = ifaceDigest(dbTypeCheck(db, DEP));
+	const use = ifaceDigest(dbTypeCheck(db, USE));
+	return [dep, use, implDigest(dbParse(db, DEP)), implDigest(dbParse(db, USE))];
 }
 
-function digests(depText: string, useText: string = USE_TEXT): int64[] {
+function digests(depText: string, useText: string = USE_TEXT): string[] {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, DEP, depText);
 	dbSetFileText(db, USE, useText);
@@ -274,7 +269,7 @@ test "an unrelated private declaration leaves the interface digest unchanged" {
 	assert base[2] != digests("const hidden = 5;\n" + BASE_DEP)[2];
 }
 
-test "a dependency digest reaches every importer in the chain" {
+test "a dependency's interface change reaches every importer in the chain, a body change none" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
 	dbSetFileText(db, "/ch/mid.ms", 'import { v } from "./logic";\nexport function m(): int32 { return v(); }');
@@ -287,28 +282,19 @@ test "a dependency digest reaches every importer in the chain" {
 	assert body[0] == a[0] && body[1] == a[1] && body[2] == a[2];
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int64 { return 1; }");
 	const sig = chain(db);
-	assert sig[0] != a[0];
-	assert sig[1] != a[1];
-	assert sig[2] != a[2];
+	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] > a[2];
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
 	const undone = chain(db);
-	assert undone[0] == a[0] && undone[1] == a[1] && undone[2] == a[2];
+	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] > sig[2];
 }
 
-function chain(db: TransAmDb): int64[] {
-	const logic = ifaceDigest(dbTypeCheck(db, "/ch/logic.ms"), []);
-	const mid = ifaceDigest(dbTypeCheck(db, "/ch/mid.ms"), [logic]);
-	const far = ifaceDigest(dbTypeCheck(db, "/ch/far.ms"), [mid]);
-	return [logic, mid, far];
-}
-
-test "the digest folds each dependency digest in order" {
-	const db = createTransAmDb(100);
-	dbSetFileText(db, DEP, BASE_DEP);
-	const ctx = dbTypeCheck(db, DEP);
-	assert ifaceDigest(ctx, [1, 2]) != ifaceDigest(ctx, [2, 1]);
-	assert ifaceDigest(ctx, [1]) != ifaceDigest(ctx, [1, 1]);
-	assert ifaceDigest(ctx, [1]) == ifaceDigest(ctx, [1]);
+function chain(db: TransAmDb): int32[] {
+	const changed: int32[] = [];
+	for (const path of ["/ch/logic.ms", "/ch/mid.ms", "/ch/far.ms"]) {
+		dbTypeCheck(db, path);
+		changed.push(cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, path))).changedAt);
+	}
+	return changed;
 }
 
 test "an errored module still has a digest that moves with its errors" {
@@ -334,11 +320,11 @@ test "checking importers leaves the exporter digest unchanged" {
 	dbSetFileText(db, USE, use);
 	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, USE), getFileId(db.fileInput, DEP));
 	const depCtx = dbTypeCheck(db, DEP);
-	const before = ifaceDigest(depCtx, []);
-	const beforeImpl = implDigest(dbParse(db, DEP), before);
+	const before = ifaceDigest(depCtx);
+	const beforeImpl = implDigest(dbParse(db, DEP));
 	assert errorCount(dbTypeCheck(db, USE)) == 0;
-	assert ifaceDigest(depCtx, []) == before;
-	assert implDigest(dbParse(db, DEP), before) == beforeImpl;
+	assert ifaceDigest(depCtx) == before;
+	assert implDigest(dbParse(db, DEP)) == beforeImpl;
 }
 
 test "a foreign type reference is keyed by its symbol" {
@@ -349,14 +335,14 @@ test "a foreign type reference is keyed by its symbol" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, DEP, "export class Near { x: int32 = 1; }");
 	const ctx = dbTypeCheck(db, DEP);
-	const here = ifaceDigest(ctx, []);
+	const here = ifaceDigest(ctx);
 	const near = ctx.interf[0];
 	near.symbolType.typeChildren.push(owner);
 	near.symbolType.typeNames.push("far");
-	const withKey = ifaceDigest(ctx, []);
+	const withKey = ifaceDigest(ctx);
 	assert withKey != here;
 	sym.disamb = 7;
-	assert ifaceDigest(ctx, []) != withKey;
+	assert ifaceDigest(ctx) != withKey;
 }
 
 test "an anonymous foreign symbol has no key" {
@@ -371,6 +357,6 @@ test "an anonymous foreign symbol has no key" {
 	ctx.interf[0].symbolType.typeChildren.push(owner);
 	ctx.interf[0].symbolType.typeNames.push("far");
 	let message = "";
-	try { ifaceDigest(ctx, []); } catch (e) { message = (e as Error).message; }
+	try { ifaceDigest(ctx); } catch (e) { message = (e as Error).message; }
 	assert message.contains("is local to its module and has no key"), message;
 }

@@ -1,9 +1,3 @@
-// Trans-Am Hash Utilities — djb2 string hashing, hash combinators, AST content hashing
-//
-// The engine decides validity by change revisions, never by these hashes; the build
-// session fingerprints generic instances with them (buildSession.ms).
-//
-// transAmHashNode hashes kind + data fields recursively, skipping positions/comments/types/symbols.
 
 import {
 	Node, NodeKind, NodeFlag,
@@ -30,7 +24,6 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
-import { forEachChild } from "../../ast/visitor";
 
 
 // ===== Imports from std/hash =====
@@ -38,39 +31,48 @@ import { forEachChild } from "../../ast/visitor";
 import { djb2 } from "std/hash";
 export function taHashString(s: string): int64 { return djb2(s); }
 
-// ===== Hash Combinators =====
-// Uses multiplication + modulo (not bitwise ops) for JS-backend compatibility.
-// Bitwise <<, >>, ^ operate on signed int32 in JS, giving different results than C int64.
+// ===== Exact AST rendering =====
 
-const PRIME: int64 = 2147483647;
-
-export function combine(a: int64, b: int64): int64 {
-	return ((a * 31) + b) % PRIME;
+export class TaText {
+	parts: string[];
 }
 
-// ===== AST Content Hash Helpers =====
-
-export function hS(h: int64, s: string): int64 {
-	if (s == null) return combine(h, 0);
-	return combine(h, taHashString(s));
+export function createText(): TaText {
+	return { parts: [] };
 }
 
-export function hI(h: int64, n: int64): int64 {
-	const v = (n < 0) ? (0 - n) : n;
-	return combine(h, v % PRIME);
+export function textOf(t: TaText): string {
+	return t.parts.join("");
 }
 
-export function hB(h: int64, b: boolean): int64 {
-	return combine(h, b ? 1 : 0);
+export function hNull(h: TaText): TaText {
+	h.parts.push("_");
+	return h;
 }
 
-function hN(h: int64, node: Node | null): int64 {
-	if (node == null) return combine(h, 0);
-	return combine(h, taHashNode(node));
+export function hS(h: TaText, s: string): TaText {
+	if (s == null) return hNull(h);
+	h.parts.push(`s${s.length}:`);
+	h.parts.push(s);
+	return h;
 }
 
-function hNodes(h: int64, nodes: Node[]): int64 {
-	if (nodes == null) return combine(h, 0);
+export function hI(h: TaText, n: int64): TaText {
+	h.parts.push(`i${n};`);
+	return h;
+}
+
+export function hB(h: TaText, b: boolean): TaText {
+	h.parts.push(b ? "T" : "F");
+	return h;
+}
+
+function hN(h: TaText, node: Node | null): TaText {
+	return hashInto(h, node, true);
+}
+
+function hNodes(h: TaText, nodes: Node[]): TaText {
+	if (nodes == null) return hNull(h);
 	h = hI(h, nodes.length);
 	for (const node of nodes) {
 		h = hN(h, node);
@@ -78,8 +80,8 @@ function hNodes(h: int64, nodes: Node[]): int64 {
 	return h;
 }
 
-function hNodeRows(h: int64, rows: Node[][]): int64 {
-	if (rows == null) return combine(h, 0);
+function hNodeRows(h: TaText, rows: Node[][]): TaText {
+	if (rows == null) return hNull(h);
 	h = hI(h, rows.length);
 	for (const row of rows) {
 		h = hNodes(h, row);
@@ -87,8 +89,8 @@ function hNodeRows(h: int64, rows: Node[][]): int64 {
 	return h;
 }
 
-function hStrings(h: int64, strs: string[]): int64 {
-	if (strs == null) return combine(h, 0);
+function hStrings(h: TaText, strs: string[]): TaText {
+	if (strs == null) return hNull(h);
 	h = hI(h, strs.length);
 	for (const s of strs) {
 		h = hS(h, s);
@@ -96,12 +98,12 @@ function hStrings(h: int64, strs: string[]): int64 {
 	return h;
 }
 
-function hF(h: int64, v: float64): int64 {
+function hF(h: TaText, v: float64): TaText {
 	return hS(h, String(v));
 }
 
-function hFloats(h: int64, nums: float64[]): int64 {
-	if (nums == null) return combine(h, 0);
+function hFloats(h: TaText, nums: float64[]): TaText {
+	if (nums == null) return hNull(h);
 	h = hI(h, nums.length);
 	for (const n of nums) {
 		h = hF(h, n);
@@ -124,47 +126,34 @@ function hFloats(h: int64, nums: float64[]): int64 {
 // extend this function to hash the new channel.
 
 export function transAmHashNode(node: Node): number {
-	return taHashNode(node) as number;
+	return taHashString(nodeText(node)) as number;
 }
 
-export function taHashNode(node: Node): int64 {
-	return hashNode(node, true);
+export function nodeText(node: Node | null): string {
+	return textOf(hashInto(createText(), node, true));
 }
 
-export function transAmHashSurface(node: Node): number {
-	return hashNode(node, false) as number;
-}
-
-export function transAmHashLowered(node: Node): number {
-	if (node == null) return 0;
-	let h: int64 = taHashNode(node);
-	const visit = (n: Node): void => {
-		h = hI(h, n.location != null ? n.location.line : 0);
-		h = hI(h, n.location != null ? n.location.column : 0);
-		h = hFlags(h, n.flags);
-		forEachChild(n, visit);
-	};
-	visit(node);
-	return h as number;
+export function surfaceText(node: Node | null): string {
+	return textOf(hashInto(createText(), node, false));
 }
 
 const HASHED_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.Optional | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.TypeModifier | NodeFlag.ValueUnion | NodeFlag.Parenthesized | NodeFlag.QuoteSplice | NodeFlag.WhenDeferred | NodeFlag.WhenPicked | NodeFlag.CommaWritten | NodeFlag.ExplicitDeref;
 
-function hFlags(h: int64, flags: BitSet<NodeFlag>): int64 {
-	if (flags.isEmpty()) return combine(h, 0);
+function hFlags(h: TaText, flags: BitSet<NodeFlag>): TaText {
+	if (flags.isEmpty()) return hNull(h);
 	for (const flag of flags.toItems()) h = hI(h, flag as int32);
 	return h;
 }
 
-function hMembers(h: int64, nodes: Node[], bodies: boolean): int64 {
+function hMembers(h: TaText, nodes: Node[], bodies: boolean): TaText {
 	h = hI(h, nodes.length);
-	for (const node of nodes) h = combine(h, hashNode(node, bodies));
+	for (const node of nodes) h = hashInto(h, node, bodies);
 	return h;
 }
 
-function hashNode(node: Node, bodies: boolean): int64 {
-	if (node == null) return 0;
-	let h: int64 = ((node.kind as int32 as int64) * 2654435761) % PRIME;
+function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
+	if (node == null) return hNull(h);
+	h = hI(h, node.kind as int32);
 	h = hS(h, node.typeArg);
 	h = hFlags(h, node.flags.intersection(HASHED_NODE_FLAGS));
 
@@ -359,7 +348,7 @@ function hashNode(node: Node, bodies: boolean): int64 {
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			h = hS(h, d.fnName); h = hStrings(h, d.params); h = hStrings(h, d.fnParamTypes);
-			h = bodies ? hN(h, d.fnBody) : combine(h, 0); h = hS(h, d.fnFlags); h = hS(h, d.fnReturnType);
+			h = bodies ? hN(h, d.fnBody) : hNull(h); h = hS(h, d.fnFlags); h = hS(h, d.fnReturnType);
 			h = hNodes(h, d.fnDefaults); h = hS(h, d.nativeName);
 		},
 		NodeKind.DoWhileStmt => {
@@ -388,7 +377,7 @@ function hashNode(node: Node, bodies: boolean): int64 {
 			h = hStrings(h, d.importNames); h = hStrings(h, d.importAliases); h = hS(h, d.importSource); h = hStrings(h, d.importTypeNames);
 		},
 		NodeKind.ExportDecl => {
-			h = combine(h, hashNode((node.data as ExportDeclData).exportedDecl, bodies));
+			h = hashInto(h, (node.data as ExportDeclData).exportedDecl, bodies);
 		},
 		NodeKind.TypeAliasDecl => {
 			const d = node.data as TypeAliasDeclData;
@@ -422,13 +411,13 @@ function hashNode(node: Node, bodies: boolean): int64 {
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			h = hS(h, d.methodName); h = hStrings(h, d.methodParams); h = hStrings(h, d.methodParamTypes);
-			h = bodies ? hN(h, d.methodBody) : combine(h, 0); h = hB(h, d.methodIsStatic);
+			h = bodies ? hN(h, d.methodBody) : hNull(h); h = hB(h, d.methodIsStatic);
 			h = hS(h, d.methodFlags); h = hS(h, d.methodVisibility); h = hS(h, d.methodReturnType); h = hS(h, d.nativeName);
 			h = hNodes(h, d.methodDefaults);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = bodies ? hN(h, d.ctorBody) : combine(h, 0); h = hS(h, d.ctorVisibility);
+			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = bodies ? hN(h, d.ctorBody) : hNull(h); h = hS(h, d.ctorVisibility);
 			h = hNodes(h, d.ctorDefaults);
 		},
 		NodeKind.ExternDecl => {
@@ -452,7 +441,7 @@ function hashNode(node: Node, bodies: boolean): int64 {
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			h = hNodes(h, d.decorators); h = combine(h, hashNode(d.decoratedNode, bodies));
+			h = hNodes(h, d.decorators); h = hashInto(h, d.decoratedNode, bodies);
 		},
 
 		// === Other ===
@@ -470,7 +459,7 @@ function hashNode(node: Node, bodies: boolean): int64 {
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
 			h = hS(h, d.macroDeclName); h = hStrings(h, d.macroDeclParams); h = hStrings(h, d.macroDeclParamTypes); h = hS(h, d.macroDeclReturnType);
-			h = bodies ? hN(h, d.macroDeclBody) : combine(h, 0);
+			h = bodies ? hN(h, d.macroDeclBody) : hNull(h);
 		},
 		NodeKind.QuoteExpr => {
 			h = hN(h, (node.data as QuoteExprData).quoteBody);
@@ -565,16 +554,15 @@ test "single char" {
 	assert h != 0;
 }
 
-test "combine is deterministic" { assert combine(1, 2) == combine(1, 2); }
-
-test "chained order matters" {
-	const a = combine(combine(0, 1), 2);
-	const b = combine(combine(0, 2), 1);
-	assert a != b;
+test "a null node renders as the null token" {
+	assert nodeText(null) == "_";
 }
 
-test "null node hashes to zero" {
-	assert transAmHashNode(null as unknown as Node) == 0;
+test "rendered tokens delimit themselves, so a split moved between two strings or a list changes the text" {
+	assert textOf(hS(hS(createText(), "ab"), "c")) != textOf(hS(hS(createText(), "a"), "bc"));
+	assert textOf(hS(hI(createText(), 1), "2")) != textOf(hS(hI(createText(), 12), ""));
+	assert parseHash("const a = [1, 2];") != parseHash("const a = [12];");
+	assert parseHash('const a = "x_";') != parseHash("const a = null; const b = \"x\";");
 }
 
 test "same AST same hash" {
@@ -583,7 +571,7 @@ test "same AST same hash" {
 	const r2 = parseSource("const x = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) == transAmHashNode(r2.value);
+	assert nodeText(r1.value) == nodeText(r2.value);
 }
 
 test "comment-only change same hash" {
@@ -592,7 +580,7 @@ test "comment-only change same hash" {
 	const r2 = parseSource("const x = 1; // comment");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) == transAmHashNode(r2.value);
+	assert nodeText(r1.value) == nodeText(r2.value);
 }
 
 test "different code different hash" {
@@ -601,7 +589,7 @@ test "different code different hash" {
 	const r2 = parseSource("const x = 2;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) != transAmHashNode(r2.value);
+	assert nodeText(r1.value) != nodeText(r2.value);
 }
 
 test "different identifier different hash" {
@@ -610,25 +598,19 @@ test "different identifier different hash" {
 	const r2 = parseSource("const y = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) != transAmHashNode(r2.value);
+	assert nodeText(r1.value) != nodeText(r2.value);
 }
 
-function parseHash(source: string): number {
+function parseHash(source: string): string {
 	const r = parseSource(source);
 	if (!r.ok) throw new Error("parse failed: " + source);
-	return transAmHashNode(r.value);
+	return nodeText(r.value);
 }
 
-function surfaceHash(source: string): number {
+function surfaceHash(source: string): string {
 	const r = parseSource(source);
 	if (!r.ok) throw new Error("parse failed: " + source);
-	return transAmHashSurface(r.value);
-}
-
-function loweredHash(source: string): number {
-	const r = parseSource(source);
-	if (!r.ok) throw new Error("parse failed: " + source);
-	return transAmHashLowered(r.value);
+	return surfaceText(r.value);
 }
 
 test "surface hash ignores function body" {
@@ -680,7 +662,7 @@ test "hash sees loop labels a transform sets" {
 		const r = parseSource(source);
 		if (!r.ok) throw new Error("parse failed: " + source);
 		const stmt = (r.value.data as ProgramData).programStmts[0];
-		const before = transAmHashNode(r.value);
+		const before = nodeText(r.value);
 		match (stmt.kind) {
 			NodeKind.WhileStmt => { (stmt.data as WhileStmtData).whileLabel = "lp"; },
 			NodeKind.ForStmt => { (stmt.data as ForStmtData).forLabel = "lp"; },
@@ -689,7 +671,7 @@ test "hash sees loop labels a transform sets" {
 			NodeKind.DoWhileStmt => { (stmt.data as DoWhileStmtData).dwLabel = "lp"; },
 			_ => { throw new Error("internal: label test: unexpected " + source); },
 		}
-		assert transAmHashNode(r.value) != before;
+		assert nodeText(r.value) != before;
 	}
 }
 
@@ -704,16 +686,6 @@ test "hash sees class generic params and implements" {
 
 test "hash sees call type arguments" {
 	assert parseHash("const a = f<int32>();") != parseHash("const a = f<int64>();");
-}
-
-test "lowered hash ignores comments but sees line shifts" {
-	const base = loweredHash("const x = 1;\nconst y = 2;");
-	assert base == loweredHash("const x = 1;\nconst y = 2; // tail");
-	assert base != loweredHash("\nconst x = 1;\nconst y = 2;");
-}
-
-test "lowered hash sees content" {
-	assert loweredHash("const x = 1;") != loweredHash("const x = 2;");
 }
 
 test "hash sees default position among parameters" {
@@ -736,20 +708,20 @@ test "hash sees parser flags and ignores checker flags" {
 	const r = parseSource("function f(): void {}");
 	if (!r.ok) throw new Error("parse failed");
 	const fn = (r.value.data as ProgramData).programStmts[0];
-	const before = transAmHashNode(r.value);
+	const before = nodeText(r.value);
 	fn.flags = fn.flags.incl(NodeFlag.Sem).incl(NodeFlag.LastRead).incl(NodeFlag.OptionalChainEnd);
-	assert transAmHashNode(r.value) == before;
+	assert nodeText(r.value) == before;
 	fn.flags = fn.flags.incl(NodeFlag.ExternC);
-	assert transAmHashNode(r.value) != before;
+	assert nodeText(r.value) != before;
 }
 
 test "hash sees try clause flag" {
 	const r = parseSource("try { f(); } catch (e) { g(); }");
 	if (!r.ok) throw new Error("parse failed");
 	const t = (r.value.data as ProgramData).programStmts[0];
-	const before = transAmHashNode(r.value);
+	const before = nodeText(r.value);
 	(t.data as TryCatchStmtData).hasCatchClause = false;
-	assert transAmHashNode(r.value) != before;
+	assert nodeText(r.value) != before;
 }
 
 test "hash sees number literal bit pattern" {
@@ -757,7 +729,7 @@ test "hash sees number literal bit pattern" {
 	if (!r.ok) throw new Error("parse failed");
 	const decl = (r.value.data as ProgramData).programStmts[0];
 	const init = (decl.data as VariableDeclData).initializer;
-	const before = transAmHashNode(r.value);
+	const before = nodeText(r.value);
 	(init.data as NumberLiteralData).isBitPattern = true;
-	assert transAmHashNode(r.value) != before;
+	assert nodeText(r.value) != before;
 }
