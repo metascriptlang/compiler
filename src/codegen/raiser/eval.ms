@@ -6,6 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramDat
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol } from "../../checker/context";
+import { sameType } from "../../checker/compat";
 import { lookupSymbol } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath } from "../../compiler/meta/nodeSym";
@@ -422,9 +423,26 @@ export function engineRecheckCount(): int32 {
 	return _engineRecheckCount;
 }
 
+function raiserTierOf(sym: Symbol): Symbol | null {
+	if (!sym.modulePath.endsWith(".cms") || sym.instantiatedFrom != null) return null;
+	const tierPath = sym.modulePath.slice(0, sym.modulePath.byteLength - 4) + ".rms";
+	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
+	if (tier == null) return null;
+	for (const head of tier) {
+		if (head.name != sym.name) continue;
+		if (head.overloads.length == 0) return head;
+		for (const candidate of [head, ...head.overloads]) {
+			if (sameType(candidate.symbolType, sym.symbolType)) return candidate;
+		}
+	}
+	throw new Error(`internal: ${tierPath} has no Raiser tier of '${sym.name}' to run at comptime`);
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
+	const tierSym = raiserTierOf(sym);
+	if (tierSym != null) return ensureCompiledIntoEngine(tierSym);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
