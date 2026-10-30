@@ -1517,9 +1517,13 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64
 
 function isExpressionKind(kind: NodeKind): boolean {
 	return match (kind) {
-		NodeKind.CallExpr | NodeKind.NewExpr | NodeKind.UpdateExpr | NodeKind.BinaryExpr | NodeKind.UnaryExpr
-			| NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.ConditionalExpr | NodeKind.MemberExpr
-			| NodeKind.ArrayAccess | NodeKind.Identifier | NodeKind.MacroInvocation | NodeKind.TryExpr | NodeKind.MatchExpr => true,
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.Identifier
+			| NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr
+			| NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ArrowFunction
+			| NodeKind.FunctionExpr | NodeKind.TypeAssertion | NodeKind.ConditionalExpr | NodeKind.NewExpr
+			| NodeKind.TryExpr | NodeKind.MatchExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr
+			| NodeKind.OutExpr | NodeKind.SizeofExpr | NodeKind.MacroInvocation => true,
 		_ => false,
 	};
 }
