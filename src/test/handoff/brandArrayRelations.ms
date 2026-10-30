@@ -46,3 +46,12 @@ test "brandArrayRelations: an intersection the checker cannot represent is an er
 		assert d.length == 1 && d[0].indexOf("cannot represent the intersection") >= 0, t + ": " + lines(d);
 	}
 }
+
+test "brandArrayRelations: a literal cast to a brand is typed by the brand's element type, so an element that does not fit is refused as the plain cast refuses it" {
+	const plain = errors("const p = [300] as uint8[];\nconsole.log(p.length);");
+	const brand = errors("const b = [300] as Bytes;\nconsole.log(b.length);");
+	const wide = errors("type Words16 = int16[] & { __brand: \"W\" };\nconst w = [300, -2] as Words16;\nconsole.log(w.length);");
+	assert plain.length == 1, lines(plain);
+	assert brand.length == 1 && brand[0].indexOf("300") >= 0, lines(brand);
+	assert wide.length == 0, lines(wide);
+}

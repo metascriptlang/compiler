@@ -2521,7 +2521,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	// `as unknown` is a type-system escape hatch — don't use it as context.
 	const asFnBody = distinctCallTarget(targetType);
 	const convTarget = distinctNumericBase(targetType) ?? targetType;
-	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : convTarget) : null;
+	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : (brandArrayBase(convTarget) ?? convTarget)) : null;
 	const operandMark = ctx.errors.length;
 	const prevConversion = ctx.conversionOperand;
 	const prevConversionTarget = ctx.conversionTarget;
