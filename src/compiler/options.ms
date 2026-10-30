@@ -311,6 +311,10 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 	const config = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
 	opts.resolve = config.resolve;
 	try applyCacheConfig(opts, config.build, projectRoot);
+	if (opts.command == "x") {
+		opts.target = Target.Raiser;
+		opts.targetExplicit = true;
+	}
 	if (config.valid) {
 		const targeted = applyBuildTarget(opts, config.build.target);
 		if (!targeted.ok) return Result.err(`${buildMsPath}: build.target: ${targeted.error}`);
