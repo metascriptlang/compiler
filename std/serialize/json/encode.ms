@@ -52,7 +52,7 @@ export macro jsonValueOf(arg: Node): Node {
 		};
 	}
 	let tt = implementationOf(t);
-	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
+	while (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
@@ -109,6 +109,8 @@ export macro jsonValueOf(arg: Node): Node {
 				if (en == "") {
 					error("jsonValueOf: anonymous struct element arrays unsupported", t);
 				}
+			} else if (elemType.typExprBase.kind == NodeKind.Identifier && elemType.typExprBase.name == "Distinct") {
+				elemByValueOf = true;
 			} else {
 				error("jsonValueOf: unsupported array element kind (TypeGeneric inner kind=" + peeled.kind + ")", t);
 			}
