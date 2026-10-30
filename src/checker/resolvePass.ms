@@ -29,6 +29,7 @@ import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
 import { parseExpressionFromState } from "../parser/expressions/core";
+import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -589,25 +590,6 @@ function bitSetElementAllowed(elem: Type): boolean {
 	return isOrdinalEnum(elem);
 }
 
-type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
-
-type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
-
-let genericTypeHookFn: GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void => {
-	throw new Error(`internal: no binder for the hook '${hook}' of a generic type is registered`);
-};
-
-export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
-	genericTypeHookFn = fn;
-}
-
-let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
-};
-
-export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
-	typeInstanceHooksFn = fn;
-}
-
 export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null {
 	if (lookupSymbol(ctx.table, name) != null) return null;
 	const t = resolveAnnotation(name, ctx, 0, 0);
@@ -711,7 +693,7 @@ function genericInstanceOf(ctx: CheckerContext, sym: Symbol, genericParams: stri
 	const gi = createGenericInstance(baseType, args);
 	gi.typeName = sym.name;
 	instantiateGenericBody(gi, genericParams);
-	typeInstanceHooksFn(gi, ctx, line, col);
+	callTypeInstanceHooks(gi, ctx, line, col);
 	return isRefBase ? createRef(gi) : gi;
 }
 
@@ -2303,7 +2285,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
-				if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+				if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 				return;
 			}
 		}
@@ -2315,7 +2297,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
-	if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+	if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 }
 
 function hookWritesItsReceiver(name: string): boolean {
