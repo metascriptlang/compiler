@@ -2931,6 +2931,27 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 					node.location.line, node.location.column);
 			}
 		}
+		if (elemExpected == null && d.elements.length > 1 && elemType != null && isAwaitable(elemType)) {
+			const awaitedParts: Type[] = [];
+			let plainPromises = true;
+			for (const el of d.elements) {
+				const elType = el.nodeType;
+				if (elType == null || !isAwaitable(elType) || isAffineAwaitable(elType)) { plainPromises = false; break; }
+				awaitedParts.push(awaitedType(elType)!);
+			}
+			if (plainPromises) {
+				const joinedAwaited = joinBranchTypes(awaitedParts);
+				if (!isUnresolvedType(joinedAwaited) && !sameType(joinedAwaited, awaitedType(elemType)!)) {
+					const joinedPromise = createPromise(joinedAwaited);
+					let pi = 0;
+					while (pi < d.elements.length) {
+						d.elements[pi] = fitJoinedBranch(ctx, d.elements[pi], joinedPromise);
+						pi = pi + 1;
+					}
+					elemType = joinedPromise;
+				}
+			}
+		}
 		if (elemExpected == null && d.elements.length > 1
 			&& !(elemType != null && isAwaitable(elemType))) {
 			adoptLiteralArms(ctx, d.elements);
