@@ -20,7 +20,7 @@ export interface DecoratorInfo {
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper", "wasm",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
 
@@ -141,6 +141,14 @@ export function exportNameDecorator(decorators: Node[]): Node | null {
 	for (const dec of decorators) {
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		if ((dec.data as MacroInvocationData).macroName == "exportName") return dec;
+	}
+	return null;
+}
+
+export function wasmDecorator(decorators: Node[]): Node | null {
+	for (const dec of decorators) {
+		if (dec.kind != NodeKind.MacroInvocation) continue;
+		if ((dec.data as MacroInvocationData).macroName == "wasm") return dec;
 	}
 	return null;
 }

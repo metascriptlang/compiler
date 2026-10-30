@@ -1,7 +1,8 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, ProgramData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, ProgramData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { exportedFunctionOf, wasmDecorator } from "./decoratorHelpers";
 import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
@@ -591,21 +592,168 @@ function refuseKeptBorrow(call: Node, argNode: Node, pi: number): void {
 	});
 }
 
-export function refuseKeptWasmCallbacks(ctx: CheckerContext, program: Node): void {
+export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
+	const roots: Node[] = [];
 	for (const stmt of (program.data as ProgramData).programStmts) {
-		if (stmt.kind != NodeKind.ExportDecl) continue;
-		const fn = (stmt.data as ExportDeclData).exportedDecl;
-		if (fn.kind != NodeKind.FunctionDecl || fn.paramSyms == null) continue;
-		for (const param of fn.paramSyms!) {
-			if (param.symbolType == null || peelThrough(param.symbolType!, PEEL_ALIAS).kind != TypeKind.Function) continue;
-			const site = findKeptSite(routineBody(fn), { lent: [param], held: [], seen: [fn] });
-			if (site == null) continue;
-			const what = site.kind == NodeKind.BinaryExpr
-				? "stores it in '" + describeExpr((site.data as BinaryExprData).left) + "'"
-				: "passes it to '" + describeExpr((site.data as CallExprData).callee) + "'";
-			addError(ctx, `wasm-placed function '${(fn.data as FunctionDeclData).fnName}' keeps its callback parameter '${param.name}': it ${what} at ${site.location.line}:${site.location.column}, but a JS callback is only lent for the call\ncall it before returning, or keep the state it needs instead of the callback`,
-				site.location.line, site.location.column);
+		if (stmt.kind != NodeKind.DecoratedDecl) continue;
+		const dd = stmt.data as DecoratedDeclData;
+		const dec = wasmDecorator(dd.decorators);
+		if (dec == null) continue;
+		if ((dec.data as MacroInvocationData).macroArgs.length > 0) {
+			addError(ctx, "@wasm takes no arguments", dec.location.line, dec.location.column);
+			continue;
 		}
+		const fn = dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.ExportDecl ? exportedFunctionOf(dd.decoratedNode) : null;
+		if (fn == null || (fn.data as FunctionDeclData).fnBody == null) {
+			addError(ctx, "@wasm applies to an exported module-level function with a body: the JS side calls it through its export", dec.location.line, dec.location.column);
+			continue;
+		}
+		refuseKeptWasmCallbacks(ctx, fn);
+		roots.push(fn);
+	}
+	if (roots.length > 0) refuseSharedModuleState(ctx, program, roots);
+}
+
+interface WasmReach {
+	routines: Node[];
+	rootOf: Node[];
+}
+
+interface StateUse {
+	sym: Symbol;
+	site: Node;
+	routine: Node;
+	root: Node;
+}
+
+function routineName(r: Node): string {
+	return r.kind == NodeKind.MethodDecl ? (r.data as MethodDeclData).methodName : (r.data as FunctionDeclData).fnName;
+}
+
+function sharesModuleState(sym: Symbol): boolean {
+	if (sym.symbolKind != SymbolKind.Variable || !hasFlag(sym, SymbolFlag.Global)) return false;
+	if (hasFlag(sym, SymbolFlag.Mutable)) return true;
+	const t = sym.symbolType;
+	return t != null && peelThrough(t, PEEL_ALIAS).kind != TypeKind.String && typeCarriesRef(t);
+}
+
+function calleeRoutine(ctx: CheckerContext, node: Node): Node | null {
+	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.CallExpr) return null;
+	const routine = routineParts(node.resolvedSym);
+	return routine != null && isOutsideResolvedStd(ctx, node.resolvedSym!.modulePath) ? routine : null;
+}
+
+function reachRoutine(ctx: CheckerContext, routine: Node, root: Node, w: WasmReach): void {
+	if (w.routines.includes(routine)) return;
+	w.routines.push(routine);
+	w.rootOf.push(root);
+	const visit = (node: Node): void => {
+		const callee = calleeRoutine(ctx, node);
+		if (callee != null) reachRoutine(ctx, callee, root, w);
+		forEachChild(node, visit);
+	};
+	const body = routineBody(routine);
+	if (body != null) visit(body);
+}
+
+function stateSites(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null && sharesModuleState(node.resolvedSym!)) out.push(node);
+	forEachChild(node, (child: Node): void => stateSites(child, out));
+}
+
+function callsAny(ctx: CheckerContext, node: Node | null, targets: Node[]): boolean {
+	if (node == null) return false;
+	const callee = calleeRoutine(ctx, node);
+	if (callee != null && targets.includes(callee)) return true;
+	const hit: boolean[] = [false];
+	forEachChild(node, (child: Node): void => { if (!hit[0]) hit[0] = callsAny(ctx, child, targets); });
+	return hit[0];
+}
+
+function throughOf(use: StateUse): string {
+	return use.routine == use.root ? "" : ` through '${routineName(use.routine)}'`;
+}
+
+// Module state that only wasm-placed code reaches lives in wasm alone; a use from JS-side code
+// would read or write the JS copy instead, which the wasm copy never sees.
+function refuseSharedModuleState(ctx: CheckerContext, program: Node, roots: Node[]): void {
+	const w: WasmReach = { routines: [], rootOf: [] };
+	for (const root of roots) reachRoutine(ctx, root, root, w);
+	const uses: StateUse[] = [];
+	const touching: Node[] = [];
+	for (let i = 0; i < w.routines.length; i += 1) {
+		const sites: Node[] = [];
+		stateSites(routineBody(w.routines[i]), sites);
+		for (const site of sites) uses.push({ sym: site.resolvedSym!, site, routine: w.routines[i], root: w.rootOf[i] });
+		if (sites.length > 0) touching.push(w.routines[i]);
+	}
+	for (const use of uses) {
+		const exported = hasFlag(use.sym, SymbolFlag.Exported);
+		if (!exported && use.sym.modulePath == ctx.modulePath) continue;
+		addError(ctx, `wasm-placed function '${routineName(use.root)}' uses the module variable '${use.sym.name}'${throughOf(use)} at ${use.site.location.line}:${use.site.location.column}, which ${exported ? "is exported" : "belongs to another module"}, so JS-side code can reach it too, but JS and wasm each keep their own copy of module state\nkeep it unexported beside the @wasm functions that use it, or pass it in as a parameter and return what changed`,
+			use.site.location.line, use.site.location.column);
+		return;
+	}
+	if (uses.length == 0) return;
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const r of w.routines) {
+			if (touching.includes(r) || !callsAny(ctx, routineBody(r), touching)) continue;
+			touching.push(r);
+			grew = true;
+		}
+	}
+	for (const r of touching) {
+		if (roots.includes(r) || r.resolvedSym == null || !hasFlag(r.resolvedSym!, SymbolFlag.Exported)) continue;
+		addError(ctx, `'${routineName(r)}' uses module state that only wasm-placed code may use, and it is exported, so JS-side code can call it and change the JS copy instead\nmark it @wasm, or keep it unexported`,
+			r.location.line, r.location.column);
+		return;
+	}
+	const found: (Node | null)[] = [null, null];
+	const visit = (node: Node, enclosing: Node | null): void => {
+		if (found[0] != null) return;
+		const inside = enclosing == null && (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.MethodDecl) ? node : enclosing;
+		if (inside == null || !touching.includes(inside)) {
+			const callee = calleeRoutine(ctx, node);
+			const hitsState = node.kind == NodeKind.Identifier && node.resolvedSym != null && sharesModuleState(node.resolvedSym!);
+			if (hitsState || (callee != null && touching.includes(callee) && !roots.includes(callee))) {
+				found[0] = node;
+				found[1] = inside;
+				return;
+			}
+		}
+		forEachChild(node, (child: Node): void => visit(child, inside));
+	};
+	for (const stmt of (program.data as ProgramData).programStmts) visit(stmt, null);
+	const site = found[0];
+	if (site == null) return;
+	const where = found[1] == null ? "top-level code" : `'${routineName(found[1]!)}'`;
+	const at = `${site.location.line}:${site.location.column}`;
+	if (site.kind == NodeKind.Identifier && site.resolvedSym != null && sharesModuleState(site.resolvedSym!)) {
+		let use = uses[0];
+		for (const u of uses) { if (u.sym == site.resolvedSym) { use = u; break; } }
+		addError(ctx, `the module variable '${use.sym.name}' is used by wasm-placed function '${routineName(use.root)}'${throughOf(use)} and also by ${where} at ${at}, which runs on the JS side: JS and wasm each keep their own copy of module state, so neither sees the other's changes\nreach it only through @wasm functions, or pass the value across as a parameter and return what changed`,
+			site.location.line, site.location.column);
+		return;
+	}
+	const callee = calleeRoutine(ctx, site)!;
+	addError(ctx, `'${routineName(callee)}' uses module state that only wasm-placed code may use, and ${where} at ${at} calls it on the JS side, where it would change the JS copy that wasm never sees\ncall it only from @wasm functions, or mark it @wasm`,
+		site.location.line, site.location.column);
+}
+
+function refuseKeptWasmCallbacks(ctx: CheckerContext, fn: Node): void {
+	if (fn.paramSyms == null) return;
+	for (const param of fn.paramSyms!) {
+		if (param.symbolType == null || peelThrough(param.symbolType!, PEEL_ALIAS).kind != TypeKind.Function) continue;
+		const site = findKeptSite(routineBody(fn), { lent: [param], held: [], seen: [fn] });
+		if (site == null) continue;
+		const what = site.kind == NodeKind.BinaryExpr
+			? "stores it in '" + describeExpr((site.data as BinaryExprData).left) + "'"
+			: "passes it to '" + describeExpr((site.data as CallExprData).callee) + "'";
+		addError(ctx, `wasm-placed function '${(fn.data as FunctionDeclData).fnName}' keeps its callback parameter '${param.name}': it ${what} at ${site.location.line}:${site.location.column}, but a JS callback is only lent for the call\ncall it before returning, or keep the state it needs instead of the callback`,
+			site.location.line, site.location.column);
 	}
 }
 

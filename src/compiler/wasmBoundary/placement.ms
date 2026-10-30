@@ -1,19 +1,32 @@
-import { Node, NodeKind, ProgramData } from "../../ast/node";
-import { isWasmPlacementStmt } from "../../checker/decoratorHelpers";
+import { Node, NodeKind, ProgramData, DecoratedDeclData, FunctionDeclData, SymbolFlag } from "../../ast/node";
+import { exportedFunctionOf } from "../../checker/decoratorHelpers";
+import { hasFlag } from "../../checker/symbol";
 
-export function hasWasmPlacement(program: Node): boolean {
-	if (program == null || program.kind != NodeKind.Program) return false;
-	for (const stmt of (program.data as ProgramData).programStmts) {
-		if (isWasmPlacementStmt(stmt)) return true;
-	}
-	return false;
+function wasmFunctionOf(stmt: Node): Node | null {
+	let decl = stmt;
+	if (decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl == null || decl.kind != NodeKind.ExportDecl) return null;
+	const fn = exportedFunctionOf(decl);
+	if (fn == null || fn.resolvedSym == null || !hasFlag(fn.resolvedSym!, SymbolFlag.Wasm)) return null;
+	return fn;
 }
 
-export function placedModules(paths: string[], programs: Node[]): string[] {
-	if (paths.length != programs.length) throw new Error(`internal: placedModules got ${paths.length} paths and ${programs.length} programs`);
-	const placed: string[] = [];
-	for (let i = 0; i < paths.length; i += 1) {
-		if (hasWasmPlacement(programs[i])) placed.push(paths[i]);
+export function wasmFunctionNames(program: Node): string[] {
+	const names: string[] = [];
+	if (program == null || program.kind != NodeKind.Program) return names;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const fn = wasmFunctionOf(stmt);
+		if (fn != null) names.push((fn.data as FunctionDeclData).fnName);
 	}
-	return placed;
+	return names;
+}
+
+export function withoutWasmFunctions(program: Node): Node {
+	const pd = program.data as ProgramData;
+	const kept: Node[] = [];
+	for (const stmt of pd.programStmts) {
+		if (wasmFunctionOf(stmt) == null) kept.push(stmt);
+	}
+	pd.programStmts = kept;
+	return program;
 }

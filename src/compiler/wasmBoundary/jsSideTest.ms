@@ -26,7 +26,7 @@ function bindingsFor(names: string[]) {
 		if (sym == null) throw new Error("internal: test source lacks " + n);
 		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
 	}
-	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps);
+	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
 	if (m.errors.length > 0) throw new Error("internal: " + m.errors.join("; "));
 	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name);
 }

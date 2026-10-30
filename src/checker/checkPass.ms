@@ -27,7 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
-import { isBuiltinDirective, inlineDecorator, isWasmPlacementStmt } from "./decoratorHelpers";
+import { isBuiltinDirective, inlineDecorator, isWasmPlacementStmt, wasmDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -44,7 +44,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
-import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField, refuseKeptWasmCallbacks } from "./sendable";
+import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField, checkWasmFunctions } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -428,6 +428,8 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	if (local && node.kind == NodeKind.DecoratedDecl) refuseComputedGotoDecorator(ctx, (node.data as DecoratedDeclData).decorators);
 	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
 	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
+	const wasmDec = local && node.kind == NodeKind.DecoratedDecl ? wasmDecorator((node.data as DecoratedDeclData).decorators) : null;
+	if (wasmDec != null) addError(ctx, "@wasm applies to an exported module-level function", wasmDec.location.line, wasmDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
 		if (!mintDecoratedLocalType(ctx, node)) return;
 		after = applyNestedDecorators(ctx, node);
@@ -621,7 +623,7 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 			if (isComputedGotoMark(node) && !isRegisteredMark(ctx, node)) {
 				addError(ctx, "@computedGoto must be a statement of a while loop body", d.expr.location.line, d.expr.location.column);
 			}
-			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr) && !isWasmPlacementStmt(node)) {
+			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr)) {
 				addError(ctx, "invalid directive '@" + (d.expr.data as MacroInvocationData).macroName + "': no macro or compiler directive has this name", d.expr.location.line, d.expr.location.column);
 			}
 			if (d.expr.kind == NodeKind.SpliceMany) {
@@ -3720,11 +3722,7 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 		if (stmt.kind == NodeKind.ExprStmt) {
 			const d = stmt.data as ExprStmtData;
 			if (isWasmPlacementStmt(stmt)) {
-				const md = d.expr.data as MacroInvocationData;
-				if (md.macroArgs.length > 0) {
-					addError(ctx, "@wasm() takes no arguments: it places the whole module in wasm", d.expr.location.line, d.expr.location.column);
-				}
-				refuseKeptWasmCallbacks(ctx, program);
+				addError(ctx, "@wasm marks a function, not a module: put `@wasm` on each exported function that runs in wasm, and the functions it calls follow it", d.expr.location.line, d.expr.location.column);
 				continue;
 			}
 			collectOneDirective(ctx, d.expr);
@@ -3746,6 +3744,7 @@ export function collectDirectives(ctx: CheckerContext, program: Node): void {
 			}
 		}
 	}
+	checkWasmFunctions(ctx, program);
 }
 
 // Stamp @include headers on all ImportC symbols in current scope.
