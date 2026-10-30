@@ -4694,6 +4694,43 @@ A `distinct` over a function type is callable (`count()`) and widens one way int
 is never read implicitly on its own: a type that wants bare reads declares the `valueOf` protocol (see
 "Convention-based dispatch protocols").
 
+#### A brand over an array
+
+`uint8[] & { __brand: "Bytes" }` is a brand like `int32 & { __brand: "Id" }`: the array underneath, a
+different type on top. The brand widens to its base, the base never narrows to it without `as`, and a
+`toString` declared for the brand applies to that brand only.
+
+```ms
+type Bytes = uint8[] & { __brand: "Bytes" };
+function toString(this b: Bytes): string {
+	let out = "<b";
+	for (const x of b) out += " " + x.toString();
+	return out + ">";
+}
+const raw: uint8[] = [97, 98];
+const b = raw as Bytes;
+console.log(`${b} | ${raw}`);      // <b 97 98> | 97,98
+const wrong: Bytes = raw;          // error: Type 'uint8[]' is not assignable to type 'Bytes'
+```
+
+Measured 2026-10-30 with the candidate of `wt/std-ms-string-lane-d` (corpus `brandArrayPrintsDeclaredText`,
+`brandArrayWidensToBase`, handoff `brandArrayRelations`):
+
+| Use of `b: Bytes` | Result |
+|---|---|
+| `b[i]`, `b.length`, `for (x of b)`, `[...b]`, `b[1..3]` | the array's own; the same on C, `--danger`, JS, ESM and the Raiser |
+| passed as `uint8[]`, `Readonly<uint8[]>`, `Readonly<Span<uint8>>` or a generic `T[]` (`T` = `uint8`) | accepted |
+| extension `this x: uint8[]` called as `b.f()` | found; an extension declared `this x: Bytes` wins when both exist |
+| a `Map<string, Bytes>` value, a `Bytes[]` element, a class field | accepted |
+| `${b}`, `String(b)`, `"y" + b`, `acc += b`, `b.toString()` | the brand's declared `toString`; `${raw}` still prints `97,98` |
+| `const w: Bytes = raw`, `Bytes` into `Words` (same base, other brand), `Bytes` into `Wide` (`int32[]` base) | refused, `Type 'X' is not assignable to type 'Y'` |
+
+An intersection that is neither all object types (merged into one struct) nor a brand is refused with
+`cannot represent the intersection '...'`; before, it silently became its first operand (`uint8[] &
+{ __brand: "X" }` was plain `uint8[]`). The emitted C of a brand-typed loop, spread and slice differs from
+the plain array's by one same-type cast. Not measured: a brand over a fixed-size array, `Map` or class
+(a fixed-size array and a type that is no number, string, boolean, char or array and no object are refused; a `Map` with a brand object produced no error and was not examined further), and DRC under ASan.
+
 ### Quote Expressions
 ```typescript
 // Capture a block of code as an AST (for macros)
