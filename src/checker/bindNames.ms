@@ -113,6 +113,10 @@ function bindIdentifier(b: NameBinder, node: Node): void {
 }
 
 function bindPatternElement(b: NameBinder, elem: Node, skipUnderscore: boolean): void {
+	if (elem.kind == NodeKind.ArrayPattern || elem.kind == NodeKind.ObjectPattern) {
+		bindPattern(b, elem);
+		return;
+	}
 	if (elem.kind != NodeKind.Identifier) return;
 	const name = (elem.data as IdentifierData).name;
 	if (skipUnderscore && name == "_") return;
@@ -152,6 +156,7 @@ function patternNames(pattern: Node, out: string[]): void {
 		for (const elem of (pattern.data as ArrayPatternData).patternElements) {
 			const target = elem.kind == NodeKind.SpreadExpr ? (elem.data as SpreadExprData).spreadArg : elem;
 			if (target.kind == NodeKind.Identifier && (target.data as IdentifierData).name != "_") out.push((target.data as IdentifierData).name);
+			else if (target.kind == NodeKind.ArrayPattern || target.kind == NodeKind.ObjectPattern) patternNames(target, out);
 		}
 	} else if (pattern.kind == NodeKind.ObjectPattern) {
 		for (const prop of (pattern.data as ObjectPatternData).patternProps) {
@@ -161,6 +166,7 @@ function patternNames(pattern: Node, out: string[]): void {
 			} else if (prop.kind == NodeKind.ObjectPatternProp) {
 				const alias = (prop.data as ObjectPatternPropData).propAlias;
 				if (alias != null && alias.kind == NodeKind.Identifier) out.push((alias.data as IdentifierData).name);
+				else if (alias != null && (alias.kind == NodeKind.ArrayPattern || alias.kind == NodeKind.ObjectPattern)) patternNames(alias, out);
 			}
 		}
 	}

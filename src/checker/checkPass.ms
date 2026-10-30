@@ -2383,6 +2383,18 @@ function definePatternBinding(ctx: CheckerContext, sym: Symbol, named: Node, dec
 	sgRecordSym(ctx, named.location.line, named.location.column, named.location.column + sym.name.length, sym, sym.symbolType, SymbolKind.Variable, sym.name, "", true);
 }
 
+function isNestedPattern(n: Node): boolean {
+	return n.kind == NodeKind.ArrayPattern || n.kind == NodeKind.ObjectPattern;
+}
+
+function defineNestedPatternBindings(ctx: CheckerContext, pattern: Node, elemType: Type, isConst: boolean, declaring: Node | null): void {
+	if (pattern.kind == NodeKind.ArrayPattern && !destructuresByPosition(elemType)) {
+		addError(ctx, `an array pattern needs a tuple or an array, and this element is '${typeDisplayName(elemType)}'`, pattern.location.line, pattern.location.column);
+	}
+	pattern.nodeType = elemType;
+	defineForOfPatternBindings(ctx, pattern, elemType, isConst, declaring);
+}
+
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, declaring: Node | null): void {
 	if (pattern.kind == NodeKind.ArrayPattern) {
 		const apd = pattern.data as ArrayPatternData;
@@ -2402,6 +2414,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
+			} else if (isNestedPattern(elem)) {
+				const derived = destrPositionalElemType(iterType, i);
+				defineNestedPatternBindings(ctx, elem, derived != null ? derived : inferredType(), isConst, declaring);
 			} else if (elem.kind == NodeKind.SpreadExpr) {
 				if (i != apd.patternElements.length - 1) addError(ctx, REST_NOT_LAST, elem.location.line, elem.location.column);
 				const inner = (elem.data as SpreadExprData).spreadArg;
@@ -2464,8 +2479,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			}
 			if (prop.kind != NodeKind.ObjectPatternProp) continue;
 			const p = prop.data as ObjectPatternPropData;
-			if (p.propAlias.kind == NodeKind.Identifier) {
-				const id = p.propAlias.data as IdentifierData;
+			if (p.propAlias.kind == NodeKind.Identifier || isNestedPattern(p.propAlias)) {
 				const derivedField = destrNamedFieldType(iterType, p.propKey);
 				if (derivedField == null) {
 					const settled = iterType != null && !isUnresolvedType(iterType) && iterType.kind != TypeKind.Unknown && !hasGenericParams(iterType);
@@ -2485,6 +2499,11 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					}
 				}
 				const derived = isReadonlyView(iterType) ? propagateReadonlyView(derivedField) : derivedField;
+				if (isNestedPattern(p.propAlias)) {
+					defineNestedPatternBindings(ctx, p.propAlias, derived != null ? derived : inferredType(), isConst, declaring);
+					continue;
+				}
+				const id = p.propAlias.data as IdentifierData;
 				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;

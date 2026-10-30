@@ -75,6 +75,16 @@ function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: Sou
 	return restRef;
 }
 
+function isNestedPattern(n: Node): boolean {
+	return n.kind == NodeKind.ArrayPattern || n.kind == NodeKind.ObjectPattern;
+}
+
+function expandNested(pattern: Node, base: Node, declKind: DeclKind, loc: SourceLocation, ctx: TransformContext): Node[] {
+	return pattern.kind == NodeKind.ArrayPattern
+		? expandArrayRet(pattern, base, declKind, loc, ctx)
+		: expandObjectRet(pattern, base, declKind, loc, ctx);
+}
+
 // Expand array pattern [a, b, ...rest] → indexed access
 export function expandArrayRet(
 	pattern: Node, base: Node, declKind: DeclKind,
@@ -102,6 +112,14 @@ export function expandArrayRet(
 					items.push(restDecl);
 				}
 			}
+			continue;
+		}
+
+		if (isNestedPattern(elem)) {
+			const access = makeArrayAccess(cloneNodeKeepSem(base), makeNumber(i, loc), loc);
+			const elemType = destrElemType(base, i);
+			if (elemType != null) access.nodeType = elemType;
+			for (const inner of expandNested(elem, access, declKind, loc, ctx)) items.push(inner);
 			continue;
 		}
 
@@ -172,6 +190,13 @@ export function expandObjectRet(
 		}
 		if (prop.kind != NodeKind.ObjectPatternProp) continue;
 		const p = prop.data as ObjectPatternPropData;
+		if (isNestedPattern(p.propAlias)) {
+			const memberAccess = makeMember(cloneNodeKeepSem(base), p.propKey, loc);
+			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
+			if (fieldType != null) memberAccess.nodeType = fieldType;
+			for (const inner of expandNested(p.propAlias, memberAccess, declKind, loc, ctx)) items.push(inner);
+			continue;
+		}
 		if (p.propAlias.kind == NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
 			const memberAccess = makeMember(cloneNodeKeepSem(base), p.propKey, loc);
