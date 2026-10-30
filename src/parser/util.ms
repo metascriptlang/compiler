@@ -177,7 +177,7 @@ export function prependParamPatterns(body: Node, patterns: Node[], locs: SourceL
 		if (pattern == null) continue;
 		const loc = i < locs.length ? locs[i] : body.location;
 		const init = createNodeAt(NodeKind.Identifier, { name: paramPatternName(i) }, loc);
-		decls.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: pattern, destrInit: init, destrIsConst: true }, loc));
+		decls.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: pattern, destrInit: init, destrIsConst: true, destrType: "" }, loc));
 	}
 	if (decls.length == 0) return body;
 	if (body.kind == NodeKind.BlockStmt) {

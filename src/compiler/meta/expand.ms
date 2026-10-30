@@ -1018,6 +1018,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addNodeField(keys, values, "destrPattern", d.destrPattern, loc);
 		addNodeField(keys, values, "destrInit", d.destrInit, loc);
 		addBoolField(keys, values, "destrIsConst", d.destrIsConst, loc);
+		addStrField(keys, values, "destrType", d.destrType, loc);
 		return;
 	}
 	if (k == NodeKind.ThrowStmt) {

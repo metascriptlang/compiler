@@ -3267,8 +3267,15 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
-	checkExpr(ctx, d.destrInit, null);
-	const initType = d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
+	let declType: Type | null = null;
+	if (d.destrType != "") {
+		const typeLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
+		declType = annotatedType(d.destrType, node.typeExpr, ctx, typeLoc.line, typeLoc.column);
+		resolveTypeExpr(node.typeExpr, ctx);
+	}
+	checkExpr(ctx, d.destrInit, declType);
+	if (declType != null) d.destrInit = fitViewLocal(ctx, fitNode(ctx, d.destrInit, declType, d.destrInit.nodeType), declType);
+	const initType = declType != null ? declType : d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
 	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, node);
 }
 

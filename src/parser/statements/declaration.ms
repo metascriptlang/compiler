@@ -108,32 +108,40 @@ function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeRes
 	// Destructuring: const { a, b } = ... or const [ x, y ] = ...
 	if (current(state).kind == TokenKind.LBrace) {
 		const pattern = try parseObjectPattern(state);
-		skipOptionalType(state);
+		const destrType = captureOptionalType(state);
+		const destrTypeExpr = getLastTypeExpr();
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
+		const destrNode = finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at)));
+			destrType,
+		}, at));
+		destrNode.typeExpr = destrTypeExpr;
+		return Result.ok(destrNode);
 	}
 
 	if (current(state).kind == TokenKind.LBracket) {
 		const pattern = try parseArrayPattern(state);
-		skipOptionalType(state);
+		const destrType = captureOptionalType(state);
+		const destrTypeExpr = getLastTypeExpr();
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
+		const destrNode = finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at)));
+			destrType,
+		}, at));
+		destrNode.typeExpr = destrTypeExpr;
+		return Result.ok(destrNode);
 	}
 
 	const nameToken = current(state);

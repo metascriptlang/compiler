@@ -499,7 +499,7 @@ export type NodeData =
 	| { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] } // ArrayPattern
 	| { patternProps: Node[], hasRestProp: boolean }               // ObjectPattern
 	| { propKey: string, propAlias: Node, propDefault: Node | null } // ObjectPatternProp
-	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
+	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string } // DestructuringDecl
 	// Statement variants
 	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
@@ -725,7 +725,7 @@ export type TypeAnnotationData = { annotationType: string };
 export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] };
 export type ObjectPatternData = { patternProps: Node[], hasRestProp: boolean };
 export type ObjectPatternPropData = { propKey: string, propAlias: Node, propDefault: Node | null };
-export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
+export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string };
 
 // Statements
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };

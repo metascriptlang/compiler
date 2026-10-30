@@ -300,7 +300,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
-			h = hN(h, d.destrPattern); h = hN(h, d.destrInit); h = hB(h, d.destrIsConst);
+			h = hN(h, d.destrPattern); h = hN(h, d.destrInit); h = hB(h, d.destrIsConst); h = hS(h, d.destrType);
 		},
 
 		// === Statements ===

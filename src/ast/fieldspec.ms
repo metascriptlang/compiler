@@ -142,7 +142,7 @@ function rebuildTypeAnnotation(n: Node, X: FieldXform): NodeData { const d = n.d
 function rebuildArrayPattern(n: Node, X: FieldXform): NodeData { const d = n.data as ArrayPatternData; return { patternElements: X.nodes(d.patternElements) as Node[], hasRestElement: X.bool(d.hasRestElement), patternDefaults: X.nodes(d.patternDefaults) as Node[] } as NodeData; }
 function rebuildObjectPattern(n: Node, X: FieldXform): NodeData { const d = n.data as ObjectPatternData; return { patternProps: X.nodes(d.patternProps) as Node[], hasRestProp: X.bool(d.hasRestProp) } as NodeData; }
 function rebuildObjectPatternProp(n: Node, X: FieldXform): NodeData { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node, propDefault: X.node(d.propDefault) } as NodeData; }
-function rebuildDestructuringDecl(n: Node, X: FieldXform): NodeData { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst) } as NodeData; }
+function rebuildDestructuringDecl(n: Node, X: FieldXform): NodeData { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst), destrType: X.str(d.destrType) } as NodeData; }
 function rebuildVariableDecl(n: Node, X: FieldXform): NodeData { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
 function rebuildIfStmt(n: Node, X: FieldXform): NodeData { const d = n.data as IfStmtData; return { condition: X.node(d.condition) as Node, consequent: X.node(d.consequent) as Node, alternate: X.node(d.alternate) as Node } as NodeData; }
 function rebuildWhileStmt(n: Node, X: FieldXform): NodeData { const d = n.data as WhileStmtData; return { whileCondition: X.node(d.whileCondition) as Node, whileBody: X.node(d.whileBody) as Node, whileLabel: X.str(d.whileLabel) } as NodeData; }
@@ -330,7 +330,7 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind == NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; V.nodes("patternElements", d.patternElements); V.bool("hasRestElement", d.hasRestElement); V.nodes("patternDefaults", d.patternDefaults); return; }
 	if (kind == NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; V.nodes("patternProps", d.patternProps); V.bool("hasRestProp", d.hasRestProp); return; }
 	if (kind == NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; V.str("propKey", d.propKey); V.node("propAlias", d.propAlias); V.node("propDefault", d.propDefault); return; }
-	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; V.node("destrPattern", d.destrPattern); V.node("destrInit", d.destrInit); V.bool("destrIsConst", d.destrIsConst); return; }
+	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; V.node("destrPattern", d.destrPattern); V.node("destrInit", d.destrInit); V.bool("destrIsConst", d.destrIsConst); V.str("destrType", d.destrType); return; }
 	if (kind == NodeKind.VariableDecl) { const d = n.data as VariableDeclData; V.str("declName", d.declName); V.str("declType", d.declType); V.node("initializer", d.initializer); V.integer("declKind", d.declKind as int32 as int64); V.loc("nameLocation", d.nameLocation); return; }
 	if (kind == NodeKind.IfStmt) { const d = n.data as IfStmtData; V.node("condition", d.condition); V.node("consequent", d.consequent); V.node("alternate", d.alternate); return; }
 	if (kind == NodeKind.WhileStmt) { const d = n.data as WhileStmtData; V.node("whileCondition", d.whileCondition); V.node("whileBody", d.whileBody); V.str("whileLabel", d.whileLabel); return; }
@@ -475,7 +475,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.ArrayPattern, { patternElements: [a, n1], hasRestElement: true, patternDefaults: [null as unknown as Node, n1] } as NodeData, makeLoc(17, 34)));
 	out.push(objPat);
 	out.push(objPatProp);
-	out.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: objPat, destrInit: n1, destrIsConst: true } as NodeData, makeLoc(17, 37)));
+	out.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: objPat, destrInit: n1, destrIsConst: true, destrType: "" } as NodeData, makeLoc(17, 37)));
 	out.push(createNodeAt(NodeKind.VariableDecl, { declName: "v", declType: "int32", initializer: n1, declKind: 2 as int32 as DeclKind, nameLocation: pkLoc(6) } as NodeData, makeLoc(17, 38)));
 	out.push(createNodeAt(NodeKind.IfStmt, { condition: a, consequent: block, alternate: a } as NodeData, makeLoc(17, 39)));
 	out.push(createNodeAt(NodeKind.WhileStmt, { whileCondition: a, whileBody: block, whileLabel: "lbl" } as NodeData, makeLoc(17, 40)));
@@ -610,7 +610,7 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 	if (kind == NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; s = s + `apat=${d.hasRestElement ? "T" : "F"}`; for (const p of d.patternElements) s = s + pkDumpNode(p, withMeta) + ";"; for (const p of d.patternDefaults) if (p != null) s = s + "d" + pkDumpNode(p, withMeta) + ";"; return s; }
 	if (kind == NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; s = s + `opat=${d.hasRestProp ? "T" : "F"}`; for (const p of d.patternProps) s = s + pkDumpNode(p, withMeta) + ";"; return s; }
 	if (kind == NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; s = s + `oprop=${d.propKey}:${pkDumpNode(d.propAlias, withMeta)}`; if (d.propDefault != null) s = s + "=" + pkDumpNode(d.propDefault, withMeta); return s; }
-	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return s + `destr=${pkDumpNode(d.destrPattern, withMeta)}=${pkDumpNode(d.destrInit, withMeta)}${d.destrIsConst ? "C" : "L"}`; }
+	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return s + `destr=${pkDumpNode(d.destrPattern, withMeta)}=${pkDumpNode(d.destrInit, withMeta)}${d.destrIsConst ? "C" : "L"}${d.destrType != "" ? ":" + d.destrType : ""}`; }
 	if (kind == NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return s + `var=${d.declName}:${d.declType}:${d.declKind as int32}:${pkDumpLoc(d.nameLocation)}=${pkDumpNode(d.initializer, withMeta)}`; }
 	if (kind == NodeKind.IfStmt) { const d = n.data as IfStmtData; return s + `if=(${pkDumpNode(d.condition, withMeta)}${pkDumpNode(d.consequent, withMeta)}${pkDumpNode(d.alternate, withMeta)})`; }
 	if (kind == NodeKind.WhileStmt) { const d = n.data as WhileStmtData; return s + `while=${d.whileLabel}(${pkDumpNode(d.whileCondition, withMeta)}${pkDumpNode(d.whileBody, withMeta)})`; }

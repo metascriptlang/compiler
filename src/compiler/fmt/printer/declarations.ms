@@ -639,7 +639,12 @@ function declarator(node: Node, options: FormatOptions): Doc {
 		const dd = node.data as DestructuringDeclData;
 		const complex = dd.destrPattern.kind == NodeKind.ObjectPattern && isComplexObjectPattern(dd.destrPattern);
 		const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: complex, inChain: false };
-		return printAssignmentLike(patternParts(dd.destrPattern, options), " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
+		const left = patternParts(dd.destrPattern, options);
+		if (dd.destrType != "") {
+			left.push(docText(": "));
+			left.push(printTypeAnnotation(node.typeExpr, dd.destrType, options));
+		}
+		return printAssignmentLike(left, " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
 	}
 	const d = node.data as VariableDeclData;
 	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";

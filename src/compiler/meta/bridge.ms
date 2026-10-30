@@ -1092,6 +1092,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "destrPattern", d.destrPattern);
 			setNode(objHeap, arrHeap, handle, "destrInit", d.destrInit);
 			setBool(objHeap, handle, "destrIsConst", d.destrIsConst);
+			setStr(objHeap, arrHeap, handle, "destrType", d.destrType);
 		},
 
 		// === Statements ===
@@ -2116,7 +2117,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const destrPattern = readNode(objHeap, arrHeap, h, "destrPattern", loc);
 			const destrInit = readNode(objHeap, arrHeap, h, "destrInit", loc);
 			const destrIsConst = readBool(objHeap, h, "destrIsConst");
-			return createNodeAt(NodeKind.DestructuringDecl, { destrPattern, destrInit, destrIsConst }, loc);
+			const destrType = readStr(objHeap, arrHeap, h, "destrType");
+			return createNodeAt(NodeKind.DestructuringDecl, { destrPattern, destrInit, destrIsConst, destrType }, loc);
 		},
 
 		// === Statements ===
