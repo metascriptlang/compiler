@@ -475,7 +475,7 @@ export function bodyText(this req: HttpRequest): string {
 test "a request keeps its body bytes and bodyText decodes them as valid text" {
 	const req: HttpRequest = {
 		method: HttpMethod.POST, path: "/", version: "HTTP/1.1", headers: hdrs.createHeaders(),
-		bytes: [0x61, 0xC3, 0xA9, 0xFF, 0x80], clientFd: -1,
+		bytes: [0x61, 0xC3, 0xA9, 0xFF, 0x80] as Buffer, clientFd: -1,
 	};
 	assert req.bytes.length == 5;
 	assert req.bytes[3] == 0xFF;
@@ -601,7 +601,7 @@ function initClient(fd: int32, keepAliveSeconds: int32): ClientState {
 		lastActivityMs: 0 as int64,
 		request: {
 			method: HttpMethod.GET, path: msStringNewCap(0), version: "1.1",
-			headers: hdrs.createHeaders(), bytes: [], clientFd: fd,
+			headers: hdrs.createHeaders(), bytes: Buffer.alloc(0), clientFd: fd,
 		},
 		response: {
 			fd: fd, status: 200,
@@ -623,7 +623,7 @@ function resetClient(client: ClientState, fd: int32): void {
 	client.lastActivityMs = msMonoTimeMs();
 	client.request.method = HttpMethod.GET;
 	client.request.clientFd = fd;
-	client.request.bytes = [];
+	client.request.bytes = Buffer.alloc(0);
 	client.request.headers._names.length = 0;
 	client.request.headers._values.length = 0;
 	client.response.fd = fd;
@@ -641,7 +641,7 @@ function resetRequest(client: ClientState, fd: int32, method: int32): void {
 	client.request.method = method as HttpMethod;
 	// path is set by parsePathInto (zero-alloc) — not reset here
 	client.request.clientFd = fd;
-	client.request.bytes = [];
+	client.request.bytes = Buffer.alloc(0);
 	// Headers MUST be cleared — frameRequest reads CL/TE from this struct.
 	// Stale headers from a previous pipelined request would mislead framing
 	// (e.g. a GET reusing a POST connection sees Content-Length=5 → needMore).

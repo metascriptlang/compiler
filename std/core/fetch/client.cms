@@ -135,7 +135,7 @@ export function doRequestOver(
 	// Read response headers — loop until \r\n\r\n. The buffer may also hold the
 	// start of the body once headers terminate.
 	const headPieces: Buffer[] = [];
-	let headTail: Buffer = [];
+	let headTail: Buffer = Buffer.alloc(0);
 	let headTotal = 0;
 	let headEnd = -1;
 	while (headEnd < 0) {
@@ -167,13 +167,13 @@ export function doRequestOver(
 	const bodyStart = (headEnd + 4) as int32;
 
 	const contentLength = getContentLength(parsed.value.headers);
-	let body: Buffer = [];
+	let body: Buffer = Buffer.alloc(0);
 
 	if (isChunked(parsed.value.headers)) {
 		const chunkPieces: Buffer[] = [];
-		let chunkTail: Buffer = [];
+		let chunkTail: Buffer = Buffer.alloc(0);
 		let chunkTotal = 0;
-		let more: Buffer = [...data[bodyStart..data.length]];
+		let more: Buffer = [...data[bodyStart..data.length]] as Buffer;
 		while (true) {
 			chunkPieces.push(more);
 			const window = Buffer.concat(chunkTail, more);
@@ -213,7 +213,7 @@ export function doRequestOver(
 function lastBytes(data: Buffer, count: int32): Buffer {
 	const length = data.length as int32;
 	const from = length > count ? length - count : 0;
-	return [...data[from..data.length]];
+	return [...data[from..data.length]] as Buffer;
 }
 
 function indexOfText(data: Buffer, needle: string): int32 {
@@ -223,9 +223,9 @@ function indexOfText(data: Buffer, needle: string): int32 {
 function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32, contentLength: int32): Result<Buffer, HttpError> {
 	const available = (initialData.length as int32) - bodyStart;
 	if (available >= contentLength) {
-		return Result.ok([...initialData[bodyStart..(bodyStart + contentLength)]]);
+		return Result.ok([...initialData[bodyStart..(bodyStart + contentLength)]] as Buffer);
 	}
-	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]]];
+	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]] as Buffer];
 	let remaining = contentLength - available;
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
@@ -239,7 +239,7 @@ function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buff
 }
 
 function readUntilCloseOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32): Buffer {
-	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]]];
+	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]] as Buffer];
 	while (true) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
 		if (chunk.length == 0) break;
@@ -372,7 +372,7 @@ function options(): RequestOptions {
 function serve(pieces: Buffer[]): (maxBytes: int32) => Buffer {
 	let next = 0;
 	return (maxBytes: int32) => {
-		if (next >= pieces.length) return [];
+		if (next >= pieces.length) return Buffer.alloc(0);
 		next += 1;
 		return pieces[next - 1];
 	};
@@ -424,7 +424,7 @@ test "a head terminator split across reads at every offset is found" {
 	const wire = wireOf(head, [0x68, 0x69]);
 	const headEnd = head.length as int32;
 	for (let cut = headEnd - 3; cut < headEnd; cut++) {
-		const response = fetchOver([[...wire[0..cut]], [...wire[cut..wire.length]]]);
+		const response = fetchOver([[...wire[0..cut]] as Buffer, [...wire[cut..wire.length]] as Buffer]);
 		assert response.ok;
 		if (response.ok) assert response.value.bytes.toHex() == "6869";
 	}
@@ -436,7 +436,7 @@ test "a chunked terminator split across reads at every offset is found" {
 	const wire = Buffer.concatList([wireOf(head, []), Buffer.fromString("1\r\nA", "utf8"), Buffer.fromString(tailText, "utf8")]);
 	const tailStart = (wire.length as int32) - (tailText.length as int32);
 	for (let cut = tailStart + 1; cut < tailStart + 5; cut++) {
-		const response = fetchOver([[...wire[0..cut]], [...wire[cut..wire.length]]]);
+		const response = fetchOver([[...wire[0..cut]] as Buffer, [...wire[cut..wire.length]] as Buffer]);
 		assert response.ok;
 		if (response.ok) assert response.value.bytes.toHex() == "41";
 	}

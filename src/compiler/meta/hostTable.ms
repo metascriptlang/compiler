@@ -986,7 +986,7 @@ function _bridgeMsRawString(args: RaiserValue[]): RaiserValue {
 	const heap: RaiserArrayHeap = heapOrNull;
 	const handle = args[0].intVal;
 	const len = heapArrayLen(heap, handle);
-	const bytes: uint8[] = [];
+	const bytes = Buffer.alloc(0);
 	for (let i = 0; i < len; i = i + 1) bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
 	return boxString(rawString(bytes));
 }

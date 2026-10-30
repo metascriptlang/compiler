@@ -1,1 +1,8 @@
-export type Buffer = uint8[];
+import { Buffer } from "./type";
+export { Buffer } from "./type";
+export { toJSON, inspect } from "./protocols";
+
+/** Decodes the bytes as WTF-8: an ill-formed sequence becomes U+FFFD, an encoded surrogate stays. */
+export function toString(this buf: Buffer): string {
+	return buf.asString();
+}

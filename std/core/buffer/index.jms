@@ -16,7 +16,14 @@ import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 
-export type Buffer = uint8[];
+import { Buffer } from "./type";
+export { Buffer } from "./type";
+export { toJSON, inspect } from "./protocols";
+
+/** Decodes the bytes as UTF-8 the way Node does: an ill-formed sequence becomes U+FFFD. */
+export function toString(this b: Buffer): string {
+	return b.toStringEncoded("utf8", 0, b.length);
+}
 
 // ===== private native bindings =====
 
@@ -101,6 +108,8 @@ export function fromString(this typeof Buffer, value: string, encoding: string):
 	// utf8 — and every other name takes the same fallback as the C side.
 	return encodeUtf8(value);
 }
+
+export extern function slice(this b: Buffer, start: number = 0, end: number = 9007199254740991): Buffer from "#.slice(#, #)";
 
 export extern function copy(this typeof Buffer, value: Buffer): Buffer from "#.slice()";
 

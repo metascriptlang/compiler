@@ -175,7 +175,7 @@ async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Pr
 	}
 	const wireResult = buildAndMaskFrame(opcode, true, payload);
 	if (!wireResult.ok) return Result.err(wireResult.error);
-	const sent = await sendAsync(ws.fd, wireResult.value);
+	const sent = await sendAsync(ws.fd, wireResult.value as Buffer);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
 	return Result.ok(null);
 }
@@ -189,7 +189,7 @@ function sendFrameSync(ws: WsClient, opcode: int32, payload: uint8[]): Result<vo
 	}
 	const wireResult = buildAndMaskFrame(opcode, true, payload);
 	if (!wireResult.ok) return Result.err(wireResult.error);
-	const sent = netSend(ws.fd, wireResult.value);
+	const sent = netSend(ws.fd, wireResult.value as Buffer);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
 	return Result.ok(null);
 }

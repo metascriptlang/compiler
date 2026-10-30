@@ -138,7 +138,7 @@ export class ChildProcess {
 		const raw = this.held[which] + msProcChildTake(this.handle, which);
 		const kept = incompleteTail(raw.asBytes());
 		const length = raw.byteLength;
-		this.held[which] = rawString([...raw.asBytes()[(length - kept)..length]]);
+		this.held[which] = rawString([...raw.asBytes()[(length - kept)..length]] as Buffer);
 		return utf8Text(raw.byteSlice(0, length - kept), false);
 	}
 

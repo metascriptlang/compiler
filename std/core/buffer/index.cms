@@ -6,10 +6,17 @@ import { newEncodingOutput, freshEncodingOutputBytes } from "std/core/encoding/o
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
 import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
-export type Buffer = uint8[];
+import { Buffer } from "./type";
+export { Buffer } from "./type";
+export { toJSON, inspect } from "./protocols";
+
+/** Decodes the bytes as UTF-8 the way Node does: an ill-formed sequence becomes U+FFFD. */
+export function toString(this buf: Buffer): string {
+	return utf8String(buf, false);
+}
 
 function bufferAlloc(size: number): Buffer {
-	return new Array<uint8>(size as int64);
+	return new Array<uint8>(size as int64) as Buffer;
 }
 
 export function alloc(this typeof Buffer, size: number): Buffer {
@@ -287,6 +294,11 @@ export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 	const buf = bufferAlloc(arr.length);
 	for (let i = 0; i < arr.length; i++) buf.set(i, arr[i]);
 	return buf;
+}
+
+export function slice(this buf: Buffer, start: number = 0, end: number = 9007199254740991): Buffer {
+	const bytes: Readonly<Span<uint8>> = buf;
+	return bytes.slice(start, end) as Buffer;
 }
 
 export function copy(this typeof Buffer, value: Buffer): Buffer {

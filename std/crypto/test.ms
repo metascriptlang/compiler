@@ -56,7 +56,7 @@ test "digest scratch accepts exact small and maximum capacities" {
 }
 
 test "crypto codecs preserve every byte" {
-	const bytes: uint8[] = [];
+	const bytes = Buffer.alloc(0);
 	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
 	assert Buffer.compare(fromHex(toHex(bytes)), bytes) == 0;
 	assert Buffer.compare(fromBase64(toBase64(bytes)), bytes) == 0;
