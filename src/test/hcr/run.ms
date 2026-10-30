@@ -437,6 +437,22 @@ function watchAsync(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function watchBrandUnion(): void {
+	const tag = "hcrWatchBrandUnion";
+	const dir = freshDir(`${TMP}/watchBrandUnion`);
+	for (const f of readDir(`${FIXTURES}/watchBrandUnion`)) copy(`${FIXTURES}/watchBrandUnion/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-BRAND ")) seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != "HCR-BRAND start s2\nHCR-BRAND reloaded s2b3") {
+		console.log(both(ran));
+		failWith(tag, "a brand passed into a union holding its base, from a module rechecked against kept modules, did not reload into the running app");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function watchGeneric(): void {
 	const tag = "hcrWatchGeneric";
 	const dir = copyAppAndLib("watchGeneric");
@@ -2540,6 +2556,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrWatchGeneric", run: watchGeneric },
 	{ name: "hcrWatchGenericLayout", run: watchGenericLayout },
 	{ name: "hcrWatchAsync", run: watchAsync },
+	{ name: "hcrWatchBrandUnion", run: watchBrandUnion },
 	{ name: "hcrNewInstance", run: newInstance },
 	{ name: "hcrPrivateHelper", run: privateHelper },
 	{ name: "hcrSubdirModule", run: subdirModule },
