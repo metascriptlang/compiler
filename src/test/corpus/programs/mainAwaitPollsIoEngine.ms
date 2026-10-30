@@ -15,23 +15,28 @@ import { writeFile, removeAll, ensureDir, basename, dirname } from "std/fs";
 import { watch, nextChanges } from "std/fs/watch";
 import { createSocket, bind, listen, accept, connect, send, close, recvAsync, acceptAsync } from "std/net";
 
+function bindFree(fd: int32, from: int32): int32 {
+	let port = from;
+	while (bind(fd, "127.0.0.1", port) < 0) port = port + 1;
+	return port;
+}
+
 const basePort = (30000 + Date.now() % 20000) as int32;
 
 const recvListen = createSocket();
-bind(recvListen, "127.0.0.1", basePort);
+const recvPort = bindFree(recvListen, basePort);
 listen(recvListen, 4);
 const server = spawn((): int32 => { const c = accept(recvListen); send(c, "hello"); return c; });
 const client = createSocket();
-connect(client, "127.0.0.1", basePort);
+connect(client, "127.0.0.1", recvPort);
 const got = (await recvAsync(client, 16)).asString();
 console.log(`recv awaited at top level: ${got}`);
 close(await server);
 close(client);
 close(recvListen);
 
-const acceptPort = basePort + (1 as int32);
 const acceptListen = createSocket();
-bind(acceptListen, "127.0.0.1", acceptPort);
+const acceptPort = bindFree(acceptListen, recvPort + (1 as int32));
 listen(acceptListen, 4);
 const dialer = spawn((): int32 => { const fd = createSocket(); connect(fd, "127.0.0.1", acceptPort); return fd; });
 const accepted = await acceptAsync(acceptListen);
