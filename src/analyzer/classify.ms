@@ -323,7 +323,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
 				// C-library allocation with no ms header) corrupts memory.
-				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor) return noRcInfo();
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor || refInner.kind == TypeKind.CString) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {

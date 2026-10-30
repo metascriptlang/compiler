@@ -757,7 +757,7 @@ export function isPointerType(t: Readonly<Type>): boolean {
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
 	if (inner.kind == TypeKind.Union) {
 		const held = unwrapRefNullUnion(inner);
-		return held != null && isPointerType(held);
+		return held != null && (held.kind == TypeKind.CString || isPointerType(held));
 	}
 	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,

@@ -3809,7 +3809,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.Null) return false;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
-	if (t.kind == TypeKind.Unknown) return false;
+	if (t.kind == TypeKind.Unknown || t.kind == TypeKind.CString) return false;
 	if (t.kind == TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -4132,7 +4132,7 @@ function isNullablePointer(t: Readonly<Type>): boolean {
 	if (t.kind == TypeKind.Cursor) return t.typeReturn != null && isNullablePointer(t.typeReturn);
 	if (isAwaitable(t)) return true;
 	const k = (peelToRepr(t) ?? t).kind;
-	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
+	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt || k == TypeKind.CString;
 }
 
 export function isNullableBigInt(t: Type | null): boolean {
