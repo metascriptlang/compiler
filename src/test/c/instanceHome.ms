@@ -110,3 +110,39 @@ test "overloads of one generic keep their own instance over the same type argume
 	const ran = execFileResult(`${dir}/prog`, [], dir);
 	assert ran.exitCode == 0 && ran.output.trim() == "7 6", ran.output;
 }
+
+function libCFrom(dir: string, entry: string): string {
+	removeAll(`${dir}/out`);
+	const r = execFileResult(msc, ["build", `${dir}/${entry}.ms`, "--emit=c", "--output=prog"], dir);
+	if (r.exitCode != 0) return `BUILD-FAILED ${entry} ${r.output}${r.errorOutput}`;
+	for (const name of readDir(`${dir}/out/debug`)) {
+		if (!name.endsWith("ZlibOms.c")) continue;
+		const text = readFile(`${dir}/out/debug/${name}`);
+		if (text.ok) return text.value;
+	}
+	return `BUILD-FAILED no C for lib from ${entry}`;
+}
+
+function libCDifference(name: string, uses: string): string {
+	const dir = project(name, "import { twice } from \"./lib\";\nconsole.log(twice<int32>(1));\n");
+	writeFile(`${dir}/mainInst.ms`, `import { twice, Wrap, nest } from "./lib";\nimport { Box } from "./box";\nclass Mine { m: int32 = 3; }\nconsole.log(twice<int32>(1));\n${uses}\n`);
+	const plain = libCFrom(dir, "main");
+	const inst = libCFrom(dir, "mainInst");
+	if (plain.startsWith("BUILD-FAILED") || inst.startsWith("BUILD-FAILED")) return plain + inst;
+	return plain == inst ? "" : `lib's C depends on what its importer instantiates:\n--- main\n${plain}\n--- mainInst\n${inst}`;
+}
+
+test "a module's C is the same whether or not its importer instantiates its generic function" {
+	const diff = libCDifference("sameFn", "console.log(twice(new Mine()).m);");
+	assert diff == "", diff;
+}
+
+test "a module's C is the same whether or not its importer instantiates its generic class" {
+	const diff = libCDifference("sameClass", "console.log(new Wrap<Mine>(new Mine()).get().m, new Wrap<Box>(new Box()).get().n);");
+	assert diff == "", diff;
+}
+
+test "a module's C is the same whether or not its importer instantiates a generic that calls a private helper" {
+	const diff = libCDifference("sameHelper", "console.log(nest(new Mine()).m, twice<Box>(new Box()).n);");
+	assert diff == "", diff;
+}
