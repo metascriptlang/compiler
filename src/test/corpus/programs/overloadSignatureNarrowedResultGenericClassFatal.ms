@@ -2,7 +2,6 @@
 // @stdout: before fancy
 // @xfail(danger): --danger drops the forced conversion check, so the Fancy<Dog> signature over a plain Holder<Dog> reads Fancy's memory instead of stopping
 // @skip-js: JS names the failed generic instance by its emitted class (`Holder_…__ref_Dog is not Fancy<Dog>`) where C writes `Holder<Dog>`
-// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 // note: the generic-class form of overloadSignatureNarrowedResultFatal: the signature returns a subclass instance `Fancy<Dog>` of what the implementation returns, `Holder<Dog>`, and the second call's implementation returns the plain parent.
 
 class Animal { kind(): string { return "animal"; } }
