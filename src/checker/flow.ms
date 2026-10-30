@@ -1491,31 +1491,43 @@ function skipsExhaustiveSwitch(clause: FlowSwitchClauseData | null): boolean {
 	const disc = sd.switchDisc;
 	if (disc == null || disc.nodeType == null || isTypeofOperand(disc)) return false;
 	// checkSwitch widens a number-literal discriminant in place, so its declared type is the one left to read.
-	let members = literalMembersOf(disc.nodeType);
-	if (members == null && disc.kind == NodeKind.Identifier && disc.resolvedSym != null && disc.resolvedSym.symbolType != null) members = literalMembersOf(disc.resolvedSym.symbolType);
+	let members = literalMemberKeys(disc.nodeType);
+	if (members == null && disc.kind == NodeKind.Identifier && disc.resolvedSym != null && disc.resolvedSym.symbolType != null) members = literalMemberKeys(disc.resolvedSym.symbolType);
 	if (members == null || members.length == 0) return false;
-	const tests: Type[] = [];
+	let testCount = 0;
+	for (const c of sd.switchCases) testCount += (c.data as SwitchCaseData).caseTests.length;
+	if (testCount < members.length) return false;
+	const held = new HashSet<string>();
 	for (const c of sd.switchCases) {
 		for (const test of (c.data as SwitchCaseData).caseTests) {
 			const lit = caseLiteralOf(test);
 			if (lit == null) return false;
-			tests.push(lit);
+			held.add(caseLiteralKey(lit));
 		}
 	}
-	for (const m of members) {
-		if (!tests.some((lit) => isSameCaseLiteral(m, lit))) return false;
+	for (const key of members) {
+		if (!held.has(key)) return false;
 	}
 	return true;
 }
 
-function literalMembersOf(t: Type): Type[] | null {
-	if (t.kind == TypeKind.Enum) return t.typeNames.map((name) => createEnumLiteral(t, name));
-	if (t.kind == TypeKind.Boolean) return [createBooleanLiteral(true), createBooleanLiteral(false)];
+function literalMemberKeys(t: Type): string[] | null {
+	if (t.kind == TypeKind.Enum) return t.typeNames.map((name) => "e:" + t.typeName + "." + name);
+	if (t.kind == TypeKind.Boolean) return ["b:true", "b:false"];
 	const parts: Type[] = t.kind == TypeKind.Union && t.typeChildren != null ? t.typeChildren : [t];
+	const keys: string[] = [];
 	for (const p of parts) {
 		if (p == null || (p.kind != TypeKind.StringLiteral && p.kind != TypeKind.NumberLiteral && p.kind != TypeKind.BooleanLiteral && p.kind != TypeKind.EnumLiteral)) return null;
+		keys.push(caseLiteralKey(p));
 	}
-	return parts;
+	return keys;
+}
+
+function caseLiteralKey(t: Type): string {
+	if (t.kind == TypeKind.EnumLiteral) return "e:" + literalDiscValue(t);
+	if (t.kind == TypeKind.StringLiteral) return "s:" + t.typeName;
+	if (t.kind == TypeKind.BooleanLiteral) return "b:" + t.typeName;
+	return "n:" + t.typeName;
 }
 
 function caseLiteralOf(written: Node): Type | null {
@@ -1523,11 +1535,6 @@ function caseLiteralOf(written: Node): Type | null {
 	while (test.kind == NodeKind.HiddenSubConv || test.kind == NodeKind.HiddenStdConv) test = (test.data as HiddenStdConvData).convExpr;
 	if (test.kind == NodeKind.BooleanLiteral) return createBooleanLiteral((test.data as BooleanLiteralData).boolValue);
 	return enumMemberLiteralOf(test) ?? equalityLiteralType(test);
-}
-
-function isSameCaseLiteral(a: Type, b: Type): boolean {
-	if (a.kind == TypeKind.EnumLiteral) return b.kind == TypeKind.EnumLiteral && literalDiscValue(a) == literalDiscValue(b);
-	return sameLiteralType(a, b);
 }
 
 function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): boolean {
@@ -2226,15 +2233,17 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 
 // The members an enum or a union of its members still holds after `!== member`;
 // nothing left is `never`. A read of the reference widens a partial remainder back to the enum.
+const ENUM_REMAINDER_LIMIT = 64;
+
 function withoutEnumMember(t: Type, member: Type): Type {
 	const enumType = member.typeReturn;
 	if (enumType == null) return t;
 	const held = enumMembersHeld(t, enumType);
-	if (held == null || !held.includes(member.typeNames[0])) return t;
+	if (held == null || held.length > ENUM_REMAINDER_LIMIT || !held.includes(member.typeNames[0])) return t;
 	const rest = held.filter((name) => name != member.typeNames[0]);
 	if (rest.length == 0) return neverType();
 	const literals = rest.map((name) => createEnumLiteral(enumType, name));
-	return literals.length == 1 ? literals[0] : createUnion(literals);
+	return literals.length == 1 ? literals[0] : createUnionInOrder(literals);
 }
 
 function enumMembersHeld(t: Type, enumType: Type): string[] | null {
