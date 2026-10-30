@@ -1,0 +1,139 @@
+@include("errno.h");
+
+import { IoError, IoErrorKind, ioError, ioErrorFromErrno } from "std/io/errors";
+
+extern const EINVAL: int32;
+
+function mismatch(path: string): IoError {
+	return ioError(IoErrorKind.Unknown, path,
+		"alias target is not the recorded relative name: " + path);
+}
+
+when (windows) {
+	@include("windows.h");
+	@include("winioctl.h");
+	@include("runtime/fs/header.h");
+
+	import { freeWide, widePath } from "std/fs/widePath";
+	import { parseReparseTarget, SYMLINK_TAG } from "./reparseTarget";
+
+	extern const MAXIMUM_REPARSE_DATA_BUFFER_SIZE: int32;
+	extern const FILE_SHARE_READ: uint32;
+	extern const FILE_SHARE_WRITE: uint32;
+	extern const FILE_SHARE_DELETE: uint32;
+	extern const OPEN_EXISTING: uint32;
+	extern const FILE_FLAG_OPEN_REPARSE_POINT: uint32;
+	extern const FILE_FLAG_BACKUP_SEMANTICS: uint32;
+	extern const FSCTL_GET_REPARSE_POINT: uint32;
+	extern const INVALID_HANDLE_VALUE: Ptr<void>;
+	extern function GetLastError(): uint32;
+	extern function CloseHandle(handle: Ptr<void>): int32;
+	extern function msFsErrnoFromWin32(code: uint32): int32;
+	extern function lstrlenW(text: Ptr<uint16>): int32;
+	extern function CreateFileW(
+		path: Ptr<uint16>, access: uint32, share: uint32,
+		security: Ptr<void> | null, disposition: uint32, flags: uint32,
+		template: Ptr<void> | null,
+	): Ptr<void>;
+	extern function DeviceIoControl(
+		handle: Ptr<void>, code: uint32, input: Ptr<void> | null,
+		inputLength: uint32, output: Ptr<void>, outputLength: uint32,
+		returned: Ptr<void>, overlapped: Ptr<void> | null,
+	): int32;
+
+	function matchesUnits(
+		actual: Readonly<Span<uint8>>, expected: Ptr<uint16>, units: int32,
+	): boolean {
+		if (actual.length != (units as int64) * 2) { return false; }
+		for (let i: int32 = 0; i < units; i += 1) {
+			const unit = (actual[i * 2] as uint16) |
+				((actual[i * 2 + 1] as uint16) << 8);
+			if (unit != expected[i]) { return false; }
+		}
+		return true;
+	}
+
+	function verifyKernel(path: string, target: string): Result<void, IoError> {
+		const data = Buffer.alloc(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+		const countBytes = Buffer.alloc(4);
+		const wide = widePath(path);
+		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
+		const handle = CreateFileW(wide, 0,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING,
+			FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, null);
+		const openError = handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+		freeWide(wide);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(openError), path));
+		}
+		const read = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, null, 0,
+			data as Span<uint8> as Ptr<void>, data.length as uint32,
+			countBytes as Span<uint8> as Ptr<void>, null);
+		const readError = read == 0 ? GetLastError() : 0;
+		CloseHandle(handle);
+		if (read == 0) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(readError), path));
+		}
+		const returned = (countBytes[0] as int64) |
+			((countBytes[1] as int64) << 8) |
+			((countBytes[2] as int64) << 16) |
+			((countBytes[3] as int64) << 24);
+		if (returned > data.length) {
+			return Result.err(ioError(IoErrorKind.Unknown, path,
+				"reparse byte count exceeds its buffer: " + path));
+		}
+		const parsed = parseReparseTarget(data[0..returned]);
+		if (!parsed.ok) {
+			return Result.err(ioError(IoErrorKind.Unknown, path, parsed.error));
+		}
+		if (parsed.value.tag != SYMLINK_TAG || (parsed.value.flags & 1) == 0) {
+			return Result.err(mismatch(path));
+		}
+		const expected = widePath(target);
+		if (expected == null) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		const equal = matchesUnits(
+			parsed.value.nameUtf16Le, expected, lstrlenW(expected),
+		);
+		freeWide(expected);
+		if (!equal) { return Result.err(mismatch(path)); }
+		return Result.ok(null);
+	}
+} else {
+	@include("unistd.h");
+
+	extern let errno: int32;
+	extern function cReadlink(
+		path: cstring, output: Ptr<void>, size: uint64,
+	): int64 from "readlink";
+
+	function verifyKernel(path: string, target: string): Result<void, IoError> {
+		const expected = target.asBytes();
+		const data = Buffer.alloc(expected.length + 1);
+		const read = cReadlink(path as cstring,
+			data as Span<uint8> as Ptr<void>, data.length as uint64);
+		const error = errno;
+		if (read < 0) { return Result.err(ioErrorFromErrno(error, path)); }
+		if (read != expected.length) { return Result.err(mismatch(path)); }
+		for (let i: int64 = 0; i < read; i += 1) {
+			if (data[i] != expected[i]) { return Result.err(mismatch(path)); }
+		}
+		return Result.ok(null);
+	}
+}
+
+export function verifyStoredRelativeTarget(
+	path: string, target: string,
+): Result<void, IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	if (target == "" || target == "." || target == ".." ||
+		target.indexOf("\0") >= 0 || target.indexOf("/") >= 0 ||
+		target.indexOf("\\") >= 0 || target.indexOf(":") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	return verifyKernel(path, target);
+}
