@@ -890,6 +890,17 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 	d.awaitArg = adoptThenable(ctx, d.awaitArg, "Type of 'await' operand");
 }
 
+export function adoptAwaitedValue(ctx: CheckerContext, d: AwaitExprData): void {
+	const t = d.awaitArg.nodeType;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t) || isUnknownType(t) || hasGenericParams(t)) return;
+	if (t.kind == TypeKind.Error || t.kind == TypeKind.Void) return;
+	const lift = ctx.compilerFuncs.get("promiseOfValue");
+	if (lift == null) throw new Error("internal: the prelude declares no @compilerFunc promiseOfValue");
+	const call = boundCallOf(lift, [d.awaitArg], d.awaitArg.location);
+	callCheckExpr(ctx, call, createPromise(t));
+	d.awaitArg = call;
+}
+
 export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
 	const adopted = adoptThenable(ctx, value, "The value an async function returns");
 	if (adopted == value) return value;
