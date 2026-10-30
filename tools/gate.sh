@@ -26,7 +26,7 @@ RULES=(
 DEFAULT_LANES="build suite"
 ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
 LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
+PHASES=("build" "tools boundary cache suite tests fmt lsp guard solana corpus san" "tsan" "hcr")
 KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
@@ -2494,7 +2494,7 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do case "$lane" in corpus|san|tsan) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
-  MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
+  MSCORPUS_BUILD_JOBS=$(build_width 1) || exit $?
   select_pid="" keys_pid=""
   case " $todo " in *" suite "*|*" tests "*|*" corpus "*|*" san "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
@@ -2515,6 +2515,7 @@ for phase in "${PHASES[@]}"; do
     case "$lane" in corpus|san|tsan)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
+      MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
       narrow="" only_csv=""
       narrow_for "$lane"
       if select_leaves_nothing "$lane"; then say "gate: $lane skipped, every program has a recorded pass"; continue; fi
