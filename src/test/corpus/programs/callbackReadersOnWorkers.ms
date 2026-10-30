@@ -1,4 +1,4 @@
-// @stdout: total=46000
+// @stdout: total=50000
 // note: worker tasks run array readers over arrays the spawning task owns; a callback that writes nothing the reader holds runs a reader body that counts no element, so no task writes a refcount it does not own.
 class Item { v: int32 = 0; next: Item | null = null; }
 
@@ -8,6 +8,17 @@ function countIf<T>(this arr: Readonly<T[]>, fn: (x: Readonly<T>) => boolean): i
 	let n: int32 = 0;
 	for (let i = 0; i < arr.length; i++) if (fn(arr[i])) n += 1;
 	return n;
+}
+
+@inline
+function countIfInline(items: Readonly<Item[]>, fn: (x: Readonly<Item>) => boolean): int32 {
+	let n: int32 = 0;
+	for (let i = 0; i < items.length; i++) if (fn(items[i])) n += 1;
+	return n;
+}
+
+function viaInlineReader(items: Readonly<Item[]>): int32 {
+	return countIfInline(items, (y: Readonly<Item>): boolean => y.v > 5);
 }
 
 function viaFindIndex(items: Readonly<Item[]>): int32 {
@@ -44,7 +55,8 @@ async function round(): Promise<int32> {
 	const d = spawn(() => viaMap(items));
 	const e = spawn(() => viaUserReader(items));
 	const g = spawn(() => viaStructs(slots));
-	return await a + await b + await c + await d + await e + await g;
+	const h = spawn(() => viaInlineReader(items));
+	return await a + await b + await c + await d + await e + await g + await h;
 }
 
 let total: int32 = 0;

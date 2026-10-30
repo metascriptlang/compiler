@@ -47,6 +47,14 @@ function lastWhere(xs: Tree[], fn: (t: Tree) => boolean): int32 {
 	for (let i = xs.length - 1; i >= 0; i--) if (fn(xs[i])) return i as int32;
 	return -1;
 }
+@inline
+function inlineWhere(xs: Tree[], fn: (t: Tree) => boolean): int32 {
+	for (let i = xs.length - 1; i >= 0; i--) if (fn(xs[i])) return i as int32;
+	return -1;
+}
+function viaInline(xs: Tree[]): int32 {
+	return inlineWhere(xs, (k: Tree): boolean => k.v == 1);
+}
 function anyOf(xs: Tree[], fn: (t: Tree) => boolean): boolean {
 	return lastWhere(xs, fn) >= 0;
 }
@@ -56,6 +64,7 @@ const slots: Slot[] = [{ item: root, w: 1, a: 0, b: 0 }];
 console.log(sum(root) + pruneParent(root));
 console.log(eachSlot(slots, (s: Slot): int64 => s.w + s.item.v as int64));
 console.log(root.kids.countIf((k: Readonly<Tree>): boolean => k.v > 0));
+console.log(viaInline(root.kids));
 console.log(anyOf(root.kids, (k: Tree): boolean => k.v == 2));
 `;
 
@@ -105,4 +114,13 @@ test "a reader that forwards its callback calls the clone of the reader it forwa
 	assert count(lent, "lastWheredollarlent_") == 1, lent;
 	assert count(bodyOf(code, "anyOf"), "lastWheredollarlent_") == 0;
 	assert count(bodyOf(code, "lastWheredollarlent_"), "msIncref") == 0;
+}
+
+test "an inline reader keeps its clone, and a call whose callback keeps the contract reaches the inline clone" {
+	const code = compiled();
+	const lent = bodyOf(code, "inlineWheredollarlent_");
+	assert lent != "" && count(lent, "msIncref") == 0 && count(lent, "msDecref") == 0, lent;
+	assert count(code, "static inline int32_t inlineWheredollarlent_") >= 1;
+	const via = bodyOf(code, "viaInline");
+	assert count(via, "inlineWheredollarlent_") == 1 && count(via, "inlineWhere__") == 0, via;
 }
