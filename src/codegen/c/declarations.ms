@@ -624,7 +624,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	if (d.initializer != null
 			&& d.initializer.kind == NodeKind.NullLiteral
 			&& node.nodeType != null
-			&& (isNumeric(node.nodeType) || node.nodeType.kind == TypeKind.Boolean)) {
+			&& (isNumeric(node.nodeType) || node.nodeType.kind == TypeKind.Boolean || node.nodeType.kind == TypeKind.Enum)) {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = 0;`);
 		return;
 	}
