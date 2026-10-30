@@ -2932,24 +2932,22 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			}
 		}
 		if (elemExpected == null && d.elements.length > 1 && elemType != null && isAwaitable(elemType)) {
-			const awaitedParts: Type[] = [];
+			let survivor: Type | null = null;
 			let plainPromises = true;
 			for (const el of d.elements) {
 				const elType = el.nodeType;
 				if (elType == null || !isAwaitable(elType) || isAffineAwaitable(elType)) { plainPromises = false; break; }
-				awaitedParts.push(awaitedType(elType)!);
+				const awaited = awaitedType(elType);
+				if (survivor == null && awaited != null && awaited.kind != TypeKind.Never) survivor = elType;
 			}
-			if (plainPromises) {
-				const joinedAwaited = joinBranchTypes(awaitedParts);
-				if (!isUnresolvedType(joinedAwaited) && !sameType(joinedAwaited, awaitedType(elemType)!)) {
-					const joinedPromise = createPromise(joinedAwaited);
-					let pi = 0;
-					while (pi < d.elements.length) {
-						d.elements[pi] = fitJoinedBranch(ctx, d.elements[pi], joinedPromise);
-						pi = pi + 1;
-					}
-					elemType = joinedPromise;
+			if (plainPromises && survivor != null && awaitedType(elemType)!.kind == TypeKind.Never) {
+				let pi = 0;
+				while (pi < d.elements.length) {
+					const pt = d.elements[pi].nodeType;
+					if (pt != null && awaitedType(pt)!.kind == TypeKind.Never) d.elements[pi] = fitJoinedBranch(ctx, d.elements[pi], survivor);
+					pi = pi + 1;
 				}
+				elemType = survivor;
 			}
 		}
 		if (elemExpected == null && d.elements.length > 1
