@@ -136,12 +136,6 @@ function saveHashMemo(path: string, files: string[]): void {
 
 // Memoized; initCache computes it once on the main thread so parallel compile
 // workers only ever read the settled value.
-export function toolchainStamp(): string {
-	if (_toolchainStamp != "") return _toolchainStamp;
-	_toolchainStamp = hashContent(`${compilerStamp()}\n${objectStamp()}`);
-	return _toolchainStamp;
-}
-
 export function compilerStamp(): string {
 	if (_compilerStamp != "") return _compilerStamp;
 	const exe = resolveArgv0(argv[0]);
@@ -151,6 +145,12 @@ export function compilerStamp(): string {
 	_compilerStamp = hashFile(exe);
 	if (_hashMemoWrites != writes) saveHashMemo(memo, [exe]);
 	return _compilerStamp;
+}
+
+export function toolchainStamp(): string {
+	if (_toolchainStamp != "") return _toolchainStamp;
+	_toolchainStamp = hashContent(`${compilerStamp()}\n${objectStamp()}`);
+	return _toolchainStamp;
 }
 
 export function objectStamp(): string {
