@@ -69,6 +69,7 @@ export interface KeyedOp {
 let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _opKeyOfSym: HashMap<Symbol, string> = new HashMap<Symbol, string>();
 let _opOrder: KeyedOp[] = [];
+let _reusedOps: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 
 export function sealHookSyms(sealed: boolean): void {
 	_hookSymsSealed = sealed;
@@ -78,6 +79,13 @@ export function resetHookSyms(): void {
 	_opSyms = new HashMap<string, Symbol>();
 	_opKeyOfSym = new HashMap<Symbol, string>();
 	_opOrder = [];
+	_reusedOps = new HashMap<string, Symbol>();
+}
+
+export function reuseOps(ops: KeyedOp[]): void {
+	for (const op of ops) {
+		if (op.canon) _reusedOps.set(op.key, op.sym);
+	}
 }
 
 function attachedOpName(op: AttachedOp): string {
@@ -228,6 +236,12 @@ export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | n
 		return held;
 	}
 	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
+	const reused = _reusedOps.get(key);
+	if (reused != null && reused.name == name) {
+		reused.symbolType = fnType!;
+		recordOp(key, reused, true);
+		return reused;
+	}
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
 	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);

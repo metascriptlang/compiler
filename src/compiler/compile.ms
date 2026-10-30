@@ -47,7 +47,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
-import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
+import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -3366,7 +3366,10 @@ resetLiftedOps();
 		};
 		if (session.keep) {
 			const earlier = session.lowerClaims.get(modPath);
-			if (earlier != null) reuseClones(writeTables, earlier.contracts);
+			if (earlier != null) {
+				reuseClones(writeTables, earlier.contracts);
+				reuseOps(earlier.ops);
+			}
 			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
 			if (job.ran) {
 				staged.push({ at, job, tree });
