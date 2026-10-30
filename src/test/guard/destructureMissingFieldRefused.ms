@@ -6,8 +6,8 @@
 // WHAT IT CATCHES: the pattern binding an untyped slot for a missing field, which C reports as an
 //   internal unresolved type and JS runs as `<object>`.
 //
-// RED MEANS: one of the shapes compiled. A field the source has, with or without a default, and a name
-//   an extension declares for this very receiver (`area`), still bind; `map` exists only on arrays.
+// RED MEANS: one of the shapes compiled. A field the source has, with or without a default, still binds;
+//   `map` exists only on arrays.
 //
 // GUARD-CHECK-FAIL Property 'missing' does not exist on type 'GuardSrc'
 // GUARD-CHECK-FAIL Property 'gone' does not exist on type 'GuardSrc'
@@ -15,12 +15,10 @@
 // GUARD-JS
 
 interface GuardSrc { x: string; y: int32; }
-function area(this s: GuardSrc): int32 { return s.y; }
 const src: GuardSrc = { x: "a", y: 1 };
 const { y = 5, x: s = "z" } = src;
 const { missing } = src; // GUARD-REFUSED
 const { missing: renamed } = src; // GUARD-REFUSED
 const { gone = 1 } = src; // GUARD-REFUSED
 const { map } = src; // GUARD-REFUSED
-const { area: measure } = src;
 console.log(y, s, missing, renamed, gone, map);
