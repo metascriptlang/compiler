@@ -1,19 +1,37 @@
 import { sha256 } from "std/crypto";
 
+const DIGEST_LENGTH: int32 = 64;
+const SEPARATOR = "  ";
+const ENGINE_HOSTS: string[] = [
+	"aarch64-macos",
+	"x86_64-macos",
+	"x86_64-linux",
+	"aarch64-linux",
+	"x86_64-windows",
+	"aarch64-windows",
+];
+
 export struct ManifestEntry {
 	path: string;
 	digest: string;
 }
 
 function isDigest(text: string): boolean {
-	if (text.length != 64) { return false; }
+	if (text.length != DIGEST_LENGTH) { return false; }
 	for (let i: int32 = 0; i < text.length; i += 1) {
 		const code = text.charCodeAt(i);
-		if ((code < 48 || code > 57) && (code < 97 || code > 102)) {
-			return false;
-		}
+		const decimal = code >= "0".code && code <= "9".code;
+		const lowerHex = code >= "a".code && code <= "f".code;
+		if (!decimal && !lowerHex) { return false; }
 	}
 	return true;
+}
+
+function startsWithDriveLetter(path: string): boolean {
+	if (path.length < 2 || path.charCodeAt(1) != ":".code) { return false; }
+	const first = path.charCodeAt(0);
+	return (first >= "A".code && first <= "Z".code) ||
+		(first >= "a".code && first <= "z".code);
 }
 
 function isSafePath(path: string): boolean {
@@ -22,13 +40,7 @@ function isSafePath(path: string): boolean {
 		path.indexOf("\n") >= 0 || path.indexOf("\r") >= 0) {
 		return false;
 	}
-	if (path.length >= 2 && path.charCodeAt(1) == 58) {
-		const first = path.charCodeAt(0);
-		if ((first >= 65 && first <= 90) ||
-			(first >= 97 && first <= 122)) {
-			return false;
-		}
-	}
+	if (startsWithDriveLetter(path)) { return false; }
 	for (const part of path.split("/")) {
 		if (part == "" || part == "." || part == "..") { return false; }
 	}
@@ -60,7 +72,7 @@ export function renderManifest(
 		if (previous != "" && !orderedBefore(previous, entry.path)) {
 			return Result.err("FILES.sha256: paths are not unique and sorted");
 		}
-		text += entry.digest + "  " + entry.path + "\n";
+		text += entry.digest + SEPARATOR + entry.path + "\n";
 		previous = entry.path;
 	}
 	return Result.ok(text);
@@ -72,15 +84,17 @@ export function parseManifest(text: string): Result<ManifestEntry[], string> {
 	if (!text.endsWith("\n")) {
 		return Result.err("FILES.sha256: missing final LF");
 	}
+	const pathStart = DIGEST_LENGTH + SEPARATOR.length;
 	const lines = text.split("\n");
 	for (let i: int32 = 0; i + 1 < lines.length; i += 1) {
 		const line = lines[i];
-		if (line.length < 67 || line.slice(64, 66) != "  ") {
+		if (line.length <= pathStart ||
+			line.slice(DIGEST_LENGTH, pathStart) != SEPARATOR) {
 			return Result.err("FILES.sha256: bad line " + String(i + 1));
 		}
 		entries.push({
-			digest: line.slice(0, 64),
-			path: line.slice(66, line.length),
+			digest: line.slice(0, DIGEST_LENGTH),
+			path: line.slice(pathStart, line.length),
 		});
 	}
 	const rendered = renderManifest(entries);
@@ -97,20 +111,30 @@ function oneLine(text: string): boolean {
 	return text.endsWith("\n") && text.indexOf("\n") == text.length - 1;
 }
 
+function isEngineHost(host: string): boolean {
+	for (const candidate of ENGINE_HOSTS) {
+		if (host == candidate) { return true; }
+	}
+	return false;
+}
+
+function isDecimal(text: string): boolean {
+	for (let i: int32 = 0; i < text.length; i += 1) {
+		const code = text.charCodeAt(i);
+		if (code < "0".code || code > "9".code) { return false; }
+	}
+	return true;
+}
+
 export function parseHeader(
 	hostLine: string,
 	versionLine: string,
 ): Result<ContractHeader, string> {
 	if (!oneLine(hostLine)) { return Result.err("HOST is not one line"); }
 	const host = hostLine.slice(0, hostLine.length - 1);
-	let known = false;
-	for (const candidate of [
-		"aarch64-macos", "x86_64-macos", "x86_64-linux", "aarch64-linux",
-		"x86_64-windows", "aarch64-windows",
-	]) {
-		if (host == candidate) { known = true; }
+	if (!isEngineHost(host)) {
+		return Result.err("HOST is not a supported engine host");
 	}
-	if (!known) { return Result.err("HOST is not a supported engine host"); }
 	if (!oneLine(versionLine)) {
 		return Result.err("VERSION is not one line");
 	}
@@ -121,11 +145,8 @@ export function parseHeader(
 	}
 	for (const part of parts) {
 		if (part == "") { return Result.err("VERSION has an empty component"); }
-		for (let i: int32 = 0; i < part.length; i += 1) {
-			const code = part.charCodeAt(i);
-			if (code < 48 || code > 57) {
-				return Result.err("VERSION has a non-decimal component");
-			}
+		if (!isDecimal(part)) {
+			return Result.err("VERSION has a non-decimal component");
 		}
 	}
 	return Result.ok({ host, version });
