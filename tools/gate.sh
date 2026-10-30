@@ -2310,6 +2310,8 @@ part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__
 # test processes (10:48Z, 16:21Z, 17:08Z 2026-10-30). So the lane starts another tier only while the RAM available keeps
 # one more of them above a tenth of the host's RAM (earlyoom's kill line, doubled), counting each tier started in the last
 # minute at its full peak too, because a tier reaches its peak only after it has compiled for a while; it always runs one.
+# The estimate still misses (earlyoom killed tiers at 18:39Z and 18:49Z), so a tier killed by a signal earlyoom sends runs
+# again alone once the others finish: a tier that is itself too big is killed again and stays red.
 TEST_JOB_KB=$((3500 * 1024))
 test_ram_room() {
   [ -r /proc/meminfo ] || return 0
@@ -2342,7 +2344,18 @@ run_test_lane() {
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
         fi
       done <<<"$jobs"
-      wait ;;
+      wait
+      while read -r f shard; do
+        [ -n "$f" ] || continue
+        if [ "$shard" = - ]; then part=$(part_of tests "$f"); else part=$(part_of tests "$f.$shard"); fi
+        case "$(cat "$part.rc" 2>/dev/null)" in 137|143) ;; *) continue ;; esac
+        printf 'gate: %s was killed under host memory pressure; running it again alone\n' "${part##*/}"
+        if [ "$shard" = - ]; then
+          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir
+        else
+          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir "--tests-shard=$shard"
+        fi
+      done <<<"$jobs" ;;
   esac
   while read -r f shard; do
     [ -n "$f" ] || continue
