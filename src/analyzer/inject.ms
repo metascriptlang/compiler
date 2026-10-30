@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
+import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
@@ -1820,6 +1820,12 @@ function processBlockBody(body: Node, dctx: DrcContext, isLoop: boolean, isFunct
 
 // ===== Per-Statement Dispatch =====
 
+function processDecorated(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
+	const d = stmt.data as DecoratedDeclData;
+	d.decoratedNode = processStmt(d.decoratedNode, idx, stmts, dctx, loc);
+	return stmt;
+}
+
 function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	if (stmt == null) return stmt;
 	const sloc = stmt.location;
@@ -1831,6 +1837,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.ReturnStmt => processReturn(stmt, dctx, sloc),
 		NodeKind.ExprStmt => processExprStmt(stmt, idx, stmts, dctx, sloc),
 		NodeKind.FunctionDecl => processFuncDecl(stmt, dctx, sloc),
+		NodeKind.DecoratedDecl => processDecorated(stmt, idx, stmts, dctx, sloc),
 		NodeKind.IfStmt => processIf(stmt, dctx, sloc),
 		NodeKind.WhileStmt => processWhile(stmt, dctx, sloc),
 		NodeKind.ForStmt => processFor(stmt, dctx, sloc),
