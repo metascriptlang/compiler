@@ -1274,6 +1274,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 						fname = fname.slice(0, fname.length - 1).trim();
 						fieldIsOptional = true;
 					}
+					if (fname.length >= 2 && fname.charAt(0) == "\"" && fname.charAt(fname.length - 1) == "\"") {
+						fname = fname.slice(1, fname.length - 1);
+					}
 					let ftypeStr = field.slice(colonIdx + 1, field.length).trim();
 					if (fieldIsOptional) {
 						ftypeStr = optionalizeTypeString(ftypeStr);
