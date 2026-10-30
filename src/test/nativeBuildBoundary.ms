@@ -1520,9 +1520,20 @@ function genericNamesTree(parent: string): string {
 	return app;
 }
 
+function supportRootOf(binary: string): string {
+	let dir = dirname(binary);
+	for (let up = 0; up < 6; up += 1) {
+		if (exists(`${dir}/std/core/system/index.ms`)) return dir;
+		if (dirname(dir) == dir) break;
+		dir = dirname(dir);
+	}
+	need(false, `find std above ${binary}`);
+	return "";
+}
+
 function installedCompiler(at: string): string {
 	ensureDir(at);
-	const support = exists(`${dirname(compiler)}/std`) ? dirname(compiler) : dirname(dirname(compiler));
+	const support = supportRootOf(compiler);
 	need(command(at, "install-msc", "cp", [compiler, `${at}/msc`]).code == 0, `copy ${compiler} to ${at}`);
 	need(command(at, "install-support", "cp", ["-R", `${support}/std`, `${support}/runtime`, at]).code == 0, `copy std and runtime to ${at}`);
 	if (exists(`${support}/vendor`)) need(command(at, "install-vendor", "ln", ["-s", `${support}/vendor`, `${at}/vendor`]).code == 0, `link vendor in ${at}`);
