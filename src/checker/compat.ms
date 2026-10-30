@@ -2115,7 +2115,7 @@ export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], min
 // matches (context-sensitive args in two-pass overload resolution — object
 // literals and arrow functions are re-checked with the winner's param types in
 // Pass 2, so Pass 1 scoring must not reject them for partial/incomplete typing).
-export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[] = [], literalRels: int32[] | null = null): CandidateScore {
+export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[] = [], literalRels: int32[] | null = null, restFrom: int32 = -1): CandidateScore {
 	const score = emptyCandidateScore();
 	if (argTypes.length < minArity || argTypes.length > paramTypes.length) {
 		score.exactMatches = -1;
@@ -2127,13 +2127,14 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			score.subtypeMatches = score.subtypeMatches + 1;
 			continue;
 		}
-		const rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
+		let rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
 			? literalRels[i] as TypeRelation
 			: argRelation(paramTypes[i], argTypes[i]);
 		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
 		}
+		if (restFrom >= 0 && i >= restFrom && (rel == TypeRelation.Exact || rel == TypeRelation.Generic)) rel = TypeRelation.Convertible;
 		countRelation(score, rel);
 		if (rel == TypeRelation.Exact || rel == TypeRelation.Subtype) addInheritancePenalty(score, classDistance(argTypes[i], paramTypes[i]));
 	}

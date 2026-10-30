@@ -1462,11 +1462,33 @@ function spreadElementType(spread: Node): Type {
 
 function spreadFitsCandidate(candType: Type, at: int32, element: Type, minArgs: number): boolean {
 	const formals = candType.typeChildren;
-	if (at < minArgs || at >= fixedCount(formals) || fixedCount(formals) != formals.length) return false;
-	for (let k = at; k < formals.length; k += 1) {
+	const fixed = fixedCount(formals);
+	const hasRest = fixed != formals.length;
+	if (at < minArgs || (at >= fixed && !hasRest)) return false;
+	for (let k = at; k < fixed; k += 1) {
 		if (typeRelation(formals[k], element) == TypeRelation.None) return false;
 	}
-	return true;
+	return !hasRest || typeRelation(restElementOf(formals), element) != TypeRelation.None;
+}
+
+function restElementOf(formals: Type[]): Type {
+	return getElementType(unwrapRef(unwrapVarargs(formals[formals.length - 1])));
+}
+
+function takesRest(candType: Type): boolean {
+	return fixedCount(candType.typeChildren) != candType.typeChildren.length;
+}
+
+// A rest parameter takes each argument past the fixed ones as one element, so a call is scored against the
+// formals it would fill.
+function expandRest(formals: Type[], count: int32): Type[] {
+	const fixed = fixedCount(formals);
+	if (fixed == formals.length) return formals;
+	const expanded: Type[] = [];
+	for (let k = 0; k < fixed; k += 1) expanded.push(formals[k]);
+	const element = restElementOf(formals);
+	for (let k = fixed; k < count; k += 1) expanded.push(element);
+	return expanded;
 }
 
 interface SpreadTake { spread: Node | null; at: int32; taken: boolean; }
@@ -4253,7 +4275,10 @@ interface ContextPick {
 function trialScore(candidate: Type, args: Node[], argTypes: Type[], skipMask: boolean[]): CandidateScore {
 	enterSpeculation();
 	try {
-		return scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
+		const formals = expandRest(candidate.typeChildren, argTypes.length);
+		const fixed = fixedCount(candidate.typeChildren);
+		const rest = takesRest(candidate);
+		return scoreCandidateWithSkip(formals, argTypes, rest && fixed < getMinArity(candidate) ? fixed : getMinArity(candidate), skipMask, literalRelations(formals, args, argTypes), rest ? fixed : -1);
 	} finally {
 		leaveSpeculation();
 	}
@@ -4441,6 +4466,12 @@ function takesAdaptedArg(cand: Type, argTypes: Type[], skipMask: boolean[]): boo
 	return false;
 }
 
+// The reference's `chooseOverload` takes the first signature that fits, so a tie between a signature
+// with a rest parameter and one without goes to the one declared first.
+function restTie(a: Type, b: Type): boolean {
+	return takesRest(a) != takesRest(b);
+}
+
 function adapterTie(a: Type, b: Type, argTypes: Type[], skipMask: boolean[]): boolean {
 	return takesAdaptedArg(a, argTypes, skipMask) || takesAdaptedArg(b, argTypes, skipMask);
 }
@@ -4519,7 +4550,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			bestIdx = ci;
 			bestScore = score;
 			ambiguous = false;
-		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask)) {
+		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask) && !restTie(candType, candidates[bestIdx])) {
 			ambiguous = true;
 		}
 		ci = ci + 1;
@@ -5300,7 +5331,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], at, skipMask)) {
+			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], at, skipMask) && !restTie(candidates[i], candidates[bestIdx])) {
 				ambiguous = true;
 			}
 		}
