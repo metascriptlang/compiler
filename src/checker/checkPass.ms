@@ -9,10 +9,10 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
-import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
-import { Module, ModuleGraph } from "../module/graph";
+import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
 import { env, cwd } from "std/process";
 import { parseAsBuildOf } from "../parser/context";
@@ -20,7 +20,7 @@ import { backendName, backendOfExtension } from "../module/resolver";
 import { resolveRuntimeDir, isBuiltinStubHeader } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
-import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
+import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -28,7 +28,7 @@ import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
-import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
+import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseNames, paramSymbol } from "./bindNames";
@@ -43,7 +43,7 @@ import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineI
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
-import { isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
+import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
 import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
@@ -425,6 +425,7 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
+	if (local && node.kind == NodeKind.DecoratedDecl) refuseComputedGotoDecorator(ctx, (node.data as DecoratedDeclData).decorators);
 	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
 	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
@@ -2298,6 +2299,7 @@ function iterableElemType(t: Type | null): Type {
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
+	d.forOfIterable = widenArrayBrand(d.forOfIterable);
 	if (iterateThroughProxy(ctx, node)) return;
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
 	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable, ReadNeed.Items)) {
@@ -3302,6 +3304,8 @@ function enterComptimeOuter(ctx: CheckerContext, program: Node): void {
 	setOuterProgramForComptime(program);
 	if (ctx.exportRegistry != null && ctx.moduleGraph != null && ctx.currentModule != null && ctx.preludeCtx != null) {
 		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);
+	} else {
+		clearOuterCheckContext();
 	}
 }
 
@@ -4273,7 +4277,7 @@ function checkProgramCore(
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean = false,
 ): CheckerContext {
-	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, applyModulePasses));
+	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, null, applyModulePasses));
 }
 
 export interface BoundModule {
@@ -4292,6 +4296,7 @@ export function bindModuleForCheck(
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
+	adoptStmt: ((stmt: Node) => void) | null,
 	applyModulePasses: boolean,
 	globalImports: CheckerContext | null = null,
 ): BoundModule {
@@ -4302,6 +4307,7 @@ export function bindModuleForCheck(
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
+	ctx.adoptStmt = adoptStmt;
 	injectPrelude(ctx, preludeCtx);
 	if (globalImports != null) injectPreludeExports(ctx, globalImports);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
@@ -4494,6 +4500,19 @@ function checkOk(input: string): boolean {
 function checkErrors(input: string): number {
 	const ctx = checkSource(input);
 	return errorCount(ctx);
+}
+
+test "a check outside a module graph hands compile-time evaluation no other compilation's modules" {
+	for (const js of [false, true]) {
+		setOuterCheckContext(createExportRegistry(), createModuleGraph(), createModule("/other/main.ms"), standalonePreludeCtx());
+		const pr = parseSource("const x = 1;");
+		assert pr.ok;
+		if (js) checkProgramJs(pr.value);
+		else checkProgram(pr.value);
+		const outer = getComptimeOuterCtx()!;
+		assert outer.program == pr.value;
+		assert outer.registry == null && outer.graph == null && outer.module == null && outer.preludeCtx == null;
+	}
 }
 
 test "variable decl" {

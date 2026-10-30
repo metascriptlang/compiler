@@ -20,7 +20,8 @@
 // MS uses it.
 //
 // Signed + - *, unary minus and steps, and char steps, stop on overflow (msOverflow*), as the
-// C backend's checkedArith.h does; unlike C, --danger keeps the check here.
+// C backend's checkedArith.h does. Under --danger the same operations wrap two's
+// complement like C (`| 0`, Math.imul, BigInt.asIntN), so both backends print one value.
 //
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
@@ -45,25 +46,25 @@ export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
 }
 
 function materializeIntOp(node: Node, ctx: TransformContext): Node {
-	if (node.kind == NodeKind.UnaryExpr) return unaryAsUnsigned(node);
+	if (node.kind == NodeKind.UnaryExpr) return unaryAsUnsigned(node, ctx);
 	if (node.kind == NodeKind.UpdateExpr) return updateAtWidth(node, ctx);
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
 	if (base != "") return compoundAsInteger(node, d, base, ctx);
-	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
+	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d, ctx);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
 	const signed = signedType(node.nodeType);
-	if (signed != null && wrapsAtWidth(d.operator) && !node.flags.has(NodeFlag.NoOverflowCheck)) return overflowChecked(node, signed, node.location);
+	if (signed != null && wrapsAtWidth(d.operator) && !node.flags.has(NodeFlag.NoOverflowCheck)) return overflowChecked(node, signed, node.location, ctx);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
 }
 
-function divideAsInteger(node: Node, d: BinaryExprData): Node {
+function divideAsInteger(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = peelToRepr(node.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return node;
-	if (d.operator == "**" || !cannotRaise(d.right, t)) return checkedIntOp(d.operator, d.left, d.right, t, node.nodeType, node.location);
+	if (d.operator == "**" || !cannotRaise(d.right, t)) return checkedIntOp(d.operator, d.left, d.right, t, node.nodeType, node.location, ctx);
 	if (d.operator != "/") return node;
 	// BigInt division already truncates; Math.trunc on a BigInt throws.
 	if (is64Kind(t.kind)) return node;
@@ -74,7 +75,7 @@ function divideAsInteger(node: Node, d: BinaryExprData): Node {
 
 // The same helpers as C (runtime/core/checkedArith.h), declared for JS in
 // std/core/system/index.jms: a zero divisor, MIN / -1 and an overflowing power raise.
-function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: Type | null, loc: SourceLocation): Node {
+function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: Type | null, loc: SourceLocation, ctx: TransformContext): Node {
 	const prefix = match (op) {
 		"/" => "msDiv",
 		"%" => "msMod",
@@ -87,17 +88,19 @@ function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: 
 		TypeKind.Uint32 => "U32",
 		_ => "U64",
 	};
-	const call = makeCall(runtimeRef(prefix + suffix, loc), [left, right], loc);
+	const wrapPow = op == "**" && !ctx.overflowChecks && (hk == TypeKind.Int32 || hk == TypeKind.Int64);
+	const call = makeCall(runtimeRef((wrapPow ? "msPowWrap" : prefix) + suffix, loc), [left, right], loc);
 	call.nodeType = createPrimitive(hk);
 	const narrow = subIntKind(t);
-	if (narrow != TypeKind.Unknown) return isSignedKind(narrow) ? overflowChecked(call, t, loc) : wrapTo(call, narrow, loc);
+	if (narrow != TypeKind.Unknown) return isSignedKind(narrow) ? overflowChecked(call, t, loc, ctx) : wrapTo(call, narrow, loc);
 	if (resultType != null) call.nodeType = resultType;
 	return call;
 }
 
 // A double product of two int32 operands may round, but never back into range,
 // so the test needs no Math.imul.
-function overflowChecked(inner: Node, t: Type, loc: SourceLocation): Node {
+function overflowChecked(inner: Node, t: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	if (!ctx.overflowChecks) return wrapSigned(inner, t, loc);
 	const suffix = match (t.kind) {
 		TypeKind.Int8 => "I8",
 		TypeKind.Int16 => "I16",
@@ -108,6 +111,22 @@ function overflowChecked(inner: Node, t: Type, loc: SourceLocation): Node {
 	const call = makeCall(runtimeRef("msOverflow" + suffix, loc), [inner], loc);
 	call.nodeType = t;
 	return call;
+}
+
+function wrapSigned(inner: Node, t: Type, loc: SourceLocation): Node {
+	if (t.kind == TypeKind.Int64) {
+		const call = makeCall(makeMember(jsGlobalRef("BigInt", loc), "asIntN", loc), [makeNumber(64, loc), inner], loc);
+		call.nodeType = t;
+		return call;
+	}
+	if (t.kind == TypeKind.Int32 && inner.kind == NodeKind.BinaryExpr && (inner.data as BinaryExprData).operator == "*") {
+		const d = inner.data as BinaryExprData;
+		const product = exactMul(d.left, d.right, loc);
+		product.nodeType = t;
+		return product;
+	}
+	const narrow = subIntKind(t);
+	return narrow != TypeKind.Unknown ? wrapTo(inner, narrow, loc) : truncateTo(inner, t.kind, loc);
 }
 
 function signedType(t: Type | null): Type | null {
@@ -191,12 +210,12 @@ function binaryAsUnsigned(node: Node): Node {
 	return truncateTo(node, t.kind, node.location);
 }
 
-function unaryAsUnsigned(node: Node): Node {
+function unaryAsUnsigned(node: Node, ctx: TransformContext): Node {
 	const t = peelToRepr(node.nodeType);
 	if (t == null) return node;
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
-	if (d.unaryOp == "-" && isSignedKind(t.kind)) return isLiteral(d.operand) ? node : overflowChecked(node, t, node.location);
+	if (d.unaryOp == "-" && isSignedKind(t.kind)) return isLiteral(d.operand) ? node : overflowChecked(node, t, node.location, ctx);
 	const narrow = subIntKind(t);
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	if (t.kind != TypeKind.Uint32) return node;
@@ -228,11 +247,11 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	const step = d.updateOp == "++" ? "+" : "-";
 	if (isSignedKind(t.kind) || t.kind == TypeKind.Char) {
-		const checked = makeBinary(d.updateArg, "=", overflowChecked(makeBinary(readBack, step, stepOne(t, loc), loc), t, loc), loc);
+		const checked = makeBinary(d.updateArg, "=", overflowChecked(makeBinary(readBack, step, stepOne(t, loc), loc), t, loc, ctx), loc);
 		if (d.isPrefix) return checked;
 		const before = makeBinary(checked, d.updateOp == "++" ? "-" : "+", stepOne(t, loc), loc);
 		before.nodeType = t;
-		return before;
+		return ctx.overflowChecks ? before : wrapSigned(before, t, loc);
 	}
 	const stored = makeBinary(d.updateArg, "=", atWidth(makeBinary(readBack, step, makeNumber(1, loc), loc), t, loc), loc);
 	if (d.isPrefix) return stored;
@@ -310,9 +329,9 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		}
 		return node;
 	}
-	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location), node.location);
+	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location, ctx), node.location);
 	if (wrapsAtWidth(base) && isSignedKind(t.kind)) {
-		return makeBinary(d.left, "=", overflowChecked(makeBinary(readBack, base, d.right, node.location), t, node.location), node.location);
+		return makeBinary(d.left, "=", overflowChecked(makeBinary(readBack, base, d.right, node.location), t, node.location, ctx), node.location);
 	}
 	if (isShiftOp(base) || base == "&" || base == "|" || base == "^") {
 		const bin = makeBinary(readBack, base, d.right, node.location);

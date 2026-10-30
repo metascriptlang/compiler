@@ -131,6 +131,26 @@ test "@computedGoto: a declaration cannot carry it" {
 	assert c.includes("@computedGoto marks a statement of a while loop body, not a declaration"), c.slice(0, 400);
 }
 
+test "@computedGoto: a switch cannot carry it, in a function or a nested block, while the loop directive stays accepted" {
+	const onSwitch = emitted(`function step(op: int32): int32 {
+			@computedGoto
+			switch (op) { case 0: return 10; default: return 0; }
+		}
+		console.log(step(0));`);
+	assert onSwitch.includes("@computedGoto marks a statement of a while loop body"), onSwitch.slice(0, 400);
+	const nested = emitted(`function step(op: int32): int32 {
+			if (op > 0) {
+				@computedGoto
+				switch (op) { case 0: return 10; default: return 0; }
+			}
+			return 1;
+		}
+		console.log(step(0));`);
+	assert nested.includes("@computedGoto marks a statement of a while loop body"), nested.slice(0, 400);
+	const valid = emitted(loopOver(abc, abcSwitch));
+	assert !valid.startsWith("error:"), valid.slice(0, 400);
+}
+
 function countOf(text: string, needle: string): int32 {
 	return (text.split(needle).length - 1) as int32;
 }

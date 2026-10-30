@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
@@ -107,7 +107,7 @@ function rewriteAtomicLiteral(node: Node): Node {
 // the C ABI (msXxxArray); box that value into a refcounted cell so the pointer-typed
 // destination matches — same shape as a fresh array literal / new Array().
 function rewriteExternArrayReturn(node: Node): Node {
-	const refType = node.nodeType;
+	const refType = brandPeeled(node.nodeType);
 	if (refType == null || refType.kind != TypeKind.Ref || refType.typeReturn == null
 			|| refType.typeReturn.kind != TypeKind.Array) return node;
 	const sym = node.resolvedSym;
@@ -118,14 +118,21 @@ function rewriteExternArrayReturn(node: Node): Node {
 			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;
 	if (!declaresArrayReturn(sym)) return node;
+	const declared = node.nodeType;
 	node.nodeType = refType.typeReturn;
 	const box = makeCall(runtimeRef("msBoxRefArray", node.location), [node], node.location);
-	box.nodeType = refType;
+	box.nodeType = declared;
 	return box;
 }
 
+function brandPeeled(t: Type | null): Type | null {
+	let cur = t;
+	for (let body = distinctWidenBody(cur); body != null; body = distinctWidenBody(cur)) cur = body;
+	return cur;
+}
+
 function declaresArrayReturn(sym: Symbol): boolean {
-	const ret = sym.symbolType != null ? sym.symbolType.typeReturn : null;
+	const ret = brandPeeled(sym.symbolType != null ? sym.symbolType.typeReturn : null);
 	return ret != null && ret.kind == TypeKind.Ref && ret.typeReturn != null && ret.typeReturn.kind == TypeKind.Array;
 }
 

@@ -321,7 +321,7 @@ function msOverflowI16(v: float64): int16 {
 
 @compilerFunc
 function msOverflowI32(v: float64): int32 {
-	@emit(`if ((${v} | 0) !== ${v}) ${msDefect}("over- or underflow");
+	@emit(`if (${v} > 2147483647 || ${v} < -2147483648) ${msDefect}("over- or underflow");
 	return ${v};`);
 	unreachable;
 }
@@ -406,6 +406,19 @@ function msPowI32(a: int32, b: int32): int32 {
 }
 
 @compilerFunc
+function msPowWrapI32(a: int32, b: int32): int32 {
+	@emit(`if (${b} < 0) return ${a} === 1 ? 1 : (${a} === -1 ? ((${b} & 1) ? -1 : 1) : 0);
+	let r = 1, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1) r = Math.imul(r, x);
+		y = y >>> 1;
+		if (y === 0) return r;
+		x = Math.imul(x, x);
+	}`);
+	unreachable;
+}
+
+@compilerFunc
 function msPowU32(a: uint32, b: uint32): uint32 {
 	@emit(`let r = 1, x = ${a}, y = ${b};
 	for (;;) {
@@ -458,6 +471,19 @@ function msPowI64(a: int64, b: int64): int64 {
 		if (y === 0n) return r;
 		x = x * x;
 		if (x > 9223372036854775807n || x < -9223372036854775808n) ${msDefect}("over- or underflow");
+	}`);
+	unreachable;
+}
+
+@compilerFunc
+function msPowWrapI64(a: int64, b: int64): int64 {
+	@emit(`if (${b} < 0n) return ${a} === 1n ? 1n : (${a} === -1n ? ((${b} & 1n) ? -1n : 1n) : 0n);
+	let r = 1n, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1n) r = BigInt.asIntN(64, r * x);
+		y = y >> 1n;
+		if (y === 0n) return r;
+		x = BigInt.asIntN(64, x * x);
 	}`);
 	unreachable;
 }

@@ -8,7 +8,7 @@
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -21,9 +21,10 @@ import { createState, isAtEnd } from "../parser/cursor";
 import { definedValue } from "../compiler/defines";
 import { headerTarget } from "../module/loader";
 import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/cimport/emit";
+import { ITERATOR_HELPER_NEEDS_SOURCE, ITERATOR_HELPER_RETURNS_ITERATOR } from "./iteratorHelperTexts";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
+import { mintCtorRoutine, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
@@ -350,7 +351,7 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 			}
 		} else {
 			if (base != null) return null;
-			if (!(isNumeric(s) || s.kind == TypeKind.String || s.kind == TypeKind.Boolean || s.kind == TypeKind.Char)) return null;
+			if (!(isNumeric(s) || s.kind == TypeKind.String || s.kind == TypeKind.Boolean || s.kind == TypeKind.Char || s.kind == TypeKind.Array)) return null;
 			base = op;
 		}
 	}
@@ -1110,9 +1111,8 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 
 	// Check for intersection types (split on top-level &) — erasure tier.
 	// Intersection binds tighter than union, so checked BEFORE the union split.
-	// At runtime the type collapses to its left-most operand; downstream
-	// passes (checker / transform / codegen) never see an Intersection Type.
-	// Branded types like `string & { __brand: "X" }` resolve to `string`.
+	// Downstream passes never see an Intersection Type: all-object operands merge
+	// into one struct, a brand becomes a BrandWiden Distinct, anything else is refused.
 	const intersectionParts = splitTopLevel(trimmed, "&");
 	if (intersectionParts.length >= 2) {
 		// Two-tier semantic:
@@ -1120,8 +1120,8 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		//     synthesize a merged struct with all fields combined. Matches
 		//     TypeScript intersection field merging (LANG.md §5.3 example
 		//     `type Extended = IUser & { role: string }`).
-		//   - Any operand is primitive (e.g. `string & { __brand: "X" }`) →
-		//     erasure to first operand (branded primitives, Bug 1 path).
+		//   - A brand (`string & { __brand: "X" }`, `uint8[] & { __brand: "X" }`) →
+		//     a BrandWiden Distinct; any other mix is an error.
 		const operandTypes: Type[] = [];
 		const operandLabels: string[] = [];
 		let allObjectLike = true;
@@ -1149,9 +1149,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
 			if (brand != null) return brand;
+			addError(ctx, "cannot represent the intersection '" + trimmed + "': only object types merge (`A & B`), and a brand is one base (a number, string, boolean, char or array) with an object whose fields are all literals (`T & { __brand: \"X\" }`)", line, col);
+			return errorType();
 		}
-		// Erasure tier (non-brand mix): first operand wins. S2 (TSGAP item 5)
-		// replaces this silent collapse with a hard error.
 		const firstPart = intersectionParts[0].trim();
 		if (firstPart.length > 0) {
 			return resolveAnnotation(firstPart, ctx, line, col);
@@ -1975,14 +1975,17 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" -> ["T", "U"]
 // Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
-function typeParamSym(ctx: CheckerContext, gp: Type): Symbol {
+function typeParamSym(ctx: CheckerContext, gp: Type, owner: Symbol | null = null, index: int32 = 0): Symbol {
 	const sym = makeSymbol(gp.typeName, SymbolKind.TypeAlias, gp, false);
+	sym.modulePath = owner != null ? owner.modulePath : ctx.modulePath;
+	sym.typeParamOwner = owner;
+	sym.disamb = index;
 	stampItem(ctx, sym);
 	gp.sym = sym;
 	return sym;
 }
 
-export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type {
+export function defineGenericParam(ctx: CheckerContext, paramStr: string, owner: Symbol | null = null, index: int32 = 0): Type {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
 		// Has constraint: "T:Comparable" -> name="T", constraint="Comparable"
@@ -1991,12 +1994,12 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type 
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
 		gp.typeExtra = resolveTypeTest(constraintStr, ctx, 0, 0);
-		defineSymbol(ctx.table, typeParamSym(ctx, gp));
+		defineSymbol(ctx.table, typeParamSym(ctx, gp, owner, index));
 		return gp;
 	}
 	// No constraint: "T"
 	const gp = createGenericParam(paramStr);
-	defineSymbol(ctx.table, typeParamSym(ctx, gp));
+	defineSymbol(ctx.table, typeParamSym(ctx, gp, owner, index));
 	return gp;
 }
 
@@ -2012,7 +2015,7 @@ export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: strin
 		const trimmed = param.trim();
 		if (trimmed == "") continue;
 		const colonPos = findChar(trimmed, ":");
-		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed));
+		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed, sym, declared.length as int32));
 		constraints.push(colonPos > 0 ? trimmed.slice(colonPos + 1, trimmed.length) : "");
 	}
 	for (let i = 0; i < declared.length; i += 1) {
@@ -2197,6 +2200,14 @@ function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol
 		}
 	}
 }
+function refuseIteratorHelperTypes(ctx: CheckerContext, node: Node, sym: Symbol, paramTypes: Type[], returnType: Type): void {
+	const problem = paramTypes.length == 0 || !isIterator(peelTransparentInstance(paramTypes[0])) ? ITERATOR_HELPER_NEEDS_SOURCE
+		: !isIterator(returnType) ? ITERATOR_HELPER_RETURNS_ITERATOR : "";
+	if (problem == "") return;
+	addError(ctx, problem, node.location.line, node.location.column);
+	sym.symFlags = sym.symFlags.excl(SymbolFlag.IteratorHelper);
+}
+
 export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
@@ -2254,6 +2265,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	resolveTypeExpr(node.typeExpr, ctx);
 	const bindsGenericTypeHook = refuseHookReceiver(ctx, node, paramTypes, d.fnReturnType != "" ? returnType : null);
 	const fnType = createFunction(paramTypes, d.params, returnType);
+	if (hasFlag(sym, SymbolFlag.IteratorHelper)) refuseIteratorHelperTypes(ctx, node, sym, paramTypes, returnType);
 	if (hasFlag(sym, SymbolFlag.Inline)) fnType.callConv = CallingConvention.CcInline;
 	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
@@ -2356,6 +2368,8 @@ function hookReceiverFault(hook: string, key: string, written: string, recv: Typ
 		return "'" + shown + "' is not a type a hook can belong to, so the hook would never run";
 	}
 	if (name != key) return "'" + display + "' is not the type's own name, and a hook is found by the name its receiver is declared with, so the hook would never run";
+	const classTakesHook = hook == "onDestroy" || hook == "onTrace";
+	if (byVar && byClass && !classTakesHook) return "";
 	if (byVar && byClass) return "'" + display + "' points at the class reference, and a class receiver already is the reference the hook writes through: take it as 'this x: " + name + "'";
 	if (hookWritesItsReceiver(hook)) {
 		if (readonlyView) return "'" + display + "' is a read-only view, and the hook has to write its receiver";
@@ -2413,7 +2427,8 @@ function hookTakes(hook: string): string {
 
 function hookParamFault(hook: string, paramTypes: Type[]): string {
 	if (hook != "onDestroy" && hook != "onTrace" && paramTypes.length > 0) {
-		const recv = paramTypes[0];
+		let recv = paramTypes[0];
+		if (recv.kind == TypeKind.Var && recv.typeReturn != null) recv = recv.typeReturn;
 		if (recv.kind == TypeKind.Ref && recv.typeReturn != null && refWrapsNominal(recv)) {
 			return "'" + typeDisplayName(recv) + "' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
 		}
@@ -3254,6 +3269,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
 		if (parentSym != null) ensureShaped(parentSym, ctx);
+		if (parentSym != null && parentSym.symbolKind == SymbolKind.Interface) {
+			addError(ctx, "Cannot extend an interface '" + bareParentName.trim() + "'. Did you mean 'implements'?", node.location.line, node.location.column);
+		}
 		if (parentSym != null) refuseExtendingPrivateConstructor(ctx, parentSym, node.location.line, node.location.column);
 		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
 		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
@@ -3309,6 +3327,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Propagate HasAsgn from any managed field (parent + own after merge)
 	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
+	ctorRoutineFor(ctx, sym);
 }
 
 function refuseActorHandleName(ctx: CheckerContext, actorName: string, memberName: string, member: Node): void {
@@ -3419,6 +3438,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 	inner.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
+	ctorRoutineFor(ctx, sym);
 }
 
 // ===== Tests =====

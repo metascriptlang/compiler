@@ -256,7 +256,7 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 	return 0;
 }
 
-static void completeSend(msIoRequest* req) {
+static int completeSend(msIoEngine* e, msIoRequest* req) {
 	ssize_t bytesSent;
 	do {
 		bytesSent = send(req->fd, req->buf + req->offset, (size_t)(req->len - req->offset), 0);
@@ -272,11 +272,19 @@ static void completeSend(msIoRequest* req) {
 		abort();
 	}
 
+	if (bytesSent >= 0 && req->offset + (int32_t)bytesSent < req->len) {
+		req->offset += (int32_t)bytesSent;
+		e->fdMap[req->fd] = req;
+		msSelectorRegister(e->selector, req->fd, MS_EVENT_WRITE, req);
+		return 1;
+	}
+
 	/* Decref the msString that msIoSendString incref'd */
 	if (req->strRef.p) msStringDecref(req->strRef);
 	req->strRef = MS_EMPTY_STRING;
 
-	msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)bytesSent);
+	msFutureCompleteT((msFuture_int32*)req->fut, bytesSent < 0 ? (int32_t)bytesSent : req->len);
+	return 0;
 }
 
 /* msFutureCompleteT (not msFutureCancel) — Cancel skips callbacks so the
@@ -666,7 +674,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		switch (req->op) {
 		case MS_IO_RECV:   completeRecv(req);   break;
 		case MS_IO_ACCEPT: if (completeAccept(e, req)) continue; break;
-		case MS_IO_SEND:   completeSend(req);   break;
+		case MS_IO_SEND:   if (completeSend(e, req)) continue; break;
 		case MS_IO_CLOSE:
 			close(fd);
 			msFutureCompleteVoid(req->fut);

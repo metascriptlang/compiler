@@ -3,26 +3,27 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { callConvKey, createFunction, createClosureType, numberType, nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
+import { callConvKey, createFunction, createClosureType, numberType, nominalTypeKeyIn, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
+import { ModuleNameRoots, buildModuleNameRoots, mangleModuleName, setModuleNameRoots } from "../codegen/c/names";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
 // surface syntax) cannot recurse forever.
-function monoStructuralKey(t: Readonly<Type>): string {
+function monoStructuralKey(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	let key = "";
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		if (i > 0) key = key + ",";
 		key = key + t.typeNames[i] + ":";
-		key = key + (i < t.typeChildren.length ? monoTypeKey(t.typeChildren[i]) : "void");
+		key = key + (i < t.typeChildren.length ? monoTypeKeyIn(roots, t.typeChildren[i]) : "void");
 	}
 	return key;
 }
 
-function monoOwnerPath(t: Readonly<Type>): string {
+function monoOwnerPath(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	if (t.sym != null) return t.sym.modulePath;
 	if (t.typeName == "") return "";
 	if (t.kind == TypeKind.Struct && t.typeNames.length > 0 && !hasTypeIdentity(t)) return "";
-	nominalTypeKey(t);
+	nominalTypeKeyIn(roots, t);
 	return "";
 }
 
@@ -30,7 +31,7 @@ function monoOwnerPath(t: Readonly<Type>): string {
 // itself carries no symbol (it is built structurally), but its `typeExtra` still
 // points at the declared base type, which the collect pass stamped with the
 // declaring symbol — the same identity monoOwnerPath reads for a named struct.
-function monoGenericOwner(gi: Readonly<Type>): string {
+function monoGenericOwner(roots: Readonly<ModuleNameRoots>, gi: Readonly<Type>): string {
 	let base: Readonly<Type | null> = gi.typeExtra;
 	let hops = 0;
 	while (base != null && hops < 8
@@ -38,7 +39,7 @@ function monoGenericOwner(gi: Readonly<Type>): string {
 		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
 		hops = hops + 1;
 	}
-	if (base != null) return monoOwnerPath(base);
+	if (base != null) return monoOwnerPath(roots, base);
 	return "";
 }
 
@@ -50,8 +51,16 @@ function monoGenericOwner(gi: Readonly<Type>): string {
 // the pending-instance dedup key. An unknown owner (test contexts, builtins
 // that are never declared) keeps the bare spelling.
 export function monoBaseName(baseName: string, ownerPath: string): string {
+	return monoBaseNameIn(buildModuleNameRoots(), baseName, ownerPath);
+}
+
+function monoBaseNameIn(roots: Readonly<ModuleNameRoots>, baseName: string, ownerPath: string): string {
 	if (baseName == "" || ownerPath == "") return baseName;
-	return baseName + "_" + hashToBase36(ownerPath);
+	return baseName + "_" + ownerHash(roots, ownerPath);
+}
+
+function ownerHash(roots: Readonly<ModuleNameRoots>, ownerPath: string): string {
+	return hashToBase36(mangleModuleName(roots, ownerPath));
 }
 
 export function monoRoutineBaseName(baseName: string, ownerPath: string, disamb: int32): string {
@@ -64,17 +73,29 @@ export function monoRoutineBaseName(baseName: string, ownerPath: string, disamb:
 // analyzer, transform and codegen so the struct, its hooks and every call site
 // cannot drift apart.
 export function monoInstanceName(gi: Readonly<Type>): string {
-	return monoInstanceNameOf(gi.typeName, monoGenericOwner(gi), gi.typeChildren);
+	return monoInstanceNameIn(buildModuleNameRoots(), gi);
+}
+
+export function monoInstanceNameIn(roots: Readonly<ModuleNameRoots>, gi: Readonly<Type>): string {
+	return monoInstanceNameOfIn(roots, gi.typeName, monoGenericOwner(roots, gi), gi.typeChildren);
 }
 
 export function monoInstanceNameOf(genericName: string, ownerPath: string, typeArgs: Readonly<Type[]>): string {
-	return mangleMonoName(monoBaseName(genericName, ownerPath), typeArgs);
+	return monoInstanceNameOfIn(buildModuleNameRoots(), genericName, ownerPath, typeArgs);
+}
+
+function monoInstanceNameOfIn(roots: Readonly<ModuleNameRoots>, genericName: string, ownerPath: string, typeArgs: Readonly<Type[]>): string {
+	return mangleMonoNameIn(roots, monoBaseNameIn(roots, genericName, ownerPath), typeArgs);
 }
 
 // Output spelling only; checked type arguments decide instance identity.
 export function monoTypeKey(t: Readonly<Type | null>): string {
+	return monoTypeKeyIn(buildModuleNameRoots(), t);
+}
+
+export function monoTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null) return "null";
-	const key = monoTypeKeyBody(t);
+	const key = monoTypeKeyBody(roots, t);
 	return t.typeFlags.has(TypeFlag.IsReadonly) ? "ro_" + key : key;
 }
 
@@ -83,7 +104,7 @@ function monoDeclaredName(t: Readonly<Type>): string {
 	return disamb == 0 ? t.typeName : t.typeName + "_u" + String(disamb);
 }
 
-function monoTypeKeyBody(t: Readonly<Type>): string {
+function monoTypeKeyBody(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	return match (t.kind) {
 		TypeKind.Number => "float64",
 		TypeKind.String => "string",
@@ -93,7 +114,7 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => t.sym != null && t.sym.symbolKind == SymbolKind.Actor ? monoTypeKey(t.sym.symbolType) : "int64",
+		TypeKind.Int64 => t.sym != null && t.sym.symbolKind == SymbolKind.Actor ? monoTypeKeyIn(roots, t.sym.symbolType) : "int64",
 		TypeKind.Uint8 => "uint8",
 		TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32",
@@ -102,71 +123,71 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 		TypeKind.Float64 => "float64",
 		TypeKind.Char => "char",
 		TypeKind.CString => "cstring",
-		TypeKind.Array => "arr_" + monoTypeKey(t.typeReturn),
-		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
-		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
-		TypeKind.EnumLiteral => "k" + (t.kind as number).toString() + "_" + monoTypeKey(t.typeReturn) + "_" + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
+		TypeKind.Array => "arr_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Ref => "ref_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Ptr => "ptr_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.EnumLiteral => "k" + (t.kind as number).toString() + "_" + monoTypeKeyIn(roots, t.typeReturn) + "_" + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
 		TypeKind.Struct | TypeKind.Enum => {
-			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
-			if (isMaybeType(t) && t.typeReturn != null && representedPayload(t.typeReturn) != t.typeReturn) return "Maybe_" + monoTypeKey(t.typeReturn);
-			if (t.typeFlags.has(TypeFlag.DuVariant)) return t.typeName + "_" + hashToBase36(nominalTypeKey(t));
-			const owner = monoOwnerPath(t);
+			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(roots, t));
+			if (isMaybeType(t) && t.typeReturn != null && representedPayload(t.typeReturn) != t.typeReturn) return "Maybe_" + monoTypeKeyIn(roots, t.typeReturn);
+			if (t.typeFlags.has(TypeFlag.DuVariant)) return t.typeName + "_" + hashToBase36(nominalTypeKeyIn(roots, t));
+			const owner = monoOwnerPath(roots, t);
 			const name = monoDeclaredName(t);
-			if (owner != "") return name + "_" + hashToBase36(owner);
+			if (owner != "") return name + "_" + ownerHash(roots, owner);
 			return name;
 		},
 		TypeKind.GenericInstance => {
 			const seen = peelTransparentInstance(t);
-			if (seen != t) return monoTypeKey(seen);
-			let key = monoBaseName(t.typeName, monoGenericOwner(t));
+			if (seen != t) return monoTypeKeyIn(roots, seen);
+			let key = monoBaseNameIn(roots, t.typeName, monoGenericOwner(roots, t));
 			let i = 0;
 			while (i < t.typeChildren.length) {
-				key = key + "_" + monoTypeKey(t.typeChildren[i]);
+				key = key + "_" + monoTypeKeyIn(roots, t.typeChildren[i]);
 				i = i + 1;
 			}
 			return key;
 		},
 		TypeKind.Alias => {
 			if (t.typeReturn == null) throw new Error("internal: alias '" + t.typeName + "' has no target in monoTypeKey");
-			return monoTypeKey(t.typeReturn);
+			return monoTypeKeyIn(roots, t.typeReturn);
 		},
-		TypeKind.SizedArray => "sizedArr_" + t.typeValue.toString() + "_" + monoTypeKey(t.typeReturn),
-		TypeKind.Span => "span_" + monoTypeKey(t.typeReturn),
-		TypeKind.Set => "set_" + monoTypeKey(t.typeReturn),
-		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
-		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
+		TypeKind.SizedArray => "sizedArr_" + t.typeValue.toString() + "_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Span => "span_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Set => "set_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Var => "var_" + monoTypeKeyIn(roots, t.typeReturn),
+		TypeKind.Borrow => "borrow_" + monoTypeKeyIn(roots, t.typeReturn),
 		TypeKind.Distinct => {
-			if (isBrandDistinct(t)) return "brand_" + monoTypeKey(t.typeReturn) + "_" + hashToBase36(t.typeName);
-			if (t.typeName == "") return "distinct_" + monoTypeKey(t.typeReturn);
-			const owner = monoOwnerPath(t);
+			if (isBrandDistinct(t)) return "brand_" + monoTypeKeyIn(roots, t.typeReturn) + "_" + hashToBase36(t.typeName);
+			if (t.typeName == "") return "distinct_" + monoTypeKeyIn(roots, t.typeReturn);
+			const owner = monoOwnerPath(roots, t);
 			const name = monoDeclaredName(t);
-			if (owner != "") return "distinct_" + name + "_" + hashToBase36(owner);
+			if (owner != "") return "distinct_" + name + "_" + ownerHash(roots, owner);
 			return "distinct_" + name;
 		},
 		TypeKind.Function => {
 			let key = "fn";
 			for (const child of t.typeChildren) {
-				key = key + "_" + monoTypeKey(child);
+				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
-			return key + "_r_" + monoTypeKey(t.typeReturn) + callConvKey(t);
+			return key + "_r_" + monoTypeKeyIn(roots, t.typeReturn) + callConvKey(t);
 		},
 		TypeKind.Union => {
 			if (t.typeName != "") {
-				const owner = monoOwnerPath(t);
+				const owner = monoOwnerPath(roots, t);
 				const name = monoDeclaredName(t);
-				if (owner != "") return name + "_" + hashToBase36(owner);
+				if (owner != "") return name + "_" + ownerHash(roots, owner);
 				return name;
 			}
 			let key = "union";
 			for (const child of t.typeChildren) {
-				key = key + "_" + monoTypeKey(child);
+				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
 			return key;
 		},
 		TypeKind.Tuple => {
 			let key = "tuple";
 			for (const child of t.typeChildren) {
-				key = key + "_" + monoTypeKey(child);
+				key = key + "_" + monoTypeKeyIn(roots, child);
 			}
 			return key;
 		},
@@ -174,8 +195,8 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 		_ => {
 			let key = "k" + (t.kind as number).toString();
 			if (t.typeName != "") key = key + "_" + hashToBase36(t.typeName);
-			if (t.typeReturn != null) key = key + "_" + monoTypeKey(t.typeReturn);
-			for (const child of t.typeChildren) key = key + "_" + monoTypeKey(child);
+			if (t.typeReturn != null) key = key + "_" + monoTypeKeyIn(roots, t.typeReturn);
+			for (const child of t.typeChildren) key = key + "_" + monoTypeKeyIn(roots, child);
 			return key;
 		},
 	};
@@ -186,16 +207,13 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 // identity<number>     → "identity__number"
 // pair<number, string> → "pair__number_string"
 export function mangleMonoName(baseName: string, concreteTypes: Readonly<Type[]>): string {
-	return baseName + "__" + buildTypeArgKeys(concreteTypes).join("_");
+	return mangleMonoNameIn(buildModuleNameRoots(), baseName, concreteTypes);
 }
 
-// Build typeArgKeys from concrete types
-export function buildTypeArgKeys(concreteTypes: Readonly<Type[]>): string[] {
+function mangleMonoNameIn(roots: Readonly<ModuleNameRoots>, baseName: string, concreteTypes: Readonly<Type[]>): string {
 	const keys: string[] = [];
-	for (let i = 0; i < concreteTypes.length; i += 1) {
-		keys.push(monoTypeKey(concreteTypes[i]));
-	}
-	return keys;
+	for (const t of concreteTypes) keys.push(monoTypeKeyIn(roots, t));
+	return baseName + "__" + keys.join("_");
 }
 
 // ===== Tests =====
@@ -223,7 +241,22 @@ test "monoTypeKey array" {
 
 test "monoTypeKey object" {
 	const obj = declaredAt({ kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.Struct, "/p/box.ms");
-	assert monoTypeKey(obj) == "Box_" + hashToBase36("/p/box.ms");
+	assert monoTypeKey(obj) == "Box_" + hashToBase36(mangleModuleName(buildModuleNameRoots(), "/p/box.ms"));
+}
+
+test "a type and a generic routine of one module are named the same under every install root" {
+	const saved = buildModuleNameRoots();
+	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
+	const names: string[] = [];
+	for (const root of ["/home/gate/recompiler", "/tmp/other-checkout/deeper"]) {
+		setModuleNameRoots({ compiler: root, packages: "", project: `${root}/app`, uniqueNames: new HashMap<string, string>() });
+		const box = declaredAt({ kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.Struct, `${root}/std/box.ms`);
+		const meters = declaredAt({ kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.TypeAlias, `${root}/app/m.ms`);
+		const tagged = declaredAt({ kind: TypeKind.Union, typeName: "Tagged", typeNames: [], typeChildren: [f64], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.TypeAlias, `${root}/app/m.ms`);
+		names.push(`${monoTypeKey(box)} ${monoTypeKey(meters)} ${monoTypeKey(tagged)} ${monoRoutineBaseName("wrap", `${root}/std/box.ms`, 0)} ${monoInstanceNameOf("Pair", `${root}/app/m.ms`, [box])}`);
+	}
+	setModuleNameRoots(saved);
+	assert names[0] == names[1], `${names[0]} vs ${names[1]}`;
 }
 
 test "a generic instance over an unnamed base type has no owner to name" {

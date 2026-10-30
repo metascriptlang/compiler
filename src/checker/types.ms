@@ -3,8 +3,8 @@
 
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { mangleSeparatedProperty } from "../codegen/c/names";
-import { isAssignable } from "./compat";
+import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
+import { isAssignable, sameNominal } from "./compat";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -814,8 +814,8 @@ function unionMemberKey(t: Readonly<Type>): string {
 		owner = owner.typeReturn;
 		depth += 1;
 	}
-	const ownerPath = owner != null && owner.sym != null ? owner.sym.modulePath : "";
-	return typeKey(t) + "\u0001" + ownerPath;
+	const ownerName = owner != null && owner.sym != null ? mangleModuleName(buildModuleNameRoots(), owner.sym.modulePath) : "";
+	return typeKey(t) + "\u0001" + ownerName;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
@@ -1099,9 +1099,11 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 		if (slot >= 0) hits.push(slot);
 		return hits;
 	}
+	const memberEnum = ek == TypeKind.EnumLiteral ? literalBase(exprType) : null;
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
+		if (!hit && memberEnum != null) hit = child.kind == TypeKind.Enum && sameNominal(child, memberEnum);
 		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) hit = child.kind == ek;
 		if (hit) hits.push(vi);
 		vi += 1;
@@ -1588,7 +1590,7 @@ function hasNominalIdentity(inner: Type): boolean {
 }
 
 function moduleQualifiedName(inner: Type): string {
-	const owner = inner.sym != null ? inner.sym.modulePath : "";
+	const owner = inner.sym != null && inner.sym.modulePath != "" ? mangleModuleName(buildModuleNameRoots(), inner.sym.modulePath) : "";
 	return owner == "" ? inner.typeName : inner.typeName + "_" + identSafeKey(owner);
 }
 
@@ -3509,6 +3511,10 @@ function plainDataAll(ts: Type[], declaresHook: (owner: Type) => boolean, depth:
 // (types.ms:genTupleType) so generated comparison functions match struct names.
 
 export function tupleTypeName(t: Readonly<Type | null>): string {
+	return tupleTypeNameIn(buildModuleNameRoots(), t);
+}
+
+export function tupleTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null || t.kind != TypeKind.Tuple) return "";
 	let key = "tuple:";
 	let i = 0;
@@ -3516,7 +3522,7 @@ export function tupleTypeName(t: Readonly<Type | null>): string {
 		if (i > 0) key = key + ",";
 		const child = t.typeChildren[i];
 		if (child != null) {
-			key = key + typeKey(child);
+			key = key + typeKeyIn(roots, child, []);
 		}
 		i += 1;
 	}
@@ -3624,20 +3630,24 @@ export function heldBeyond(slot: Type): Type[] {
 }
 
 export function nominalTypeKey(t: Readonly<Type>): string {
+	return nominalTypeKeyIn(buildModuleNameRoots(), t);
+}
+
+export function nominalTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const sym = t.sym;
 	if (sym != null) {
-		const declared = `${sym.modulePath}:${sym.name}:${sym.disamb}`;
-		return t.typeFlags.has(TypeFlag.DuVariant) ? duVariantKey(declared, t) : declared;
+		const declared = `${mangleModuleName(roots, sym.modulePath)}:${sym.name}:${sym.disamb}`;
+		return t.typeFlags.has(TypeFlag.DuVariant) ? duVariantKey(roots, declared, t) : declared;
 	}
-	if (t.typeInst != null) return typeKey(t.typeInst);
+	if (t.typeInst != null) return typeKeyIn(roots, t.typeInst, []);
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
 	return t.typeName;
 }
 
-function duVariantKey(declared: string, t: Readonly<Type>): string {
+function duVariantKey(roots: Readonly<ModuleNameRoots>, declared: string, t: Readonly<Type>): string {
 	let k = declared;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		k = k + "|" + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + typeKey(t.typeChildren[i]);
+		k = k + "|" + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + typeKeyIn(roots, t.typeChildren[i], []);
 	}
 	return k;
 }
@@ -3646,7 +3656,7 @@ export function isNominalKind(k: TypeKind): boolean {
 	return k == TypeKind.Struct || k == TypeKind.Union || k == TypeKind.Enum || k == TypeKind.Distinct;
 }
 
-function genericHeadKey(gi: Readonly<Type>): string {
+function genericHeadKey(roots: Readonly<ModuleNameRoots>, gi: Readonly<Type>): string {
 	let base: Readonly<Type | null> = gi.typeExtra;
 	let hops = 0;
 	while (base != null && hops < 8
@@ -3654,42 +3664,48 @@ function genericHeadKey(gi: Readonly<Type>): string {
 		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
 		hops = hops + 1;
 	}
-	if (base != null && base.typeName != "") return nominalTypeKey(base);
+	if (base != null && base.typeName != "") return nominalTypeKeyIn(roots, base);
 	return gi.typeName;
 }
 
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
 function typeKey(t: Readonly<Type>): string {
-	return typeKeyIn(t, []);
+	return typeKeyIn(buildModuleNameRoots(), t, []);
 }
 
 // `keying` holds the types whose keys are being built, so a type met again inside its own key ends
 // it; each key owns its list because modules are emitted on parallel workers.
-function typeKeyIn(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
+function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
 	if (t == null) return "null";
 	for (let i = 0; i < keying.length; i += 1) {
 		if (keying[i] == t) return "rec" + (keying.length - i).toString();
 	}
 	keying.push(t);
 	defer keying.pop();
-	return typeKeyInner(t, keying);
+	return typeKeyInner(roots, t, keying);
 }
 
-function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
+function genericParamKey(roots: Readonly<ModuleNameRoots>, name: string, sym: Readonly<Symbol>): string {
+	const owner = sym.typeParamOwner;
+	if (owner != null && owner.modulePath != "") return `${name}@${symbolKeyIn(roots, sym)}`;
+	return `${name}#${sym.itemModule}.${sym.item}`;
+}
+
+function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
-	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
-	if (t.kind == TypeKind.GenericParam && t.sym != null) return `${t.typeName}#${t.sym.itemModule}.${t.sym.item}`;
-	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(roots, t.typeReturn, keying);
+	if (t.kind == TypeKind.GenericParam && t.sym != null) return genericParamKey(roots, t.typeName, t.sym);
+	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKeyIn(roots, t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Set) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
-			let k = genericHeadKey(t) + "<";
+			let k = genericHeadKey(roots, t) + "<";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
 			return k + ">";
@@ -3704,14 +3720,14 @@ function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): stri
 		TypeKind.Float32 => "float32",
 		TypeKind.BigInt => "bigint",
 		TypeKind.Array => {
-			return "Array(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
+			return "Array(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Tuple => {
 			let k = "tuple:";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + typeKeyIn(t.typeChildren[i], keying);
+				k = k + typeKeyIn(roots, t.typeChildren[i], keying);
 				i += 1;
 			}
 			return k;
@@ -3721,45 +3737,45 @@ function typeKeyInner(t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): stri
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void") + callConvKey(t);
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void") + callConvKey(t);
 		},
 		TypeKind.Union => {
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "null");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "null");
 				i += 1;
 			}
 			return k + ")";
 		},
 		TypeKind.Span => {
-			return "Span(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
+			return "Span(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Set => {
-			return "BitSet(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
+			return "BitSet(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.SizedArray => {
-			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
+			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Ref => {
 			const inner = refSubstInner(t);
-			return refWrapperName(t) + "Ref(" + (inner != null ? typeKeyIn(inner, keying) : "any") + ")";
+			return refWrapperName(t) + "Ref(" + (inner != null ? typeKeyIn(roots, inner, keying) : "any") + ")";
 		},
-		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
-		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
-		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
-		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
-		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
+		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
+		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
+		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
+		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
 		TypeKind.Struct => {
 			let k = "anon(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
+				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
 			return k + ")";
@@ -3801,7 +3817,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.Null) return false;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
-	if (t.kind == TypeKind.Unknown) return false;
+	if (t.kind == TypeKind.Unknown || t.kind == TypeKind.CString) return false;
 	if (t.kind == TypeKind.Function) return true;
 	if (isStructType(t)) return true;
 	if (isPrimitiveKind(t.kind)) return true;
@@ -4124,7 +4140,7 @@ function isNullablePointer(t: Readonly<Type>): boolean {
 	if (t.kind == TypeKind.Cursor) return t.typeReturn != null && isNullablePointer(t.typeReturn);
 	if (isAwaitable(t)) return true;
 	const k = (peelToRepr(t) ?? t).kind;
-	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
+	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt || k == TypeKind.CString;
 }
 
 export function isNullableBigInt(t: Type | null): boolean {
@@ -4792,6 +4808,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
 		unifyTypeGuard(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
+		return;
+	}
+	if (formal.kind != TypeKind.Distinct && isBrandDistinct(concrete) && concrete.typeReturn != null && isArrayShaped(concrete.typeReturn)) {
+		unifyTypeGuard(formal, concrete.typeReturn, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Span) {
@@ -6659,7 +6679,7 @@ test "a defaulted binding sheds null" {
 	assert destrDefaultedType(null) == null;
 }
 
-import { makeSymbol } from "./symbol";
+import { makeSymbol, symbolKeyIn } from "./symbol";
 
 test "a tuple names its nominal members by declaring symbol" {
 	const a = createStruct("TupleCell", ["text"], [stringType()], false);
@@ -6734,4 +6754,27 @@ test "a unification bounds its depth by the bindings it is given, not by another
 	unifyTypeUnprofiled(formal, concrete, fresh);
 	assert fresh.names.length == 1 && fresh.types[0].kind == TypeKind.Number, "a fresh unification beside a deep one binds T";
 	assert fresh.depth == 0 && deep.depth == 3, "each unification leaves its own depth where it found it";
+}
+
+function declaredParam(owner: Symbol, index: int32, itemModule: int32, item: int32): Type {
+	const gp = createGenericParam("T");
+	const sym = makeSymbol("T", SymbolKind.TypeAlias, gp, false);
+	sym.modulePath = owner.modulePath;
+	sym.typeParamOwner = owner;
+	sym.disamb = index;
+	sym.itemModule = itemModule;
+	sym.item = item;
+	gp.sym = sym;
+	return gp;
+}
+
+test "a declared generic parameter is keyed by its declaration and position, never by the process-local item pair" {
+	const g = makeSymbol("g", SymbolKind.Function, null, false);
+	g.modulePath = "/src/b.ms";
+	const box = makeSymbol("Box", SymbolKind.Class, null, false);
+	box.modulePath = "/src/b.ms";
+	const ofG = declaredParam(g, 0, 3, 7);
+	assert typeKey(ofG) != typeKey(declaredParam(box, 0, 3, 8));
+	assert typeKey(ofG) != typeKey(declaredParam(g, 1, 3, 9));
+	assert typeKey(ofG) == typeKey(declaredParam(g, 0, 5, 2)), `${typeKey(ofG)} vs ${typeKey(declaredParam(g, 0, 5, 2))}`;
 }

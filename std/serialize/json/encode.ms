@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, declaredCallType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -26,9 +26,33 @@ function isOptionalField(name: string, optionalFields: string[]): boolean {
 	return false;
 }
 
-export macro jsonValueOf(t: Node): Node {
+// A declared `toJSON` is called once and its result serialized without a second
+// hook lookup on the result itself, as SerializeJSONProperty does: the expansion
+// re-emits `jsonValueOf` on `_jsonHooked(x.toJSON())`, a prelude identity the next
+// expansion strips, as the other helpers it emits are prelude functions.
+export macro jsonValueOf(arg: Node): Node {
+	const wrapped = arg.kind == NodeKind.CallExpr && arg.callee.kind == NodeKind.Identifier
+		&& arg.callee.name == "_jsonHooked";
+	const t: Node = wrapped ? arg.arguments[0] : arg;
+	const hooked = wrapped ? null : declaredCallType(t, "toJSON");
+	if (hooked != null) {
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonValueOf" },
+			arguments: [{
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonHooked" },
+				arguments: [{
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: "toJSON", isOptional: false },
+					arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
+					nodeType: hooked,
+				}],
+			}],
+		};
+	}
 	let tt = implementationOf(t);
-	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
+	while (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
@@ -85,6 +109,8 @@ export macro jsonValueOf(t: Node): Node {
 				if (en == "") {
 					error("jsonValueOf: anonymous struct element arrays unsupported", t);
 				}
+			} else if (elemType.typExprBase.kind == NodeKind.Identifier && elemType.typExprBase.name == "Distinct") {
+				elemByValueOf = true;
 			} else {
 				error("jsonValueOf: unsupported array element kind (TypeGeneric inner kind=" + peeled.kind + ")", t);
 			}

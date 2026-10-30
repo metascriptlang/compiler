@@ -28,13 +28,13 @@ test "an arrow parameter named x keeps the outer narrowing" {
 }
 
 test "a later closure writing the outer x cancels the narrowing" {
-	assert hasError(NARROWED + "\tconst h = (): void => { x = null; };\n\treturn g();\n}", "does not exist on type");
+	assert hasError(NARROWED + "\tconst h = (): void => { x = null; };\n\treturn g();\n}", "is possibly 'null'");
 }
 
 test "a write to the outer x beside a shadowing declaration still cancels the narrowing" {
-	assert hasError(NARROWED + "\tconst h = (): void => { x = null; if (true) { let x = 1; x = 2; } };\n\treturn g();\n}", "does not exist on type");
+	assert hasError(NARROWED + "\tconst h = (): void => { x = null; if (true) { let x = 1; x = 2; } };\n\treturn g();\n}", "is possibly 'null'");
 }
 
 test "a write to the outer x after a block's shadowing declaration closed still cancels it" {
-	assert hasError(NARROWED + "\tconst h = (): void => { { let x = 1; x = 2; } x = null; };\n\treturn g();\n}", "does not exist on type");
+	assert hasError(NARROWED + "\tconst h = (): void => { { let x = 1; x = 2; } x = null; };\n\treturn g();\n}", "is possibly 'null'");
 }

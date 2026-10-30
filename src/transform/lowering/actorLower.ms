@@ -135,8 +135,6 @@ function paramSlotWidth(paramTypes: Type[], idx: int32): int32 {
 	return mk == "string" ? 2 : 1;
 }
 
-// Force T* on actor proxy/impl for value-layout params so msSinkBoxStruct's
-// memset reaches caller's local (not just proxy's copy) — prevents double-free.
 function markValueLayoutParamsAsMutated(sym: Symbol, paramTypes: Type[]): void {
 	if (sym == null) return;
 	let bits: int32 = sym.mutatedParams;
@@ -668,7 +666,6 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			// BEFORE this point — sym now refers to the proxy.
 			if (m.resolvedSym != null) {
 				m.resolvedSym.symbolType = proxyFnType;
-				markValueLayoutParamsAsMutated(m.resolvedSym, proxyParamTypes);
 				// The analyzer reads this to classify UNPARKED calls to the proxy as
 				// SEND-class handoffs (plain-ref args consumed into the message);
 				// parked calls carry NodeFlag.AwaitParked instead and stay borrows.

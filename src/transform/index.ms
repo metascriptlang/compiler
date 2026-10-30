@@ -136,9 +136,10 @@ function runs(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pa
 	return false;
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null, overflowChecks: boolean = true): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	ctx.overflowChecks = overflowChecks;
 	ctx.liftTables = liftTables;
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);

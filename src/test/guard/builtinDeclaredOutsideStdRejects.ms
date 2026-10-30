@@ -1,12 +1,13 @@
-// guard: @builtin and @iteratorHelper are refused in a module outside the std tree the compiler
-// resolved, on a function, an extern, a method and a generator, and in a user file whose path spells
-// a std module, so every reader of a builtin kind or the helper flag can trust that std declared it.
+// guard: @builtin is refused in a module outside the std tree the compiler resolved, on a function,
+// an extern and a method, and in a user file whose path spells a std module, so every reader of a
+// builtin kind can trust that std declared it. @iteratorHelper is open to every module: a
+// well-shaped user generator is accepted and each misuse shape is refused at its declaration.
 //
 // WHY A SUBPROCESS: the fake std file needs a directory tree beside the entry module.
 //
-// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) or the
-//   iterator-helper close and borrow the checker's trust in the std declaration, or std membership
-//   is read from a path spelling.
+// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) and borrow
+//   the checker's trust in the std declaration, std membership is read from a path spelling, a
+//   well-shaped user @iteratorHelper is refused, or a misused one reaches the lowering.
 
 import { execFileResult, cwd, exit, env } from "std/process";
 import { ensureDir, isFile, writeFile } from "std/fs";
@@ -33,8 +34,6 @@ interface Case {
 	declaredIn: string;
 	files: { path: string, text: string }[];
 }
-
-const FAKE_HELPER = "@iteratorHelper\nexport function* fakeMap(this it: Iterator<int32>): Iterator<int32> {\n\tfor (const x of it) yield x;\n}\n";
 
 const FAKE_STRUCT = "@builtin(\"PtrBits\")\nexport extern function fakeBits(p: Ptr<void>): uint64;\n";
 
@@ -66,22 +65,22 @@ const cases: Case[] = [
 			{ path: "main.ms", text: "import { fakeBits } from \"./std/core/struct\";\nconsole.log(1);\n" },
 		],
 	},
-	{
-		name: "a user generator claiming @iteratorHelper",
-		refusal: "@iteratorHelper is reserved for the standard library",
-		declaredIn: "/main.ms'",
-		files: [{ path: "main.ms", text: `${FAKE_HELPER}console.log(1);\n` }],
-	},
-	{
-		name: "a user file at std/core/array/iterator.ms claiming @iteratorHelper",
-		refusal: "@iteratorHelper is reserved for the standard library",
-		declaredIn: "/std/core/array/iterator.ms'",
-		files: [
-			{ path: "std/core/array/iterator.ms", text: FAKE_HELPER },
-			{ path: "main.ms", text: "import { fakeMap } from \"./std/core/array/iterator\";\nconsole.log(1);\n" },
-		],
-	},
 ];
+
+const HELPER = "@iteratorHelper\n";
+const NEEDS_SOURCE = "@iteratorHelper needs the source iterator (an Iterator<T>) as the first parameter";
+const ALIASES = "type It = Iterator<int32>;\ntype Count = int32;\n";
+const SHAPE_REFUSALS: { name: string, text: string, refusal: string }[] = [
+	{ name: "no parameters", text: `${HELPER}function* h(): Iterator<int32> { yield 1; }`, refusal: NEEDS_SOURCE },
+	{ name: "a first parameter that is not an iterator", text: `${HELPER}function* h(n: int32): Iterator<int32> { yield n; }`, refusal: NEEDS_SOURCE },
+	{ name: "a function that is not a generator", text: `${HELPER}function h(it: Iterator<int32>): Iterator<int32> { return it; }`, refusal: "@iteratorHelper applies to a generator function with a body" },
+	{ name: "a return type that is not an iterator", text: `${HELPER}function* h(it: Iterator<int32>): int32 { yield 1; }`, refusal: "@iteratorHelper must return an Iterator<T>" },
+	{ name: "a first parameter whose alias is not an iterator", text: `${ALIASES}${HELPER}function* h(n: Count): Iterator<int32> { yield n; }`, refusal: NEEDS_SOURCE },
+	{ name: "a return type whose alias is not an iterator", text: `${ALIASES}${HELPER}function* h(it: It): Count { yield 1; }`, refusal: "@iteratorHelper must return an Iterator<T>" },
+	{ name: "an async generator", text: `${HELPER}async function* h(it: Iterator<int32>): Iterator<int32> { yield 1; }`, refusal: "@iteratorHelper does not apply to an async generator" },
+];
+const USER_HELPERS = `${HELPER}function* dedupe<T>(it: Iterator<T>): Iterator<T> { for (const x of it) yield x; }\n${HELPER}function* twice(this it: Iterator<int32>): Iterator<int32> { for (const x of it) { yield x; yield x; } }\nconsole.log(1);\n`;
+const ALIAS_HELPER = `${ALIASES}${HELPER}function* aliased(it: It): It { for (const x of it) yield x; }\nconsole.log(1);\n`;
 
 let slot = 0;
 for (const c of cases) {
@@ -98,6 +97,26 @@ for (const c of cases) {
 		if (r.exitCode == 0 || !out.includes(c.refusal) || !out.includes(c.declaredIn)) report(`${c.name} [${target}]: not refused at its declaration: ${out}`);
 	}
 }
+
+function checkUserFile(label: string, text: string, refusal: string): void {
+	slot += 1;
+	const dir = `${root}/out/guard/builtinDeclaredOutsideStdRejects/${slot}`;
+	ensureDir(dir);
+	writeFile(`${dir}/main.ms`, text);
+	for (const target of ["c", "js"]) {
+		const r = execFileResult(msc, ["check", `--target=${target}`, `${dir}/main.ms`]);
+		const out = `${r.output}${r.errorOutput}`;
+		if (refusal == "") {
+			if (r.exitCode != 0) report(`${label} [${target}]: refused: ${out}`);
+		} else if (r.exitCode == 0 || !out.includes(refusal) || !out.includes("/main.ms:")) {
+			report(`${label} [${target}]: not refused at its declaration: ${out}`);
+		}
+	}
+}
+
+checkUserFile("a well-shaped user @iteratorHelper", USER_HELPERS, "");
+checkUserFile("a user @iteratorHelper whose source and return are an alias of Iterator", ALIAS_HELPER, "");
+for (const c of SHAPE_REFUSALS) checkUserFile(`@iteratorHelper on ${c.name}`, `${c.text}\nconsole.log(1);\n`, c.refusal);
 
 if (failed != 0) exit(1);
 console.log("GUARD-OK");

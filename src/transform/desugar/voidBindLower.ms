@@ -5,17 +5,46 @@
 // env field ever reaches the emitters. The checker has already applied the
 // TS-strict refusals by the time this runs.
 
-import { Node, NodeKind, Type, TypeKind, DeclKind, VariableDeclData, BinaryExprData, ExprStmtData, BlockStmtData, ProgramData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, Type, TypeKind, DeclKind, VariableDeclData, BinaryExprData, MemberExprData, HiddenDerefData, HiddenStdConvData, ExprStmtData, BlockStmtData, ProgramData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { nullType, createArray, createRef } from "../../checker/types";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkBlockExpanding } from "../walker";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, mapChildren } from "../../ast/visitor";
 import { makeNull, makeExprStmt, makeVarDecl, makeIdentResolved } from "../util";
 
 export function lowerVoidBind(program: Node, ctx: TransformContext): Node {
+	eraseVoidFieldReads(program);
 	expandVoidBinds(program, ctx);
 	restampVoidUse(program);
 	return program;
+}
+
+function isPlainPath(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.HiddenDeref) return isPlainPath((n.data as HiddenDerefData).expr);
+	if (n.kind == NodeKind.HiddenSubConv) return isPlainPath((n.data as HiddenStdConvData).convExpr);
+	return n.kind == NodeKind.MemberExpr && isPlainPath((n.data as MemberExprData).object);
+}
+
+// A void-typed field has no C member, so reading one off a plain path yields the
+// null carrier. A field store keeps its target and only its object is walked.
+function eraseVoidFieldReads(node: Node): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.operator == "=" && bd.left.kind == NodeKind.MemberExpr) {
+			bd.right = eraseVoidFieldReads(bd.right);
+			mapChildren(bd.left, eraseVoidFieldReads);
+			return node;
+		}
+	}
+	mapChildren(node, eraseVoidFieldReads);
+	if (isVoidTyped(node) && node.kind == NodeKind.MemberExpr && isPlainPath(node)) {
+		const carrier = makeNull(node.location);
+		carrier.nodeType = node.nodeType;
+		return carrier;
+	}
+	return node;
 }
 
 function expandVoidBinds(node: Node, ctx: TransformContext): void {

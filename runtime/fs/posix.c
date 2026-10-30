@@ -27,10 +27,34 @@ msString msFsReadFile(msString path) {
 	FILE* f = fopen(msStringToCString(path), "rb");
 	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
 	struct stat st;
-	size_t cap = fstat(fileno(f), &st) == 0 && st.st_size > 0 && st.st_size < MS_LEN_MAX ? (size_t)st.st_size + 1 : 4096;
-	char* buf = (char*)malloc(cap);
-	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
+	size_t cap = 4096;
 	size_t len = 0;
+	msString direct = MS_EMPTY_STRING;
+	if (fstat(fileno(f), &st) == 0 && st.st_size > 0 && st.st_size < MS_LEN_MAX) {
+		size_t size = (size_t)st.st_size;
+		direct = msStringNewUninit((int64_t)size);
+		errno = 0;
+		len = fread(direct.p->data, 1, size, f);
+		if (ferror(f)) {
+			_msFsLastErrno = errno != 0 ? errno : EIO;
+			msStringDecref(direct);
+			fclose(f);
+			return MS_EMPTY_STRING;
+		}
+		int next = len == size ? getc(f) : EOF;
+		if (next == EOF) {
+			fclose(f);
+			if (len == 0) { msStringDecref(direct); return MS_EMPTY_STRING; }
+			direct.len = (int64_t)len;
+			direct.p->data[len] = '\0';
+			return direct;
+		}
+		ungetc(next, f);
+		cap = size * 2;
+	}
+	char* buf = (char*)malloc(cap);
+	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); if (direct.len > 0) msStringDecref(direct); return MS_EMPTY_STRING; }
+	if (len > 0) { memcpy(buf, direct.p->data, len); msStringDecref(direct); }
 	for (;;) {
 		errno = 0;
 		len += fread(buf + len, 1, cap - len, f);

@@ -33,7 +33,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { refuseOwnedCast, storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthClosureThunk, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall, boundCallOf } from "./fit";
+import { brandArrayBase, widenArrayBrand, refuseOwnedCast, storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthClosureThunk, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedOperands, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall, boundCallOf } from "./fit";
 import { resolveRuntimeDir } from "../utils/path";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
@@ -717,6 +717,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.QuoteExpr => {
 			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
+			reportUnconsumedJsx(ctx, node, "quote", expectedType);
 			node.nodeType = noneType(); return;
 		},
 		NodeKind.RegexLiteral | NodeKind.JSXText => noneType(),
@@ -795,6 +796,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
+			d.spreadArg = widenArrayBrand(d.spreadArg);
 			if (isFunctionShaped(d.spreadArg.nodeType) && !valueOfInPlace(ctx, d.spreadArg)) {
 				addError(ctx, "a function value cannot be spread — call it first", node.location.line, node.location.column);
 			}
@@ -1247,6 +1249,7 @@ function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	ctx.awaitedCall = savedAwaited;
 	refuseMixedTimedGroup(ctx, d.awaitArg);
 	adoptAwaitedThenable(ctx, d);
+	adoptAwaitedValue(ctx, d);
 	const argType = d.awaitArg.nodeType;
 	if (argType != null && isAwaitable(argType)) {
 		const promiseInner = awaitedType(argType);
@@ -1468,7 +1471,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		const rightConverted = leftConverted != null ? null : operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
 		if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
 		if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
-		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
+		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right, node.flags.has(NodeFlag.TemplateStep) ? ReadNeed.Text : ReadNeed.Value)) rightType = d.right.nodeType;
 		const leftUnion = readUnionOperand(ctx, d.operator, node, d.left, d.right, true);
 		if (leftUnion == UnionRead.Read) leftType = d.left.nodeType;
 		const rightUnion = leftUnion == UnionRead.Refused ? UnionRead.Untouched : readUnionOperand(ctx, d.operator, node, d.right, d.left, false);
@@ -1864,9 +1867,14 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	widenEqualityOperand(ctx, d);
 	if (d.left != beforeLeft || d.left.nodeType != beforeLeftType) effLeft = d.left.nodeType;
 	if (d.right != beforeRight || d.right.nodeType != beforeRightType) effRight = d.right.nodeType;
+	if (isEqualityOp && effLeft != null && effRight != null
+		&& d.left.kind != NodeKind.NullLiteral && d.right.kind != NodeKind.NullLiteral) {
+		effLeft = storedTypeOfNullRead(d.left, effLeft, effLeft);
+		effRight = storedTypeOfNullRead(d.right, effRight, effRight);
+	}
 			if (effLeft != null && effRight != null && synthValueEquality(ctx, node, d, effLeft, effRight)) return;
 	if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
-	if (isComparisonOp(d.operator)) refuseMixedSignedCompare(ctx, d.operator, effLeft, effRight, node);
+	if (isComparisonOp(d.operator) || (isArithmeticOp && d.operator != "**")) refuseMixedSignedOperands(ctx, d.operator, effLeft, effRight, node);
 	if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 	if (rejectCharArith(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 	if (rejectLossyIntFloatMix(ctx, d.operator, d.left, d.right, effLeft, effRight)) { node.nodeType = errorType(); return; }
@@ -2513,7 +2521,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	// `as unknown` is a type-system escape hatch — don't use it as context.
 	const asFnBody = distinctCallTarget(targetType);
 	const convTarget = distinctNumericBase(targetType) ?? targetType;
-	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : convTarget) : null;
+	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : (brandArrayBase(convTarget) ?? convTarget)) : null;
 	const operandMark = ctx.errors.length;
 	const prevConversion = ctx.conversionOperand;
 	const prevConversionTarget = ctx.conversionTarget;
@@ -2923,6 +2931,25 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 					node.location.line, node.location.column);
 			}
 		}
+		if (elemExpected == null && d.elements.length > 1 && elemType != null && isAwaitable(elemType)) {
+			let survivor: Type | null = null;
+			let plainPromises = true;
+			for (const el of d.elements) {
+				const elType = el.nodeType;
+				if (elType == null || !isAwaitable(elType) || isAffineAwaitable(elType)) { plainPromises = false; break; }
+				const awaited = awaitedType(elType);
+				if (survivor == null && awaited != null && awaited.kind != TypeKind.Never) survivor = elType;
+			}
+			if (plainPromises && survivor != null && awaitedType(elemType)!.kind == TypeKind.Never) {
+				let pi = 0;
+				while (pi < d.elements.length) {
+					const pt = d.elements[pi].nodeType;
+					if (pt != null && awaitedType(pt)!.kind == TypeKind.Never) d.elements[pi] = fitJoinedBranch(ctx, d.elements[pi], survivor);
+					pi = pi + 1;
+				}
+				elemType = survivor;
+			}
+		}
 		if (elemExpected == null && d.elements.length > 1
 			&& !(elemType != null && isAwaitable(elemType))) {
 			adoptLiteralArms(ctx, d.elements);
@@ -3022,7 +3049,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
-	arrType = peelTransparentInstance(arrType);
+	arrType = peelTransparentInstance(brandArrayBase(arrType) ?? arrType);
 	// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
 	// Base must be the enum TYPE symbol itself (not a value of enum type).
 	if (d.array.kind == NodeKind.Identifier && d.array.resolvedSym != null
@@ -4350,7 +4377,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook } from "./instantiate";
-import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
+import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

@@ -205,13 +205,13 @@ static size_t gzConsumeTrailer(struct msInflateCtx* c, size_t inLen) {
     return take;
 }
 
-int32_t msInflateFeed(int64_t handle, msString inChunk, int32_t isLast) {
+int32_t msInflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int32_t isLast) {
     struct msInflateCtx* c = handleToCtx(handle);
     if (!c) return -1;
     if (c->gzState == GZ_STATE_ERROR) return -1;
 
-    const uint8_t* in = (inChunk.p && inChunk.len > 0) ? (const uint8_t*)inChunk.p->data : NULL;
-    size_t inLen = (size_t)inChunk.len;
+    if (inLenBytes <= 0) in = NULL;
+    size_t inLen = in ? (size_t)inLenBytes : 0;
     size_t inPos = 0;
 
     /* 1. Eat gzip header bytes (only if format=gzip). */
@@ -280,37 +280,25 @@ int32_t msInflateFeed(int64_t handle, msString inChunk, int32_t isLast) {
         c->streamEnded = 1;
         return 1;
     }
+    if (isLast) {
+        c->gzState = GZ_STATE_ERROR;
+        return -1;
+    }
     return 0;
 }
 
-msString msInflateDrain(int64_t handle, int32_t maxBytes) {
+msUint8Array msInflateDrain(int64_t handle, int32_t maxBytes) {
     struct msInflateCtx* c = handleToCtx(handle);
-    if (!c || c->queueLen == 0) return MS_EMPTY_STRING;
+    if (!c || c->queueLen == 0) return MS_EMPTY_UINT8_ARRAY;
 
     size_t take = (size_t)maxBytes;
     if (take == 0 || take > c->queueLen) take = c->queueLen;
 
-    msString out = msStringNew((const char*)c->queue, (int64_t)take);
+    msUint8Array out = msBufferFrom(c->queue, (int64_t)take);
 
     size_t remain = c->queueLen - take;
     if (remain > 0) memmove(c->queue, c->queue + take, remain);
     c->queueLen = remain;
 
-    return out;
-}
-
-msString msInflateOneShot(msString data, int32_t format) {
-    int64_t h = msInflateNew(format);
-    if (!h) return MS_EMPTY_STRING;
-
-    int32_t st = msInflateFeed(h, data, 1);
-    if (st < 0) { msInflateFree(h); return MS_EMPTY_STRING; }
-
-    struct msInflateCtx* c = handleToCtx(h);
-    msString out = MS_EMPTY_STRING;
-    if (c->queueLen > 0) {
-        out = msStringNew((const char*)c->queue, (int64_t)c->queueLen);
-    }
-    msInflateFree(h);
     return out;
 }

@@ -47,7 +47,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
-import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
+import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -1716,7 +1716,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		refusePointerOpsOnJs(unitCtxs[ui], unitPrograms[ui]);
 		const reexports = modPath == entryPath ? checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]) : [];
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
-		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
+		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true, [], false, null, opts.mode != MODE_DANGER);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
 		const moduleId = replaceExt(moduleDisplayPath(modPath), "");
@@ -3366,7 +3366,10 @@ resetLiftedOps();
 		};
 		if (session.keep) {
 			const earlier = session.lowerClaims.get(modPath);
-			if (earlier != null) reuseClones(writeTables, earlier.contracts);
+			if (earlier != null) {
+				reuseClones(writeTables, earlier.contracts);
+				reuseOps(earlier.ops);
+			}
 			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
 			if (job.ran) {
 				staged.push({ at, job, tree });
@@ -4501,12 +4504,22 @@ export interface JsTreeResult {
 	testFuncs: string[][];
 }
 
+function underEntryDir(modulePath: string, entryPath: string): boolean {
+	return modulePath.startsWith(`${dirname(entryPath)}/`);
+}
+
+test "only a module under the entry's directory counts as under it" {
+	assert underEntryDir("/w/probe/a.ms", "/w/probe/entry.ms");
+	assert underEntryDir("/w/probe/sub/a.ms", "/w/probe/entry.ms");
+	assert !underEntryDir("/w/probe2/a.ms", "/w/probe/entry.ms");
+	assert !underEntryDir("/w/std/serialize/json/parser.ms", "/w/probe/entry.ms");
+}
+
 function testedModules(loadOrder: string[], entryPath: string, opts: CliOptions): string[] {
-	const entryDir = `${dirname(entryPath)}/`;
 	const tested: string[] = [];
 	let candidates = 0;
 	for (const p of loadOrder) {
-		if (opts.testsInDir && !p.startsWith(entryDir)) continue;
+		if (opts.testsInDir && !underEntryDir(p, entryPath)) continue;
 		if (candidates % opts.testsShards == opts.testsShard) tested.push(p);
 		candidates += 1;
 	}
@@ -4663,7 +4676,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			if (fn.resolvedSym != null) written.add(fn.resolvedSym);
 			else writtenUnresolved.add((fn.data as FunctionDeclData).fnName);
 		}
-		const transformed = transformProgram(unitPrograms[ui], ctx, true);
+		const transformed = transformProgram(unitPrograms[ui], ctx, true, [], false, null, opts.mode != MODE_DANGER);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
 		const own: Node[] = [];
@@ -4902,6 +4915,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 	let entries = "";
 	for (let i = 0; i < tree.modulePaths.length; i += 1) {
 		if (tree.testFuncs[i].length == 0) continue;
+		if (opts.testsInDir && !underEntryDir(tree.modulePaths[i], filePath)) continue;
 		const spec = relSpecBetween(harnessRel, tree.moduleOutRels[i]);
 		let funcs = "";
 		let names = "";

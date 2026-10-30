@@ -4,6 +4,8 @@
 // polled via msFsLastErrno, readFile returns "" on failure.
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { Buffer } from "../core/buffer";
+import { rawBuffer, rawString } from "../core/buffer/bytes";
 
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
@@ -30,6 +32,15 @@ export function readFile(path: string): Result<string, IoError> {
 	const err = msFsLastErrno();
 	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
+}
+
+export function readFileBytes(path: string): Result<Buffer, IoError> {
+	const raw = try readFile(path);
+	return Result.ok(rawBuffer(raw));
+}
+
+export function writeFileBytes(path: string, content: Buffer): Result<void, IoError> {
+	return writeFile(path, rawString(content));
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {

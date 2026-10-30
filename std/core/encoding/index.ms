@@ -3,17 +3,35 @@ import {
 	encodingOutputBytes, freshEncodingOutputBytes,
 } from "./output";
 
+when (c) {
+	@inline
+	function fillHex(data: Readonly<Span<uint8>>, out: Ptr<uint8>): void {
+		const input = data as Readonly<Ptr<uint8>>;
+		const digits = "0123456789abcdef".asBytes() as Readonly<Ptr<uint8>>;
+		const length = data.length as int64;
+		for (let i: int64 = 0; i < length; i++) {
+			const byte = input[i] as int32;
+			out[i << 1] = digits[byte >> 4];
+			out[(i << 1) | 1] = digits[byte & 15];
+		}
+	}
+}
+
 @inline
 export function encodeHex(this data: Readonly<Span<uint8>>): string {
 	if (data.length == 0) return emptyEncoding;
-	const digits = "0123456789abcdef".asBytes();
 	let result = newEncodingOutput((data.length as int64) * 2);
 	const bytes = freshEncodingOutputBytes(result);
-	const inputLength = data.length as EncodingIndex;
-	for (let i: EncodingIndex = 0; i < inputLength; i++) {
-		const byte = data[i];
-		bytes[i * 2] = digits[byte >> 4];
-		bytes[i * 2 + 1] = digits[byte & 15];
+	when (c) {
+		fillHex(data, bytes);
+	} else {
+		const digits = "0123456789abcdef".asBytes();
+		const inputLength = data.length as EncodingIndex;
+		for (let i: EncodingIndex = 0; i < inputLength; i++) {
+			const byte = data[i];
+			bytes[i * 2] = digits[byte >> 4];
+			bytes[i * 2 + 1] = digits[byte & 15];
+		}
 	}
 	when (c) { return result; } else { return result.asString(); }
 }
@@ -226,6 +244,25 @@ test "hex codec preserves every byte" {
 	assert decoded.length == 256;
 	for (let i = 0; i < decoded.length; i++) assert decoded[i] == bytes[i];
 	assert "AaFf00".decodeHex().encodeHex() == "aaff00";
+}
+
+test "hex encoder matches known answers at every block edge" {
+	const all: uint8[] = [];
+	for (let i = 0; i < 256; i++) all.push(i as uint8);
+	const known = all.encodeHex();
+	assert known.length == 512;
+	assert known.startsWith("000102030405");
+	assert known.endsWith("fafbfcfdfeff");
+	for (const size of [0, 1, 63, 64, 65, 1048576]) {
+		const bytes: uint8[] = [];
+		for (let i = 0; i < size; i++) bytes.push(((i * 7 + i / 251) % 256) as uint8);
+		const encoded = bytes.encodeHex();
+		assert encoded.length == size * 2;
+		const decoded = encoded.decodeHex();
+		assert decoded.length == size;
+		for (let i = 0; i < size; i++) assert decoded[i] == bytes[i];
+		if (size > 1) assert encoded.substring(2, 4) == "07";
+	}
 }
 
 test "hex decoder keeps empty odd and invalid input behavior" {

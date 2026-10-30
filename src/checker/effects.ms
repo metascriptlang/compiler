@@ -12,6 +12,7 @@ import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
 import { lookupModuleProgram } from "./instantiate";
 import { ModuleGraph, addModule, createModule, createModuleGraph } from "../module/graph";
+import { recordBodyRead } from "./bodyReads";
 
 export enum Effect {
 	SideEffect,
@@ -394,6 +395,7 @@ function builtFresh(sym: Symbol): boolean {
 }
 
 function noTaskStartsBefore(sym: Symbol): boolean {
+	recordBodyRead(sym.modulePath);
 	const program = lookupModuleProgram(sym.modulePath);
 	const decl = sym.declNode;
 	if (program == null || decl == null || !checkedModules.has(sym.modulePath)) return false;
@@ -437,6 +439,7 @@ function cycleStartsNoTask(path: string): boolean {
 			if (known) return false;
 			continue;
 		}
+		recordBodyRead(member);
 		const program = lookupModuleProgram(member);
 		if (program == null || !checkedModules.has(member)) return false;
 		let starts = false;
@@ -614,10 +617,12 @@ function settleOpenRegion(t: EffectTable, pure: boolean): void {
 }
 
 export function routineEffect(sym: Symbol, e: Effect): EffectCause | null {
+	recordBodyRead(sym.modulePath);
 	return memo(sym, e, (): EffectCause | null => walkRoutine(unpackDecl(sym.declNode), e));
 }
 
 export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | null {
+	recordBodyRead(classSym.modulePath);
 	return memo(classSym, e, (): EffectCause | null => {
 		const decl = unpackDecl(classSym.declNode);
 		if (decl == null || decl.kind != NodeKind.ClassDecl) return null;
@@ -662,6 +667,9 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
+		if (call.nodeType == null && (callee == null || callee.nodeType == null)) {
+			throw new Error(`internal: the effect walk reached a call at ${call.location.line}:${call.location.column} whose routine body was never checked`);
+		}
 		if (isOwnParam(callee)) return null;
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (e == Effect.SpawnUnsafe && isSendableFunction(valueType)) return null;
@@ -1056,6 +1064,7 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 }
 
 function paramStoreEffect(sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
+	recordBodyRead(sym.modulePath);
 	while (paramStoreTables.length <= index) paramStoreTables.push(emptyTable());
 	return memoIn(paramStoreTables[index], sym, (): EffectCause | null => walkRoutine(decl, Effect.StoresBorrowed, [name]));
 }

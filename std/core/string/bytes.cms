@@ -58,8 +58,8 @@ function repairedString(data: Readonly<Span<uint8>>, valid: int64, surrogates: b
 	return result;
 }
 
-/** A string a kernel filled from outside, as text: the same string, neither copied nor allocated, when it is already valid (one scan, ASCII fast path first); an ill-formed one is repaired as `utf8String` repairs it. The caller owns `raw`: a valid one is flagged in place. */
-export function utf8Text(raw: string, surrogates: boolean): string {
+/** A string a kernel filled from outside, as text: the same string, neither copied nor allocated, when it is already valid (one scan, ASCII fast path first); an ill-formed one is repaired as `utf8String` repairs it. `raw` is a sink: a last-use argument moves in and out without a copy, and a valid one is flagged in place. */
+export function utf8Text(sink raw: string, surrogates: boolean): string {
 	const data = raw.asBytes();
 	const length = data.length as int64;
 	if (length == 0) return raw;

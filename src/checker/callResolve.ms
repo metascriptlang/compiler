@@ -890,6 +890,17 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 	d.awaitArg = adoptThenable(ctx, d.awaitArg, "Type of 'await' operand");
 }
 
+export function adoptAwaitedValue(ctx: CheckerContext, d: AwaitExprData): void {
+	const t = d.awaitArg.nodeType;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t) || isUnknownType(t) || hasGenericParams(t)) return;
+	if (t.kind == TypeKind.Error || t.kind == TypeKind.Void || thenSignatureOf(ctx, t) != null) return;
+	const lift = ctx.compilerFuncs.get("promiseOfValue");
+	if (lift == null) throw new Error("internal: the prelude declares no @compilerFunc promiseOfValue");
+	const call = boundCallOf(lift, [d.awaitArg], d.awaitArg.location);
+	callCheckExpr(ctx, call, createPromise(t));
+	d.awaitArg = call;
+}
+
 export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
 	const adopted = adoptThenable(ctx, value, "The value an async function returns");
 	if (adopted == value) return value;
@@ -2958,6 +2969,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					}
 				}
 			}
+			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType) && takesAddressAtCArg(argTypes[pi], paramType)
+					&& node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC) && hasAddress(args[pi])
+					&& !isReadonlyView(skipModifier(paramType)) && !isReadonlyView(nonNullMemberOfNullable(skipModifier(paramType)))) {
+				const refusal = writeRefusal(args[pi], WriteSite.CPointer);
+				if (refusal != null) addError(ctx, refusal, args[pi].location.line, args[pi].location.column);
+			}
 			// Reference parity: var/out params require lvalue argument
 			if (!isOutParam(paramType) && pi < args.length && args[pi].kind == NodeKind.OutExpr) {
 				addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": 'out' is written only for an out parameter, and this parameter is not one", node.location.line, node.location.column);
@@ -2970,7 +2987,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				}
 				if (!isLocation(lvArg)) {
 					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": " + (isOutParam(paramType) ? "out" : "ref") + " parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
 					const ro = readonlyRootType(lvArg);
 					const refusal = writeThroughArc(lvArg)
@@ -3118,6 +3135,12 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	return returnType;
 }
 
+function wrapsIntoMaybe(source: Type, formal: Type): boolean {
+	const maybe = peelSink(formal);
+	if (!isMaybeType(maybe) || maybe.typeReturn == null || isMaybeType(source)) return false;
+	return isAssignable(source, maybe.typeReturn) || arityAdapts(source, maybe.typeReturn);
+}
+
 function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bindings: UnifyBindings): void {
 	const cd = node.data as CallExprData;
 	const lim = cd.arguments.length < fnType.typeChildren.length ? cd.arguments.length : fnType.typeChildren.length;
@@ -3127,7 +3150,7 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
 		if (formal != null && restWithoutElements(formal)) continue;
 		if (formal == null || hasGenericParams(formal)) continue;
-		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal)) {
+		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal) && !wrapsIntoMaybe(arg.nodeType, formal)) {
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal),
 				arg.location.line, arg.location.column);
 			continue;
@@ -3173,7 +3196,7 @@ function bindFromUnfitDestination(fnType: Type, bindings: UnifyBindings, fixed: 
 		if (at == null || isUnresolvedType(at) || at.kind == TypeKind.Error || at.kind == TypeKind.Null) continue;
 		if (!hasGenericParams(fnType.typeChildren[ai])) continue;
 		const formal = applySubstitutions(fnType.typeChildren[ai], rebound);
-		if (hasGenericParams(formal) || slotRefuses(at, formal)) return false;
+		if (hasGenericParams(formal) || (slotRefuses(at, formal) && !wrapsIntoMaybe(at, formal))) return false;
 	}
 	for (let bi = 0; bi < bindings.types.length; bi += 1) bindings.types[bi] = rebound.types[bi];
 	return true;
@@ -5576,6 +5599,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
+	if (objType.kind == TypeKind.Error) {
+		node.nodeType = objType;
+		return objType;
+	}
+	if (isMaybeType(objType) && !d.isOptional && objType.typeNames.indexOf(d.property) >= 0) {
+		const subject = d.object.kind == NodeKind.Identifier ? `'${(d.object.data as IdentifierData).name}'` : "object";
+		addError(ctx, `${subject} is possibly 'null' (${typeDisplayName(objType)}): narrow it with a null check, or unwrap it with '!' or '??', before reading '${d.property}'`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).
@@ -6291,7 +6324,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					}
 				}
 			}
-			if (suggestion != "") {
+			if (isMaybeType(resolvedObjType)) {
+				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}': it is possibly 'null', narrow it with a null check, or unwrap it with '!' or '??'`, node.location.line, node.location.column);
+			} else if (suggestion != "") {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
 			} else {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);

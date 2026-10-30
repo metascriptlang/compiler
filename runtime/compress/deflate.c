@@ -134,13 +134,13 @@ void msDeflateFree(int64_t handle) {
     free(c);
 }
 
-int32_t msDeflateFeed(int64_t handle, msString inChunk, int32_t isLast) {
+int32_t msDeflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int32_t isLast) {
     struct msDeflateCtx* c = handleToCtx(handle);
     if (!c || c->errored) return -1;
     if (c->finished) return 1;
 
-    const uint8_t* in = (inChunk.p && inChunk.len > 0) ? (const uint8_t*)inChunk.p->data : NULL;
-    size_t inLen = (size_t)inChunk.len;
+    if (inLenBytes <= 0) in = NULL;
+    size_t inLen = in ? (size_t)inLenBytes : 0;
     size_t inPos = 0;
 
     /* For gzip, update CRC32 + total input length over all feed() calls. */
@@ -206,14 +206,14 @@ int32_t msDeflateFeed(int64_t handle, msString inChunk, int32_t isLast) {
     return c->finished ? 1 : 0;
 }
 
-msString msDeflateDrain(int64_t handle, int32_t maxBytes) {
+msUint8Array msDeflateDrain(int64_t handle, int32_t maxBytes) {
     struct msDeflateCtx* c = handleToCtx(handle);
-    if (!c || c->queueLen == 0) return MS_EMPTY_STRING;
+    if (!c || c->queueLen == 0) return MS_EMPTY_UINT8_ARRAY;
 
     size_t take = (size_t)maxBytes;
     if (take == 0 || take > c->queueLen) take = c->queueLen;
 
-    msString out = msStringNew((const char*)c->queue, (int64_t)take);
+    msUint8Array out = msBufferFrom(c->queue, (int64_t)take);
 
     size_t remain = c->queueLen - take;
     if (remain > 0) memmove(c->queue, c->queue + take, remain);
@@ -222,18 +222,15 @@ msString msDeflateDrain(int64_t handle, int32_t maxBytes) {
     return out;
 }
 
-msString msDeflateOneShot(msString data, int32_t format, int32_t level) {
+msUint8Array msDeflateOneShot(const uint8_t* data, int64_t dataLen, int32_t format, int32_t level) {
     int64_t h = msDeflateNew(format, level);
-    if (!h) return MS_EMPTY_STRING;
+    if (!h) return MS_EMPTY_UINT8_ARRAY;
 
-    int32_t st = msDeflateFeed(h, data, 1);
-    if (st < 0) { msDeflateFree(h); return MS_EMPTY_STRING; }
+    int32_t st = msDeflateFeed(h, data, dataLen, 1);
+    if (st < 0) { msDeflateFree(h); return MS_EMPTY_UINT8_ARRAY; }
 
     struct msDeflateCtx* c = handleToCtx(h);
-    msString out = MS_EMPTY_STRING;
-    if (c->queueLen > 0) {
-        out = msStringNew((const char*)c->queue, (int64_t)c->queueLen);
-    }
+    msUint8Array out = msBufferFrom(c->queue, (int64_t)c->queueLen);
     msDeflateFree(h);
     return out;
 }

@@ -170,7 +170,7 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. A comparison between a signed and an unsigned integer compiles only when one of the two types holds every value of the other (`uint8` with `int32`, `uint32` with `int64`) and then compares the values on every backend; `int32` with `uint32`, `int8` with `uint8` and any signed type with `uint64` need `as` on one side (corpus `mixedSignednessComparison`, handoff `relationalCheck`). Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. A comparison between a signed and an unsigned integer compiles only when one of the two types holds every value of the other (`uint8` with `int32`, `uint32` with `int64`) and then compares the values on every backend; `int32` with `uint32`, `int8` with `uint8` and any signed type with `uint64` need `as` on one side (corpus `mixedSignednessComparison`, handoff `relationalCheck`). The arithmetic operators `+ - * / %` follow the same rule between a signed and an unsigned integer (corpus `mixedSignednessArithmetic`, handoff `relationalCheck`); a literal operand adopts the other side's type. Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
 
 Constants follow Nim's literal rule, with one safety addition:
 
@@ -203,7 +203,7 @@ error: implicit int64 → int32 conversion in '+=' narrows — write an explicit
 
 Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`, `anonymousLiteralFieldWidths`.
 
-**`as` from one integer type to another** (measured 2026-10-15 on C, JS and the Raiser): into a signed type, a value in the target's range is kept and a value past it stops the program, a `uint64` past 2^63 into `int64` included (`value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807`, exit 1). A constant outside is a compile error: `(9223372036854775808 as uint64) as int64` is `cannot convert 9223372036854775808 to int64`. Into an unsigned type the value wraps (`uint64` 2^63+5 `as uint32` is 5). `int64Bits(u)` reads a `uint64`'s bits as an `int64` (`int64Bits(18446744073709551615)` is -1). `--danger` drops the run-time check on C; JS keeps it. For a `uint64` past 2^63 into `int32`, C prints the value as a float (`value 9.2233720368547758e+18 not in range …`); JS and the Raiser print the integer. Pins: corpus `669`, `uint64ToInt64Checked`, `1033`; handoff `intLiteralBoundary`; the Raiser conversion tests in `src/raiser/vm.ms`.
+**`as` from one integer type to another** (measured 2026-10-15 on C, JS and the Raiser): into a signed type, a value in the target's range is kept and a value past it stops the program, a `uint64` past 2^63 into `int64` included (`value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807`, exit 1). A constant outside is a compile error: `(9223372036854775808 as uint64) as int64` is `cannot convert 9223372036854775808 to int64`. Into an unsigned type the value wraps (`uint64` 2^63+5 `as uint32` is 5). `int64Bits(u)` reads a `uint64`'s bits as an `int64` (`int64Bits(18446744073709551615)` is -1). `--danger` drops the run-time check on C; JS keeps it. The signed overflow check of `+ - *`, unary `-`, `++`, `--` and `**` is separate: `--danger` drops it on JS too and the value wraps as on C (measured 2026-10-30, C and JS print the same: `int32` 2147483647 + 1 is -2147483648, `int64` 9223372036854775807 + 1 is -9223372036854775808, `int32` 123456789 * 987654321 is -67153019); the default and `--release` builds stop with `over- or underflow`. For a `uint64` past 2^63 into `int32`, C prints the value as a float (`value 9.2233720368547758e+18 not in range …`); JS and the Raiser print the integer. Pins: corpus `669`, `uint64ToInt64Checked`, `1033`; handoff `intLiteralBoundary`; the Raiser conversion tests in `src/raiser/vm.ms`.
 
 ### Float Types
 
@@ -1012,17 +1012,20 @@ encoding and keeps its numeric meaning.
 | `hash()` | `int64` | C only; what makes `HashMap<BitSet<E>, V>` work |
 
 Measured 2026-09-15 on the installed `v0.2.54`, identical on C and JS unless a row says otherwise.
-Three spellings look right and are not:
+Two spellings look right and are not:
 
 - `Flag.Used as BitSet<Flag>` compiles and reads the **ordinal as the mask**: ordinal 1 becomes the
   set `{Mutable}`. A one-member set is `(0 as BitSet<Flag>).incl(Flag.Used)`;
   `const s: BitSet<Flag> = Flag.Used` is a type error.
-- Implicit text conversion: `` `${s}` ``, `"x " + s` and `String(s)` fail the C compile and print the
-  representation word on JS (`12` for bits 2 and 3); `console.log(s)` prints `<BitSet>` on C and the
-  word on JS (KNOWN-ISSUES L32). `s.toString()` is right in a template, a concatenation and `+=` on
-  both backends.
 - An integer mask crosses with one cast each way: `(mask as uint8) as BitSet<Flag>` at the band's
   width, and `s as uint32` back.
+
+Implicit text conversion reads `toString()`: `` `${s}` ``, `"x " + s`, `String(s)` and `console.log(s)` print
+`{Used, Cursor}` on C, `--danger`, JS and ESM, `{}` for the empty set and `{A, I}` for a set over nine
+members (corpus `bitSetTextsAsItsMembers`, measured 2026-10-30 on a candidate of this slice). Before it
+these printed `<BitSet>` on C and the representation word on JS (`3` for bits 0 and 1). The Raiser VM prints
+the members as ordinals (`{0, 1}`, card `2026-09-25-raiser-enum-to-string-prints-the-number`). Not measured:
+a set over more than 64 members.
 
 Why it is shaped this way — the cross-language survey, the one TypeScript idiom it costs
 (`(flags & F.X) != 0` becomes `.has()`), the width rules, and the deliberately deferred
@@ -1151,7 +1154,7 @@ the diagnostic):
    (arithmetic, comparison, equality, the right side of `op=`, `+` with a string). Not at: a condition,
    a receiver (`b.length` is still "no member"), an assignment or `++` target, a formal with open
    generic parameters, or overload scoring (an overloaded call needs a candidate that takes the value).
-   For `+` with a string a type that declares `valueOf` reads `valueOf` first, as JavaScript does.
+   For `+` with a string a type that declares `valueOf` reads `valueOf` first, as JavaScript does. A template interpolation reads `toString` first.
 6. **One step**: the converter's return type must be the target, or the target is `T | null` of it;
    `float64 → Seconds` and `Seconds → Minutes` do not make `float64 → Minutes`.
 7. **No self-application**: inside its own body the converter does not apply ("'boxToText' does not
@@ -3745,28 +3748,42 @@ console.log(person);          // Person { name: "Alice", age: 30 } (colored debu
 console.log(a, b, c);         // space-separated, each auto-converted
 ```
 
-Structs and classes are printed in a **colored** JSON-like debug format with ANSI color prefixes (blue for structs, green for classes, cyan for anonymous objects, magenta for JsonValue). Enums print their variant name. This colored format is exclusive to `console.log` — it never appears in `.toString()` or string concatenation.
+Structs and classes are printed in a **colored** JSON-like debug format with ANSI color prefixes (blue for structs, green for classes, cyan for anonymous objects, magenta for JsonValue). Enums print their variant name. This colored format is exclusive to `console.log` — it never appears in `.toString()`, `String()`, a template or string concatenation. It is printed for a struct or class value passed directly, with its fields written as `{ a: 1 }` inside; an array of such values passed to `console.log` prints the elements' text joined by commas, with no color (measured 2026-10-30 with the installed `msc` build 73e18a165a on C, `--danger`, JS and the Raiser, which print the same text: for `struct SP { a: int32 }`, `console.log(sp)` prints `SP { a: 3 }` in color and `console.log([sp])` prints `{"a":5}`).
 
-#### String Concatenation (`+`) — Limited Auto-Coercion
+##### Custom debug representation — `inspect`
 
-The `+` operator auto-coerces only **numbers**, **booleans** and **enums** to strings:
-
-```ms
-const s1 = "value: " + 42;       // OK → "value: 42"
-const s2 = "flag: " + true;      // OK → "flag: true"
-const s3 = "color: " + color;    // OK → "color: Home" (the member name)
-const s4 = "person: " + person;  // ERROR — struct not auto-coerced
-```
-
-For structs and classes in string concatenation, call `.toString()` explicitly; an enum needs no call:
+`console.log` reads a declared `inspect(this x: T): string` (a class method or an extension, no parameter besides the receiver) before `toString`, and a printed struct, class, tuple or array reads it for each field and element, so a nested value shows its own `inspect`. A type with no `inspect` prints as before: its `toString` when passed directly, else the colored dump. `String(x)`, a template, `+`, `+=` and `.toString()` never read it.
 
 ```ms
-const s4 = "person: " + person.toString();
+class Money {
+    cents: int32;
+    inspect(): string { return "Money<" + this.cents.toString() + ">"; }
+    toString(): string { return "$" + this.cents.toString(); }
+}
+console.log(money);         // Money<5>
+console.log(`${money}`);    // $5
 ```
+
+The name is Node's: `util.inspect` calls an object's `[util.inspect.custom]` method, and before Node 11 a method named `inspect`. MetaScript has no symbol-keyed members, so the method form with Node's own name is the closest TS-surface spelling that keeps Node's precedence (inspect hook, then `toString`, for the console only). The mechanism follows the reference's separate `repr` family (an overloadable debug representation distinct from its `$` text operation: a user's definition wins over the generic one, and the generic object, tuple and collection `repr` applies the same operation to each field and element, so a nested value uses its own).
+
+Measured 2026-10-30 on a candidate of this slice (corpus `consoleInspectHonoured`: C, `--danger`, JS and ESM, not the Raiser; red on the installed `msc` build 73e18a165a, green on the candidate): for a class and a struct each declaring `inspect` and `toString`, `console.log(x)` prints `CI[2]` and `SI[3]` while `` `${x}` ``, `String(x)` and `"" + x` print `CI<2>` and `SI<3>`; a class declaring only `toString` prints `CT<7>` as before; `console.log([a, b])` prints `CI[2],CI[4]` (an array of `toString`-only values still prints `CT<7>,CT<8>`); and a struct holding such a class, such a struct and an array of them prints `Holder { c: CI[2], s: SI[3], cs: [CI[2], CI[4]], n: 5 }` (colored). Not measured: an `inspect` that does not return `string` (the code ignores it), a union member, a generic instance, `Map` or `Set` values, and an `inspect` on a read-only view receiver.
+
+#### String Concatenation (`+`) — Auto-Coercion
+
+The `+` operator and `+=` with a string coerce numbers, booleans, enums, structs and classes to text. A number, boolean or enum gives its text (an enum its member name); a struct or class gives its declared `toString` when it has one, else plain JSON:
+
+```ms
+const s1 = "value: " + 42;       // "value: 42"
+const s2 = "flag: " + true;      // "flag: true"
+const s3 = "color: " + color;    // "color: Home" (the member name)
+const s4 = "person: " + person;  // plain JSON, or the declared toString
+```
+
+Measured 2026-10-30 with the installed `msc` (build 73e18a165a): a struct and a class, each with and without a declared `toString`, concatenated after `"plus "` and appended with `s += x` print `plus SC<1>`, `plus CC<2>`, `plus {"a":3}`, `plus {"a":4}` and `pe SC<1>CC<2>` on C, `--danger`, JS and the Raiser alike, with no error. `.toString()` called explicitly gives the same text.
 
 #### `String()` — Universal Type Coercion Function
 
-`String(x)` converts any value to its string representation. It is a prelude function (no import needed) that delegates to `x.toString()` internally:
+`String(x)` converts any value to its string representation. It is a prelude function (no import needed):
 
 ```ms
 const s1 = String(42);           // "42"
@@ -3775,7 +3792,7 @@ const s3 = String(Color.Red);    // "Red"
 const s4 = String(person);       // plain JSON (or custom toString if defined)
 ```
 
-`String()` and `.toString()` always produce the same result — they share the same underlying infrastructure. Use whichever reads better at the call site.
+For a struct and a class, with and without a declared `toString`, `String(x)`, `` `${x}` `` and `x.toString()` printed the same text on C, `--danger`, JS and the Raiser (`String SC SC<1>`, `String CP {"a":4}`). A struct holding a struct, a class and a plain struct prints `{"s":{"a":1},"c":{"a":2},"p":{"a":3}}` under `String(w)`, a template and `JSON.stringify` alike: a declared `toString` of a field is not read for the enclosing value. Not measured: `String(x)` for a union or a generic instance, and the split JS lane.
 
 Inside template strings, numbers and booleans auto-convert — no `String()` needed:
 
@@ -3828,14 +3845,14 @@ function toString(this p: Person): string {
     return p.name + " (age " + p.age.toString() + ")";
 }
 
-// Now all four contexts use your custom format:
+// Every context that prints the value itself uses your custom format:
 console.log(person);                    // "Alice (age 30)"
 String(person)                          // "Alice (age 30)"
-const s = "hello " + person.toString(); // "hello Alice (age 30)"
+const s = "hello " + person;            // "hello Alice (age 30)"
 person.toString()                       // "Alice (age 30)"
 ```
 
-The custom `toString` takes priority over the default debug format everywhere — including `console.log` and `String()`.
+A declared `toString` takes priority over the default format when the value is the operand itself: `console.log(x)`, `String(x)`, `` `${x}` ``, `"s" + x`, `s += x`, `x.toString()`, and each element of an array passed to `console.log` (`console.log([sc])` prints `SC<1>`). It is not read for a value that sits as a field of another struct or class: `console.log(w)` for `interface W { s: SC; c: CC; p: SP }` prints `W { s: { a: 1 }, c: { a: 2 }, p: { a: 3 } }` in color, and `String(w)` and `JSON.stringify(w)` print `{"s":{"a":1},"c":{"a":2},"p":{"a":3}}`. Measured 2026-10-30 on C, `--danger`, JS and the Raiser with the installed `msc` (build 73e18a165a).
 
 #### Summary Table
 
@@ -3845,8 +3862,8 @@ The custom `toString` takes priority over the default debug format everywhere �
 | boolean | auto | auto | yes | yes |
 | string | identity | identity | identity | identity |
 | enum | auto (variant name) | auto (variant name) | yes | yes |
-| struct | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
-| class | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
+| struct | auto (colored debug; the declared `toString` when there is one) | auto (declared `toString`, else plain JSON) | yes (declared `toString`, else plain JSON) | yes (same) |
+| class | auto (colored debug; the declared `toString` when there is one) | auto (declared `toString`, else plain JSON) | yes (declared `toString`, else plain JSON) | yes (same) |
 
 A template interpolation `${v}` is `String(v)`: an enum interpolates as its variant name, also with explicit values, as a struct field, inside a nested template and as an operand of `+` after a string, on C, `--danger`, JS and split JS (corpus `enumInTemplateTextsAsItsName`, measured 2026-10-30 on a candidate of this slice; before it JS printed the number). The Raiser VM still prints the ordinal (card `2026-09-25-raiser-enum-to-string-prints-the-number`), and `"str" + v` and `s += v` give the same name (corpus `enumCompoundAppendTextsAsItsName`; `"str" + k` measured 2026-10-30 on a candidate of this slice: `strHome` on C and JS, `str1` on the Raiser VM; `s += k` on a local, a field and in a loop, with `s += 7` and `s += true` unchanged: C, `--danger`, JS and split JS agree). Not measured: `s += k` on the Raiser, a union of enums. The language has no string enums.
 
@@ -3913,18 +3930,20 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 |---|---|---|
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
 | `toPairs(this T): [K, V][]` | `for ([k, v] of obj)` → `for ([k, v] of obj.toPairs())` | non-array obj in `for..of` with an array pattern |
-| `toString(this T): string` | implicit string context | type concat with string |
+| `toString(this T): string` | implicit string context | `"s" + x`, `s += x`, `${x}`, `String(x)`, a value passed directly to `console.log` (not a field of one) |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `toJSON(this T): U` | `JSON.stringify(x)` serializes `x.toJSON()` in place of `x` | a value of static type T at the top level, as a field or as an array element of a `JSON.stringify` |
+| `inspect(this T): string` | `console.log(x)` prints `x.inspect()` in place of `x`'s debug dump or `toString` | a value of static type T passed to `console.log`, an element of an array passed to it, or a field or element inside a struct or class it prints; never `String(x)`, a template, `+` or `.toString()` |
 | `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
 reads through `valueOf` only when the type has none for it, or has one for another target (corpus
 `782-protocolSiteBeforeValueOf`: a `Box` with a converter to `string` meeting an `int32` slot reads
-`valueOf`, `fallback 100`). `+` with a string reads `valueOf` first, as JavaScript does (`concat v=100`). The choice is made while
+`valueOf`, `fallback 100`). `+` with a string reads `valueOf` first, as JavaScript does (`concat v=100`), while a template interpolation `${v}` reads `toString` first and `valueOf` only when the type has no `toString` (corpus `templateTextsWithToStringBeforeValueOf`, a struct and a class with both give `100C` in the template and `at 100` after `"at " +`, measured 2026-10-30 on a candidate of this slice: C, `--danger`, JS, ESM and the Raiser VM agree). The choice is made while
 checking, by the static type; the chosen call runs at run time.
 
 **Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.
@@ -4454,9 +4473,21 @@ const config = try JSON.parse<AppConfig>(raw) catch defaultConfig;
 const app = try JSON.parse<AppConfig>(readFile("config.json"));
 app.server.host    // fully typed through nesting
 
-// Stringify any interface
+// Stringify a struct, class or interface value
 const json = JSON.stringify(person);  // '{"name":"Son","age":30}'
 ```
+
+A declared `toJSON` is honoured, as ECMAScript SerializeJSONProperty does: a class method or an extension `function toJSON(this x: T): U` with no parameter besides the receiver is called on a value of static type `T` (top level, field, array element, `T | null`), and its result is serialized in place of the value. The result's own `toJSON` is not called again, but its fields' are. The name stays `toJSON` rather than the `to<X>` convention because `JSON.stringify` is a JavaScript site whose protocol is that name. Array elements are read-only views, so a class method that must serve an array element declares `toJSON(this: Readonly<T>)`; a plain `toJSON()` there is refused at the call with the message that names the declaration to write. The key argument ECMAScript passes is not passed.
+
+```ms
+class Money { cents: int32; toJSON(this: Readonly<Money>): string { return "$" + this.cents.toString(); } }
+struct Pt { x: int32; y: int32 }
+function toJSON(this p: Pt): number[] { return [p.x, p.y]; }
+```
+
+Measured 2026-10-30 on a candidate of this slice (corpus lanes C, `--danger`, JS and ESM, not the Raiser; corpus `jsonToJsonHonoured`, red on the installed `msc` build 73e18a165a, green on the candidate): `JSON.stringify(new Money(5))` prints `"$5"`, a `Pt` prints `[3,4]`, `interface Wrap { m: Money; p: Pt; n: Money | null }` prints `{"m":"$5","p":[1,2],"n":null}`, `Money[]` prints `["$1","$2"]`, a class whose `toJSON` returns an object prints that object (`{"v":7}`), one returning a `Money` prints `{"cents":9}` (not `"$9"`), one returning a holder of a `Money` prints `{"m":"$5"}`, and a class that declares only `toString` prints its fields as before. Not measured: `toJSON` on a union member or a generic instance, and a `Map` value (a `Map` is not serialized as JavaScript does, see above).
+
+`JSON.stringify` of a `Map` writes the map's internal fields (`entries`, `indices`, `size`, ...), not `{}` as JavaScript does (measured 2026-10-30 on C with the installed `msc` build 73e18a165a; not measured on JS).
 
 Implemented via monomorphization — `JSON.parse<Person>` generates a specialized parse function at compile time using `T`'s field names and types. Same mechanism as `Array<T>` and `Result<T, E>`.
 
@@ -4693,6 +4724,43 @@ retains its historical spelling.
 A `distinct` over a function type is callable (`count()`) and widens one way into that function type. It
 is never read implicitly on its own: a type that wants bare reads declares the `valueOf` protocol (see
 "Convention-based dispatch protocols").
+
+#### A brand over an array
+
+`uint8[] & { __brand: "Bytes" }` is a brand like `int32 & { __brand: "Id" }`: the array underneath, a
+different type on top. The brand widens to its base, the base never narrows to it without `as`, and a
+`toString` declared for the brand applies to that brand only.
+
+```ms
+type Bytes = uint8[] & { __brand: "Bytes" };
+function toString(this b: Bytes): string {
+	let out = "<b";
+	for (const x of b) out += " " + x.toString();
+	return out + ">";
+}
+const raw: uint8[] = [97, 98];
+const b = raw as Bytes;
+console.log(`${b} | ${raw}`);      // <b 97 98> | 97,98
+const wrong: Bytes = raw;          // error: Type 'uint8[]' is not assignable to type 'Bytes'
+```
+
+Measured 2026-10-30 with the candidate of `wt/std-ms-string-lane-d` (corpus `brandArrayPrintsDeclaredText`,
+`brandArrayWidensToBase`, handoff `brandArrayRelations`):
+
+| Use of `b: Bytes` | Result |
+|---|---|
+| `b[i]`, `b.length`, `for (x of b)`, `[...b]`, `b[1..3]` | the array's own; the same on C, `--danger`, JS, ESM and the Raiser |
+| passed as `uint8[]`, `Readonly<uint8[]>`, `Readonly<Span<uint8>>` or a generic `T[]` (`T` = `uint8`) | accepted |
+| extension `this x: uint8[]` called as `b.f()` | found; an extension declared `this x: Bytes` wins when both exist |
+| a `Map<string, Bytes>` value, a `Bytes[]` element, a class field | accepted |
+| `${b}`, `String(b)`, `"y" + b`, `acc += b`, `b.toString()` | the brand's declared `toString`; `${raw}` still prints `97,98` |
+| `const w: Bytes = raw`, `Bytes` into `Words` (same base, other brand), `Bytes` into `Wide` (`int32[]` base) | refused, `Type 'X' is not assignable to type 'Y'` |
+
+An intersection that is neither all object types (merged into one struct) nor a brand is refused with
+`cannot represent the intersection '...'`; before, it silently became its first operand (`uint8[] &
+{ __brand: "X" }` was plain `uint8[]`). The emitted C of a brand-typed loop, spread and slice differs from
+the plain array's by one same-type cast. Not measured: a brand over a fixed-size array, `Map` or class
+(a fixed-size array and a type that is no number, string, boolean, char or array and no object are refused; a `Map` with a brand object produced no error and was not examined further), and DRC under ASan.
 
 ### Quote Expressions
 ```typescript

@@ -448,6 +448,13 @@ test "an out argument written as `out b.val` reaches the field of a local" {
 	assert !cb.ok && cb.error.contains("requires a variable"), cb.ok ? "accepted" : cb.error;
 }
 
+test "an expression passed to a ref parameter is refused as a ref parameter, to an out parameter as an out parameter" {
+	const refBad = compileToCWithStd("function bump(ref count: int32): void { count += 1; }\nbump(41);\n");
+	assert !refBad.ok && refBad.error.contains("'bump' arg 0: ref parameter requires a variable, not an expression"), refBad.ok ? "accepted" : refBad.error;
+	const outBad = compileToCWithStd("function put(out count: int32): void { count = 1; }\nput(41);\n");
+	assert !outBad.ok && outBad.error.contains("'put' arg 0: out parameter requires a variable, not an expression"), outBad.ok ? "accepted" : outBad.error;
+}
+
 test "a ref or out parameter never escapes into a closure" {
 	const refused = [
 		"function twice(ref n: int32): void { const add = (): void => { n = n + 10; }; add(); }",

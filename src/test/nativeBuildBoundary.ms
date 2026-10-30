@@ -4,6 +4,7 @@ import {
 	appendFile, changeStamp, chmod, copyFile, ensureDir, exists, readDir, readFile,
 	remove, removeAll, writeFile,
 } from "std/fs";
+import { dirname } from "std/fs/path";
 
 const windows = platform == "windows";
 
@@ -1487,6 +1488,87 @@ function runModuleNames(): void {
 	need(build(long, "c-long") == 0, "module-names c build");
 	recordTrue("the C binary's symbols name no directory of the build machine", builtText(`${long}/probe`).indexOf("msc45native45boundary", 0) < 0);
 	record("same-basename modules and a module outside the project keep their own names on C", "1 2 three", value(long));
+	runGenericModuleNames();
+}
+
+function genericNamesTree(parent: string): string {
+	const app = `${parent}/app`;
+	ensureDir(app);
+	put(`${app}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${app}/lib.ms`, [
+		"export class Box<T> {",
+		"\titem: T;",
+		"\tconstructor(item: T) { this.item = item; }",
+		"\tget(): T { return this.item; }",
+		"}",
+		"export function first<T>(xs: T[]): T { return xs[0]; }",
+		"",
+	].join("\n"));
+	put(`${app}/main.ms`, [
+		"import { HashMap } from \"std/core/struct\";",
+		"import { Box, first } from \"./lib\";",
+		"class Node { v: number = 1; }",
+		"const nodes: Node[] = [new Node(), new Node()];",
+		"const popped = nodes.pop()!;",
+		"const boxed = new Box<Node>(new Node());",
+		"const head = first<Node>(nodes);",
+		"const byName = new HashMap<string, Node>();",
+		"byName.set(\"a\", head);",
+		"console.log(`${popped.v} ${boxed.get().v} ${head.v} ${byName.size}`);",
+		"",
+	].join("\n"));
+	return app;
+}
+
+function supportRootOf(binary: string): string {
+	let dir = dirname(binary);
+	for (let up = 0; up < 6; up += 1) {
+		if (exists(`${dir}/std/core/system/index.ms`)) return dir;
+		if (dirname(dir) == dir) break;
+		dir = dirname(dir);
+	}
+	need(false, `find std above ${binary}`);
+	return "";
+}
+
+function installedCompiler(at: string): string {
+	ensureDir(at);
+	const support = supportRootOf(compiler);
+	need(command(at, "install-msc", "cp", [compiler, `${at}/msc`]).code == 0, `copy ${compiler} to ${at}`);
+	need(command(at, "install-support", "cp", ["-R", `${support}/std`, `${support}/runtime`, at]).code == 0, `copy std and runtime to ${at}`);
+	if (exists(`${support}/vendor`)) need(command(at, "install-vendor", "ln", ["-s", `${support}/vendor`, `${at}/vendor`]).code == 0, `link vendor in ${at}`);
+	return `${at}/msc`;
+}
+
+function emittedC(app: string): string[] {
+	const files = readDir(`${app}/out/debug`).filter((f: string): boolean => f.endsWith(".c"));
+	files.sort();
+	return files;
+}
+
+function runGenericModuleNames(): void {
+	if (windows) {
+		console.log("skip module-names install roots: the install copies use POSIX cp and ln");
+		return;
+	}
+	const near = genericNamesTree(`${root}/g`);
+	const far = genericNamesTree(`${root}/g-much-longer-work-directory/inner`);
+	const nearMsc = installedCompiler(`${root}/install-a`);
+	const farMsc = installedCompiler(`${root}/install-a-much-longer-name/inner`);
+	for (const [app, msc] of [[near, nearMsc], [far, farMsc]]) {
+		need(command(app, "generic-js", msc, ["build", "--target=js", "--output=out.js", "main.ms"]).code == 0, `module-names generic js build in ${app}`);
+		need(command(app, "generic-c", msc, ["build", "main.ms", "--emit=c", "--trimpath"]).code == 0, `module-names generic c emit in ${app}`);
+	}
+	const nearJs = builtText(`${near}/out.js`);
+	recordTrue("generic instances get the same JS names from two install and work roots", nearJs == builtText(`${far}/out.js`));
+	const files = emittedC(near);
+	record("both install and work roots emit the same C modules", files.join(","), emittedC(far).join(","));
+	const differing = files.filter((f: string): boolean => builtText(`${near}/out/debug/${f}`) != builtText(`${far}/out/debug/${f}`));
+	record("generic instances get the same C names from two install and work roots (differing modules)", "", differing.join(","));
+	const mainC = files.filter((f: string): boolean => f.contains("mainOms")).map((f: string): string => builtText(`${near}/out/debug/${f}`)).join("");
+	recordTrue("the C names a std, a user class and a user routine generic instance", mainC.contains("HashMap_") && mainC.contains("Box_") && mainC.contains("first_"));
+	const ran = command(near, "generic-js-run", "node", ["out.js"]);
+	record("the generic program runs on JS", "1 1 1 1", ran.code == 0 ? ran.stdout.trim() : `exit ${ran.code}`);
 }
 
 function toolPresent(exe: string): boolean {

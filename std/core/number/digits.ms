@@ -46,7 +46,7 @@ function multipleOfPow5(value: uint64, e5: int32): boolean {
 function mulShift(x: uint64, yHi: uint64, yLo: uint64): uint64 {
 	const lowHi = msMulHi64(x, yLo);
 	const midLo = x * yHi + lowHi;
-	return msMulHi64(x, yHi) + (midLo < lowHi ? 1 : 0);
+	return msMulHi64(x, yHi) + ((midLo < lowHi ? 1 : 0) as uint64);
 }
 
 @inline
@@ -78,7 +78,7 @@ function asymmetricInterval(e2: int32): Decimal {
 	const lowerEndpoint = (pow10Hi - (pow10Hi >> 54)) >> ((11 - betaMinus1) as uint64);
 	const upperEndpoint = (pow10Hi + (pow10Hi >> 53)) >> ((11 - betaMinus1) as uint64);
 	const lowerEndpointIsInteger = 2 <= e2 && e2 <= 3;
-	const xi = lowerEndpoint + (lowerEndpointIsInteger ? 0 : 1);
+	const xi = lowerEndpoint + ((lowerEndpointIsInteger ? 0 : 1) as uint64);
 	const q = upperEndpoint / 10;
 	if (q * 10 >= xi) return { significand: q, exponent: minusK + 1 };
 	let rounded = ((pow10Hi >> ((10 - betaMinus1) as uint64)) + 1) / 2;

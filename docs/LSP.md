@@ -60,7 +60,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 *   **Goal**: Close gaps found via audit against standard references and rust-analyzer (Salsa, DefMap, PrimeCaches).
 *   **Audit date**: 2026-03-07. Compared against standard reference compilers and rust-analyzer.
 *   **Tasks**:
-    - [ ] **G1: Output-Hash Early Cutoff** — When parse output hash is unchanged after re-parse (e.g., comment-only edit), dependents stay GREEN. Implements the core Salsa "backdating" optimization. Requires `taHashNode` for AST content hashing + comparison in `tryMarkGreen`. *(High impact, Medium effort)*
+    - ~~[x] **G1: Early Cutoff** — Done differently from the plan (9b2c5501b6): Trans-Am decides validity by change revisions, not output hashes; Preprocess and Parse keep their previous revision when the preprocessed text is exactly equal, pinned in `src/compiler/transam/index.ms` tests. Cross-module cutoff on an unchanged interface is the cache-reuse arc's.~~
     - ~~[x] **G2: Durability for Stdlib** — Mark std/ files as `TaDurability.High` via `dbSetStdPath` prefix matching. Skip `tryMarkGreen` recursive verification for High-durability entries (they never change during a session). HIGH durability skip still checks `computedAt` for safety. Standard reference: `belongsToStdlib`. rust-analyzer: 3-tier version vector skips sysroot.~~
     - ~~[x] **G3: Stdlib Export Freeze** — Skip re-registration in `dbInvalidateExports` for std/ paths (prefix-matched via `db.stdPath`). Once registered, std exports are immutable for the session.~~
     - ~~[x] **G4: Stale Edge Cleanup** — Verified `clearImportsFor` is called before `recordImportsForFile` re-records edges, preventing phantom dependencies from deleted imports.~~
@@ -104,7 +104,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 
 1. ~~**P0: Bridge dbTypeCheck to the ExportRegistry** so imports actually resolve.~~ DONE
 2. ~~**P0: G2+G3+G4+G5** — Stdlib durability, export freeze, stale edge cleanup, cancel in export reg.~~ DONE
-3. **P1: G1** — Output-hash early cutoff (the Salsa signature optimization).
+3. ~~**P1: G1** — Early cutoff.~~ DONE as change revisions (9b2c5501b6)
 4. **P1: Wire `dbSetStdPath` in LSP** — Pass `stdPath` from init config to `dbSetStdPath(db, path)` to activate stdlib durability.
 5. **P1: Add HCR state-layout manifest diagnostics** to surface the existing restart-required contract before build.
 6. **P2: Implement "Auto-Import" completions** to match the TypeScript developer experience.
@@ -120,7 +120,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 | **Multi-Module** | Full Symbol Index | markDirty + markClientsDirty | DefMap + Durability | ExportRegistry + BFS invalidation |
 | **Dirty Propagation** | File watcher | dirty flags + transitive closure | Salsa version vectors | RED marking + getTransitiveDependents |
 | **Stdlib Caching** | Bundled .d.ts | Aggressive caching | Durable tier (skip validation) | TaDurability.High + prefix match |
-| **Early Cutoff** | N/A | N/A | Output hash backdating | Stubbed (G1) |
+| **Early Cutoff** | N/A | N/A | Output hash backdating | Change revisions; Preprocess/Parse backdate on exact text equality |
 | **Request Queue** | Async event loop | Channel + tryRecv | crossbeam channel | `select()` drain + coalesce |
 | **Cancellation** | Async/Promise | doStopCompile hook | salsa::Cancelled (unwinding) | Version-based checkCancel (loop boundary) |
 | **Circular Deps** | Error | recursiveDep warning | DefMap handles | detectCycle + LSP Warning |

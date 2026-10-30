@@ -287,14 +287,9 @@ export function isHashSupported(algorithm: string): boolean {
 // ===== Encoding =====
 
 import { encodeHex, decodeHexString, encodeBase64, decodeBase64String } from "../core/encoding";
-import { emptyEncoding } from "../core/encoding/output";
 
 export function toHex(data: Bytes): string {
-	if (typeof data == "string") {
-		if (data.asBytes().length == 0) return emptyEncoding;
-		return data.asBytes().encodeHex();
-	}
-	if (data.length == 0) return emptyEncoding;
+	if (typeof data == "string") return data.asBytes().encodeHex();
 	return data.encodeHex();
 }
 
@@ -304,11 +299,7 @@ export function fromHex(hex: string): Buffer {
 }
 
 export function toBase64(data: Bytes): string {
-	if (typeof data == "string") {
-		if (data.asBytes().length == 0) return emptyEncoding;
-		return data.asBytes().encodeBase64();
-	}
-	if (data.length == 0) return emptyEncoding;
+	if (typeof data == "string") return data.asBytes().encodeBase64();
 	return data.encodeBase64();
 }
 

@@ -31,8 +31,8 @@ function main(): void {
 	out.push(`rest:${reads - mark}`); mark = reads;
 	const n = nextSet().size();
 	out.push(`size:${reads - mark}`); mark = reads;
-	const m = nextMaybe().toString();
-	const none = nextNone().toString();
+	const m = nextMaybe()?.toString() ?? "null";
+	const none = nextNone()?.toString() ?? "null";
 	out.push(`maybe:${reads - mark}`); mark = reads;
 	console.log(out.join(","));
 	console.log(`${x},${y},${a},${b},${c},${d},${x2},${rest.y},${n},${m},${none}`);

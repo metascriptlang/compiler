@@ -413,27 +413,16 @@ byte-identical C means no lane outcome can change. The C argument covers the JS 
 C ⇒ the changed checker branch never fired for that program ⇒ the JS emitter
 saw the same checker output as before.
 
-**`tools/gate.sh` selects by recorded passes, with no control compiler.**
-Whenever the diff pulls in the corpus or SAN lane, the gate emits every program
-once with the candidate (plain C, `--danger` C and JS, in one per-gate copy of the
-tree's sources and `std/`) and runs only the programs with no recorded pass for
-that emit. What keys a record, where it is written and what never records:
-`tools/gate.sh --help` and `support_stamp`, `record_keys`. Records stay on the
-host that wrote them, so a gate on another host starts with none, and a gate
-whose corpus lane is skipped by an earlier red records nothing.
-
-Measured over the 39 gates queued with this selector on 2026-10-29
-(`~/metascript/.gate-host/queue/q1029*.log`, oci-u and rtx), the day both cache
-arcs and the toolchain arc landed files the support stamp hashes:
-
-| gates | programs selected | select | GREEN gate |
-|---|---|---|---|
-| 8 found records | 13–68 | 3m31s–15m40s | 10m03s–23m02s, median 15m49s |
-| 31 ran whole | 1703–1800 | 2m44s–84m09s, median 5m46s | 26m38s–110m26s, median 39m15s (12 green) |
-
-Of the 31, 14 changed a file the support stamp hashes (`src/compiler/{cache,cc,compile,toolchain,buildConfig,options}.ms`,
-`runtime/`, the corpus runner); of the other 17, 7 never reached the corpus lane
-because an earlier phase went red, and 10 are not classified. The selector it replaced built a control
+**`tools/gate.sh` emits no program to select what the corpus lanes run.** The land gate runs
+corpus and SAN on the programs the slice adds or edits and those its owner names with
+`gate-queue submit --programs`; `--full`, `--release` and a corpus lane named in `--with` run every
+program. The pass-record selector it replaced emitted every program once with the candidate (plain C,
+`--danger` C and JS) and skipped those with a recorded pass for that emit. Over the 105 gates to
+2026-10-30 that ran it (`~/metascript/.gate-host/logs/*/gate-*.log`) it took 22.5 h, 0.43 s a program,
+while running a program took a median 0.73 s in corpus and 0.36 s in SAN; it skipped 14% of corpus
+and 28% of SAN programs, at most 11 h, and 62 of the 105 skipped no corpus program, because records stay
+on the host that wrote them and a change to the support stamp voids them. It pays only above about a 40%
+hit rate across both lanes. The selector it replaced built a control
 compiler at the merge base and emitted every program on both sides; its select took a
 median of 1231 s over 105 host logs.
 

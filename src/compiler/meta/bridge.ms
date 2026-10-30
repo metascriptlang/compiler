@@ -1515,6 +1515,27 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64
 	return result;
 }
 
+function isExpressionKind(kind: NodeKind): boolean {
+	return match (kind) {
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.Identifier
+			| NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr
+			| NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ArrowFunction
+			| NodeKind.FunctionExpr | NodeKind.TypeAssertion | NodeKind.ConditionalExpr | NodeKind.NewExpr
+			| NodeKind.TryExpr | NodeKind.MatchExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr
+			| NodeKind.OutExpr | NodeKind.SizeofExpr | NodeKind.MacroInvocation => true,
+		_ => false,
+	};
+}
+
+function readStatements(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[] {
+	const nodes = readNodes(objHeap, arrHeap, h, name, fallbackLoc);
+	for (let i = 0; i < nodes.length; i += 1) {
+		if (isExpressionKind(nodes[i].kind)) nodes[i] = createNodeAt(NodeKind.ExprStmt, { expr: nodes[i] }, nodes[i].location);
+	}
+	return nodes;
+}
+
 function readNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): number[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: number[] = [];
@@ -2115,7 +2136,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.DeferStmt, { deferExpr }, loc);
 		},
 		NodeKind.BlockStmt => {
-			const statements = readNodes(objHeap, arrHeap, h, "statements", loc);
+			const statements = readStatements(objHeap, arrHeap, h, "statements", loc);
 			return createNodeAt(NodeKind.BlockStmt, { statements }, loc);
 		},
 		NodeKind.VariableDecl => {
@@ -2382,7 +2403,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Program ===
 		NodeKind.Program => {
-			const programStmts = readNodes(objHeap, arrHeap, h, "programStmts", loc);
+			const programStmts = readStatements(objHeap, arrHeap, h, "programStmts", loc);
 			return createNodeAt(NodeKind.Program, { programStmts }, loc);
 		},
 
@@ -4209,6 +4230,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		ctorRoutine: null,
 		borrowedFrom: null,
 		staticOwner: null,
+		typeParamOwner: null,
 		typeParams: [],
 	};
 }

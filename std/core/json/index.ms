@@ -83,6 +83,10 @@ export function _jsonArrayOfValues<T>(arr: Readonly<Span<T>>): JsonValue {
 	return jsonArray(items);
 }
 
+export function _jsonHooked<T>(v: T): T {
+	return v;
+}
+
 export function _jsonNullable<T>(v: Readonly<T | null>): JsonValue {
 	if (v == null) return jsonNull();
 	return jsonValueOf(v);

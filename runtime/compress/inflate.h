@@ -15,7 +15,7 @@
 #ifndef MS_COMPRESS_INFLATE_H
 #define MS_COMPRESS_INFLATE_H
 
-#include "runtime/core/string.h"
+#include "runtime/core/buffer.h"
 #include <stdint.h>
 
 /* ===== Format selectors ===== */
@@ -44,19 +44,15 @@ int64_t msInflateNew(int32_t format);
  *
  * `isLast` should be 1 on the final chunk of the stream, 0 otherwise.
  */
-int32_t msInflateFeed(int64_t handle, msString inChunk, int32_t isLast);
+int32_t msInflateFeed(int64_t handle, const uint8_t* in, int64_t inLen, int32_t isLast);
 
 /* Copy up to `maxBytes` of decoded output from the context's internal buffer
- * into a fresh msString. Consumes the returned bytes from the buffer. Returns
- * MS_EMPTY_STRING when no output is ready. */
-msString msInflateDrain(int64_t handle, int32_t maxBytes);
+ * into a fresh Buffer. Consumes the returned bytes from the buffer. Returns
+ * the empty Buffer when no output is ready. */
+msUint8Array msInflateDrain(int64_t handle, int32_t maxBytes);
 
 /* Destroy a streaming inflate context. Safe to call with handle=0. */
 void msInflateFree(int64_t handle);
 
-/* ===== One-shot API (thin wrapper over streaming) ===== */
-
-/* Decompress an in-memory blob. Returns MS_EMPTY_STRING on error. */
-msString msInflateOneShot(msString data, int32_t format);
 
 #endif

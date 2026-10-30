@@ -712,6 +712,80 @@ test "iterator helpers: a stored helper closed before its first next closes the 
 	assert log.join(",") == "t.return,m.return,f.return";
 }
 
+@iteratorHelper
+function* dedupe<T>(it: Iterator<T>): Iterator<T> {
+	let first = true;
+	let last: T | null = null;
+	for (const x of it) {
+		if (first || x != last) yield x;
+		first = false;
+		last = x;
+	}
+}
+
+@iteratorHelper
+function* twice(this it: Iterator<int32>): Iterator<int32> {
+	for (const x of it) {
+		yield x;
+		yield x;
+	}
+}
+
+type IntIter = Iterator<int32>;
+
+@iteratorHelper
+function* aliased(it: IntIter): IntIter {
+	for (const x of it) yield x;
+}
+
+test "user @iteratorHelper: a source and return spelled through a type alias close the source" {
+	const log: string[] = [];
+	const a = aliased(counter("s", 3, log));
+	closeNow(a);
+	closeNow(a);
+	const b = aliased(counter("t", 3, log));
+	assert b.next().value == 1;
+	closeNow(b);
+	assert log.join(",") == "s.return,t.next,t.return";
+}
+
+test "user @iteratorHelper: a stored helper closed before its first next closes the source once and never pulls it" {
+	const log: string[] = [];
+	const d = dedupe(counter("s", 3, log));
+	closeNow(d);
+	closeNow(d);
+	const t = counter("t", 3, log).twice();
+	closeNow(t);
+	assert d.next().done && t.next().done;
+	assert log.join(",") == "s.return,t.return";
+}
+
+test "user @iteratorHelper: a stored helper closed after a next closes the source once" {
+	const log: string[] = [];
+	const d = dedupe(counter("s", 3, log));
+	assert d.next().value == 1;
+	closeNow(d);
+	closeNow(d);
+	assert d.next().done;
+	assert log.join(",") == "s.next,s.return";
+}
+
+test "user @iteratorHelper: a chain mixing a user helper with std helpers closes every source once" {
+	const log: string[] = [];
+	const c = dedupe(counter("s", 5, log).map((x: int32, i: number): int32 => x)).twice().take(3);
+	closeNow(c);
+	closeNow(c);
+	assert log.join(",") == "s.return";
+	const log2: string[] = [];
+	const e = dedupe(counter("s", 5, log2)).filter((x: int32, i: number): boolean => true);
+	e.next();
+	closeNow(e);
+	assert log2.join(",") == "s.next,s.return";
+	let sum: int32 = 0;
+	for (const x of dedupe(counter("z", 3, log2)).twice()) sum += x;
+	assert sum == 12;
+}
+
 test "iterator consumer: a chain expands in place when an imported module expands the same instance" {
 	const nums: int32[] = [1, 2, 3];
 	assert doubledSum(nums) == 12;

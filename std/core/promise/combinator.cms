@@ -1,0 +1,186 @@
+@include("runtime/promise/combinatorMs.h");
+
+extern function msPromiseArrayCount(arr: Ptr<void>): int32;
+extern function msPromiseArrayAt(arr: Ptr<void>, index: int32): Ptr<void>;
+extern function msPromiseHold(p: Ptr<void>): void;
+extern function msPromiseRelease(p: Ptr<void>): void;
+extern function msPromiseSlots(count: int32): Ptr<Ptr<void>>;
+extern function msPromiseSlotsZeroed(count: int32): Ptr<Ptr<void>>;
+extern function msPromiseFreeValueOnDestroy(fut: Ptr<void>): void;
+extern function msPromiseInputRejected(fut: Ptr<void>): boolean;
+extern function msPromiseInputError(fut: Ptr<void>): Ptr<void>;
+extern function msPromiseInputValue(fut: Ptr<void>): Ptr<void>;
+extern function msPromiseCompleteEmpty(fut: Ptr<void>): void;
+extern function msPromiseAllWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msFutureCreate(): Ptr<void>;
+extern function msFutureComplete(fut: Ptr<void>, value: Ptr<void>): void;
+extern function msFutureFailShared(fut: Ptr<void>, error: Ptr<void>): void;
+extern function msFutureEdgeAll(result: Ptr<void>, inputs: Ptr<Ptr<void>>, count: int32): void;
+extern function msFutureEdgeSettle(result: Ptr<void>, index: int32): void;
+extern function msMemAlloc(size: uint64): Ptr<void>;
+extern function msMemAlloc0(size: uint64): Ptr<void>;
+extern function free(p: Ptr<void>): void;
+
+struct AllState {
+	result: Ptr<void>;
+	inputs: Ptr<Ptr<void>>;
+	values: Ptr<Ptr<void>>;
+	remaining: int32;
+	failed: boolean;
+}
+
+struct AllEnv {
+	state: Ptr<AllState>;
+	index: int32;
+}
+
+@exportName("msPromiseAllCb")
+function allCallback(env: Ptr<void>): void {
+	const e = env as Ptr<AllEnv>;
+	const s = e.state;
+	const index = e.index;
+	free(env);
+	const input = s.inputs[index];
+	if (!s.failed) {
+		if (msPromiseInputRejected(input)) {
+			s.failed = true;
+			msFutureFailShared(s.result, msPromiseInputError(input));
+		} else {
+			s.values[index] = msPromiseInputValue(input);
+		}
+	}
+	msFutureEdgeSettle(s.result, index);
+	msPromiseRelease(input);
+	s.remaining -= 1;
+	if (s.remaining == 0) {
+		if (!s.failed) {
+			msPromiseFreeValueOnDestroy(s.result);
+			msFutureComplete(s.result, s.values as Ptr<void>);
+		} else {
+			free(s.values as Ptr<void>);
+		}
+		msPromiseRelease(s.result);
+		free(s.inputs as Ptr<void>);
+		free(s as Ptr<void>);
+	}
+}
+
+@exportName("msPromiseAll")
+function promiseAll(futures: Ptr<void>): Ptr<void> {
+	const count = msPromiseArrayCount(futures);
+	const result = msFutureCreate();
+	if (count == 0) {
+		msPromiseCompleteEmpty(result);
+		return result;
+	}
+	const inputs = msPromiseSlots(count);
+	for (let i: int32 = 0; i < count; i++) {
+		const input = msPromiseArrayAt(futures, i);
+		inputs[i] = input;
+		msPromiseHold(input);
+	}
+	const state = msMemAlloc0(sizeof AllState) as Ptr<AllState>;
+	state.result = result;
+	msPromiseHold(result);
+	state.inputs = inputs;
+	state.values = msPromiseSlotsZeroed(count);
+	state.remaining = count;
+	msFutureEdgeAll(result, inputs, count);
+	for (let i: int32 = 0; i < count; i++) {
+		const env = msMemAlloc(sizeof AllEnv) as Ptr<AllEnv>;
+		env.state = state;
+		env.index = i;
+		msPromiseAllWatch(msPromiseArrayAt(futures, i), env as Ptr<void>);
+	}
+	return result;
+}
+
+extern function msPromiseCellOnDestroy(fut: Ptr<void>): void;
+extern function msPromiseVtMake(vt: Ptr<void>, count: int32): Ptr<void>;
+extern function msPromiseVtCollect(vt: Ptr<void>, arr: Ptr<void>, index: int32, fut: Ptr<void>, shareFn: Ptr<void>): void;
+extern function msPromiseLoadAcquire(p: Ptr<void>): int32;
+extern function msPromiseExchangeAcqRel(p: Ptr<void>, value: int32): int32;
+extern function msPromiseFetchSubAcqRel(p: Ptr<void>, amount: int32): int32;
+extern function msPromiseAllTypedWatch(fut: Ptr<void>, env: Ptr<void>): void;
+
+struct Word32 {
+	value: int32;
+}
+
+struct AllTypedState {
+	result: Ptr<void>;
+	inputs: Ptr<Ptr<void>>;
+	arr: Ptr<void>;
+	shareFn: Ptr<void>;
+	vt: Ptr<void>;
+	remaining: Word32;
+	failed: Word32;
+}
+
+struct AllTypedEnv {
+	state: Ptr<AllTypedState>;
+	index: int32;
+}
+
+@exportName("msPromiseAllTypedCb")
+function allTypedCallback(env: Ptr<void>): void {
+	const e = env as Ptr<AllTypedEnv>;
+	const s = e.state;
+	const index = e.index;
+	free(env);
+	const failed = (s.failed as Ptr<Word32>) as Ptr<void>;
+	const input = s.inputs[index];
+	if (msPromiseLoadAcquire(failed) == 0) {
+		if (msPromiseInputRejected(input)) {
+			if (msPromiseExchangeAcqRel(failed, 1) == 0) msFutureFailShared(s.result, msPromiseInputError(input));
+		} else {
+			msPromiseVtCollect(s.vt, s.arr, index, input, s.shareFn);
+		}
+	}
+	msFutureEdgeSettle(s.result, index);
+	msPromiseRelease(input);
+	if (msPromiseFetchSubAcqRel((s.remaining as Ptr<Word32>) as Ptr<void>, 1) == 1) {
+		if (msPromiseLoadAcquire(failed) == 0) {
+			msFutureComplete(s.result, s.arr);
+		} else {
+			msPromiseRelease(s.arr);
+		}
+		msPromiseRelease(s.result);
+		free(s.inputs as Ptr<void>);
+		free(s as Ptr<void>);
+	}
+}
+
+@exportName("msPromiseAllTyped")
+function promiseAllTyped(futures: Ptr<void>, shareFn: Ptr<void>, vt: Ptr<void>): Ptr<void> {
+	const count = msPromiseArrayCount(futures);
+	const result = msFutureCreate();
+	msPromiseCellOnDestroy(result);
+	const arr = msPromiseVtMake(vt, count);
+	if (count == 0) {
+		msFutureComplete(result, arr);
+		return result;
+	}
+	const inputs = msPromiseSlots(count);
+	for (let i: int32 = 0; i < count; i++) {
+		const input = msPromiseArrayAt(futures, i);
+		inputs[i] = input;
+		msPromiseHold(input);
+	}
+	const state = msMemAlloc0(sizeof AllTypedState) as Ptr<AllTypedState>;
+	state.result = result;
+	msPromiseHold(result);
+	state.inputs = inputs;
+	state.arr = arr;
+	state.shareFn = shareFn;
+	state.vt = vt;
+	state.remaining.value = count;
+	msFutureEdgeAll(result, inputs, count);
+	for (let i: int32 = 0; i < count; i++) {
+		const env = msMemAlloc(sizeof AllTypedEnv) as Ptr<AllTypedEnv>;
+		env.state = state;
+		env.index = i;
+		msPromiseAllTypedWatch(msPromiseArrayAt(futures, i), env as Ptr<void>);
+	}
+	return result;
+}

@@ -1061,7 +1061,9 @@ function coreGroup(): void {
 		need(tag, group.length > 0, "the engine's complete dependency group is empty");
 		need(tag, group.includes("core/number/digits.ms"), "the module defining msNumberToString, which core/system declares extern, is not in hcr-core");
 		need(tag, group.includes("core/array/shared.ms"), "the module that the engine's splice instance calls is not in hcr-core");
+		need(tag, group.includes("core/promise/combinator.cms"), "the module defining msPromiseAllTyped, which emitted Promise.all code calls by name, is not in hcr-core");
 		for (const member of group) {
+			if (member == "core/promise/combinator.cms") continue;
 			for (const excluded of ["core/promise/", "actor/", "crypto/", "core/fetch/",
 				"core/websocket/", "net/"]) {
 				need(tag, !member.startsWith(excluded), `hcr-core includes '${member}'`);

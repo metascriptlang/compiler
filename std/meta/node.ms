@@ -290,6 +290,7 @@ export class Symbol {
 	ctorRoutine: Symbol | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
+	typeParamOwner: Symbol | null;
 	typeParams: Type[];
 }
 
@@ -347,6 +348,7 @@ export enum NodeFlag {
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
 	ActorSelfCall, // checker: a call through `this` in the actor's own method runs the method body on this turn, not as a message
+	TemplateStep,  // parser: this `+` is one step of a template literal; its right operand converts to text with the string hint
 }
 
 // ===== Node Kind Enum =====

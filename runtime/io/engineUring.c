@@ -718,9 +718,24 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 			break;
 		}
 		case MS_IO_SEND: {
+			if (res >= 0 && req->offset + res < req->len) {
+				struct io_uring_sqe* sqe = uringGetSqe(ring);
+				if (sqe != NULL) {
+					req->offset += res;
+					sqe->opcode = IORING_OP_SEND;
+					sqe->fd = req->fd;
+					sqe->addr = (uint64_t)(uintptr_t)(req->buf + req->offset);
+					sqe->len = (uint32_t)(req->len - req->offset);
+					sqe->user_data = (uint64_t)(uintptr_t)req;
+					uringSubmitSqe(ring);
+					uringSubmit(ring);
+					continue;
+				}
+				res = -1;
+			}
 			if (req->strRef.p) msStringDecref(req->strRef);
 			req->strRef = MS_EMPTY_STRING;
-			msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)res);
+			msFutureCompleteT((msFuture_int32*)req->fut, res < 0 ? res : req->len);
 			break;
 		}
 		case MS_IO_CLOSE: {

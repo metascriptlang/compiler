@@ -5150,7 +5150,7 @@ function scratchStep(): Result<uint64, ProgramError> {
 	const count = try instructionData().readU8(0);
 	const first = scratch<Crit>(count as int32);
 	for (const crit of first) {
-		scratchFirstSeen = scratchFirstSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+		scratchFirstSeen = scratchFirstSeen + (crit.hp as uint64) + ((crit.alive ? 1 : 0) as uint64) +
 			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
 	}
 	for (let index = 0; index < first.length; index++) {
@@ -5161,7 +5161,7 @@ function scratchStep(): Result<uint64, ProgramError> {
 	}
 	const second = scratch<Crit>(count as int32);
 	for (const crit of second) {
-		scratchSecondSeen = scratchSecondSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+		scratchSecondSeen = scratchSecondSeen + (crit.hp as uint64) + ((crit.alive ? 1 : 0) as uint64) +
 			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
 	}
 	for (let index = 0; index < second.length; index++) { second[index].hp = 5; }

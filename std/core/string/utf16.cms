@@ -23,16 +23,17 @@ function bytesOf(sb: Readonly<Span<uint8>>, first: int64, end: int64): string {
 	return text;
 }
 
-// Stride-1 on purpose: a lead-byte skip loop gets if-converted to a select under LTO, which
-// serializes every step on the load (~6x); with a fixed advance there is nothing to serialize.
 @noinline
 function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
-	let count: int64 = 0;
-	for (let i: int64 = 0; i < b.length; i++) {
-		const c = b[i];
-		count += ((c & 0xC0) != 0x80 ? 1 : 0) + (c >= 0xF0 ? 1 : 0);
+	const bytes = b as Readonly<Ptr<uint8>>;
+	const length = b.length as int64;
+	let count: uint64 = 0;
+	for (let i: int64 = 0; i < length; i++) {
+		const c = bytes[i];
+		count += (c & 0xC0) != 0x80 ? 1 as uint64 : 0;
+		count += c >= 0xF0 ? 1 as uint64 : 0;
 	}
-	return count;
+	return count as int64;
 }
 
 @exportName("msStringLength")
@@ -283,4 +284,29 @@ export function stringUnicodeLength(s: string): int64 {
 		count = count + 1;
 	}
 	return count;
+}
+
+test "length counts UTF-16 units on every word-boundary size of mixed text" {
+	const pieces = ["a", "é", "€", "😀"];
+	const widths = [1, 1, 1, 2];
+	for (let seed: uint32 = 1; seed <= 40; seed++) {
+		let state = seed;
+		let text = "";
+		let expected = 0;
+		for (let pieceCount = 0; pieceCount <= 40; pieceCount++) {
+			assert text.length == expected;
+			state = state * 1664525 + 1013904223;
+			const pick = ((state >> 16) % 4) as int32;
+			text += pieces[pick];
+			expected += widths[pick];
+		}
+	}
+}
+
+test "length counts UTF-16 units across the 127-word lane flush" {
+	for (let count = 250; count <= 270; count++) {
+		assert "😀".repeat(count).length == count * 2;
+		assert "€".repeat(count).length == count;
+		assert "a".repeat(count * 5).length == count * 5;
+	}
 }

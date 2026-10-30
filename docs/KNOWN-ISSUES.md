@@ -583,7 +583,7 @@ than a static-field defect. It is independent of decorators (the same actor with
 declaration parses and the read type-checks clean, so the value is only lost at runtime. Root cause
 not investigated.
 
-## L32. Implicit text conversion of a `BitSet<E>` fails the C compile (LIVE, measured 2026-09-15)
+## L32. Implicit text conversion of a `BitSet<E>` fails the C compile (FIXED; corpus `bitSetTextsAsItsMembers` passes on C, `--danger`, JS and ESM, 2026-10-30)
 
 ```
 const s: BitSet<Mod> = Mod.ThickHide | Mod.Pacifist;          installed v0.2.54, 6-member enum

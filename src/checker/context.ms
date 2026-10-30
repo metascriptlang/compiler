@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -606,7 +606,7 @@ export function nominalTypeSym(t: Type): Symbol | null {
 	}
 	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
 	const kind = s.sym.symbolKind;
-	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
+	return kind == SymbolKind.Class || kind == SymbolKind.Actor || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
 }
 
 export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol, name: string): boolean {
@@ -749,6 +749,11 @@ function parentLevel(level: (Type | null)[]): (Type | null)[] {
 			parents.push(parent);
 			continue;
 		}
+		const widened = distinctWidenBody(t);
+		if (widened != null && isArrayShaped(widened)) {
+			parents.push(widened);
+			continue;
+		}
 		for (const base of declaredBasesOf(t)) parents.push(base);
 	}
 	return parents;
@@ -845,6 +850,49 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 	if (ofClass != null) ofClass.push(e);
 	else _dispByClass.set(classSym, [e]);
 	_dispBySym.set(sym, e);
+}
+
+// Drops every entry of the classes a module declares and returns where the first sat in the registry's order, -1 when
+// it had none, so the module's re-collection can be put back there by placeDispatchOfModule.
+export function forgetDispatchOfModule(modulePath: string): int32 {
+	let first = -1;
+	const kept: DispMethodEntry[] = [];
+	const gone = new HashSet<DispMethodEntry>();
+	for (const e of _dispEntries) {
+		if (e.classSym.modulePath != modulePath) {
+			kept.push(e);
+			continue;
+		}
+		if (first < 0) first = kept.length;
+		gone.add(e);
+		_dispByClass.delete(e.classSym);
+	}
+	_dispEntries = kept;
+	const stale: Symbol[] = [];
+	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+		if (gone.has(e)) stale.push(sym);
+	});
+	for (const sym of stale) _dispBySym.delete(sym);
+	return first;
+}
+
+// Moves the entries a module recorded since forgetDispatchOfModule to `at`, keeping their order, the place a first
+// collection of the modules in load order gives them.
+export function placeDispatchOfModule(modulePath: string, at: int32): void {
+	if (at < 0) return;
+	const mine: DispMethodEntry[] = [];
+	const rest: DispMethodEntry[] = [];
+	for (const e of _dispEntries) {
+		if (e.classSym.modulePath == modulePath) mine.push(e);
+		else rest.push(e);
+	}
+	const placed: DispMethodEntry[] = [];
+	for (let i = 0; i < rest.length; i += 1) {
+		if (i == at) for (const e of mine) placed.push(e);
+		placed.push(rest[i]);
+	}
+	if (at >= rest.length) for (const e of mine) placed.push(e);
+	_dispEntries = placed;
 }
 
 export function dispatchEntryCount(): int32 {
@@ -1416,6 +1464,7 @@ export class CheckerContext {
 	topProgram: Node | null;   // the module body being checked: the owner walk of a move in top-level code
 	exportRegistry: ExportRegistry;
 	adoptedDecls: HashMap<Node, Symbol>;
+	adoptStmt: ((stmt: Node) => void) | null;
 	adoptedParams: HashMap<Node, Symbol[]>;
 	boundIdents: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
@@ -1516,6 +1565,7 @@ export function createContext(): CheckerContext {
 		topProgram: null,
 		exportRegistry: createExportRegistry(),
 		adoptedDecls: new HashMap<Node, Symbol>(),
+		adoptStmt: null,
 		adoptedParams: new HashMap<Node, Symbol[]>(),
 		boundIdents: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
@@ -1591,8 +1641,18 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
-	ctx.itemModule = graph.loadOrder.indexOf(mod.path) as int32;
+	ctx.itemModule = moduleItemId(mod.path);
 	return ctx;
+}
+
+const _moduleItemIds = new HashMap<string, int32>();
+
+export function moduleItemId(path: string): int32 {
+	const known = _moduleItemIds.get(path);
+	if (known != null) return known;
+	const id = _moduleItemIds.size as int32;
+	_moduleItemIds.set(path, id);
+	return id;
 }
 
 // Mints the ordinal that separates same-named routines of one module in the
@@ -1605,8 +1665,6 @@ export function stampOwner(ctx: CheckerContext, sym: Symbol): void {
 	stampItem(ctx, sym);
 }
 
-let hoistedTemps: int32 = 0;
-
 export function assignTemp(sym: Symbol, value: Node): Node {
 	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: boundRead(sym, value.location), right: value }, value.location);
 	assign.nodeType = sym.symbolType;
@@ -1615,8 +1673,7 @@ export function assignTemp(sym: Symbol, value: Node): Node {
 }
 
 export function hoistedTemp(ctx: CheckerContext, t: Type, loc: SourceLocation): Symbol {
-	hoistedTemps += 1;
-	const name = ":tmp" + String(hoistedTemps);
+	const name = ":tmp" + String(nextDisamb(ctx, ctx.modulePath, ":tmp"));
 	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
 	setFlag(sym, SymbolFlag.Used);
 	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
@@ -1640,9 +1697,14 @@ export function boundRead(sym: Symbol, loc: SourceLocation): Node {
 }
 
 export function stampItem(ctx: CheckerContext, sym: Symbol): void {
-	ctx.nextItem += 1;
-	sym.itemModule = ctx.itemModule;
-	sym.item = ctx.nextItem;
+	const minter = mintingCtx(ctx);
+	minter.nextItem += 1;
+	sym.itemModule = minter.itemModule;
+	sym.item = minter.nextItem;
+}
+
+export function mintingCtx(ctx: CheckerContext): CheckerContext {
+	return ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 }
 
 export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symType: Type | null): Symbol {
@@ -1653,8 +1715,9 @@ export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symT
 
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
 	const key = modulePath + "\t" + mangle(name);
-	const next = ctx.disambTable.get(key) ?? 0;
-	ctx.disambTable.set(key, next + 1);
+	const table = mintingCtx(ctx).disambTable;
+	const next = table.get(key) ?? 0;
+	table.set(key, next + 1);
 	return next;
 }
 

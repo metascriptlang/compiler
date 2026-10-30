@@ -9,6 +9,7 @@
 #define MS_STD_OS_H
 
 #include "runtime/core/system.h"
+#include "runtime/core/cpus.h"
 #include <string.h>
 #include <time.h>
 
@@ -136,6 +137,11 @@ static inline int32_t msOsCpuCount(void) {
 #else
 	return 1;
 #endif
+}
+
+static inline int32_t msOsAvailableParallelism(void) {
+	int n = msAvailableCpus();
+	return n > 0 ? (int32_t)n : 1;
 }
 
 static inline msString msOsCpuModel(void) {

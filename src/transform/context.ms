@@ -33,6 +33,7 @@ export class TransformContext {
 	raiserBackend: boolean;
 	reloadableModules: string[];
 	rangeChecks: boolean;
+	overflowChecks: boolean;  // JS only: C folds this into rangeChecks
 	boundChecks: boolean;
 	objChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
@@ -61,7 +62,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, overflowChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

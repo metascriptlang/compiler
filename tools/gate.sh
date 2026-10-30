@@ -26,8 +26,15 @@ RULES=(
 DEFAULT_LANES="build suite"
 ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
 LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary cache suite tests fmt lsp guard solana corpus san" "tsan" "hcr")
+PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
 KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
+# The land gate keeps the lanes that are very cheap, very important or often red (the person, 2026-10-30), from 3 days
+# of gate logs to 2026-10-30 (median wall, runs with a new red): cheap lsp 0.5m, tools 1.1m, solana 1.5m, fmt 2.6m;
+# important build 5.9m, suite 3.5m, tests 5.4m (15%); often red guard 5.0m (11%), hcr 5.7m (11%), and corpus 17m
+# (23%), which with san runs the programs the slice adds or edits and those the owner names. Left to the full gate
+# (--full, --release): cache 10.1m, never red; boundary 8.4m, red 5%; tsan. No gate emits every corpus program to skip
+# those with a recorded pass any more: over 105 gates that select took 22.5 h and saved at most 11 h of corpus and san.
+LAND_LANES="tools build suite tests lsp fmt solana guard hcr corpus san"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
@@ -43,6 +50,12 @@ after another, and compare every red against src/test/known-red.json.
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
   --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana
+  --programs a,b corpus programs the owner picks for corpus and san, beside the ones the change adds or edits; the owner
+                 knows what its change reaches, so this replaces the select's emit of every program
+  --full        the lanes the diff selects, all of them, corpus and san on every program: the full gate a release
+                 or a suspect change asks for
+  --with a,b     add these lanes to the core the land gate runs (the owner pays for what its change can reach);
+                 corpus or san named here run every program, not only the touched ones
                  (tsan brings san, whose run writes the program list tsan reads)
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
@@ -906,7 +919,9 @@ test_one() {
   local bin=$1 f=$2 part=$3; shift 3
   printf 'gate: test job=%s %s\n' "${part##*/}" "$*" >"$part"
   env -u NO_COLOR -u FORCE_COLOR "$bin" test --time "$f" "$@" >>"$part" 2>&1
-  echo $? >"$part.rc"
+  local rc=$?
+  case $rc in 137|143) echo "(exit $rc)" >>"$part" ;; esac
+  echo $rc >"$part.rc"
 }
 
 test_one_self_test() (
@@ -946,6 +961,137 @@ FAKE
       [ "$got" = "$want" ] || { printf 'FAIL test timing: job identity hid the NORESULT cause\n'; bad=1; }
     fi
   done
+  return $bad
+)
+
+# A new red counts against the slice only when its diff causes it: the proof LANDING.md asked owners to run by hand (the
+# same test red on a candidate of main) the gate now runs itself. Each new red a rerun can judge runs TRIAGE_RUNS times on
+# this candidate and on main's, both at once; red on main even once, or red here fewer than twice, is not the slice's.
+# On 2026-10-29..30, 66 of 93 reds were not the slice's and each one cost its owner a re-proof and a new gate; a flake now
+# lands on a slice at most ~7% of the time, while a red the diff causes every time stays the slice's.
+TRIAGE_RUNS=3 TRIAGE_MAX=12 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
+TRIAGE_LANES=" corpus san tsan guard hcr tests suite "
+
+triage_subject() {
+  case "$1" in
+    tests|suite) printf '%s\n' "${2%% > *}" ;;
+    *) printf '%s\n' "${2% \[*\]}" ;;
+  esac
+}
+
+# names a rerun can judge: a named test whose own file the diff leaves alone, since a test the slice edits has no main twin
+triage_eligible() {
+  local lane=$1 name subj
+  while IFS= read -r name; do
+    case "$name" in *"no result"|*"no named failure"*|"timed out"|setup:*|"self-host: "*) continue ;; esac
+    subj=$(triage_subject "$lane" "$name")
+    [ -n "$subj" ] || continue
+    printf '%s\n' "$paths" | grep -F -- "$subj" >/dev/null && continue
+    printf '%s\n' "$name"
+  done
+}
+
+# names main slice runs: the names that are not the slice's, each with its evidence
+triage_judge() {
+  local name m s
+  while IFS= read -r name; do
+    m=$(grep -cxF -- "$name" "$2"); s=$(grep -cxF -- "$name" "$3")
+    if [ "$m" -gt 0 ]; then printf '%s\tred on main %s/%s\n' "$name" "$m" "$4"
+    elif [ "$s" -lt 2 ]; then printf '%s\tred %s/%s on this candidate, 0/%s on main\n' "$name" "$s" "$4" "$4"
+    fi
+  done <"$1"
+}
+
+# root of a candidate built from the merge base, shared by the gates on this host by tree; the caller removes <root>.lock
+triage_main() {
+  local mb tree d lock old
+  mb=$(git merge-base "$base" HEAD) && tree=$(git rev-parse "$mb^{tree}") || return 1
+  d="${GATE_MAIN_DIR:-${HOME:-$USERPROFILE}/.metascript/gate-main}/$tree" lock="$d.lock"
+  mkdir -p "${d%/*}" || return 1
+  until mkdir "$lock" 2>/dev/null; do
+    kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null || rm -rf "$lock"
+    sleep 5
+  done
+  echo $$ >"$lock/pid"
+  if [ ! -x "$d/out/gate/msc" ]; then
+    rm -rf "$d"; git worktree prune
+    { git worktree add -q -f --detach "$d" "$mb" && rsync -a --exclude=.git "$TOP/vendor/" "$d/vendor/" && cp -p "$BUILDER" "$d/msc" \
+      && (cd "$d" && ./msc build src/index.ms --danger $CC_FLAG --output=out/gate/msc); } >&2 || { rm -rf "$lock"; return 1; }
+    ls -dt "${d%/*}"/*/ | grep -v '\.lock/$' | tail -n +4 | while read -r old; do [ -d "${old%/}.lock" ] || rm -rf "${old%/}"; done
+  fi
+  printf '%s\n' "$d"
+}
+
+# lane tree compiler builder names runs out: every run's failing names appended to out; fails when a run names nothing it
+# could judge (a harness that did not run is no evidence either way)
+triage_side() {
+  local lane=$1 tree=$2 cmp=$3 bld=$4 runs=$6 out=$7 csv i log rc f
+  csv=$(while IFS= read -r f; do triage_subject "$lane" "$f"; done <"$5" | sort -u | paste -sd, -)
+  : >"$out"
+  for ((i = 1; i <= runs; i++)); do
+    log="$out.$i"
+    (
+      cd "$tree" || exit 2
+      case "$lane" in
+        corpus|san|tsan)
+          env -u FORCE_COLOR NO_COLOR=1 MSCORPUS_ONLY="$csv" MSCORPUS_CELL_TIMEOUT_MS=120000 \
+            $([ "$lane" = san ] && echo MSCORPUS_SAN=1) $([ "$lane" = tsan ] && echo MSCORPUS_TSAN=1) \
+            $([ "$lane" = corpus ] && [ "$raiser_on" -eq 1 ] && echo MSCORPUS_RAISER=1) \
+            MSC="$cmp" "$bld" run src/test/corpus/run.ms ;;
+        guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
+        hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
+        tests|suite)
+          [ "$lane" = tests ] || cmp=$bld
+          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
+      esac
+    ) >"$log" 2>&1; rc=$?
+    (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
+    if [ "$rc" -ne 0 ] && [ ! -s "$log.reds" ]; then printf 'triage: run %s in %s: exit %s with no named failure\n' "$i" "$tree" "$rc"; return 1; fi
+    for f in ${csv//,/ }; do
+      grep -F -- "$f" "$log" >/dev/null || { printf 'triage: run %s in %s never ran %s\n' "$i" "$tree" "$f"; return 1; }
+    done
+    cat "$log.reds" >>"$out"
+  done
+}
+
+# lane: moves the new reds that are not the slice's from $OUT/<lane>.new to $OUT/<lane>.notyours
+triage_lane() {
+  local lane=$1 n d slice main
+  : >"$OUT/$lane.notyours"
+  [ "$record" -eq 0 ] && [ "$release" -eq 0 ] && [ "${GATE_TRIAGE:-1}" != 0 ] || return 0
+  case "$TRIAGE_LANES" in *" $lane "*) ;; *) return 0 ;; esac
+  triage_eligible "$lane" <"$OUT/$lane.new" >"$OUT/$lane.triage"
+  n=$(grep -c . "$OUT/$lane.triage" | tr -d ' ')
+  [ "$n" -gt 0 ] || return 0
+  if [ "$n" -gt "$TRIAGE_MAX" ]; then say "  triage: $n new reds, more than $TRIAGE_MAX, stay the slice's"; return 0; fi
+  d=$(triage_main 2>>"$OUT/$lane.triage.log") || { say "  triage: no candidate of main could be built here ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; }
+  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$TOP" "$CAND" "$BUILDER" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.slice" >>"$OUT/$lane.triage.log" 2>&1 &
+  slice=$!
+  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$d" "$d/out/gate/msc" "$d/msc" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.main" >>"$OUT/$lane.triage.log" 2>&1 &
+  main=$!
+  wait "$slice"; slice=$?; wait "$main"; main=$?
+  rm -rf "$d/out/corpus" "$d/out/hcr" "$d.lock"
+  if [ "$slice" -ne 0 ] || [ "$main" -ne 0 ]; then say "  triage: a rerun could not judge ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; fi
+  triage_judge "$OUT/$lane.triage" "$OUT/$lane.tri.main" "$OUT/$lane.tri.slice" "$TRIAGE_RUNS" >"$OUT/$lane.notyours"
+  cut -f1 "$OUT/$lane.notyours" | grep -vxF -f - "$OUT/$lane.new" >"$OUT/$lane.new.next"
+  mv "$OUT/$lane.new.next" "$OUT/$lane.new"
+}
+
+triage_self_test() (
+  local d bad=0 got
+  d=$(mktemp -d) || return 1
+  trap 'rm -rf "$d"' EXIT
+  [ "$(triage_subject corpus 'httpServeBinaryBody [danger]')" = httpServeBinaryBody ] || { echo "FAIL triage: corpus subject"; bad=1; }
+  [ "$(triage_subject tests 'src/test/c/json.ms > parses numbers')" = src/test/c/json.ms ] || { echo "FAIL triage: tests subject"; bad=1; }
+  paths=$'src/test/corpus/programs/editedProgram.ms\nsrc/checker/checkPass.ms'
+  got=$(printf '%s\n' 'editedProgram [c]' 'httpServeBinaryBody [c]' 'src/test/c/index.ms > no result' 'guard shard 1/4: exit 1 with no named failure' 'timed out' \
+    | triage_eligible corpus | paste -sd'|' -)
+  [ "$got" = 'httpServeBinaryBody [c]' ] || { echo "FAIL triage: eligible kept '$got'"; bad=1; }
+  printf '%s\n' 'onMain [c]' 'once [c]' 'twice [c]' 'never [c]' >"$d/names"
+  printf '%s\n' 'onMain [c]' >"$d/main"
+  printf '%s\n' 'once [c]' 'twice [c]' 'twice [c]' 'onMain [c]' >"$d/slice"
+  got=$(triage_judge "$d/names" "$d/main" "$d/slice" 3 | cut -f1 | paste -sd'|' -)
+  [ "$got" = 'onMain [c]|once [c]|never [c]' ] || { echo "FAIL triage: judged not the slice's '$got', want onMain, once, never"; bad=1; }
   return $bad
 )
 
@@ -1272,7 +1418,21 @@ select_whole() {
   select_ledger select-whole "$((SECONDS - ${t0:-$SECONDS}))" "" "" "" "" ""
 }
 
+# corpus programs the diff adds or edits, and those the owner names with --programs, by name, among those the tree has
+touched_programs() {
+  local names
+  names=$({ printf '%s\n' "$paths" | sed -n 's#^src/test/corpus/programs/\([^/]*\).*#\1#p' | sed 's/\.ms$//'; printf '%s\n' "$programs_arg" | tr ',' '\n'; } | sed '/^$/d' | sort -u)
+  [ -n "$names" ] || return 0
+  list_programs | cut -d' ' -f1 | grep -xF -f <(printf '%s\n' "$names")
+}
+
 select_programs() {
+  if [ "${land:-0}" -eq 1 ]; then
+    mkdir -p "$EMIT" && touched_programs >"$EMIT/only.corpus" && cp "$EMIT/only.corpus" "$EMIT/only.san"
+    say "gate: select core only · corpus and san run the $(grep -c . "$EMIT/only.corpus" | tr -d ' ') program(s) the change adds or edits or --programs names"
+    selected=1
+    return
+  fi
   local t0=$SECONDS n_all run_c run_s keyed line
   result_keys || { select_whole "the candidate's emits or their keys could not be made"; return; }
   n_all=$(grep -c . "$EMIT/programs" | tr -d ' ')
@@ -2031,6 +2191,7 @@ CASES
   adopt_self_test || bad=1
   boot_self_test || bad=1
   test_one_self_test || bad=1
+  triage_self_test || bad=1
   bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
   bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
   bash "$TOP/tools/gateKnownApprovalTest.sh" || bad=1
@@ -2038,12 +2199,15 @@ CASES
   return $bad
 }
 
-base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" select_only=0
+base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" with_arg="" programs_arg="" full=0 select_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base=${2:?--base needs a rev}; shift ;;
     --release) release=1 ;;
     --lanes) lanes_arg=${2:?--lanes needs a list}; shift ;;
+    --full) full=1 ;;
+    --with) with_arg=${2:?--with needs a list}; shift ;;
+    --programs) programs_arg=${2:?--programs needs a list}; shift ;;
     --dry-run) dry=1 ;;
     --select) select_only=1 ;;
     --record) record=1 ;;
@@ -2070,6 +2234,7 @@ mkdir -p "$OUT" || die "cannot create $OUT"
 : >"$OUT/why"
 paths=$(changed_paths)
 
+land=0
 if [ -n "$lanes_arg" ]; then
   chosen=$(printf '%s\n' "$lanes_arg" | tr ',' '\n')
   for l in $chosen; do
@@ -2082,6 +2247,29 @@ elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then
 else
   printf '%s\n' "$paths" | route_paths | sort -u >"$OUT/why"
   chosen=$(cut -f1 "$OUT/why" | sort -u)
+fi
+if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && [ "$full" -eq 0 ]; then
+  land=1
+  full_only=$(printf '%s\n' $chosen | grep -vxF -f <(printf '%s\n' $LAND_LANES) | paste -sd' ' -)
+  chosen=$(printf '%s\n' $chosen | grep -xF -f <(printf '%s\n' $LAND_LANES))
+  # corpus and san run only the programs the change adds or edits; the owner proves the programs it reaches (LANDING.md)
+  [ -n "$(touched_programs)" ] || chosen=$(printf '%s\n' $chosen | grep -vx 'corpus\|san')
+  for n in $(printf '%s\n' "$programs_arg" | tr ',' ' '); do
+    list_programs | cut -d' ' -f1 | grep -xF "$n" >/dev/null || die "--programs names '$n', which is not a corpus program"
+  done
+  if [ -n "$programs_arg" ] && [ -n "$(touched_programs)" ]; then
+    chosen=$(printf '%s\n' $chosen corpus san | sort -u)
+    printf 'corpus\t--programs\nsan\t--programs\n' >>"$OUT/why"
+  fi
+  for l in $(printf '%s\n' "$with_arg" | tr ',' ' '); do
+    case " $ORDER " in *" $l "*) ;; *) die "unknown lane '$l' in --with" ;; esac
+    chosen=$(printf '%s\n' $chosen "$l")
+    printf '%s\t%s\n' "$l" "--with (the owner pays for it)" >>"$OUT/why"
+    full_only=$(printf '%s\n' $full_only | grep -vx "$l" | paste -sd' ' -)
+    # a corpus or san the owner asks for runs what its pass records leave, not only the touched programs
+    case $l in corpus|san) land=0 ;; esac
+  done
+  [ -z "$full_only" ] || say "gate: core only; $full_only run in the full gate (--full or --release; gate-queue submit --full)"
 fi
 if printf '%s\n' $chosen | grep -x tsan >/dev/null && ! printf '%s\n' $chosen | grep -x san >/dev/null; then
   printf 'san\t%s\n' "tsan reads the program list the san run writes" >>"$OUT/why"
@@ -2101,6 +2289,7 @@ done
 case " $lanes " in *" corpus "*|*" san "*)
   if [ -n "$lanes_arg" ]; then select_why="--lanes runs a lane whole"
   elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then select_why="the full ladder"
+  elif [ "$land" -eq 0 ]; then select_why="the full gate runs them whole"
   else
     select=1
   fi ;;
@@ -2124,10 +2313,12 @@ explain() {
     n=$(awk -F'\t' -v l="$l" '$1==l' "$OUT/why" | wc -l | tr -d ' ')
     say "gate: $l <- $(awk -F'\t' -v l="$l" '$1==l{print $2}' "$OUT/why" | head -3 | paste -sd, - | sed 's/,/, /g')$([ "$n" -gt 3 ] && printf ' (+%d more)' $((n - 3)))"
   done
-  if [ "$select" -eq 1 ]; then
+  if [ "$select" -eq 1 ] && [ "$land" -eq 1 ]; then
+    say "gate: $select_label narrowed to the corpus programs the change adds or edits and those --programs names: $(touched_programs | paste -sd' ' -)"
+  elif [ "$select" -eq 1 ]; then
     say "gate: $select_label narrowed to the programs with no recorded pass for their emits"
   elif [ -n "$select_why" ]; then
-    say "gate: no narrowing for $select_label ($select_why); its passes are recorded for the next narrowed gate"
+    say "gate: no narrowing for $select_label ($select_why)"
   fi
   case " $lanes " in *" build "*)
     if [ "$rcscan_on" -eq 1 ]; then say "gate: build runs the emit rc scan <- $rcscan_why"; else say "gate: build without the emit rc scan (no change under src/, std/ or runtime/)"; fi ;;
@@ -2283,10 +2474,31 @@ run_solana_lane() {
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
+# A tier test (`msc test <index> --tests-in-dir`) holds about 3.3 GB at its peak, whatever the lane count: one gate's tests
+# phase started every tier at once and reached 42-56 GB, and two such phases on oci-u (94 GB) made earlyoom kill gates'
+# test processes (10:48Z, 16:21Z, 17:08Z 2026-10-30). So the lane starts another tier only while the RAM available keeps
+# one more of them above a tenth of the host's RAM (earlyoom's kill line, doubled), counting each tier started in the last
+# minute at its full peak too, because a tier reaches its peak only after it has compiled for a while; it always runs one.
+# The estimate still misses (earlyoom killed tiers at 18:39Z and 18:49Z, the suite at 19:41Z), so a tier or the suite
+# killed by a signal earlyoom sends runs again once, alone: one that is itself too big is killed again and stays red.
+TEST_JOB_KB=$((3500 * 1024))
+test_ram_room() {
+  [ -r /proc/meminfo ] || return 0
+  awk -v j="$TEST_JOB_KB" -v y="$1" '/^MemTotal/ { t = $2 } /^MemAvailable/ { a = $2 } END { exit !(a - j * (1 + y) >= t / 10) }' /proc/meminfo
+}
+
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
-    suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
+    suite)
+      part=$(part_of suite src/index.ms)
+      with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part"
+      case "$(cat "$part.rc" 2>/dev/null)" in
+        137|143)
+          printf 'gate: %s was killed under host memory pressure; running it again once the RAM holds it\n' "${part##*/}"
+          until test_ram_room 0; do sleep 5; done
+          with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part" ;;
+      esac ;;
     tests)
       jobs=$(test_jobs)
       if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && tier_select; then
@@ -2294,15 +2506,33 @@ run_test_lane() {
       else
         rm -f "$OUT/tier/keep"
       fi
+      local started=() young t
       while read -r f shard; do
         [ -n "$f" ] || continue
+        while [ -n "$(jobs -rp)" ]; do
+          young=0; for t in "${started[@]}"; do [ $((SECONDS - t)) -ge 60 ] || young=$((young + 1)); done
+          ! test_ram_room "$young" || break
+          sleep 2
+        done
+        started+=("$SECONDS")
         if [ "$shard" = - ]; then
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
         else
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
         fi
       done <<<"$jobs"
-      wait ;;
+      wait
+      while read -r f shard; do
+        [ -n "$f" ] || continue
+        if [ "$shard" = - ]; then part=$(part_of tests "$f"); else part=$(part_of tests "$f.$shard"); fi
+        case "$(cat "$part.rc" 2>/dev/null)" in 137|143) ;; *) continue ;; esac
+        printf 'gate: %s was killed under host memory pressure; running it again alone\n' "${part##*/}"
+        if [ "$shard" = - ]; then
+          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir
+        else
+          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir "--tests-shard=$shard"
+        fi
+      done <<<"$jobs" ;;
   esac
   while read -r f shard; do
     [ -n "$f" ] || continue
@@ -2529,14 +2759,11 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do case "$lane" in corpus|san|tsan) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
-  MSCORPUS_BUILD_JOBS=$(build_width 1) || exit $?
+  MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
   select_pid="" keys_pid=""
   case " $todo " in *" suite "*|*" tests "*|*" corpus "*|*" san "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
       (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
-    elif [ "$select" -eq 0 ] && [ "$keys_started" -eq 0 ] && [ -n "$select_label" ] && [ -x "$CAND" ]; then
-      keys_started=1
-      (with_slot whole_keys) & keys_pid=$!
     fi ;;
   esac
   pids="" launched=""
@@ -2550,7 +2777,6 @@ for phase in "${PHASES[@]}"; do
     case "$lane" in corpus|san|tsan)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
-      MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
       narrow="" only_csv=""
       narrow_for "$lane"
       if select_leaves_nothing "$lane"; then say "gate: $lane skipped, every program has a recorded pass"; continue; fi
@@ -2583,6 +2809,7 @@ for phase in "${PHASES[@]}"; do
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red.all" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
   known_of "$lane" | scope_known "$lane" | split_flaky drop >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
+  triage_lane "$lane"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
   n_new=$(grep -c . "$OUT/$lane.new" | tr -d ' ')
@@ -2592,8 +2819,10 @@ for phase in "${PHASES[@]}"; do
   fi
   n_fixed=$(grep -c . "$OUT/$lane.fixed" | tr -d ' ')
   n_flaky=$(grep -c . "$OUT/$lane.flaky" | tr -d ' ')
+  n_mine=$(grep -c . "$OUT/$lane.notyours" | tr -d ' ')
   [ -z "$only_csv" ] || reused="$reused on $(printf '%s' "$only_csv" | tr ',' '\n' | grep -c . | tr -d ' ') program(s)"
-  line="gate: $lane$reused $(fmt_secs "${secs:-0}") · $n_red red · $((n_red - n_new)) known · $n_new new"
+  line="gate: $lane$reused $(fmt_secs "${secs:-0}") · $n_red red · $((n_red - n_new - n_mine)) known · $n_new new"
+  [ "$n_mine" -eq 0 ] || line="$line · $n_mine not the slice's"
   [ "$n_fixed" -eq 0 ] || line="$line · $n_fixed known-now-green ($(head -3 "$OUT/$lane.fixed" | paste -sd, - | sed 's/,/, /g'))"
   xp=$(sed -n 's/^.* \([0-9][0-9]*\) xpass$/\1/p' "$log" | tail -1)
   [ -z "$xp" ] || [ "$xp" = 0 ] || line="$line · $xp xpass"
@@ -2601,7 +2830,8 @@ for phase in "${PHASES[@]}"; do
   totals=$(totals_of "$lane" "$log")
   [ -z "$totals" ] || line="$line · $totals case"
   say "$line"
-  red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new))" "$n_new" "$n_flaky" "$ADMIT_WAITED"
+  red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky + n_mine)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new - n_mine))" "$n_new" "$((n_flaky + n_mine))" "$ADMIT_WAITED"
+  while IFS=$'\t' read -r name why; do say "  not the slice's: $name ($why; $OUT/$lane.triage.log)"; done <"$OUT/$lane.notyours"
   ran="$ran $lane"
   [ "$n_new" -gt 0 ] || resume_green "$lane"
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then

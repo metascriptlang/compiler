@@ -25,6 +25,15 @@ test "macro converter fit: source form and nullable slot use the payload convert
 	}
 }
 
+test "quote outside a macro: a runtime position is refused by name, a macro body stays accepted" {
+	const outside = compileToCWithStd('const code = quote { const x = 1; };');
+	assert !outside.ok && outside.error.includes("quote must be consumed by a macro"), outside.ok ? "accepted" : outside.error;
+	const nested = compileToCWithStd('function f(): void { const code = quote { 1 }; } f();');
+	assert !nested.ok && nested.error.includes("quote must be consumed by a macro"), nested.ok ? "accepted" : nested.error;
+	const inMacro = compileToCWithStd('import { Node } from "std/meta"; macro m(x: Node): Node { return quote { 1 + 2 }; } const v = m(0);');
+	assert inMacro.ok, inMacro.ok ? "" : inMacro.error;
+}
+
 test "macro converter fit: reference payload lookup still validates the expansion" {
 	const source = 'import { Node, NodeKind } from "std/meta"; class Box { value: int32 = 7; } function makeBox(): Box { return new Box(); } converter toBox(n: Node): Box { return { kind: NodeKind.CallExpr, line: n.line, column: n.column, callee: bindSym("makeBox"), arguments: [] }; }';
 	assert compileToCWithStd(source + "const plain: Box = <x/>; const maybe: Box | null = <x/>;").ok;

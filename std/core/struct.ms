@@ -375,9 +375,19 @@ export class HashMap<K, V> {
 	data: Vec<HashMapEntry<K, V>>;
 	size: int32;
 	writing: boolean;
-	constructor(pairs: Array<[K, V]> = []) {
+	constructor(pairs: Array<[K, V]> | HashMap<K, V> = []) {
+		hashMapFill(this, pairs);
+	}
+}
+
+function hashMapFill<K, V>(m: HashMap<K, V>, pairs: Array<[K, V]> | HashMap<K, V>): void {
+	if (pairs instanceof HashMap) {
+		for (const [key, value] of pairs) {
+			m.set(key, value);
+		}
+	} else {
 		for (const pair of pairs) {
-			this.set(pair[0], pair[1]);
+			m.set(pair[0], pair[1]);
 		}
 	}
 }
@@ -571,15 +581,25 @@ export class HashSet<T> {
 	size: int32;
 	writing: boolean;
 
-	constructor(items: T[] = []) {
+	constructor(items: T[] | HashSet<T> = []) {
+		hashSetFill(this, items);
+	}
+}
+
+function hashSetFill<T>(s: HashSet<T>, items: T[] | HashSet<T>): void {
+	if (items instanceof HashSet) {
+		for (const item of items) {
+			s.add(item);
+		}
+	} else {
 		if (items.length > 0) {
 			let cap = INITIAL_CAPACITY;
 			const needed = items.length + (items.length >> 1) + MIN_EMPTY_SLOTS;
 			while (cap < needed) { cap = cap * 2; }
-			this.data = new Array(cap);
+			s.data = new Array(cap);
 		}
 		for (const item of items) {
-			this.add(item);
+			s.add(item);
 		}
 	}
 }
@@ -718,9 +738,19 @@ export class Map<K, V> {
 	size: int32;
 	tombstones: int32;
 	writing: boolean;
-	constructor(pairs: Array<[K, V]> = []) {
+	constructor(pairs: Array<[K, V]> | Map<K, V> = []) {
+		orderedMapFill(this, pairs);
+	}
+}
+
+function orderedMapFill<K, V>(m: Map<K, V>, pairs: Array<[K, V]> | Map<K, V>): void {
+	if (pairs instanceof Map) {
+		for (const [key, value] of pairs) {
+			m.set(key, value);
+		}
+	} else {
 		for (const pair of pairs) {
-			this.set(pair[0], pair[1]);
+			m.set(pair[0], pair[1]);
 		}
 	}
 }
@@ -1016,17 +1046,25 @@ export class Set<T> {
 	tombstones: int32;
 	writing: boolean;
 
-	constructor(items: T[] = []) {
+	constructor(items: T[] | Set<T> = []) {
+		orderedSetFill(this, items);
+	}
+}
+
+function orderedSetFill<T>(s: Set<T>, items: T[] | Set<T>): void {
+	if (items instanceof Set) {
+		for (const item of items) {
+			s.add(item);
+		}
+	} else {
 		if (items.length > 0) {
 			let cap = INITIAL_CAPACITY;
 			const needed = items.length + (items.length >> 1) + MIN_EMPTY_SLOTS;
 			while (cap < needed) { cap = cap * 2; }
-			this.indices = new Array(cap);
-			let k: int32 = 0;
-			while (k < cap) { this.indices[k] = -1; k = k + 1; }
+			orderedSetInitIndices(s, cap);
 		}
 		for (const item of items) {
-			this.add(item);
+			s.add(item);
 		}
 	}
 }

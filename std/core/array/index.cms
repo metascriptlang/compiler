@@ -369,12 +369,17 @@ export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
  * Calls a function on every element in order and returns the results as a new array.
  * @param fn Mapper receiving the element and its index.
  */
+@inline
 export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
-	const out: U[] = [];
 	const n = arr.length;
-	for (let i = 0; i < n && i < arr.length; i += 1) {
-		out.push(fn(arr[i], i));
+	const out: U[] = [];
+	out.growEmpty(n as int64);
+	let i = 0;
+	while (i < n && i < arr.length) {
+		out[i] = fn(arr[i], i);
+		i += 1;
 	}
+	if (i < n) out.shrink(i as int64);
 	return out;
 }
 

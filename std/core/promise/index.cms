@@ -1,6 +1,15 @@
 // Platform-specific @compile (dispatch, pool, selectors) moved to src/compiler/compile.ms
 // — the compiler knows osTarget and picks only the right files.
 @compile("runtime/promise/combinator.c");
+when (drc && !bare && !solana) {
+	import "./combinator";
+
+	@compilerFunc
+	extern function msPromiseAll(futures: Ptr<void>): Ptr<void> from "msPromiseAll";
+
+	@compilerFunc
+	extern function msPromiseAllTyped(futures: Ptr<void>, shareFn: Ptr<void>, vt: Ptr<void>): Ptr<void> from "msPromiseAllTyped";
+}
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
 @builtin("Promise")
@@ -95,6 +104,13 @@ export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, r
 function raisedError(reason: string | Error): Error {
 	if (typeof reason === "string") return new Error(reason);
 	return reason;
+}
+
+@compilerFunc
+export function promiseOfValue<T>(value: T): Promise<T> {
+	const promise = msPromisePending<T>();
+	msPromiseSettle(promise, value);
+	return promise;
 }
 
 @compilerFunc

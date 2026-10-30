@@ -1,0 +1,362 @@
+import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { makeSymbol, symbolKey } from "../../checker/symbol";
+import { createStruct } from "../../checker/types";
+import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod } from "../../checker/context";
+import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceText } from "./hash";
+import { createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, TransAmDb } from "./index";
+import { recordModuleImport } from "./moduleDeps";
+import { getFileId } from "./fileInput";
+import { createQueryKey, TaQueryKind } from "./revision";
+import { cacheGet } from "./cache";
+
+enum TypeShape { Plain, Param, Instance }
+
+class DigestState {
+	modulePath: string;
+	ids: HashMap<Type, int32>;
+}
+
+function shapeOf(kind: TypeKind): TypeShape {
+	return match (kind) {
+		TypeKind.GenericParam => TypeShape.Param,
+		TypeKind.GenericInstance => TypeShape.Instance,
+		TypeKind.Number | TypeKind.String | TypeKind.Boolean | TypeKind.Void | TypeKind.Char | TypeKind.Null | TypeKind.Pending | TypeKind.Never
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Float32 | TypeKind.Float64
+			| TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Tuple | TypeKind.CString
+			| TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var
+			| TypeKind.TypeReference | TypeKind.Union | TypeKind.Enum | TypeKind.Result | TypeKind.Distinct | TypeKind.Error
+			| TypeKind.StringLiteral | TypeKind.EnumLiteral | TypeKind.Conditional | TypeKind.Alias | TypeKind.BooleanLiteral | TypeKind.Varargs | TypeKind.Cursor
+			| TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.BigInt | TypeKind.Set | TypeKind.Module | TypeKind.IndexedAccess | TypeKind.KeyOf
+			| TypeKind.NumberLiteral | TypeKind.NonPrimitive | TypeKind.Mapped => TypeShape.Plain,
+		_ => unhandledKind(kind),
+	};
+}
+
+function unhandledKind(kind: TypeKind): TypeShape {
+	throw new Error(`internal: digest: unhandled ${kind.toString()}`);
+}
+
+function putFlags<E>(out: TaText, flags: BitSet<E>): TaText {
+	const items = flags.toItems();
+	out = putInt(out, items.length);
+	for (const flag of items) out = putInt(out, flag as int32);
+	return out;
+}
+
+function putStrings(out: TaText, strings: string[] | null): TaText {
+	if (strings == null) return hNull(out);
+	out = putInt(out, strings.length);
+	for (const s of strings) out = putString(out, s);
+	return out;
+}
+
+function putNodes(out: TaText, nodes: Node[] | null): TaText {
+	if (nodes == null) return hNull(out);
+	out = putInt(out, nodes.length);
+	for (const node of nodes) out = putString(out, nodeText(node));
+	return out;
+}
+
+function putType(st: DigestState, out: TaText, t: Type | null): TaText {
+	if (t == null) return hNull(out);
+	const seen = st.ids.get(t);
+	if (seen != null) return putString(out, `@${seen}`);
+	st.ids.set(t, st.ids.size);
+	const shape = shapeOf(t.kind);
+	out = putString(putInt(out, t.kind as int32), t.typeName);
+	if (shape != TypeShape.Param && t.sym != null && t.sym.modulePath != st.modulePath) {
+		out = putString(out, symbolKey(t.sym));
+		if (shape == TypeShape.Instance) out = putTypes(st, out, t.typeChildren);
+		return out;
+	}
+	out = putStrings(out, t.typeNames);
+	out = putTypes(st, out, t.typeChildren);
+	if (shape != TypeShape.Instance) out = putType(st, out, t.typeReturn);
+	out = putType(st, out, t.typeExtra);
+	out = putFlags(out, t.typeFlags.excl(TypeFlag.OpenClass));
+	out = putInt(out, t.typeValue);
+	out = putInt(out, t.callConv as int32);
+	out = putInt(out, t.attachedOps.length);
+	for (const hook of t.attachedOps) out = hook != null ? putString(out, symbolKey(hook)) : hNull(out);
+	out = putStrings(out, t.optionalFields);
+	return putType(st, out, t.typeInst);
+}
+
+function putTypes(st: DigestState, out: TaText, types: Type[] | null): TaText {
+	if (types == null) return hNull(out);
+	out = putInt(out, types.length);
+	for (const t of types) out = putType(st, out, t);
+	return out;
+}
+
+function putExtension(out: TaText, ext: ExtensionMethod | null): TaText {
+	if (ext == null) return hNull(out);
+	out = putString(out, ext.methodName);
+	out = putBool(out, ext.isStatic);
+	return putString(out, ext.sourcePath);
+}
+
+function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
+	out = putInt(out, sym.symbolKind as int32);
+	out = putInt(out, sym.disamb);
+	out = putInt(out, sym.overloadIdx);
+	out = putFlags(out, sym.symFlags.excl(SymbolFlag.Used).excl(SymbolFlag.Consumed).excl(SymbolFlag.OverloadValidated));
+	out = putString(out, sym.nativeName);
+	out = putString(out, sym.exportName);
+	out = putString(out, sym.builtinKind);
+	out = putString(out, sym.headerPath);
+	out = putString(out, sym.jsModulePath);
+	out = putInt(out, sym.mutatedParams);
+	out = putNodes(out, sym.defaultParams);
+	out = putTypes(st, out, sym.typeParams);
+	out = putStrings(out, sym.fieldDecoratorNames);
+	out = putInt(out, sym.fieldDecorators.length);
+	for (const row of sym.fieldDecorators) out = putNodes(out, row);
+	out = putStrings(out, sym.metaKeys);
+	out = putNodes(out, sym.metaValues);
+	out = putStrings(out, sym.nonisolatedFields);
+	out = putInt(out, sym.duVariantSlot);
+	out = putInt(out, sym.staticFields.length);
+	for (const field of sym.staticFields) {
+		out = putString(out, field.name);
+		out = putType(st, out, field.symbolType);
+		out = putFlags(out, field.symFlags.excl(SymbolFlag.Used));
+	}
+	out = sym.ctorRoutine != null ? putType(st, out, sym.ctorRoutine.symbolType) : hNull(out);
+	out = putType(st, out, sym.symbolType);
+	return sym.declNode != null ? putString(out, surfaceText(sym.declNode)) : hNull(out);
+}
+
+function putExport(st: DigestState, out: TaText, ctx: CheckerContext, sym: Symbol): TaText {
+	const names = ctx.interfNames.get(sym) ?? [sym.name];
+	out = putStrings(out, names);
+	if (sym.modulePath != ctx.modulePath) return putString(out, symbolKey(sym));
+	out = putRoutine(st, out, sym);
+	out = putInt(out, sym.overloads.length);
+	for (const ov of sym.overloads) out = putRoutine(st, out, ov);
+	for (const name of names) {
+		const info = buildExportInfo(sym, ctx.extensionRegistry, ctx.modulePath, ctx, name);
+		out = putExtension(out, info.ext);
+		out = putInt(out, info.overloadExts.length);
+		for (const ext of info.overloadExts) out = putExtension(out, ext);
+		out = putType(st, out, info.converterTargetType);
+	}
+	return out;
+}
+
+export function ifaceDigest(ctx: CheckerContext): string {
+	const st: DigestState = { modulePath: ctx.modulePath, ids: new HashMap<Type, int32>() };
+	let out = putInt(createText(), ctx.interf.length);
+	for (const sym of ctx.interf) out = putExport(st, out, ctx, sym);
+	out = putString(out, ctx.includeDirectives);
+	out = putString(out, ctx.compilerFlags);
+	out = putString(out, ctx.compileDirectives);
+	out = putInt(out, ctx.jsImportRegistry.length);
+	for (const entry of ctx.jsImportRegistry) out = putStrings(putString(out, entry.modulePath), entry.names);
+	out = putInt(out, errorCount(ctx));
+	return textOf(out);
+}
+
+export function implDigest(parse: Node): string {
+	return nodeText(parse);
+}
+
+const DEP = "/dg/dep.ms";
+const USE = "/dg/use.ms";
+const USE_TEXT = 'import { f } from "./dep";\nexport function g(): int32 { return f(1); }';
+
+function measure(db: TransAmDb): string[] {
+	const dep = ifaceDigest(dbTypeCheck(db, DEP));
+	const use = ifaceDigest(dbTypeCheck(db, USE));
+	return [dep, use, implDigest(dbParse(db, DEP)), implDigest(dbParse(db, USE))];
+}
+
+function digests(depText: string, useText: string = USE_TEXT): string[] {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, DEP, depText);
+	dbSetFileText(db, USE, useText);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, USE), getFileId(db.fileInput, DEP));
+	return measure(db);
+}
+
+const BASE_DEP = "export function f(a: int32): int32 { return a + 1; }";
+
+test "a repeated check gives the same digests" {
+	const a = digests(BASE_DEP);
+	const b = digests(BASE_DEP);
+	for (let i = 0; i < 4; i += 1) assert a[i] == b[i];
+}
+
+test "a comment leaves both digests unchanged" {
+	const base = digests(BASE_DEP);
+	const edited = digests("// head\nexport function f(a: int32): int32 { /* inner */ return a + 1; } // tail");
+	for (let i = 0; i < 4; i += 1) assert base[i] == edited[i];
+}
+
+test "line shifts and whitespace leave both digests unchanged" {
+	const base = digests(BASE_DEP);
+	const edited = digests("\n\n\nexport   function f(a: int32): int32\n{\n\treturn a + 1;\n}\n");
+	for (let i = 0; i < 4; i += 1) assert base[i] == edited[i];
+}
+
+test "a private body edit moves the impl digest and not the interface digest" {
+	const base = digests("function helper(): int32 { return 1; }\nexport function f(a: int32): int32 { return a + helper(); }");
+	const edited = digests("function helper(): int32 { return 2; }\nexport function f(a: int32): int32 { return a + helper(); }");
+	assert base[0] == edited[0];
+	assert base[1] == edited[1];
+	assert base[2] != edited[2];
+}
+
+test "an exported body edit moves the impl digest and not the interface digest" {
+	const base = digests(BASE_DEP);
+	const edited = digests("export function f(a: int32): int32 { return a * 2; }");
+	assert base[0] == edited[0];
+	assert base[1] == edited[1];
+	assert base[2] != edited[2];
+	assert base[3] == edited[3];
+}
+
+test "a method body edit leaves the interface digest unchanged" {
+	const base = digests("export class C { x: int32 = 1; get(): int32 { return this.x; } }");
+	const edited = digests("export class C { x: int32 = 1; get(): int32 { return this.x + 1; } }");
+	assert base[0] == edited[0];
+	assert base[2] != edited[2];
+}
+
+test "an exported signature change moves the interface digest" {
+	const base = digests(BASE_DEP);
+	assert base[0] != digests("export function f(a: int64): int32 { return 1; }")[0];
+	assert base[0] != digests("export function f(a: int32): int64 { return 1; }")[0];
+	assert base[0] != digests("export function f(a: int32, b: int32 = 2): int32 { return a + 1; }")[0];
+}
+
+test "a body edit that writes a parameter moves the interface digest" {
+	assert digests("export function f(a: int32): int32 { return a; }")[0] != digests("export function f(a: int32): int32 { a = 2; return a; }")[0];
+	const read = "export class P { x: int32 = 1; }\nexport function f(p: P): int32 { return p.x; }";
+	const written = "export class P { x: int32 = 1; }\nexport function f(p: P): int32 { p.x = 2; return 1; }";
+	assert digests(read)[0] != digests(written)[0];
+}
+
+test "an inferred return type change moves the interface digest" {
+	const ints = digests("export function f(a: int32) { return 1; }");
+	assert ints[0] != digests("export function f(a: int32) { return true; }")[0];
+}
+
+test "an overload order change moves the interface digest" {
+	const first = "export function f(a: int32): int32 { return 1; }\n";
+	const second = "export function f(a: boolean): int32 { return 2; }\n";
+	const third = "export function f(a: int64): int32 { return 3; }\n";
+	assert digests(first + second)[0] != digests(second + first)[0];
+	assert digests(first + second + third)[0] != digests(first + third + second)[0];
+}
+
+test "a class field change moves the interface digest" {
+	const base = digests("export class C { x: int32 = 1; }");
+	assert base[0] != digests("export class C { x: int32 = 1; y: int32 = 2; }")[0];
+	assert base[0] != digests("export class C { x: int64 = 1; }")[0];
+	assert base[0] != digests("export class C { x: int32 = 2; }")[0];
+}
+
+test "an exported constant change moves the interface digest" {
+	assert digests("export const k = 1;")[0] != digests("export const k = 2;")[0];
+}
+
+test "an unrelated private declaration leaves the interface digest unchanged" {
+	const base = digests(BASE_DEP);
+	assert base[0] == digests("const hidden = 5;\n" + BASE_DEP)[0];
+	assert base[0] == digests("class Hidden { v: int32 = 1; }\n" + BASE_DEP)[0];
+	assert base[0] == digests("function other(): int32 { return 9; }\n" + BASE_DEP)[0];
+	assert base[2] != digests("const hidden = 5;\n" + BASE_DEP)[2];
+}
+
+test "a dependency's interface change reaches every importer in the chain, a body change none" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
+	dbSetFileText(db, "/ch/mid.ms", 'import { v } from "./logic";\nexport function m(): int32 { return v(); }');
+	dbSetFileText(db, "/ch/far.ms", 'import { m } from "./mid";\nexport function z(): int32 { return m(); }');
+	const edges = [["/ch/mid.ms", "/ch/logic.ms"], ["/ch/far.ms", "/ch/mid.ms"]];
+	for (const e of edges) recordModuleImport(db.moduleDeps, getFileId(db.fileInput, e[0]), getFileId(db.fileInput, e[1]));
+	const a = chain(db);
+	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 2; }");
+	const body = chain(db);
+	assert body[0] == a[0] && body[1] == a[1] && body[2] == a[2];
+	dbSetFileText(db, "/ch/logic.ms", "export function v(): int64 { return 1; }");
+	const sig = chain(db);
+	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] > a[2];
+	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
+	const undone = chain(db);
+	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] > sig[2];
+}
+
+function chain(db: TransAmDb): int32[] {
+	const changed: int32[] = [];
+	for (const path of ["/ch/logic.ms", "/ch/mid.ms", "/ch/far.ms"]) {
+		dbTypeCheck(db, path);
+		changed.push(cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, path))).changedAt);
+	}
+	return changed;
+}
+
+test "an errored module still has a digest that moves with its errors" {
+	const clean = digests(BASE_DEP);
+	const broken = digests("export function f(a: int32): int32 { return nope; }");
+	assert clean[0] != broken[0];
+}
+
+test "checking importers leaves the exporter digest unchanged" {
+	const dep = "export class Base { x: int32 = 1; get(): int32 { return this.x; } }\n"
+		+ "export class Box<T> { v: T; constructor(v: T) { this.v = v; } }\n"
+		+ "export function f(a: int32): int32 { return a; }\n"
+		+ "export function f(a: boolean): int32 { return 1; }\n"
+		+ "export function twice<T>(a: T): T { return a; }";
+	const use = 'import { Base, Box, f, twice } from "./dep";\n'
+		+ "class Derived extends Base { y: int32 = 2; }\n"
+		+ "const d = new Derived();\n"
+		+ "const b = new Box<int32>(3);\n"
+		+ "const r = f(d.get()) + f(true) + twice(1);\n"
+		+ "export function f2(a: int32): int32 { return f(a); }";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, DEP, dep);
+	dbSetFileText(db, USE, use);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, USE), getFileId(db.fileInput, DEP));
+	const depCtx = dbTypeCheck(db, DEP);
+	const before = ifaceDigest(depCtx);
+	const beforeImpl = implDigest(dbParse(db, DEP));
+	assert errorCount(dbTypeCheck(db, USE)) == 0;
+	assert ifaceDigest(depCtx) == before;
+	assert implDigest(dbParse(db, DEP)) == beforeImpl;
+}
+
+test "a foreign type reference is keyed by its symbol" {
+	const owner = createStruct("Far", [], [], true);
+	const sym = makeSymbol("Far", SymbolKind.Class, owner, false);
+	sym.modulePath = "/elsewhere.ms";
+	owner.sym = sym;
+	const db = createTransAmDb(100);
+	dbSetFileText(db, DEP, "export class Near { x: int32 = 1; }");
+	const ctx = dbTypeCheck(db, DEP);
+	const here = ifaceDigest(ctx);
+	const near = ctx.interf[0];
+	near.symbolType.typeChildren.push(owner);
+	near.symbolType.typeNames.push("far");
+	const withKey = ifaceDigest(ctx);
+	assert withKey != here;
+	sym.disamb = 7;
+	assert ifaceDigest(ctx) != withKey;
+}
+
+test "an anonymous foreign symbol has no key" {
+	const owner = createStruct("Far", [], [], true);
+	const sym = makeSymbol("Far", SymbolKind.Class, owner, false);
+	sym.modulePath = "/elsewhere.ms";
+	sym.symFlags = sym.symFlags.incl(SymbolFlag.Anon);
+	owner.sym = sym;
+	const db = createTransAmDb(100);
+	dbSetFileText(db, DEP, "export class Near { x: int32 = 1; }");
+	const ctx = dbTypeCheck(db, DEP);
+	ctx.interf[0].symbolType.typeChildren.push(owner);
+	ctx.interf[0].symbolType.typeNames.push("far");
+	let message = "";
+	try { ifaceDigest(ctx); } catch (e) { message = (e as Error).message; }
+	assert message.contains("is local to its module and has no key"), message;
+}

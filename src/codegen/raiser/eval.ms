@@ -32,10 +32,11 @@ import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
+import { recordBodyRead } from "../../checker/bodyReads";
 
 // --- Full Pipeline API ---
 
@@ -87,8 +88,9 @@ function transformForEngine(program: Node): Node {
 	ensureHostTableLoaded();
 	registerTypeQueryHostFns();
 	const outer = getComptimeOuterCtx();
-	const savedOuterProgram = outer != null ? outer.program : null;
-	const savedOuterPrelude = outer != null ? outer.preludeCtx : null as unknown as CheckerContext;
+	const saved: ComptimeOuterCtx | null = outer != null
+		? { program: outer.program, registry: outer.registry, graph: outer.graph, module: outer.module, preludeCtx: outer.preludeCtx }
+		: null;
 	const hasFullOuterCtx = outer != null
 		&& outer.registry != null
 		&& outer.graph != null
@@ -104,10 +106,7 @@ function transformForEngine(program: Node): Node {
 		transformed = transformForRaiser(program, checkerCtx);
 	} finally {
 		setEngineCheckMode(prevEngineMode);
-		if (outer != null) {
-			outer.program = savedOuterProgram;
-			outer.preludeCtx = savedOuterPrelude;
-		}
+		if (saved != null) setComptimeOuterCtx(saved);
 	}
 	return transformed;
 }
@@ -375,6 +374,19 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 registerMacroEngineCompiler(compileMacroIntoEngine);
 registerEngineStdSymbol((name: string): Symbol | null => stdSymbol(raiserPreludeCtx(), name));
 
+function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
+	const own = seed.sym;
+	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return seed;
+	const dot = own.modulePath.lastIndexOf(".");
+	const raiserPath = own.modulePath.slice(0, dot) + ".rms";
+	const scope = raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
+	if (scope == null) return seed;
+	for (const held of scope) {
+		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0) return { name: seed.name, sym: held };
+	}
+	return seed;
+}
+
 function seedCtxForSym(sym: Symbol): CheckerContext {
 	// A body ctx re-checking a generic instance carries the instantiating module's path over
 	// the defining module's scope; a helper of the instantiating module takes that module's ctx.
@@ -412,6 +424,7 @@ export function engineRecheckCount(): int32 {
 
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
+	recordBodyRead(sym.modulePath);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
@@ -431,7 +444,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeNamed(seedCtx.table)) {
-			if (!isClass || s.name != sym.name) seeds.push(s);
+			if (!isClass || s.name != sym.name) seeds.push(raiserCounterpartSeed(s));
 		}
 		exts = seedExtensionsOf(seedCtx, isClass ? sym : null);
 	}
@@ -2057,6 +2070,18 @@ test "engine: a write through a pointer past its element traps instead of writin
 	const ctx = evalOrcVM("let bytes: uint8[] = [11, 22, 33]; const view: Span<uint8> = bytes; const p = view as Ptr<uint8>; p[1] = 66; console.log(`${bytes[0]} ${bytes[1]}`);");
 	assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), ctx.error;
 	assert ctx.output == "";
+}
+
+test "engine: a refused pointer read keeps its integer register class under every bitwise operator" {
+	const ops = ["&", "|", "^", ">>", "<<"];
+	const widths = ["uint8", "uint32", "uint64"];
+	for (const op of ops) {
+		for (const width of widths) {
+			const ctx = evalOrcVM(`function read(p: Ptr<${width}>, i: int64): ${width} { return p[i] ${op} 3; }`
+				+ ` let xs: ${width}[] = [1, 2, 3]; const view: Span<${width}> = xs; console.log(\`\${read(view as Ptr<${width}>, 1)}\`);`);
+			assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), `${op} ${width}: ${ctx.error}`;
+		}
+	}
 }
 
 test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {

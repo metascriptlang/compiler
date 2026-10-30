@@ -2,8 +2,9 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
-import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
+import { Node, NodeKind, VariableDeclData, Symbol, ClassDeclData } from "../ast/node";
+import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym, moduleItemId, findExportedSymbol } from "./context";
+import { forEachChild } from "../ast/visitor";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, bindModulePassesFrom, setSlowTrace } from "./checkPass";
@@ -277,7 +278,8 @@ import { setExtraGlobalImports } from "./prelude";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { writeFile, ensureDir } from "std/fs";
-import { lookupSymbol } from "./symbol";
+import { lookupSymbol, symbolKey } from "./symbol";
+import { ctorRoutineOf } from "./ctorRoutine";
 import { findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { stringType } from "./types";
 test "single file checked" {
@@ -445,6 +447,33 @@ test "a graph that imports a prelude module without loading the prelude still ch
 	assert stdImportWithoutPreludeChecks();
 }
 
+function uncheckedCalls(n: Node): int32 {
+	let unchecked: int32 = n.kind == NodeKind.CallExpr && n.resolvedSym == null ? 1 : 0;
+	forEachChild(n, (k: Node): void => { unchecked += uncheckedCalls(k); });
+	return unchecked;
+}
+
+function importedStdBodyIsChecked(): boolean {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const dir = `${scratchRoot}/prelude-held-export`;
+	ensureDir(dir);
+	const mainPath = `${dir}/main.ms`;
+	writeFile(mainPath, "import { Math } from \"std/core/math\";\nimport { utf8String } from \"std/core/string/bytes\";\nconst n = Math.floor(2.5);\nconst s = utf8String(\"a\".asBytes(), false);\n");
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadModule(graph, mainPath, provider, config, 1);
+	const registry = checkModuleGraph(graph, stdPath, ".cms");
+	const bytes = findModule(graph, moduleIdentity(`${stdPath}/core/string/bytes.cms`, config, provider));
+	if (bytes == null) return false;
+	const info = findExportedSymbol(registry, bytes.path, "utf8String");
+	return info != null && info.sym.declNode != null && uncheckedCalls(info.sym.declNode) == 0;
+}
+
+test "an importer of a std module the shared prelude holds receives that module's checked routines" {
+	assert importedStdBodyIsChecked();
+}
+
 test "an extra global import is matched by loader identity, never by spelling" {
 	const dir = `${scratchRoot}/extra-global-import`;
 	ensureDir(dir);
@@ -466,7 +495,7 @@ function itemsOfModuleB(): string {
 	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
 	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
 	checkModuleGraph(graph, "");
-	const moduleB = graph.loadOrder.indexOf("/src/b.ms") as int32;
+	const moduleB = moduleItemId("/src/b.ms");
 	const seen: int32[] = [];
 	let out = "";
 	for (const name of ["foo", "k", "helper", "Box"]) {
@@ -483,6 +512,111 @@ test "a declaration carries its module's index and an ordinal unique in that mod
 	const first = itemsOfModuleB();
 	assert first != "";
 	assert itemsOfModuleB() == first;
+}
+
+const GENERIC_OWNER = "export function g<T>(x: T): T { function inner(): int32 { return 7; } const y = inner(); return x; }\nexport class Cell<T> { v: T; constructor(v: T) { function seed(): int32 { return 1; } const s = seed(); this.v = v; } get(): T { return this.v; } }";
+
+function ownerCountersAfter(importer: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: GENERIC_OWNER });
+	entries.push({ entryPath: "/src/a.ms", entrySource: importer });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const owner = lookupModuleCtx("/src/b.ms");
+	const user = lookupModuleCtx("/src/a.ms");
+	if (owner == null || user == null) return "unchecked";
+	let instances = 0;
+	for (const cache of [user.procInstCache, user.typeInstCache]) {
+		for (const list of cache.values()) {
+			for (const inst of list) {
+				instances += 1;
+				if (inst.sym.itemModule != user.itemModule) return `instance ${inst.sym.name} minted by module ${inst.sym.itemModule}, not its instantiator ${user.itemModule}`;
+				const ctor = ctorRoutineOf(inst.sym);
+				if (ctor != null && ctor.itemModule != user.itemModule) return `constructor ${ctor.name} minted by module ${ctor.itemModule}, not its instantiator ${user.itemModule}`;
+			}
+		}
+	}
+	return `${instances > 0 ? "instantiated" : "idle"} ${owner.nextItem} ${owner.disambTable.size}`;
+}
+
+test "instantiating a generic mints in the instantiating module and leaves the generic's module counters where its own check left them" {
+	const idle = ownerCountersAfter("import { g, Cell } from \"./b\";\nexport const n = 1;");
+	assert idle.startsWith("idle "), idle;
+	const counters = idle.slice(5, idle.length);
+	const forward = ownerCountersAfter("import { g, Cell } from \"./b\";\nconst a = g<int32>(1);\nconst b = g<string>(\"s\");\nconst c = new Cell<int32>(1).get();\nconst d = new Cell<string>(\"s\").get();");
+	assert forward == "instantiated " + counters, `${forward} vs ${idle}`;
+	const backward = ownerCountersAfter("import { g, Cell } from \"./b\";\nconst d = new Cell<string>(\"s\").get();\nconst c = new Cell<int32>(1).get();\nconst b = g<string>(\"s\");\nconst a = g<int32>(1);");
+	assert backward == "instantiated " + counters, `${backward} vs ${idle}`;
+}
+
+function lazyCtorModule(firstAsker: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Plain { v: number = 1; }" });
+	entries.push({ entryPath: "/src/c.ms", entrySource: "import { Plain } from \"./b\";\nexport const pc = new Plain().v;" });
+	entries.push({ entryPath: "/src/d.ms", entrySource: "import { Plain } from \"./b\";\nexport const pd = new Plain().v;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: firstAsker == "c" ? "import { pc } from \"./c\";\nimport { pd } from \"./d\";\nconst x = pc + pd;" : "import { pd } from \"./d\";\nimport { pc } from \"./c\";\nconst x = pc + pd;" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const owner = lookupModuleCtx("/src/b.ms");
+	const plain = scopeSymbolOf("/src/b.ms", "Plain");
+	const routine = ctorRoutineOf(plain);
+	if (owner == null || routine == null) return "no constructor routine";
+	return `${routine.modulePath} ${routine.disamb} ${routine.itemModule == owner.itemModule ? "owner" : "importer"}`;
+}
+
+test "an implicit constructor routine is minted by its class's module, whichever importer asks first" {
+	assert lazyCtorModule("c") == "/src/b.ms 0 owner", lazyCtorModule("c");
+	assert lazyCtorModule("d") == "/src/b.ms 0 owner", lazyCtorModule("d");
+}
+
+function fooModuleIdWith(firstModule: string): int32 {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): number { return n; }" });
+	entries.push({ entryPath: "/src/z.ms", entrySource: "export const z = 1;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: firstModule == "z" ? "import { z } from \"./z\";\nimport { foo } from \"./b\";\nconst x = foo(z);" : "import { foo } from \"./b\";\nconst x = foo(1);" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const foo = scopeSymbolOf("/src/b.ms", "foo");
+	return foo != null ? foo.itemModule : -2;
+}
+
+test "a module's item id is interned by its path, not by its place in the load order" {
+	const alone = fooModuleIdWith("b");
+	assert alone >= 0;
+	assert fooModuleIdWith("z") == alone, `${fooModuleIdWith("z")} vs ${alone}`;
+}
+
+const KEYED_B = "export function foo(n: number): number { return n; }\nexport const k = 2;\nfunction helper(): number { return 1; }\nexport class Box<T> { v: T; constructor(v: T) { this.v = v; } show(): T { return this.v; } }\nexport function g<A, B>(a: A, b: B): A { return a; }";
+
+function keysOfB(bSource: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: bSource });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo, Box } from \"./b\"; const x = foo(1) + new Box<number>(2).show();" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	let out = "";
+	for (const name of ["foo", "k", "helper", "Box", "g"]) {
+		const sym = scopeSymbolOf("/src/b.ms", name);
+		if (sym == null) return "no " + name;
+		out = out + symbolKey(sym) + " ";
+		for (const tp of sym.typeParams) out = out + (tp.sym != null ? symbolKey(tp.sym) : "unbound") + " ";
+	}
+	const box = scopeSymbolOf("/src/b.ms", "Box");
+	for (const member of (box!.declNode.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.MethodDecl && member.resolvedSym != null) out = out + symbolKey(member.resolvedSym) + " ";
+	}
+	return out;
+}
+
+test "a declaration's key is its name, per-name ordinal and module, unmoved by comments, unrelated declarations and a later overload" {
+	const cold = keysOfB(KEYED_B);
+	assert cold.startsWith("foo.0./src/b.ms k.0./src/b.ms helper.0./src/b.ms Box.0./src/b.ms Box.0./src/b.ms#0 g.0./src/b.ms g.0./src/b.ms#0 g.0./src/b.ms#1 "), cold;
+	assert keysOfB(KEYED_B) == cold;
+	assert keysOfB("// a comment\n" + KEYED_B) == cold;
+	assert keysOfB("function other(): number { return 0; }\nclass Zed {}\n" + KEYED_B) == cold;
+	assert keysOfB(KEYED_B + "\nexport function foo(s: string): string { return s; }") == cold;
+	const foo = scopeSymbolOf("/src/b.ms", "foo");
+	assert foo != null && foo.overloads.length == 1 && symbolKey(foo.overloads[0]) == "foo.1./src/b.ms", foo != null && foo.overloads.length > 0 ? symbolKey(foo.overloads[0]) : "no overload";
 }
 
 function showCallOwners(generic: boolean): string {

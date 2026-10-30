@@ -7,6 +7,10 @@
 // Runtime coverage for the values: corpus/programs/016-jsIntegerModel.ms.
 
 import { compileToJS, compileToJSWithStd, compileToJSBare } from "../helpers";
+import { hostTargetInfo } from "../../checker/types";
+import { join } from "std/fs/path";
+import { readFile } from "std/fs";
+import { resolveRuntimeDir } from "../../utils/path";
 
 test "int32 division by a literal truncates" {
 	const result = compileToJS("function f(a: int32): int32 { return a / 3; }");
@@ -175,12 +179,19 @@ test "uint32 remainder is left alone" {
 	assert !result.value.contains(">>> 0");
 }
 
-// Signed arithmetic stays untouched: matching C-danger would mean inventing a
-// wrap where C-debug traps instead of producing a value.
-test "int32 addition is left alone" {
+test "int32 addition is checked, not wrapped, in the default build" {
 	const result = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }");
 	assert result.ok;
 	assert !result.value.contains("| 0");
+}
+
+test "the int32 overflow helper compares against the bounds" {
+	const root = resolveRuntimeDir();
+	const text = try readFile(join(root != "" ? join(root, "std") : "std", "core/system/index.jms")) catch "";
+	const at = text.indexOf("function msOverflowI32");
+	assert at >= 0, "msOverflowI32 not found in std/core/system/index.jms";
+	const body = text.slice(at, at + 200);
+	assert body.contains("if (${v} > 2147483647 || ${v} < -2147483648) ${msDefect}"), body;
 }
 
 test "uint8 addition wraps at a byte" {
@@ -363,4 +374,66 @@ test "uint64 compound left shift masks its count and wraps at 64 bits" {
 	const result = compileToJS("function f(b: uint64): uint64 { let a: uint64 = 1; a <<= b; return a; }");
 	assert result.ok;
 	assert result.value.contains("BigInt.asUintN(64, (a << (b & 63n)))");
+}
+
+// ===== --danger: signed overflow wraps as C does =====
+//
+// The default build keeps every msOverflow* check; --danger drops them for the
+// wrap C prints (`| 0`, Math.imul, BigInt.asIntN).
+
+test "default build checks int32 and int64 add and mul" {
+	for (const src of ["function f(a: int32, b: int32): int32 { return a + b; }", "function f(a: int32, b: int32): int32 { return a * b; }"]) {
+		const r = compileToJSBare(src);
+		assert r.ok, src;
+		assert r.value.contains("msOverflowI32"), src;
+	}
+	for (const src of ["function f(a: int64, b: int64): int64 { return a + b; }", "function f(a: int64, b: int64): int64 { return a * b; }"]) {
+		const r = compileToJSBare(src);
+		assert r.ok, src;
+		assert r.value.contains("msOverflowI64"), src;
+	}
+}
+
+test "danger int32 add wraps with | 0 and keeps no check" {
+	const r = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }", hostTargetInfo(), true);
+	assert r.ok;
+	assert !r.value.contains("msOverflow");
+	assert r.value.contains("| 0");
+}
+
+test "danger int32 mul is an exact 32-bit multiply" {
+	const r = compileToJSBare("function f(a: int32, b: int32): int32 { return a * b; }", hostTargetInfo(), true);
+	assert r.ok;
+	assert !r.value.contains("msOverflow");
+	assert r.value.contains("Math.imul");
+}
+
+test "danger int64 add and mul wrap at 64 bits" {
+	for (const src of ["function f(a: int64, b: int64): int64 { return a + b; }", "function f(a: int64, b: int64): int64 { return a * b; }"]) {
+		const r = compileToJSBare(src, hostTargetInfo(), true);
+		assert r.ok, src;
+		assert !r.value.contains("msOverflow"), src;
+		assert r.value.contains("BigInt.asIntN(64"), src;
+	}
+}
+
+test "danger int32 step, compound assignment and negation wrap" {
+	for (const src of ["function f(a: int32): int32 { let x = a; x++; return x; }", "function f(b: int32): int32 { let a: int32 = 1; a += b; return a; }", "function f(a: int32): int32 { return -a; }"]) {
+		const r = compileToJSBare(src, hostTargetInfo(), true);
+		assert r.ok, src;
+		assert !r.value.contains("msOverflow"), src;
+		assert r.value.contains("| 0"), src;
+	}
+}
+
+test "danger int32 power calls the wrapping power" {
+	const r = compileToJSBare("function f(a: int32, b: int32): int32 { return a ** b; }", hostTargetInfo(), true);
+	assert r.ok;
+	assert r.value.contains("msPowWrapI32");
+}
+
+test "danger keeps the division-by-zero check" {
+	const r = compileToJSBare("function f(a: int32, b: int32): int32 { return a / b; }", hostTargetInfo(), true);
+	assert r.ok;
+	assert r.value.contains("msDivI32(");
 }

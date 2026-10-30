@@ -1,7 +1,7 @@
 // Value equality and value dump: one routine per type, folded from the type's fields.
 // The checker routes `==` / `!=` and string conversion of a value type to these by symbol.
 
-import { equalsFold, dumpFold, debugLabel } from "std/core/value/fold";
+import { equalsFold, dumpFold, inspectFold, debugLabel } from "std/core/value/fold";
 
 // The generic entry the checker calls for a struct, tuple or fixed array operand.
 @compilerFunc
@@ -91,6 +91,7 @@ when (!bare && !solana) {
 @compilerFunc
 export function valueDump<T>(x: T, color: boolean): string {
 	let out = "";
+	inspectFold(x, color);
 	dumpFold(x, color);
 	return out;
 }
@@ -125,6 +126,16 @@ extern function unionMemberDebug<T, H>(x: T, holder: H, ...texts: string[]): str
 @compilerFunc
 @builtin("UnionEq")
 extern function unionMemberEq<A, B>(a: A, b: B, holderA: A, holderB: B, ...held: boolean[]): boolean;
+
+@compilerFunc
+export function inspectJoin<T>(xs: T[]): string {
+	let out = "";
+	for (let i = 0; i < xs.length; i = i + 1) {
+		if (i > 0) out = out + ",";
+		out = out + valueDump(xs[i], true);
+	}
+	return out;
+}
 
 @compilerFunc
 export function valueDebug<T>(x: T): string {

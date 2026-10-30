@@ -11,13 +11,14 @@
 @passC("-Ivendor/monocypher/src");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { Bytes, rawString } from "std/core/buffer/bytes";
+import { newOutputBuffer, outputBytes } from "../outputBuffer";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 // C bindings
-extern function msChacha20Seal(key: string, plainText: string, aad: string): string;
-extern function msChacha20Open(key: string, sealed: string, aad: string): string;
+extern function msChacha20SealInto(key: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
+extern function msChacha20OpenInto(key: string, sealed: string, aad: string, out: Ptr<uint8>): int64;
 
 // ===== AEAD Encryption =====
 
@@ -31,9 +32,12 @@ function validateKey(key: string, op: string): Result<boolean, CryptoError> {
 export function chacha20Seal(keyBytes: Bytes, plainText: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
 	const key = rawString(keyBytes);
 	const _v = try validateKey(key, "chacha20Seal");
-	const result = msChacha20Seal(key, rawString(plainText), rawString(aad));
-	if (result == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
-	return Result.ok(rawBuffer(result));
+	const text = rawString(plainText);
+	const sealed = newOutputBuffer(24 + (text.byteLength as int64) + 16);
+	if (msChacha20SealInto(key, text, rawString(aad), outputBytes(sealed)) != 1) {
+		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
+	}
+	return Result.ok(sealed);
 }
 
 export function chacha20Open(keyBytes: Bytes, sealedBytes: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
@@ -43,9 +47,43 @@ export function chacha20Open(keyBytes: Bytes, sealedBytes: Bytes, aad: Bytes = "
 	if (sealed.byteLength < 40) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "chacha20Open", "sealed data too short (need nonce+mac)"));
 	}
-	const result = msChacha20Open(key, sealed, rawString(aad));
-	if (result == "" && sealed.byteLength > 40) {
+	const plain = newOutputBuffer((sealed.byteLength as int64) - 40);
+	if (msChacha20OpenInto(key, sealed, rawString(aad), outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "chacha20Open", "authentication tag mismatch"));
 	}
-	return Result.ok(rawBuffer(result));
+	return Result.ok(plain);
+}
+
+function patternBuffer(size: int32): Buffer {
+	const buf = Buffer.alloc(size);
+	for (let i = 0; i < size; i++) buf[i] = ((i * 7 + i / 251) % 256) as uint8;
+	return buf;
+}
+
+test "chacha20 seal fills one buffer of nonce, cipher text and mac at every block edge" {
+	const key = "0123456789abcdef0123456789abcdef";
+	for (const size of [0, 1, 63, 64, 65, 1048576]) {
+		const plain = patternBuffer(size);
+		const sealed = chacha20Seal(key, plain, "aad");
+		assert sealed.ok;
+		assert sealed.value.length == size + 40;
+		const opened = chacha20Open(key, sealed.value, "aad");
+		assert opened.ok;
+		assert opened.value.length == size;
+		for (let i = 0; i < size; i++) assert opened.value[i] == plain[i];
+		assert !chacha20Open(key, sealed.value, "other").ok;
+		const forged = Buffer.copy(sealed.value);
+		forged[size + 39] = (forged[size + 39] ^ 1) as uint8;
+		assert !chacha20Open(key, forged, "aad").ok;
+	}
+}
+
+test "chacha20 seal rejects a short key and draws a fresh nonce" {
+	assert !chacha20Seal("short", "x").ok;
+	const a = chacha20Seal("0123456789abcdef0123456789abcdef", "x");
+	const b = chacha20Seal("0123456789abcdef0123456789abcdef", "x");
+	assert a.ok && b.ok;
+	let same = true;
+	for (let i = 0; i < 24; i++) if (a.value[i] != b.value[i]) same = false;
+	assert !same;
 }

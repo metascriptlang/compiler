@@ -2,7 +2,7 @@ import { CheckerContext, ExtensionRegistry, buildExportInfo, createExportRegistr
 import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, makeLoc, Symbol } from "../../ast/node";
 import { inferredType } from "../../checker/types";
-import { compileProjectToC, compileProjectToJS, MapEntry } from "../helpers";
+import { compileProjectToC, compileProjectToJS, compileProjectToJSWithStd, MapEntry } from "../helpers";
 
 function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
 	const loc = makeLoc(0, 0);
@@ -83,7 +83,7 @@ function refusedInMain(libSource: string, mainSource: string): boolean {
 
 function fitsOnBothBackends(libSource: string, mainSource: string): boolean {
 	const cCode = compileProjectToC(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
-	const jsCode = compileProjectToJS(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
+	const jsCode = compileProjectToJSWithStd(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
 	return !cCode.startsWith("ERROR") && !jsCode.startsWith("ERROR");
 }
 

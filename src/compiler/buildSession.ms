@@ -18,6 +18,7 @@ import { taHashString, transAmHashNode } from "./transam/hash";
 import { KeyedOp } from "../codegen/c/types";
 import { ContractClaim } from "../analyzer/writeEffects";
 import { sameType } from "../checker/compat";
+import { symbolKey } from "../checker/symbol";
 
 export enum BuildStatus {
 	Built,
@@ -267,7 +268,7 @@ function instanceFingerprint(session: BuildSession, node: Node): string {
 	const sym = node.resolvedSym;
 	if (sym != null && sym.instantiatedFrom != null) {
 		const generic = sym.instantiatedFrom;
-		identity = generic.modulePath + ":" + String(generic.item) + ":" + String(generic.disamb);
+		identity = symbolKey(generic);
 		for (const arg of instanceArgsOf(sym)) identity = identity + "|" + argFingerprint(session, arg);
 	}
 	const fingerprint = identity + "#" + String(foldTypes(session, node, transAmHashNode(node)));
@@ -323,6 +324,18 @@ function slotReference(disamb: int32): Node {
 	return ref;
 }
 
+function genericIn(modulePath: string, disamb: int32, item: int32): Symbol {
+	const generic = makeSymbol("f", SymbolKind.Function, null, false);
+	generic.modulePath = modulePath;
+	generic.disamb = disamb;
+	generic.item = item;
+	return generic;
+}
+
+function instanceOver(arg: Type): Node {
+	return instanceOfGeneric(genericIn("/g.ms", 0, 0), arg);
+}
+
 test "an instance fingerprint tells two same-named symbols of one module apart" {
 	const session = createBuildSession(true);
 	assert instancesFingerprint(session, [slotReference(1)]) != instancesFingerprint(session, [slotReference(2)]);
@@ -339,11 +352,9 @@ function classB(fieldType: Type): Type {
 	return declared(createStruct("B", ["x"], [fieldType], false), SymbolKind.Class);
 }
 
-function instanceOver(arg: Type): Node {
+function instanceOfGeneric(generic: Symbol, arg: Type): Node {
 	const sym = makeSymbol("f", SymbolKind.Function, int32Type(), false);
 	sym.modulePath = "/m.ms";
-	const generic = makeSymbol("f", SymbolKind.Function, null, false);
-	generic.modulePath = "/g.ms";
 	sym.instantiatedFrom = generic;
 	sym.instanceArgs = [arg];
 	const ref = createNodeAt(NodeKind.Identifier, { name: "f" }, makeLoc(1, 1));
@@ -367,6 +378,15 @@ test "an instance over a diamond chain fingerprints in linear size" {
 		level.typeFlags = level.typeFlags.incl(TypeFlag.IsStruct);
 	}
 	assert instancesFingerprint(session, [instanceOver(level)]).length < 8000;
+}
+
+test "an instance identity is its generic's declaration, not its process-local item" {
+	const session = createBuildSession(true);
+	const arg = int32Type();
+	const base = instancesFingerprint(session, [instanceOfGeneric(genericIn("/g.ms", 0, 5), arg)]);
+	assert base == instancesFingerprint(session, [instanceOfGeneric(genericIn("/g.ms", 0, 9), arg)]);
+	assert base != instancesFingerprint(session, [instanceOfGeneric(genericIn("/h.ms", 0, 5), arg)]);
+	assert base != instancesFingerprint(session, [instanceOfGeneric(genericIn("/g.ms", 1, 5), arg)]);
 }
 
 test "an instance fingerprint changes when the argument class changes a field type" {

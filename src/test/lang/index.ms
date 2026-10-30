@@ -71,6 +71,7 @@ import "./receiverRelation";
 import "./routineFlagWords";
 import "./importedBindingShadow";
 import "./staticReceiver";
+import "./staticGenericOverloads";
 import "./overloadedSubscript";
 import "./stringRepresentation";
 import "./stringByteSliceEdges";

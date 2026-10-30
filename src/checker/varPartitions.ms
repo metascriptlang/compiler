@@ -16,6 +16,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { sameUpToDistinct } from "./checkExprPass";
 import { isSpawnCall } from "./freestanding";
 import { refuseBorrowingHandleEscapes } from "./sendable";
+import { recordBodyRead } from "./bodyReads";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -473,6 +474,7 @@ function constructorOf(newNode: Node): Node | null {
 function newSummary(node: Node): ResizeSummary {
 	const ctor = constructorOf(node);
 	if (ctor != null) {
+		recordBodyRead(node.resolvedSym!.modulePath);
 		const s = noResize();
 		const body = routineBody(ctor);
 		const fresh: Symbol[] = [];
@@ -564,6 +566,7 @@ function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
 }
 
 function scanRoutine(sym: Symbol): ResizeSummary {
+	recordBodyRead(sym.modulePath);
 	const s = noResize();
 	resizeStack.push(sym);
 	const body = routineBody(sym.declNode);

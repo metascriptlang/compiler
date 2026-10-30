@@ -12,23 +12,21 @@
 
 /* ===== Promise.all ===== */
 
-typedef struct {
-	msFuture* result;     /* output future — resolves when all inputs resolve */
-	msFuture** inputs;    /* input futures (borrowed) */
-	void** values;        /* result values in order (owned) */
-	int count;            /* total inputs */
-	int remaining;        /* unsettled count */
-	bool failed;          /* set on first rejection */
-} msPromiseAllState;
-
-typedef struct {
-	msPromiseAllState* state;
-	int index;
-} msPromiseAllCbEnv;
-
 /* Resolves when ALL resolve. Rejects on FIRST rejection.
- * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
-void* msPromiseAll(msRefArray* futures);
+ * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len.
+ * Defined in std/core/promise/combinator.cms. */
+void* msPromiseAll(void* futures);
+
+/* The per-element-type half of the typed Promise.all, defined by MS_PROMISE_ALL_FOR_TI:
+ * make allocates the result array cell with `count` zeroed slots, collect copies or moves
+ * one resolved input into its slot. msPromiseAllTyped is the shared body in
+ * std/core/promise/combinator.cms. */
+typedef struct msPromiseAllVt {
+	void* (*make)(int32_t count);
+	void (*collect)(void* arr, int32_t index, void* fut, void* shareFn);
+} msPromiseAllVt;
+
+void* msPromiseAllTyped(void* futures, void* shareFn, void* vt);
 
 /* ===== Promise.race ===== */
 
@@ -422,101 +420,38 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
     MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, &elemFutType##_allArrTI)
 
 #define MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrTI) \
-    typedef struct elemFutType##_allState { \
-        msFuture* result; \
-        elemFutType** inputs; \
-        arrType* arr;                   /* heap-allocated output array; ownership transfers to future */ \
-        int count; \
-        _Atomic(int32_t) remaining;    /* decremented per completion; last decrementer runs cleanup */ \
-        _Atomic(bool) failed;           /* first-failure wins; prevents double-fail */ \
-        msClosure share;                /* copies an owning input's value: share(dst, fut) */ \
-    } elemFutType##_allState; \
-    \
-    typedef struct { \
-        elemFutType##_allState* state; \
-        int index; \
-    } elemFutType##_allCbEnv; \
-    \
-    static void elemFutType##_allCb(void* env) { \
-        elemFutType##_allCbEnv* e = (elemFutType##_allCbEnv*)env; \
-        elemFutType##_allState* s = e->state; \
-        int idx = e->index; \
-        free(e); \
-        /* Early-out for completions that arrive after a sibling already failed.
-         * Acquire so we observe the write from the failing thread. */ \
-        bool alreadyFailed = atomic_load_explicit(&s->failed, memory_order_acquire); \
-        elemFutType* f = s->inputs[idx]; \
-        if (!alreadyFailed) { \
-            if (f->base.failed || f->base.cancelled) { \
-                /* Exchange: only the first caller to see `failed == false` runs msFutureFail. */ \
-                bool prev = atomic_exchange_explicit(&s->failed, true, memory_order_acq_rel); \
-                if (!prev) msFutureFailShared(s->result, f->base.error); \
-            } else if (f->base.valueDrop != NULL && s->share.fn != NULL) { \
-                ((void (*)(void*, void*))s->share.fn)((void*)(&s->arr->p->data[idx]), (void*)f); \
-            } else { \
-                copyStmt((&s->arr->p->data[idx]), (&f->value)); \
-            } \
-        } \
-        /* Release the setup-loop incref — the input array's owner may drop its
-         * refs the moment the combinator returns; without our own share the
-         * callback reads a freed future. */ \
-        msFutureEdgeSettle(s->result, idx); \
-        msDecrefAny(f); \
-        /* Decrement remaining and let the final decrementer (rem == 1 before sub) run cleanup.
-         * acq_rel: acquire the copy-writes from peer threads; release our own writes. */ \
-        int32_t rem = atomic_fetch_sub_explicit(&s->remaining, 1, memory_order_acq_rel); \
-        if (rem == 1) { \
-            if (!atomic_load_explicit(&s->failed, memory_order_acquire)) { \
-                msFutureComplete(s->result, s->arr); \
-            } else { \
-                msDecrefAny(s->arr); \
-            } \
-            msDecrefAny(s->result); \
-            free(s->inputs); \
-            free(s); \
-        } \
-    } \
-    \
-    static inline void* msPromiseAllFor_##elemFutType(msRefArray* arr, msClosure share) { \
-        int count = (arr != NULL) ? (int)arr->len : 0; \
-        elemFutType** futures = (arr != NULL && arr->p != NULL) ? (elemFutType**)arr->p->data : NULL; \
-        msFuture* result = (msFuture*)msFutureCreate(); \
-        result->base.valueDestructor = msPromiseAllArrRelease; \
+    static void* elemFutType##_allMake(int32_t count) { \
         arrType* resultArr = (arrType*)msAllocTyped(sizeof(arrType), (arrTI)); \
         resultArr->len = count; \
         resultArr->p = NULL; \
-        if (count == 0 || futures == NULL) { \
-            msFutureComplete(result, resultArr); \
-            return result; \
+        if (count > 0) { \
+            /* msMemAlloc0 (not msMemAlloc): zeroed slots make the failure/dup paths safe — the
+             * cell's arrDestroyFn walks all `len` slots, and an uncollected slot must
+             * read as NULL/zero (destroy no-op), never garbage. */ \
+            payloadType* payload = (payloadType*)msMemAlloc0(sizeof(payloadType) + (size_t)count * sizeof(DstT)); \
+            payload->cap = count; \
+            resultArr->p = payload; \
         } \
-        /* msMemAlloc0 (not msMemAlloc): zeroed slots make the failure/dup paths safe — the
-         * cell's arrDestroyFn walks all `len` slots, and an uncollected slot must
-         * read as NULL/zero (destroy no-op), never garbage. */ \
-        payloadType* payload = (payloadType*)msMemAlloc0(sizeof(payloadType) + (size_t)count * sizeof(DstT)); \
-        payload->cap = count; \
-        resultArr->p = payload; \
-        elemFutType** inputsCopy = (elemFutType**)msMemAlloc((size_t)count * sizeof(elemFutType*)); \
-        for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); } \
-        elemFutType##_allState* state = (elemFutType##_allState*)msMemAlloc0(sizeof(elemFutType##_allState)); \
-        state->result = result; \
-        msIncref(result); \
-        state->inputs = inputsCopy; \
-        state->arr = resultArr; \
-        state->share = share; \
-        state->count = count; \
-        atomic_store_explicit(&state->remaining, count, memory_order_relaxed); \
-        atomic_store_explicit(&state->failed, false, memory_order_relaxed); \
-        msFutureEdgeAll(result, (void* const*)inputsCopy, count); \
-        for (int i = 0; i < count; i++) { \
-            elemFutType##_allCbEnv* cbEnv = (elemFutType##_allCbEnv*)msMemAlloc(sizeof(elemFutType##_allCbEnv)); \
-            cbEnv->state = state; \
-            cbEnv->index = i; \
-            msFutureAddCallback((msFuture*)futures[i], (msClosure){ \
-                .fn = (msClosureFn)elemFutType##_allCb, \
-                .env = cbEnv \
-            }); \
+        return resultArr; \
+    } \
+    \
+    static void elemFutType##_allCollect(void* arrp, int32_t idx, void* futp, void* shareFn) { \
+        arrType* arr = (arrType*)arrp; \
+        elemFutType* f = (elemFutType*)futp; \
+        if (f->base.valueDrop != NULL && shareFn != NULL) { \
+            ((void (*)(void*, void*))shareFn)((void*)(&arr->p->data[idx]), (void*)f); \
+        } else { \
+            copyStmt((&arr->p->data[idx]), (&f->value)); \
         } \
-        return result; \
+    } \
+    \
+    static const msPromiseAllVt elemFutType##_allVt = { \
+        .make = elemFutType##_allMake, \
+        .collect = elemFutType##_allCollect, \
+    }; \
+    \
+    static inline void* msPromiseAllFor_##elemFutType(msRefArray* arr, msClosure share) { \
+        return msPromiseAllTyped(arr, (void*)share.fn, (void*)&elemFutType##_allVt); \
     }
 
 /* Per-pair collect helpers. dst/src are pointers; *src is SrcT, *dst is DstT. */

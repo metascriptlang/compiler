@@ -2,7 +2,7 @@
 // `hello ${name}, age ${age}!` → "hello " + name + ", age " + age + "!"
 
 import { TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, finishAfter, finishToken } from "../cursor";
 import { parseOk } from "./testUtil";
 
@@ -57,7 +57,9 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		first = 0;
 	}
 	for (let i = first; i < parts.length; i++) {
-		result = finishAfter(createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken), parts[i]);
+		const step = finishAfter(createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken), parts[i]);
+		step.flags = step.flags.incl(NodeFlag.TemplateStep);
+		result = step;
 	}
 	return Result.ok(result);
 }

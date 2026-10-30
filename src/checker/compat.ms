@@ -336,13 +336,25 @@ const _assignSources: Cursor<Readonly<Type>>[] = [];
 const _assignTargets: Cursor<Readonly<Type>>[] = [];
 let _isaCount: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount]; }
+function literalHoldsFields(literal: Type, shape: Type): boolean {
+	const s = unwrapRefBase(literal);
+	const t = unwrapRefBase(shape);
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || !isAnonLiteralName(s.typeName)) return false;
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		const at = s.typeNames.indexOf(t.typeNames[i]);
+		if (at < 0 || at >= s.typeChildren.length || i >= t.typeChildren.length) return false;
+		if (!isAssignable(s.typeChildren[at], t.typeChildren[i]) && !literalHoldsFields(s.typeChildren[at], t.typeChildren[i])) return false;
+	}
+	return true;
+}
+
 export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
 	const raw = param.typeExtra;
 	if (raw == null) return null;
 	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
-	return isAssignable(bound, constraint) ? null : constraint;
+	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) ? null : constraint;
 }
 
 export function isAssignable(source: Type | null, target: Type | null): boolean {
@@ -370,6 +382,13 @@ function takesUnknown(target: Type): boolean {
 		TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Error => true,
 		_ => false,
 	};
+}
+
+function unionHoldsMember(union: Type, member: Type): boolean {
+	for (const m of union.typeChildren) {
+		if (sameType(m, member)) return true;
+	}
+	return false;
 }
 
 function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
@@ -526,6 +545,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// Brand widens implicitly to its base (CubeId → string); base → brand needs `as`.
 	if (isBrandDistinct(source) && source.typeReturn != null && target.kind != TypeKind.Distinct) {
+		if (target.kind == TypeKind.Union && unionHoldsMember(target, source)) return true;
 		return isAssignable(source.typeReturn, target);
 	}
 	if (source.kind == TypeKind.GenericInstance && !isNominalType(target)) {
@@ -1360,6 +1380,7 @@ export function explainMemberPrefix(source: Type | null, target: Type | null): s
 		return " (the literal froze as an anonymous type before reaching '" + t.typeName
 			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
 	}
+	const classOverInterface = classBodyOf(s) != null && t.sym != null && t.sym.symbolKind == SymbolKind.Interface;
 	let ti = 0;
 	for (const tProp of t.typeNames) {
 		let foundAt = 0 - 1;
@@ -1374,8 +1395,8 @@ export function explainMemberPrefix(source: Type | null, target: Type | null): s
 				+ " but field " + String(foundAt) + " of " + s.typeName
 				+ "; a structural match is a pointer cast, so " + t.typeName
 				+ "'s fields must be a leading prefix of " + s.typeName
-				+ " — declare " + s.typeName + " as `extends " + t.typeName + "`"
-				+ " or reorder its fields)";
+				+ (classOverInterface ? " — reorder its fields)" : " — declare " + s.typeName + " as `extends " + t.typeName + "`"
+					+ " or reorder its fields)");
 		}
 		ti += 1;
 	}

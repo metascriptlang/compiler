@@ -1,4 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
+import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { isBuiltinStubHeader } from "../utils/path";
@@ -62,6 +63,7 @@ function noteExplicitExportNames(ctx: CheckerContext, stmt: Node): void {
 }
 
 export function collectTopLevelStmt(ctx: CheckerContext, stmt: Node): void {
+	if (ctx.adoptStmt != null) ctx.adoptStmt(stmt);
 	if (callDecoratorDefers(ctx, stmt)) {
 		collectDeclMint(ctx, stmt);
 		return;
@@ -100,6 +102,7 @@ function collectDeclMint(ctx: CheckerContext, stmt: Node): void {
 }
 
 export function collectOneStatement(ctx: CheckerContext, node: Node): void {
+	if (ctx.adoptStmt != null) ctx.adoptStmt(node);
 	collectDecl(ctx, node);
 }
 
@@ -320,12 +323,13 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 }
 
 function iteratorHelperMisuse(ctx: CheckerContext, dd: DecoratedDeclData): string {
-	if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) return `@iteratorHelper is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`;
 	const fn = exportedFunctionOf(dd.decoratedNode);
 	if (fn == null) return "@iteratorHelper applies to a module-level generator function";
 	const fd = fn.data as FunctionDeclData;
-	if (routineKindFlag(fd.fnFlags) != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
-	if (fd.params.length == 0) return "@iteratorHelper needs the source iterator as the generator's first parameter";
+	const kind = routineKindFlag(fd.fnFlags);
+	if (kind == "async_generator") return "@iteratorHelper does not apply to an async generator; it applies to a synchronous generator function";
+	if (kind != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
+	if (fd.params.length == 0) return ITERATOR_HELPER_NEEDS_SOURCE;
 	return "";
 }
 
@@ -460,14 +464,28 @@ function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
 // ===== Define + Error Helper =====
 
 export function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
-	const adopted = ctx.adoptedDecls.get(node);
-	const sym = adopted ?? makeSymbol(name, kind, symType, mutable);
-	if (adopted != null) {
-		ctx.adoptedDecls.delete(node);
-		initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
-	}
+	const sym = takeSymbol(ctx, node, name, kind, symType, mutable);
 	stampItem(ctx, sym);
 	return sym;
+}
+
+function takeSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
+	const adopted = ctx.adoptedDecls.get(node);
+	if (adopted == null) return makeSymbol(name, kind, symType, mutable);
+	ctx.adoptedDecls.delete(node);
+	if (adopted.declNode != null && adopted.symbolKind != kind) {
+		throw new Error(`internal: adoption: '${adopted.name}' is a symbol of kind ${adopted.symbolKind as int32} and its declaration is now kind ${kind as int32}; a kind change is a new symbol`);
+	}
+	initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
+	adopted.instanceArgs = null;
+	adopted.instanceParams = null;
+	adopted.ctorRoutine = null;
+	return adopted;
+}
+
+function resetViews(t: Type): void {
+	t.readonlyView = null;
+	t.mutableView = null;
 }
 
 function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
@@ -476,6 +494,7 @@ function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
 	const prior = adopted.symbolType;
 	if (fresh.kind != TypeKind.Inferred && prior.kind != fresh.kind) return fresh;
 	assignType(prior, fresh);
+	resetViews(prior);
 	return prior;
 }
 
@@ -488,6 +507,8 @@ function retainedRef(ctx: CheckerContext, node: Node, inner: Type, ref: Type): T
 	assignType(priorInner, inner);
 	assignType(prior, ref);
 	prior.typeReturn = priorInner;
+	resetViews(prior);
+	resetViews(priorInner);
 	return prior;
 }
 
@@ -730,7 +751,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
+				const staticSym = takeSymbol(ctx, member, d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				member.resolvedSym = staticSym;
@@ -803,7 +824,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
+				const staticSym = takeSymbol(ctx, member, d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				member.resolvedSym = staticSym;
@@ -1012,6 +1033,7 @@ function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, is
 		sym.nativeName = d.nativeName != "" ? formatExternName(ctx, "declaration", d.interfaceName, d.nativeName, node.location) : d.interfaceName;
 	}
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 }
 
 export function collectInterface(ctx: CheckerContext, node: Node): void {
@@ -1156,6 +1178,7 @@ export function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.aliasName, SymbolKind.TypeAlias, aliasType, false);
 	aliasType.sym = sym;
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 }
 
 export function collectExtern(ctx: CheckerContext, node: Node): void {
@@ -1190,6 +1213,7 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		sym.nativeName = d.externName;
 	}
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 	if (cTag != "") ctx.exportRegistry.cTags.set(cTag, sym);
 }
 

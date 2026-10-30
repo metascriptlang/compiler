@@ -25,9 +25,10 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+import { newOutputBuffer, outputBytes } from "../outputBuffer";
 
 // C bindings
-extern function msCryptoAesSeal(key: string, plainText: string, aad: string): string;
+extern function msCryptoAesSealInto(key: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
 extern function msCryptoAesOpen(key: string, sealed: string, aad: string, ref plainText: string): int64;
 extern function msCryptoAesCbcEncrypt(key: string, plainText: string, iv: string): string;
 extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: string): string;
@@ -51,11 +52,12 @@ function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
 export function seal(keyBytes: Bytes, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
 	const key = rawString(keyBytes);
 	const _v1 = try validateAesKey(key, "seal");
-	const result = msCryptoAesSeal(key, rawString(plainTextBytes), rawString(aadBytes));
-	if (result.byteLength == 0) {
+	const text = rawString(plainTextBytes);
+	const sealed = newOutputBuffer(12 + (text.byteLength as int64) + 16);
+	if (msCryptoAesSealInto(key, text, rawString(aadBytes), outputBytes(sealed)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "AES-GCM encryption failed"));
 	}
-	return Result.ok(rawBuffer(result));
+	return Result.ok(sealed);
 }
 
 /**
@@ -114,4 +116,32 @@ export function cbcDecrypt(keyBytes: Bytes, cipherTextBytes: Bytes, ivBytes: Byt
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
 	return Result.ok(rawBuffer(result));
+}
+
+function patternBuffer(size: int32): Buffer {
+	const buf = Buffer.alloc(size);
+	for (let i = 0; i < size; i++) buf[i] = ((i * 7 + i / 251) % 256) as uint8;
+	return buf;
+}
+
+test "aes seal fills one buffer of nonce, cipher text and tag at every block edge" {
+	const key = "0123456789abcdef0123456789abcdef";
+	for (const size of [0, 1, 63, 64, 65, 65536]) {
+		const plain = patternBuffer(size);
+		const sealed = seal(key, plain, "aad");
+		assert sealed.ok;
+		assert sealed.value.length == size + 28;
+		const opened = open(key, sealed.value, "aad");
+		assert opened.ok;
+		assert opened.value.length == size;
+		for (let i = 0; i < size; i++) assert opened.value[i] == plain[i];
+		assert !open(key, sealed.value, "other").ok;
+		const forged = Buffer.copy(sealed.value);
+		forged[size + 27] = (forged[size + 27] ^ 1) as uint8;
+		assert !open(key, forged, "aad").ok;
+	}
+}
+
+test "aes seal rejects a bad key length" {
+	assert !seal("short", "x").ok;
 }

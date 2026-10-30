@@ -187,9 +187,9 @@ static int aesGcmCrypt(
 
 /* ===== Public API ===== */
 
-msString msCryptoAesSeal(msString key, msString plainText, msString aad) {
+int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out) {
 	int keyBits = (int)key.len * 8;
-	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
+	if (keyBits != 128 && keyBits != 256) return 0;
 
 	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
 	const uint8_t* ptData = (const uint8_t*)msStringToCString(plainText);
@@ -197,27 +197,17 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad) {
 	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
 	size_t aadLen = (size_t)aad.len;
 
-	/* Generate 12-byte random nonce */
-	uint8_t nonce[12];
-	generateRandomBytes(nonce, 12);
-
-	/* Allocate output: nonce(12) + cipherText + tag(16) */
-	size_t outLen = 12 + ptLen + 16;
-	uint8_t* out = (uint8_t*)msMemAlloc(outLen);
-
-	memcpy(out, nonce, 12);
+	/* Layout: nonce(12) || cipherText || tag(16) */
+	generateRandomBytes(out, 12);
 	uint8_t tag[16];
 
-	if (!aesGcmCrypt(keyBits, keyData, ptData, ptLen, nonce, 12,
+	if (!aesGcmCrypt(keyBits, keyData, ptData, ptLen, out, 12,
 	                 aadData, aadLen, out + 12, tag, 1)) {
-		free(out);
-		return MS_EMPTY_STRING;
+		return 0;
 	}
 
 	memcpy(out + 12 + ptLen, tag, 16);
-	msString result = msStringNew((const char*)out, (int64_t)outLen);
-	free(out);
-	return result;
+	return 1;
 }
 
 int64_t msCryptoAesOpen(msString key, msString sealed, msString aad, msString* plainTextOut) {

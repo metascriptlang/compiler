@@ -47,23 +47,53 @@ export function branchContributesToJoin(t: Type | null): boolean {
 		&& t.kind != TypeKind.Error;
 }
 
+function enumSubsumes(base: Type, lit: Type): boolean {
+	return base.kind == TypeKind.Enum && lit.kind == TypeKind.EnumLiteral && lit.typeReturn != null && sameNominal(base, lit.typeReturn);
+}
+
+function enumLiteralArms(t: Type): Type[] {
+	if (t.kind != TypeKind.Union) return [t];
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.EnumLiteral) return [t];
+	}
+	return t.typeChildren as Type[];
+}
+
+function dropSubsumedEnumLiterals(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let absorbed = false;
+		for (const base of members) {
+			if (enumSubsumes(base, members[i])) { absorbed = true; break; }
+		}
+		if (!absorbed) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.shrink(kept);
+}
+
 export function joinBranchTypes(types: Type[]): Type {
 	const prepared: Type[] = [];
 	for (const t of types) {
 		if (!branchContributesToJoin(t)) continue;
-		const w = widenBranchLiteral(t);
-		let dup = false;
-		for (let pi = 0; pi < prepared.length; pi++) {
-			const p = prepared[pi];
-			if (p == w || sameType(p, w)) { dup = true; break; }
-			if (isPointerKindJoinPair(p, w)) {
-				prepared[pi] = joinedPointerMember(p, w);
-				dup = true;
-				break;
+		for (const arm of enumLiteralArms(t)) {
+			const w = widenBranchLiteral(arm);
+			let dup = false;
+			for (let pi = 0; pi < prepared.length; pi++) {
+				const p = prepared[pi];
+				if (p == w || sameType(p, w)) { dup = true; break; }
+				if (isPointerKindJoinPair(p, w)) {
+					prepared[pi] = joinedPointerMember(p, w);
+					dup = true;
+					break;
+				}
 			}
+			if (!dup) prepared.push(w);
 		}
-		if (!dup) prepared.push(w);
 	}
+	dropSubsumedEnumLiterals(prepared);
 	if (prepared.length == 0) return inferredType();
 	dropSubclassMembers(prepared);
 	if (prepared.length == 1) return prepared[0];
@@ -732,6 +762,16 @@ function brandBase(t: Type | null): Type | null {
 	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
 }
 
+export function brandArrayBase(t: Type | null): Type | null {
+	const base = brandBase(t);
+	return base != null && isArrayShaped(skipModifier(base)!) ? base : null;
+}
+
+export function widenArrayBrand(expr: Node): Node {
+	const base = brandArrayBase(expr.nodeType);
+	return base != null ? wrapInConv(expr, base) : expr;
+}
+
 function textOperandOrBase(op: string, t: Type, other: Type): Type | null {
 	const base = brandBase(t);
 	if (base == null || op != "+" || isStringLike(base)) return base;
@@ -772,12 +812,17 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	const t = expr.nodeType;
 	if (t == null || refuseNamespaceText(ctx, expr)) return null;
 	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
+	if (bitSetElemType(skipModifier(t) ?? t) != null) return declaredToString(ctx, expr);
 	const peeled = peelToStructOrUnion(t);
 	const dumped = dumpedShape(t, valueShape(t));
 	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum))) return null;
 	const loc = expr.location;
-	const declared = declaredToString(ctx, expr);
 	const slotUnion = textedSlotUnion(t);
+	if (debug && slotUnion == null) {
+		const inspected = declaredInspect(ctx, expr);
+		if (inspected != null) return inspected;
+	}
+	const declared = declaredToString(ctx, expr);
 	if (declared != null && (slotUnion == null || receivesUnion(declared.resolvedSym!))) return declared;
 	if (slotUnion != null) return unionTextCall(ctx, expr, slotUnion, debug, loc);
 	if (!dumped) return null;
@@ -805,25 +850,52 @@ export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | n
 	return text;
 }
 
+// A debug representation hook for the console: `inspect(): string`, read before `toString`, for the value itself
+// and, through `valueDump`, for each field and element; an array whose elements declare it joins their texts.
+function declaredInspect(ctx: CheckerContext, expr: Node): Node | null {
+	const own = declaredCall(ctx, expr, "inspect");
+	if (own != null && own.nodeType != null && isStringLike(own.nodeType)) return own;
+	const arrayType = expr.nodeType!;
+	const elem = isArrayShaped(arrayType) ? getElementType(arrayType.kind == TypeKind.Ref ? arrayType.typeReturn! : arrayType) : null;
+	if (elem == null) return null;
+	const elemText = declaredCallResultType(ctx, elem, "inspect", expr.location);
+	if (elemText == null || !isStringLike(elemText)) return null;
+	const join = boundCall(ctx, "inspectJoin", [expr], expr.location);
+	callCheckExpr(ctx, join, null);
+	return join;
+}
+
 function declaredToString(ctx: CheckerContext, expr: Node): Node | null {
+	const call = declaredCall(ctx, expr, "toString");
+	return call != null && call.nodeType != null && isStringLike(call.nodeType) ? call : null;
+}
+
+// The trial is silent: a member that cannot serve a zero-argument call is not a
+// user error, it just leaves the operand on the builtin path. The receiver's own
+// diagnostics were already recorded when the caller checked it, so the trial's
+// output is dropped either way.
+function declaredCall(ctx: CheckerContext, expr: Node, name: string): Node | null {
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
-		{ object: expr, property: "toString", isOptional: false }, loc);
+		{ object: expr, property: name, isOptional: false }, loc);
 	const synthCall = createNodeAt(NodeKind.CallExpr,
 		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
-	// The trial is silent: a `toString` that cannot serve a zero-argument
-	// string-returning call is not a user error, it just leaves this operand on
-	// the builtin path. The receiver's own diagnostics were already recorded when
-	// the caller checked it, so the trial's output is dropped either way.
 	const errMark = ctx.errors.length;
 	_probedToString = synthCall;
 	callCheckExpr(ctx, synthCall, null);
 	_probedToString = null;
 	const fits = ctx.errors.length == errMark;
 	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
-	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
+	const userBound = fits && synthCall.nodeType != null
 		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
 	return userBound ? synthCall : null;
+}
+
+// The result type of a user-declared zero-argument `name` member or extension of `t`, or null.
+export function declaredCallResultType(ctx: CheckerContext, t: Type, name: string, loc: SourceLocation): Type | null {
+	const holder = newSym(ctx, SymbolKind.Parameter, "u", t);
+	const call = declaredCall(ctx, holderRead(holder, t, loc), name);
+	return call == null ? null : call.nodeType;
 }
 
 let _probedToString: Node | null = null;
@@ -1567,12 +1639,13 @@ export function checkRelationalOperands(ctx: CheckerContext, op: string, leftTyp
 		node.location.line, node.location.column);
 }
 
-export function refuseMixedSignedCompare(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): void {
+export function refuseMixedSignedOperands(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): void {
 	if (leftType == null || rightType == null) return;
 	if (!isIntegerType(leftType) || !isIntegerType(rightType)) return;
 	if (isUnsignedIntegerType(leftType) == isUnsignedIntegerType(rightType)) return;
 	if (!refusesIntConv(leftType, rightType) || !refusesIntConv(rightType, leftType)) return;
-	addError(ctx, "operator '" + op + "' cannot compare '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
+	const what = binaryOperandClass(op) == "arith" ? "cannot be applied to" : "cannot compare";
+	addError(ctx, "operator '" + op + "' " + what + " '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
 		+ "': neither type holds every value of the other — convert one side with `as`", node.location.line, node.location.column);
 }
 
@@ -4060,7 +4133,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral, layoutFromC, unwrapRefBase, classBodyOf, declaredBasesOf } from "./types";
+import { getElementType, createNumberLiteral, layoutFromC, unwrapRefBase, classBodyOf, declaredBasesOf } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);

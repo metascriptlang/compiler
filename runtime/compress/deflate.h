@@ -12,7 +12,7 @@
 #ifndef MS_COMPRESS_DEFLATE_H
 #define MS_COMPRESS_DEFLATE_H
 
-#include "runtime/core/string.h"
+#include "runtime/core/buffer.h"
 #include <stdint.h>
 
 /* Format selectors — must match runtime/compress/inflate.h and the MS enum. */
@@ -32,21 +32,21 @@ int64_t msDeflateNew(int32_t format, int32_t level);
 
 /* Feed a chunk of uncompressed input.
  *   handle: from msDeflateNew()
- *   inChunk: raw bytes to compress
+ *   in, inLen: raw bytes to compress
  *   isLast:  1 to signal end-of-stream (flushes the compressor and writes the trailer for gzip)
  * Returns 0 on OK, 1 when the stream has been finalised, or <0 on error. */
-int32_t msDeflateFeed(int64_t handle, msString inChunk, int32_t isLast);
+int32_t msDeflateFeed(int64_t handle, const uint8_t* in, int64_t inLen, int32_t isLast);
 
 /* Copy up to `maxBytes` of compressed output from the context's internal queue.
  * Passing maxBytes=0 drains everything available. */
-msString msDeflateDrain(int64_t handle, int32_t maxBytes);
+msUint8Array msDeflateDrain(int64_t handle, int32_t maxBytes);
 
 /* Destroy a streaming deflate context. Safe on handle=0. */
 void msDeflateFree(int64_t handle);
 
 /* ===== One-shot ===== */
 
-/* Compress an entire in-memory buffer in one call. Returns MS_EMPTY_STRING on error. */
-msString msDeflateOneShot(msString data, int32_t format, int32_t level);
+/* Compress an entire in-memory buffer in one call. Returns the empty Buffer on error. */
+msUint8Array msDeflateOneShot(const uint8_t* data, int64_t dataLen, int32_t format, int32_t level);
 
 #endif

@@ -1790,12 +1790,12 @@ function replayBuildErrors(build: MacroBuild, ctx: CheckerContext): void {
 
 // One cache per compilation, as the reference keeps a macro's code on the module graph's VM: the
 // module graph names the compilation, a context outside any graph names itself.
-let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
+let _macroBuilds: HashMap<Node, MacroBuild[]> = new HashMap<Node, MacroBuild[]>();
 let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 let _macroCompiles: int32 = 0;
 let _macroPreprocesses: int32 = 0;
-let _preprocessedMacros: HashSet<Symbol> = new HashSet<Symbol>();
+let _preprocessedMacros: HashSet<Node> = new HashSet<Node>();
 
 export function macroPreprocessCount(): int32 {
 	return _macroPreprocesses;
@@ -1820,8 +1820,8 @@ function errorsSince(ctx: CheckerContext, mark: int32): boolean {
 
 function enterMacroBuildsCompilation(ctx: CheckerContext): void {
 	if (inMacroBuildsCompilation(ctx)) return;
-	_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
-	_preprocessedMacros = new HashSet<Symbol>();
+	_macroBuilds = new HashMap<Node, MacroBuild[]>();
+	_preprocessedMacros = new HashSet<Node>();
 	_macroBuildsGraph = ctx.moduleGraph;
 	_macroBuildsCtx = ctx;
 }
@@ -1844,10 +1844,11 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 }
 
 function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, hasTypeArg: boolean): CompiledMacro | null {
+	recordBodyRead(macroSym.modulePath);
 	enterMacroBuildsCompilation(ctx);
-	const known = _macroBuilds.get(macroSym);
+	const known = _macroBuilds.get(decl.macroDeclBody);
 	const builds: MacroBuild[] = known != null ? known : [];
-	if (known == null) _macroBuilds.set(macroSym, builds);
+	if (known == null) _macroBuilds.set(decl.macroDeclBody, builds);
 	for (let bi = 0; bi < builds.length; bi += 1) {
 		if (builds[bi].hasTypeArg != hasTypeArg) continue;
 		replayBuildErrors(builds[bi], ctx);
@@ -1963,10 +1964,10 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	const params = decl.macroDeclParams;
 
 	enterMacroBuildsCompilation(ctx);
-	if (!_preprocessedMacros.has(macroSym)) {
+	if (!_preprocessedMacros.has(body)) {
 		_macroPreprocesses += 1;
 		preprocessMacroBody(body, regCtx, macroSym.name, params);
-		_preprocessedMacros.add(macroSym);
+		_preprocessedMacros.add(body);
 	}
 
 	// Validate arity
@@ -2012,7 +2013,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		marshalArgs.push(builtNodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
 	}
 	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
-	pushActiveMetaCtx(ctx, node.location.line, node.location.column);
+	pushActiveMetaCtx(ctx, node.location.line, node.location.column, regCtx, macroSym.name);
 	const resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
 	popActiveMetaCtx();
 
@@ -2422,6 +2423,7 @@ registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { recordBodyRead } from "../../checker/bodyReads";
 
 function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
 	const ctx = createContext();

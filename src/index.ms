@@ -13,6 +13,7 @@ import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
 import "./compiler/lsp/handlers/positionsTest";
+import "./compiler/transam/cutoff";
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { runPackageCommand } from "./compiler/package/index";

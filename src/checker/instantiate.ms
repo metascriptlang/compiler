@@ -29,6 +29,7 @@ import { bindFunctionFlow } from "../binder/index";
 import { CheckedInstantiation } from "./context";
 import { TypeFlag, AttachedOp } from "../ast/node";
 import { sameType } from "./compat";
+import { recordBodyRead } from "./bodyReads";
 
 // ===== Module-Path → CheckerContext Registry =====
 // When a generic body (function or class constructor) is cloned and re-checked
@@ -106,6 +107,7 @@ export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: 
 // exports. `null` when neither holds it; the caller's scope is never a substitute.
 export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
 	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
+	recordBodyRead(sym.modulePath);
 	const defining = lookupModuleCtx(sym.modulePath);
 	if (defining != null) return defining;
 	const own = preludeModuleCtx(ctx, sym.modulePath);
@@ -138,8 +140,9 @@ export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): Check
 	return view;
 }
 
-export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
+export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null, readsBody: boolean = true): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
+	if (readsBody) recordBodyRead(definingModulePath);
 	if (isEngineCheckMode()) {
 		const engineCtx = _engineBodyCtxFn(definingModulePath, owner);
 		if (engineCtx != null) return engineCtx;
@@ -175,6 +178,18 @@ export function resetInstantiationState(): void {
 	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[]>();
+}
+
+export function forgetInstanceHooks(owner: Symbol): void {
+	_hookScannedInstances.delete(owner);
+	const hooks = _instanceHooks.get(owner);
+	if (hooks == null) return;
+	const kept: InstanceHook[] = [];
+	for (const hook of hooks) {
+		const declared = hook.sym.instantiatedFrom;
+		if (declared == null || declared.modulePath != owner.modulePath) kept.push(hook);
+	}
+	_instanceHooks.set(owner, kept);
 }
 
 interface InstanceHook {
@@ -244,7 +259,7 @@ export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 		if (lookupInstanceHook(t, lifecycleHookOp(hookName)) != null) return true;
 	}
 	const owner = nominalTypeSym(t);
-	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner), owner);
+	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner, false), owner);
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -879,7 +894,8 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 		node.kind = inner.kind;
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
-		if (inner.flags.has(NodeFlag.ExplicitDeref)) node.flags = node.flags.incl(NodeFlag.ExplicitDeref);
+		node.resolvedSym = inner.resolvedSym;
+		node.flags = node.flags.union(inner.flags);
 	}
 	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
@@ -1058,7 +1074,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	instSym.nativeName = "";
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
-	stampItem(bodyCtx, instSym);
+	stampItem(host, instSym);
 	instSym.declNode = cloned;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
@@ -1188,6 +1204,8 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const instMark = markInstanceBody(bodyCtx);
+	const savedHost = bodyCtx.instantiatingCtx;
+	bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1212,6 +1230,7 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	bodyCtx.instantiatingCtx = savedHost;
 	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return fields;
 }
@@ -1281,6 +1300,8 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const instMark = markInstanceBody(bodyCtx);
+	const savedHost = bodyCtx.instantiatingCtx;
+	bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1298,6 +1319,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	bodyCtx.instantiatingCtx = savedHost;
 	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return copy;
 }
@@ -1337,7 +1359,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const substStruct = instanceStruct(structBase, mangledClass, params, dedup.types);
 	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
-	const instSym = newSym(bodyCtx, SymbolKind.Class, mangledClass, concreteClassType);
+	const instSym = newSym(host, SymbolKind.Class, mangledClass, concreteClassType);
 	instSym.state = SymbolState.Shaped;
 	instSym.symFlags = classSym.symFlags;
 	instSym.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
@@ -1434,7 +1456,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
-	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
+	const ctorSym = mintCtorRoutine(host, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
 	ctorSym.instanceArgs = types;

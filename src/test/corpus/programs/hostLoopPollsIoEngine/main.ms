@@ -18,10 +18,19 @@ extern function msTestHostLoopRun(maxMs: int32): int32;
 
 import { createSocket, bind, listen, accept, connect, send, recv, close, recvAsync, sendAsync } from "std/net";
 
-const port = (30000 + Date.now() % 20000) as int32;
-const listenFd = createSocket();
-bind(listenFd, "127.0.0.1", port);
-listen(listenFd, 4);
+function listenFree(from: int32): int32[] {
+	let port = from;
+	while (true) {
+		const fd = createSocket();
+		if (bind(fd, "127.0.0.1", port) >= 0 && listen(fd, 4) >= 0) return [fd, port];
+		close(fd);
+		port = port + 1;
+	}
+}
+
+const bound = listenFree((30000 + Date.now() % 20000) as int32);
+const listenFd = bound[0];
+const port = bound[1];
 const server = spawn((): string => {
 	const c = accept(listenFd);
 	send(c, "hello");

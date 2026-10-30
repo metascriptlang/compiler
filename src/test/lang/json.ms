@@ -13,6 +13,26 @@ interface Person {
 	age: int32;
 }
 
+class Cents {
+	n: int32;
+	constructor(n: int32) { this.n = n; }
+	toJSON(this: Readonly<Cents>): string { return "c" + this.n.toString(); }
+}
+struct Dot { x: int32 }
+function toJSON(this d: Dot): Cents { return new Cents(d.x); }
+interface Till { total: Cents; dot: Dot }
+
+test "JSON.stringify honours a declared toJSON in a module that imports only jsonValueOf" {
+	const t: Till = { total: new Cents(5), dot: { x: 7 } };
+	assert JSON.stringify(t) == `{"total":"c5","dot":{"n":7}}`;
+	assert JSON.stringify(new Cents(2)) == `"c2"`;
+}
+
+test "jsonValueOf honours a declared toJSON and calls it once" {
+	const t: Till = { total: new Cents(5), dot: { x: 7 } };
+	assert stringify(jsonValueOf(t)) == `{"total":"c5","dot":{"n":7}}`;
+}
+
 test "JSON.stringify typed struct" {
 	const p: Person = { name: "Alice", age: 30 };
 	const s = JSON.stringify(p);
