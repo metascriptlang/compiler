@@ -183,20 +183,36 @@ class ActorCell {
 	terminate: ((reason: ExitReason) => void) | null = null;
 }
 
-const actorCells: Map<int64, ActorCell> = new Map<int64, ActorCell>();
+when (mscBuildsPreludeTables) {
+	function newActorCells(): Map<int64, ActorCell> { return new Map<int64, ActorCell>(); }
+	function newTimersLive(): Map<int64, boolean> { return new Map<int64, boolean>(); }
+} else {
+	function newActorCells(): Map<int64, ActorCell> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser actor table"); }
+	function newTimersLive(): Map<int64, boolean> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser timer table"); }
+}
+
+let actorCellsTable: Map<int64, ActorCell> | null = null;
+
+function actorCells(): Map<int64, ActorCell> {
+	const table = actorCellsTable;
+	if (table != null) return table;
+	const fresh = newActorCells();
+	actorCellsTable = fresh;
+	return fresh;
+}
 let actorNext: int64 = 1;
 
 @compilerFunc
 export function msActorOpen(): int64 {
 	const pid = actorNext;
 	actorNext = actorNext + 1;
-	actorCells.set(pid, new ActorCell());
+	actorCells().set(pid, new ActorCell());
 	return pid;
 }
 
 @compilerFunc
 export function msActorOnTerminate(pid: int64, hook: (reason: ExitReason) => void): void {
-	const cell = actorCells.get(pid);
+	const cell = actorCells().get(pid);
 	if (cell != null) cell.terminate = hook;
 }
 
@@ -237,7 +253,7 @@ async function actorPump(cell: ActorCell): Promise<void> {
 }
 
 function actorEnqueue(pid: int64, job: ActorJob): void {
-	const cell = actorCells.get(pid);
+	const cell = actorCells().get(pid);
 	if (cell == null || !cell.live) {
 		actorRefuse(job);
 		return;
@@ -270,10 +286,10 @@ export function msActorPostCallAsync(pid: int64, job: () => Promise<void>, reply
 }
 
 export function msActorStop(pid: int64, reason: ExitReason): void {
-	const cell = actorCells.get(pid);
+	const cell = actorCells().get(pid);
 	if (cell == null || !cell.live) return;
 	cell.live = false;
-	actorCells.delete(pid);
+	actorCells().delete(pid);
 	const hook = cell.terminate;
 	if (hook != null && reason != ExitReason.Killed) hook(reason);
 }
@@ -281,18 +297,26 @@ export function msActorStop(pid: int64, reason: ExitReason): void {
 @compilerFunc
 export function msActorStopLive(): boolean {
 	const live: int64[] = [];
-	actorCells.forEach((cell: ActorCell, pid: int64): void => { if (cell.live) live.push(pid); });
+	actorCells().forEach((cell: ActorCell, pid: int64): void => { if (cell.live) live.push(pid); });
 	for (const pid of live) msActorStop(pid, ExitReason.Shutdown);
 	return live.length > 0;
 }
 
-const timersLive: Map<int64, boolean> = new Map<int64, boolean>();
+let timersLiveTable: Map<int64, boolean> | null = null;
+
+function timersLive(): Map<int64, boolean> {
+	const table = timersLiveTable;
+	if (table != null) return table;
+	const fresh = newTimersLive();
+	timersLiveTable = fresh;
+	return fresh;
+}
 let timerNext: int64 = 1;
 
 function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void {
 	sleepAsync(ms).then((): void => {
-		if (!timersLive.has(id)) return;
-		if (!repeat) timersLive.delete(id);
+		if (!timersLive().has(id)) return;
+		if (!repeat) timersLive().delete(id);
 		fn();
 		if (repeat) timerTick(id, fn, ms, true);
 	});
@@ -301,7 +325,7 @@ function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void
 function timerStart(fn: () => void, ms: number, repeat: boolean): number {
 	const id = timerNext;
 	timerNext = timerNext + 1;
-	timersLive.set(id, true);
+	timersLive().set(id, true);
 	timerTick(id, fn, ms, repeat);
 	return id as number;
 }
@@ -318,5 +342,5 @@ export function msTimerSetInterval(fn: () => void, ms: number): number {
 
 @compilerFunc
 export function msTimerClear(id: number): void {
-	timersLive.delete(id as int64);
+	timersLive().delete(id as int64);
 }

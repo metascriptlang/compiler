@@ -29,6 +29,8 @@ export function createDefineTable(): DefineTable {
 	defineSymbol(t, "mscEmitsDecrefFuture", "true");
 	// std reads the declared toJSON and inspect of a type only under this symbol: a compiler built by one that predates the host function builds the tree with the lookup answering none, so the guard goes one sync cycle after the compiler lands.
 	defineSymbol(t, "mscHasDeclaredCallType", "true");
+	// The Raiser prelude builds its actor and timer tables only under this symbol: a compiler that predates it checks a collection constructor before the extensions it calls, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscBuildsPreludeTables", "true");
 	return t;
 }
 
@@ -187,6 +189,7 @@ test "define: a fresh table carries the compiler feature symbol" {
 	assert isDefined(t, "mscKeepsRootsWithOwner");
 	assert isDefined(t, "mscEmitsDecrefFuture");
 	assert isDefined(t, "mscHasDeclaredCallType");
+	assert isDefined(t, "mscBuildsPreludeTables");
 }
 
 test "define: unknown flag is false, never an error" {
