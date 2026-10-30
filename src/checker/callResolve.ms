@@ -1443,6 +1443,13 @@ function defaultReadsSpreadSlot(ctx: CheckerContext, spread: Node, pd: ParamDefa
 	return false;
 }
 
+function hideSpreadElement(args: Node[], argTypes: Type[], at: int32): Type | null {
+	if (at < 0 || at >= args.length || at >= argTypes.length || args[at].kind != NodeKind.SpreadExpr) return null;
+	const element = argTypes[at];
+	argTypes[at] = args[at].nodeType!;
+	return element;
+}
+
 function trailingArraySpread(args: Node[]): int32 {
 	const at = args.length - 1;
 	if (at < 0 || args[at].kind != NodeKind.SpreadExpr) return -1;
@@ -4675,7 +4682,9 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
+		const element = hideSpreadElement(args, argTypes, spreadAt);
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
+		if (element != null) argTypes[spreadAt] = element;
 	}
 	const winnerSymFinal = candSyms[bestIdx];
 	if (gathered != null && bestIdx >= ownCount) {
@@ -5152,7 +5161,9 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
 			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], ai < contextFormals[idx].typeChildren.length ? contextFormals[idx].typeChildren[ai] : null) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
 		}
+		const element = hideSpreadElement(args, argTypes, spreadAt);
 		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+		if (element != null) argTypes[spreadAt] = element;
 	}
 	if (extWinnerSym != null && callNode.resolvedSym != extWinnerSym && hasFlag(extWinnerSym, SymbolFlag.OverloadSig)) {
 		fitCallToImplementation(ctx, callNode, callNode.resolvedSym!, !exts[idx].isStatic);
