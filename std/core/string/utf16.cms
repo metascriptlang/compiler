@@ -29,22 +29,28 @@ const highBits: uint64 = 0x8080808080808080;
 const lowBits: uint64 = 0x0101010101010101;
 
 // Eight bytes at a time: a byte counts one unit unless it is a continuation (10xxxxxx) and one
-// more when it leads a 4-byte sequence (F0 and up), so no step waits on the previous byte.
+// more when it leads a 4-byte sequence (F0 and up), so no step waits on the previous byte. A
+// byte lane holds at most 2 per word, so 127 words add up before the lanes are summed.
 @noinline
 function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
 	const length = b.length as int64;
 	let count: int64 = 0;
 	let i: int64 = 0;
 	while (i + 8 <= length) {
-		const word = msLoadU64(b, i);
-		const continuation = word & ~(word << 1) & highBits;
-		const fourByte = word & (word << 1) & (word << 2) & (word << 3) & highBits;
-		let lanes = (fourByte >> 7) + (lowBits - (continuation >> 7));
-		lanes = lanes + (lanes >> 32);
-		lanes = lanes + (lanes >> 16);
-		lanes = lanes + (lanes >> 8);
-		count += (lanes & 0xFF) as int64;
-		i += 8;
+		let words = (length - i) >> 3;
+		if (words > 127) words = 127;
+		const stop = i + (words << 3);
+		let total: uint64 = 0;
+		while (i < stop) {
+			const word = msLoadU64(b, i);
+			const continuation = word & ~(word << 1) & highBits;
+			const fourByte = word & (word << 1) & (word << 2) & (word << 3) & highBits;
+			total = total + (fourByte >> 7) + (lowBits - (continuation >> 7));
+			i += 8;
+		}
+		total = (total & 0x00FF00FF00FF00FF) + ((total >> 8) & 0x00FF00FF00FF00FF);
+		total = (total & 0x0000FFFF0000FFFF) + ((total >> 16) & 0x0000FFFF0000FFFF);
+		count += ((total & 0xFFFFFFFF) + (total >> 32)) as int64;
 	}
 	const bytes = b as Readonly<Ptr<uint8>>;
 	while (i < length) {
@@ -319,5 +325,13 @@ test "length counts UTF-16 units on every word-boundary size of mixed text" {
 			text += pieces[pick];
 			expected += widths[pick];
 		}
+	}
+}
+
+test "length counts UTF-16 units across the 127-word lane flush" {
+	for (let count = 250; count <= 270; count++) {
+		assert "😀".repeat(count).length == count * 2;
+		assert "€".repeat(count).length == count;
+		assert "a".repeat(count * 5).length == count * 5;
 	}
 }
