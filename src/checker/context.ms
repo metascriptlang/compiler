@@ -262,8 +262,27 @@ export function reexportExt(ext: ExtensionMethod, methodName: string, sourcePath
 
 let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
 
+interface DefaultHoist { source: Node; temps: Node[]; }
+
+let _defaultHoists: HashMap<Node, DefaultHoist> = new HashMap<Node, DefaultHoist>();
+
 export function resetDefaultsCheckedAtDeclaration(): void {
 	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+	_defaultHoists = new HashMap<Node, DefaultHoist>();
+}
+
+export function noteDefaultHoists(stored: Node, source: Node, temps: Node[]): void {
+	_defaultHoists.set(stored, { source, temps });
+}
+
+export function hoistsOfDefault(stored: Node): Node[] {
+	const h = _defaultHoists.get(stored);
+	return h != null ? h.temps : [];
+}
+
+export function sourceOfDefault(stored: Node): Node {
+	const h = _defaultHoists.get(stored);
+	return h != null ? h.source : stored;
 }
 
 export function noteDefaultCheckedAtDeclaration(def: Node): void {
