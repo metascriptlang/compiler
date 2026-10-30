@@ -26,6 +26,7 @@ import "./accessorContexts";
 import "./aliasRepresentation";
 import "./assertInNonVoidArrow";
 import "./assertionEvaluation";
+import "./assertionConditional";
 import "./assertMessageLazy";
 import "./brandedStringIdentity";
 import "./byteArrayValueFit";

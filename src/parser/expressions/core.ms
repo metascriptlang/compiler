@@ -1,7 +1,7 @@
 // Core Expression Parser - Pratt parsing with operator precedence
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData, ConditionalExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser, addError } from "../cursor";
 import { lex } from "../../lexer/lexer";
 import { captureGenericTypeArgs } from "../generics";
@@ -37,7 +37,7 @@ const NO_BINARY_PREC: int32 = 100;
 
 function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	advance(state);
-	const captured = captureType(state);
+	const captured = captureType(state, true);
 	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: captured.text }, token);
 	asNode.typeExpr = captured.expr;
 	return finishNode(state, asNode);
@@ -1032,4 +1032,29 @@ test "a comment between @ and comptime leaves a comptime block" {
 test "a comment between quote and its brace leaves a quote expression" {
 	assert exprKind("quote /* c */ { const x = 1; }") == NodeKind.QuoteExpr;
 	assert exprKind("quote // c\n{ const x = 1; }") == NodeKind.QuoteExpr;
+}
+
+test "an assertion leaves its conditional question and positioned type" {
+	const node = exprNode("on as boolean ? one : two");
+	assert node.kind == NodeKind.ConditionalExpr;
+	const data = node.data as ConditionalExprData;
+	assert data.ternaryCondition.kind == NodeKind.TypeAssertion;
+	assert (data.ternaryCondition.data as TypeAssertionData).asType == "boolean";
+	assert data.ternaryCondition.typeExpr!.location.endColumn == 14;
+	assert data.ternaryConsequent.kind == NodeKind.Identifier;
+	assert data.ternaryAlternate.kind == NodeKind.Identifier;
+}
+
+test "compound assertions leave nested conditional ownership intact" {
+	for (const source of [
+		"values as int32[] ? one : two",
+		"values as List<int32> ? one : two",
+		"value as (int32 | null) ? one : two",
+		"handler as ((x: int32) => int32) ? one : two",
+		"value as typeof source ? one : two",
+		"on ? off as boolean ? one : two : three",
+		"off ? one : on as boolean ? -2 : three",
+	]) {
+		assert exprKind(source) == NodeKind.ConditionalExpr;
+	}
 }
