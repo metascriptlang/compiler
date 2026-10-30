@@ -1683,6 +1683,17 @@ slow_starts_self_test() {
   [ "$(slow_starts 2 :)" = 0 ] || { printf 'FAIL slow starts: an instant start was counted\n'; return 1; }
 }
 
+runner_self_test() {
+  local BUILDER=msc CAND=cand CC_FLAG="" narrow="" raiser_on=0 lane cmd bad=0
+  for lane in build boundary cache corpus san tsan fmt lsp; do
+    cmd=$(lane_cmd "$lane")
+    case "$cmd" in *" run src/"*) printf 'FAIL %s links the shared out/debug runner beside other lanes: %s\n' "$lane" "$cmd"; bad=1 ;; esac
+  done
+  [ "$(runner_path corpus)" = "$(runner_path san)" ] && [ "$(runner_path corpus)" != "$(runner_path fmt)" ] \
+    || { printf 'FAIL runner paths: corpus %s san %s fmt %s\n' "$(runner_path corpus)" "$(runner_path san)" "$(runner_path fmt)"; bad=1; }
+  return $bad
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -1977,6 +1988,7 @@ CASES
   emit_width_self_test || bad=1
   reread_share_self_test || bad=1
   slow_starts_self_test || bad=1
+  runner_self_test || bad=1
   resume_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
@@ -2124,15 +2136,38 @@ cand_key=""
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
+runner_src() {
+  case "$1" in
+    corpus|san|tsan) printf 'src/test/corpus/run.ms' ;;
+    fmt) printf 'src/test/fmt/run.ms' ;;
+  esac
+}
+runner_path() {
+  local src
+  src=$(runner_src "$1")
+  printf '%s/%s-runner%s' "$OUT" "$(basename "$(dirname "$src")")" "$EXE_SUFFIX"
+}
+build_runner() {
+  local src out
+  src=$(runner_src "$1")
+  [ -n "$src" ] || return 0
+  case " $runners_built " in *" $src "*) return 0 ;; esac
+  runners_built="$runners_built $src"
+  out=$(runner_path "$1")
+  rm -f "$out"
+  env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build "$src" --output="$out" >"${out%"$EXE_SUFFIX"}.log" 2>&1 \
+    || say "gate: FAIL could not build $src to $out, see ${out%"$EXE_SUFFIX"}.log"
+}
+
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
     cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
-    corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
-    san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
+    corpus) printf '%s%sMSC=%s %s' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$(runner_path corpus)" ;;
+    san) printf '%sMSCORPUS_SAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path san)" ;;
+    tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path tsan)" ;;
+    fmt) printf '%s' "$(runner_path fmt)" ;;
     lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
   esac
 }
@@ -2471,7 +2506,7 @@ lane_body() {
 }
 
 start=$SECONDS
-ran="" blocked="" verdict=GREEN stopped="" selected=0 keys_started=0 narrow="" only_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
+ran="" blocked="" verdict=GREEN stopped="" selected=0 keys_started=0 runners_built="" narrow="" only_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
 [ "$lanes" = tools ] || { [ "${GATE_QUEUE:-1}" = 0 ] || queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
@@ -2523,6 +2558,7 @@ for phase in "${PHASES[@]}"; do
     esac
     launched="$launched $lane"
     if skip_lane "$lane"; then continue; fi
+    build_runner "$lane"
     lane_body "$lane" & pids="$pids $!"
   done
   [ -z "$pids" ] || wait $pids
