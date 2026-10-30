@@ -4126,6 +4126,7 @@ function checkPreludeSource(stdPath: string, backendExt: string): CheckerContext
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
 	ctx.stdRoot = stdRoot;
+	defineBuiltinConstants(ctx);
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
