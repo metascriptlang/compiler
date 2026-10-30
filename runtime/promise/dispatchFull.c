@@ -211,9 +211,9 @@ static void msSettleWorkerWork(void) {
 }
 
 /* A timer fires on the thread that armed it (ULTRALOCK A1). gTimers is the main
- * thread's heap; on POSIX a pool worker arms onto the heap of its own loop
- * channel and services it in msWorkerLoopPump, which every worker wait runs. On
- * Windows a worker still arms onto gTimers, which the loop thread services.
+ * thread's heap; a pool worker arms onto the heap of its own loop (the loop
+ * channel on POSIX, the env inbox on Windows) and services it in
+ * msWorkerLoopPump, which every worker wait runs.
  *
  * `msDispatcher.timers` is consequently NOT COMPILED on this target — the
  * field is gated to the single-threaded dispatchers (wasm/emcc/bare) in
@@ -419,6 +419,7 @@ typedef struct msEnvInbox {
 	_Atomic(msEnvReleaseNode*) head;
 	struct msEnvInbox* nextInbox;
 	int schedId;
+	msTimerHeap timers;
 } msEnvInbox;
 
 static _Atomic(msEnvInbox*) gEnvInboxes = NULL;
@@ -430,6 +431,7 @@ void* msEnvReleaseQueue(void) {
 		msEnvInbox* in = (msEnvInbox*)msMemAlloc(sizeof(msEnvInbox));
 		atomic_store_explicit(&in->head, NULL, memory_order_relaxed);
 		in->schedId = msPoolWorkerSchedId;
+		in->timers = (msTimerHeap){ NULL, 0, 0 };
 		msEnvInbox* top = atomic_load_explicit(&gEnvInboxes, memory_order_relaxed);
 		do { in->nextInbox = top; } while (!atomic_compare_exchange_weak_explicit(&gEnvInboxes, &top, in, memory_order_release, memory_order_relaxed));
 		tlEnvInbox = in;
@@ -553,10 +555,28 @@ bool msCompletionQueueDrainAll(void) {
 	return didWork;
 }
 void* msLoopCompletionQueue(void) { return NULL; }
-bool msWorkerLoopPump(void) { bool didWork = msWorkerEnginePoll(); if (tlEnvInbox != NULL && msEnvInboxDrain(tlEnvInbox)) didWork = true; return didWork; }
+bool msWorkerLoopPump(void) {
+	bool didWork = msWorkerEnginePoll();
+	if (tlEnvInbox == NULL) return didWork;
+	const msTaskFrame* frame = msPoolFrameSwap(NULL);
+	msActor* actor = msActorCurrentForJobs();
+	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
+	if (msEnvInboxDrain(tlEnvInbox)) didWork = true;
+	if (tlEnvInbox->timers.len > 0) (void)msProcessTimers(NULL, &didWork);
+	msFutureReleaseFlush();
+	msSettleWorkerWork();
+	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
+	msPoolFrameSwap(frame);
+	return didWork;
+}
 bool msWorkerLoopPending(void) { return tlEnvInbox != NULL && atomic_load_explicit(&tlEnvInbox->head, memory_order_acquire) != NULL; }
-int msWorkerTimerDelayMs(void) { return -1; }
-static msTimerHeap* msThreadTimers(void) { return &gTimers; }
+int msWorkerTimerDelayMs(void) {
+	if (tlEnvInbox != NULL && tlEnvInbox->timers.len > 0) return msNextTimerDelayMs();
+	return -1;
+}
+static msTimerHeap* msThreadTimers(void) {
+	return msIsPoolWorker ? &((msEnvInbox*)msEnvReleaseQueue())->timers : &gTimers;
+}
 
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
@@ -1008,7 +1028,7 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 			/* An interval's env rides its re-armed entry; only a one-shot releases. */
 			if (t.periodMs == 0) msReleaseEnvOnLoop(t.cb.env);
 		}
-		msProcessCallbacks(d, didWork);
+		if (d != NULL) msProcessCallbacks(d, didWork);
 	}
 	return msTimerDelayFrom(now);
 }
@@ -1352,28 +1372,20 @@ void msPostEnvRelease(void* env) {
  * dispatcher (msDrainUntilIdle's msHasDispatcher guard), so a top-level
  * `await sleepAsync(...)` needs the dispatcher created here as before.
  *
- * A POSIX pool worker's timer counts as pending pool work until it is popped,
- * so the exit drain waits for it as it waits for a running task. On Windows a
- * worker arms onto the loop thread's heap and wakes that loop, so it recomputes
- * its poll timeout against a deadline that may now be sooner. */
+ * A pool worker's timer counts as pending pool work until it is popped, so the
+ * exit drain waits for it as it waits for a running task. */
 static void msTimerArm(msTimer t) {
-	bool worker = msIsPoolWorker;
-	if (!worker) (void)msGetDispatcher();
+	if (!msIsPoolWorker) (void)msGetDispatcher();
 	msTimerHeap* heap = msThreadTimers();
 	if (heap != &gTimers) msPoolPendingAdd(1);
 	msTimerLock();
 	msTimerPush(heap, t);
 	msTimerUnlock();
-	if (worker && heap == &gTimers) msActorWakeEventLoop();
 }
 
 /* True when `fut` is a timer on the heap this thread's own loop fires: a wait on it
- * settles on this thread, whatever the pool does. A Windows worker arms onto the loop
- * thread's heap, which the loop thread fires. */
+ * settles on this thread, whatever the pool does. */
 bool msTimerFiresHere(const void* fut) {
-#ifdef _WIN32
-	if (msIsPoolWorker) return false;
-#endif
 	msTimerHeap* heap = msThreadTimers();
 	bool found = false;
 	msTimerLock();
@@ -1387,10 +1399,6 @@ bool msTimerFiresHere(const void* fut) {
 msFuture_void* msSleepAsync(int ms) {
 	msFuture_void* fut = (msFuture_void*)msFutureCreate();
 	msIncRef(fut);
-#ifdef _WIN32
-	/* The loop thread completes and releases a worker-armed timer: PARALOCK I16/I17. */
-	if (msIsPoolWorker) fut->crossThreadPublished = true;
-#endif
 	int64_t finishAt = msMonoTimeMs() + ms;
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
 	msTimerArm(t);
@@ -1446,7 +1454,11 @@ static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
 static void msCancelTimer(int64_t id) {
 	msTimerLock();
 	bool found = msCancelTimerIn(&gTimers, id);
-#ifndef _WIN32
+#ifdef _WIN32
+	for (msEnvInbox* in = atomic_load_explicit(&gEnvInboxes, memory_order_acquire); in != NULL && !found; in = in->nextInbox) {
+		found = msCancelTimerIn(&in->timers, id);
+	}
+#else
 	for (msLoopChannel* c = atomic_load_explicit(&gWorkerChannels, memory_order_acquire); c != NULL && !found; c = c->nextWorker) {
 		found = msCancelTimerIn(&c->timers, id);
 	}

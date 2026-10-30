@@ -3,7 +3,7 @@
 // @serial
 
 // note: The timer heap keeps a sleep future alive until it has fired, and a worker's
-//   sleep future is released on the loop thread that fires it. A dropped sleepAsync
+//   sleep future is fired and released by the worker that armed it. A dropped sleepAsync
 //   used to be freed by its owner while still armed (heap-use-after-free when it
 //   fired, every run under ASan), and an awaited one on a worker could be freed
 //   while the loop was still inside its completion (TSan, every run).
