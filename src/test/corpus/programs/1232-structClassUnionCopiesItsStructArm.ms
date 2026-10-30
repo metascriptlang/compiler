@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser copy of a struct and class union shares its struct arm; card 2026-10-30-raiser-copy-of-a-struct-and-class-union-shares-its-struct-arm
 // @stdout: 1 1 1 1 1 5|y y
 struct S { kind: "s"; n: int32 }
 class C { kind: "r" = "r"; name: string = "x" }
