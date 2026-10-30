@@ -184,3 +184,94 @@ function promiseAllTyped(futures: Ptr<void>, shareFn: Ptr<void>, vt: Ptr<void>):
 	}
 	return result;
 }
+
+extern function msPromiseFirstGeneric(): Ptr<void>;
+extern function msPromiseFirstCreate(vt: Ptr<void>): Ptr<void>;
+extern function msPromiseFirstDeliver(vt: Ptr<void>, result: Ptr<void>, input: Ptr<void>, shareFn: Ptr<void>, dropFn: Ptr<void>, dropEnv: Ptr<void>): void;
+extern function msPromiseAllRejectedError(): Ptr<void>;
+extern function msPromiseFetchAddAcqRel(p: Ptr<void>, amount: int32): int32;
+extern function msPromiseFirstWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msFutureFail(fut: Ptr<void>, error: Ptr<void>): void;
+
+struct FirstState {
+	result: Ptr<void>;
+	shareFn: Ptr<void>;
+	dropFn: Ptr<void>;
+	dropEnv: Ptr<void>;
+	vt: Ptr<void>;
+	count: int32;
+	any: int32;
+	settled: Word32;
+	rejected: Word32;
+	remaining: Word32;
+}
+
+struct FirstEnv {
+	state: Ptr<FirstState>;
+	input: Ptr<void>;
+}
+
+function firstClaim(s: Ptr<FirstState>, fulfilled: boolean): boolean {
+	const settled = (s.settled as Ptr<Word32>) as Ptr<void>;
+	if (fulfilled || s.any == 0) return msPromiseExchangeAcqRel(settled, 1) == 0;
+	const rejected = msPromiseFetchAddAcqRel((s.rejected as Ptr<Word32>) as Ptr<void>, 1) + 1;
+	if (rejected == s.count && msPromiseExchangeAcqRel(settled, 1) == 0) msFutureFail(s.result, msPromiseAllRejectedError());
+	return false;
+}
+
+@exportName("msPromiseFirstCb")
+function firstCallback(env: Ptr<void>): void {
+	const e = env as Ptr<FirstEnv>;
+	const s = e.state;
+	const input = e.input;
+	free(env);
+	const rejected = msPromiseInputRejected(input);
+	if (firstClaim(s, !rejected)) {
+		if (rejected) msFutureFailShared(s.result, msPromiseInputError(input));
+		else msPromiseFirstDeliver(s.vt, s.result, input, s.shareFn, s.dropFn, s.dropEnv);
+	}
+	msPromiseRelease(input);
+	if (msPromiseFetchSubAcqRel((s.remaining as Ptr<Word32>) as Ptr<void>, 1) == 1) {
+		msPromiseRelease(s.result);
+		free(s as Ptr<void>);
+	}
+}
+
+@exportName("msPromiseFirstTyped")
+function promiseFirstTyped(futures: Ptr<void>, shareFn: Ptr<void>, dropFn: Ptr<void>, dropEnv: Ptr<void>, any: int32, vt: Ptr<void>): Ptr<void> {
+	const count = msPromiseArrayCount(futures);
+	const result = msPromiseFirstCreate(vt);
+	if (count == 0) {
+		if (any != 0) msFutureFail(result, msPromiseAllRejectedError());
+		return result;
+	}
+	const state = msMemAlloc0(sizeof FirstState) as Ptr<FirstState>;
+	state.result = result;
+	msPromiseHold(result);
+	state.shareFn = shareFn;
+	state.dropFn = dropFn;
+	state.dropEnv = dropEnv;
+	state.vt = vt;
+	state.count = count;
+	state.any = any;
+	state.remaining.value = count;
+	for (let i: int32 = 0; i < count; i++) {
+		const input = msPromiseArrayAt(futures, i);
+		msPromiseHold(input);
+		const env = msMemAlloc(sizeof FirstEnv) as Ptr<FirstEnv>;
+		env.state = state;
+		env.input = input;
+		msPromiseFirstWatch(input, env as Ptr<void>);
+	}
+	return result;
+}
+
+@exportName("msPromiseRace")
+function promiseRace(futures: Ptr<void>): Ptr<void> {
+	return promiseFirstTyped(futures, 0 as Ptr<void>, 0 as Ptr<void>, 0 as Ptr<void>, 0, msPromiseFirstGeneric());
+}
+
+@exportName("msPromiseAny")
+function promiseAny(futures: Ptr<void>): Ptr<void> {
+	return promiseFirstTyped(futures, 0 as Ptr<void>, 0 as Ptr<void>, 0 as Ptr<void>, 1, msPromiseFirstGeneric());
+}

@@ -1,63 +1,10 @@
 #ifndef MSOS_BARE
 /*
- * MetaScript Promise Combinators — Promise.all / Promise.race
+ * MetaScript Promise Combinators — Promise.allSettled / Promise.then / Promise.catch / Promise.finally
  */
 #include "runtime/core/system.h"
 #include "runtime/promise/combinator.h"
 #include <stdlib.h>
-
-/* ===== Promise.race ===== */
-
-static void msPromiseRaceCb(void* env) {
-	msPromiseRaceCbEnv* e = (msPromiseRaceCbEnv*)env;
-	msPromiseRaceState* s = e->state;
-	msFuture* f = e->input;
-	free(e);
-
-	/* First settlement wins */
-	if (!s->settled) {
-		s->settled = true;
-		if (f->base.failed || f->base.cancelled) {
-			msFutureFailShared(s->result, f->base.error);
-		} else {
-			msFutureComplete(s->result, f->value);
-		}
-	}
-
-	msDecrefAny(f);
-
-	/* Last callback frees state */
-	s->remaining--;
-	if (s->remaining == 0) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-void* msPromiseRace(msRefArray* arr) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msFutureCreate();
-
-	if (count == 0 || futures == NULL) return result;  /* never settles — ECMAScript spec */
-
-	msPromiseRaceState* state = (msPromiseRaceState*)msMemAlloc0(sizeof(msPromiseRaceState));
-	state->result = result;
-	msIncref(result);
-	state->remaining = count;
-
-	for (int i = 0; i < count; i++) {
-		msPromiseRaceCbEnv* env = (msPromiseRaceCbEnv*)msMemAlloc(sizeof(msPromiseRaceCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){
-			.fn = (msClosureFn)msPromiseRaceCb,
-			.env = env
-		});
-	}
-	return result;
-}
 
 /* ===== Promise.allSettled ===== */
 
@@ -107,66 +54,6 @@ void* msPromiseAllSettled(msRefArray* arr) {
 		env->index = i;
 		msFutureAddCallback(futures[i], (msClosure){
 			.fn = (msClosureFn)msPromiseAllSettledCb,
-			.env = env
-		});
-	}
-	return result;
-}
-
-/* ===== Promise.any ===== */
-
-static void msPromiseAnyCb(void* env) {
-	msPromiseAnyCbEnv* e = (msPromiseAnyCbEnv*)env;
-	msPromiseAnyState* s = e->state;
-	msFuture* f = e->input;
-	free(e);
-
-	/* First fulfillment wins */
-	if (!s->resolved) {
-		if (!(f->base.failed || f->base.cancelled)) {
-			s->resolved = true;
-			msFutureComplete(s->result, f->value);
-		} else {
-			s->rejected++;
-			if (s->rejected == s->count) {
-				msFutureFail(s->result, msMakeError(msStringFromCStr("All promises were rejected")));
-			}
-		}
-	}
-
-	msDecrefAny(f);
-
-	/* Last callback frees state */
-	s->remaining--;
-	if (s->remaining == 0) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-void* msPromiseAny(msRefArray* arr) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msFutureCreate();
-
-	if (count == 0 || futures == NULL) {
-		msFutureFail(result, msMakeError(msStringFromCStr("All promises were rejected")));
-		return result;
-	}
-
-	msPromiseAnyState* state = (msPromiseAnyState*)msMemAlloc0(sizeof(msPromiseAnyState));
-	state->result = result;
-	msIncref(result);
-	state->count = count;
-	state->remaining = count;
-
-	for (int i = 0; i < count; i++) {
-		msPromiseAnyCbEnv* env = (msPromiseAnyCbEnv*)msMemAlloc(sizeof(msPromiseAnyCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){
-			.fn = (msClosureFn)msPromiseAnyCb,
 			.env = env
 		});
 	}

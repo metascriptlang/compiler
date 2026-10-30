@@ -30,20 +30,9 @@ void* msPromiseAllTyped(void* futures, void* shareFn, void* vt);
 
 /* ===== Promise.race ===== */
 
-typedef struct {
-	msFuture* result;     /* output future — settles with first settled input */
-	bool settled;          /* true after first settlement */
-	int remaining;         /* callbacks remaining — free state when 0 */
-} msPromiseRaceState;
-
-typedef struct {
-	msPromiseRaceState* state;
-	msFuture* input;
-} msPromiseRaceCbEnv;
-
 /* Resolves/rejects with the FIRST settled input.
- * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
-void* msPromiseRace(msRefArray* futures);
+ * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data, ->len. Defined in std/core/promise/combinator.cms. */
+void* msPromiseRace(void* futures);
 
 /* ===== Promise.resolve / Promise.reject ===== */
 
@@ -82,22 +71,9 @@ void* msPromiseAllSettled(msRefArray* futures);
 
 /* ===== Promise.any ===== */
 
-typedef struct {
-	msFuture* result;     /* output future — resolves with first fulfilled input */
-	int count;            /* total inputs */
-	int rejected;         /* number rejected so far */
-	bool resolved;        /* true after first fulfillment */
-	int remaining;        /* callbacks remaining — free state when 0 */
-} msPromiseAnyState;
-
-typedef struct {
-	msPromiseAnyState* state;
-	msFuture* input;
-} msPromiseAnyCbEnv;
-
 /* Resolves with FIRST fulfilled input. Rejects only if ALL reject.
- * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
-void* msPromiseAny(msRefArray* futures);
+ * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data, ->len. Defined in std/core/promise/combinator.cms. */
+void* msPromiseAny(void* futures);
 
 /* A future completed by generated code owns its result when it completes on the owner
  * thread (Amendment O): readers copy it and the future drops what is left. A pool
@@ -478,95 +454,37 @@ MS_PROMISE_ALL_FOR(double, msFuture_double, double, msNumberArray, msNumberPaylo
 MS_PROMISE_ALL_FOR(bool,   msFuture_bool,   double, msNumberArray, msNumberPayload, MS_COPY_TO_DOUBLE, msNumberArrayDestroy)
 MS_PROMISE_ALL_FOR(void*,  msFuture_ptr,    void*,  msRefArray,    msRefPayload,    MS_COPY_MOVE_PTR, msRefArrayDestroy)
 
-typedef struct {
-	msFuture* result;
-	msClosure share;
-	msClosure drop;
-	int32_t count;
-	bool any;
-	_Atomic(bool) settled;
-	_Atomic(int32_t) rejected;
-	_Atomic(int32_t) remaining;
-} msPromiseFirstState;
+/* The per-element-type half of the typed Promise.race / Promise.any, defined by
+ * MS_PROMISE_FIRST_FOR: futSize is the result future's size, deliver completes the result
+ * with the winning input's value. msPromiseFirstTyped is the shared body in
+ * std/core/promise/combinator.cms. */
+typedef struct msPromiseFirstVt {
+	size_t futSize;
+	void (*deliver)(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv);
+} msPromiseFirstVt;
 
-typedef struct {
-	msPromiseFirstState* state;
-	msFuture* input;
-} msPromiseFirstCbEnv;
-
-static inline bool msPromiseFirstClaim(msPromiseFirstState* s, bool fulfilled) {
-	if (fulfilled || !s->any) return !atomic_exchange_explicit(&s->settled, true, memory_order_acq_rel);
-	int32_t rejected = atomic_fetch_add_explicit(&s->rejected, 1, memory_order_acq_rel) + 1;
-	if (rejected == s->count && !atomic_exchange_explicit(&s->settled, true, memory_order_acq_rel)) {
-		msFutureFail(s->result, msMakeError(msStringFromCStr("All promises were rejected")));
-	}
-	return false;
-}
-
-static inline void msPromiseFirstRelease(msPromiseFirstState* s, msFuture* input) {
-	msDecrefAny(input);
-	if (atomic_fetch_sub_explicit(&s->remaining, 1, memory_order_acq_rel) == 1) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-static inline void* msPromiseFirstStart(msRefArray* arr, msClosure share, msClosure drop, bool any, size_t futSize, msClosureFn cb) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msAllocTyped(futSize, &msFutureTypeInfo);
-	if (count == 0 || futures == NULL) {
-		if (any) msFutureFail(result, msMakeError(msStringFromCStr("All promises were rejected")));
-		return result;
-	}
-	msPromiseFirstState* state = (msPromiseFirstState*)msMemAlloc0(sizeof(msPromiseFirstState));
-	state->result = result;
-	msIncref(result);
-	state->share = share;
-	state->drop = drop;
-	state->count = count;
-	state->any = any;
-	atomic_store_explicit(&state->remaining, count, memory_order_relaxed);
-	for (int i = 0; i < count; i++) {
-		msPromiseFirstCbEnv* env = (msPromiseFirstCbEnv*)msMemAlloc(sizeof(msPromiseFirstCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){ .fn = cb, .env = env });
-	}
-	return result;
-}
+void* msPromiseFirstTyped(void* futures, void* shareFn, void* dropFn, void* dropEnv, int32_t any, void* vt);
 
 #define MS_PROMISE_FIRST_FOR(name, futType, boxSize) \
-	static inline void name##_cb(void* raw) { \
-		msPromiseFirstCbEnv* e = (msPromiseFirstCbEnv*)raw; \
-		msPromiseFirstState* s = e->state; \
-		futType* f = (futType*)e->input; \
-		free(e); \
-		bool fulfilled = !(f->base.failed || f->base.cancelled); \
-		if (msPromiseFirstClaim(s, fulfilled)) { \
-			if (!fulfilled) { \
-				msFutureFailShared(s->result, f->base.error); \
-			} else { \
-				futType* r = (futType*)s->result; \
-				msFutureOwnResult(s->result, s->drop); \
-				if (f->base.valueDrop != NULL && s->share.fn != NULL) { \
-					void* dst = (boxSize) == 0 ? (void*)&r->value : (*(void**)&r->value = msMemAlloc0((boxSize))); \
-					((void (*)(void*, void*))s->share.fn)(dst, (void*)f); \
-				} else { \
-					memcpy(&r->value, &f->value, sizeof(r->value)); \
-					memset(&f->value, 0, sizeof(f->value)); \
-				} \
-				msFutureCompleteVoid(r); \
-			} \
+	static void name##_deliver(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) { \
+		futType* f = (futType*)input; \
+		futType* r = (futType*)result; \
+		msFutureOwnResult(result, (msClosure){ .fn = (msClosureFn)dropFn, .env = dropEnv }); \
+		if (f->base.valueDrop != NULL && shareFn != NULL) { \
+			void* dst = (boxSize) == 0 ? (void*)&r->value : (*(void**)&r->value = msMemAlloc0((boxSize))); \
+			((void (*)(void*, void*))shareFn)(dst, (void*)f); \
+		} else { \
+			memcpy(&r->value, &f->value, sizeof(r->value)); \
+			memset(&f->value, 0, sizeof(f->value)); \
 		} \
-		msPromiseFirstRelease(s, (msFuture*)f); \
+		msFutureCompleteVoid(r); \
 	} \
+	static const msPromiseFirstVt name##_vt = { .futSize = sizeof(futType), .deliver = name##_deliver }; \
 	static inline void* name##Race(msRefArray* arr, msClosure share, msClosure drop) { \
-		return msPromiseFirstStart(arr, share, drop, false, sizeof(futType), (msClosureFn)name##_cb); \
+		return msPromiseFirstTyped(arr, (void*)share.fn, (void*)drop.fn, drop.env, 0, (void*)&name##_vt); \
 	} \
 	static inline void* name##Any(msRefArray* arr, msClosure share, msClosure drop) { \
-		return msPromiseFirstStart(arr, share, drop, true, sizeof(futType), (msClosureFn)name##_cb); \
+		return msPromiseFirstTyped(arr, (void*)share.fn, (void*)drop.fn, drop.env, 1, (void*)&name##_vt); \
 	}
 
 #endif /* MS_COMBINATOR_H */

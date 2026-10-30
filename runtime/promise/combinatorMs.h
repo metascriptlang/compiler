@@ -64,6 +64,37 @@ static inline int32_t msPromiseFetchSubAcqRel(void* p, int32_t n) {
 	return atomic_fetch_sub_explicit((_Atomic(int32_t)*)p, n, memory_order_acq_rel);
 }
 
+static inline int32_t msPromiseFetchAddAcqRel(void* p, int32_t n) {
+	return atomic_fetch_add_explicit((_Atomic(int32_t)*)p, n, memory_order_acq_rel);
+}
+
+static void msPromiseFirstGenericDeliver(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) {
+	(void)shareFn; (void)dropFn; (void)dropEnv;
+	msFutureComplete(result, ((msFuture*)input)->value);
+}
+
+static const msPromiseFirstVt msPromiseFirstGenericVt = { .futSize = sizeof(msFuture), .deliver = msPromiseFirstGenericDeliver };
+
+static inline const void* msPromiseFirstGeneric(void) { return &msPromiseFirstGenericVt; }
+
+static inline void* msPromiseFirstCreate(const void* vt) {
+	return msAllocTyped(((const msPromiseFirstVt*)vt)->futSize, &msFutureTypeInfo);
+}
+
+static inline void msPromiseFirstDeliver(const void* vt, void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) {
+	((const msPromiseFirstVt*)vt)->deliver(result, input, shareFn, dropFn, dropEnv);
+}
+
+static inline void* msPromiseAllRejectedError(void) {
+	return msMakeError(msStringFromCStr("All promises were rejected"));
+}
+
+void msPromiseFirstCb(void* env);
+
+static inline void msPromiseFirstWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseFirstCb, .env = env });
+}
+
 void msPromiseAllCb(void* env);
 void msPromiseAllTypedCb(void* env);
 
