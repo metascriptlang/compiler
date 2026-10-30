@@ -2468,8 +2468,20 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			if (p.propAlias.kind == NodeKind.Identifier) {
 				const id = p.propAlias.data as IdentifierData;
 				const derivedField = destrNamedFieldType(iterType, p.propKey);
-				if (derivedField == null && destructuredFieldIsMissing(ctx, iterType, sourceStruct, p.propKey)) {
-					addError(ctx, `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`, prop.location.line, prop.location.column);
+				if (derivedField == null) {
+					const settled = iterType != null && !isUnresolvedType(iterType) && iterType.kind != TypeKind.Unknown && !hasGenericParams(iterType);
+					if (sourceStruct != null) {
+						if (destructuredFieldIsMissing(ctx, iterType, sourceStruct, p.propKey)) {
+							addError(ctx, `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`, prop.location.line, prop.location.column);
+						} else if (settled && sourceStruct.typeNames.indexOf(p.propKey) < 0) {
+							addError(ctx, `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': it is an accessor, extension or dynamic member, and destructuring reads stored fields only`, prop.location.line, prop.location.column);
+						}
+					} else if (settled) {
+						const missing = isUnresolvedType(getProperty(iterType, p.propKey));
+						addError(ctx, missing
+							? `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`
+							: `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': read it as a member, destructuring lowers stored fields of one struct only`, prop.location.line, prop.location.column);
+					}
 				}
 				const derived = isReadonlyView(iterType) ? propagateReadonlyView(derivedField) : derivedField;
 				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
