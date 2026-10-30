@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, cal
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot } from "./fit";
+import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -4090,7 +4090,7 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 		const sigType = s.symbolType;
 		if (sigType == null || sigType.kind != TypeKind.Function) continue;
 		if (sigType.typeChildren.length != implParams.length) {
-			addError(ctx, `Overload signature for '${sym.name}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
@@ -4102,24 +4102,32 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 			}
 		}
 		if (paramMismatch >= 0) {
-			addError(ctx, `Overload signature for '${sym.name}' param ${paramMismatch + 1} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
+			addError(ctx, `Overload signature for '${writtenName(sym)}' param ${paramMismatch + 1} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 		const sRet = sigType.typeReturn;
-		if (sRet != null && implRet != null && !isAssignable(sRet, implRet)) {
-			addError(ctx, `Overload signature for '${sym.name}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
+		if (sRet != null && implRet != null && sRet.kind != TypeKind.Void && !returnHeldBy(sRet, implRet) && !returnHeldBy(implRet, sRet)) {
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 		const viewParam = sRet != null && implRet != null && dropsReadonlyView(implRet, sRet) ? firstViewParam(sigType.typeChildren) : -1;
 		if (viewParam >= 0) {
-			addError(ctx, `Overload signature for '${sym.name}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
+			addError(ctx, `Overload signature for '${writtenName(sym)}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 	}
 	return true;
+}
+
+function returnHeldBy(from: Type, to: Type): boolean {
+	return isAssignable(from, to) || convertsUnionImplicitly(from, to);
+}
+
+function writtenName(sym: Symbol): string {
+	return sym.declNode != null && sym.declNode.kind == NodeKind.MethodDecl ? (sym.declNode.data as MethodDeclData).methodName : sym.name;
 }
 
 function firstViewParam(params: Type[]): int32 {
@@ -4775,8 +4783,9 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 function narrowToSignatureReturn(callNode: Node, impl: Symbol | null, picked: Symbol, ret: Type): Type {
 	if (impl == null || !hasFlag(picked, SymbolFlag.OverloadSig) || impl.symbolType == null) return ret;
 	const implRet = impl.symbolType.typeReturn;
-	if (implRet == null || hasGenericParams(ret) || hasGenericParams(implRet) || !isSlotUnion(implRet) || sameType(implRet, ret)) return ret;
-	if (tagUnionMemberSlot(implRet, ret) < 0) return ret;
+	if (implRet == null || hasGenericParams(ret) || hasGenericParams(implRet) || sameType(implRet, ret) || ret.kind == TypeKind.Void) return ret;
+	if (isSlotUnion(ret) && returnHeldBy(implRet, ret)) return widenToSignatureReturn(callNode, implRet, ret);
+	if (!isSlotUnion(implRet) || tagUnionMemberSlot(implRet, ret) < 0) return ret;
 	const inner = createNodeAt(NodeKind.CallExpr, callNode.data, callNode.location);
 	inner.nodeType = implRet;
 	inner.flags = callNode.flags;
@@ -4787,6 +4796,22 @@ function narrowToSignatureReturn(callNode: Node, impl: Symbol | null, picked: Sy
 	callNode.data = projected.data;
 	callNode.flags = projected.flags;
 	callNode.variantSlot = projected.variantSlot;
+	callNode.nodeType = ret;
+	return ret;
+}
+
+function widenToSignatureReturn(callNode: Node, implRet: Type, ret: Type): Type {
+	const inner = createNodeAt(NodeKind.CallExpr, callNode.data, callNode.location);
+	inner.nodeType = implRet;
+	inner.flags = callNode.flags;
+	inner.variantSlot = callNode.variantSlot;
+	inner.resolvedSym = callNode.resolvedSym;
+	const widened = isSlotUnion(implRet) ? convertUnionToUnion(inner, implRet, ret) : widenVariantToUnion(inner, ret, implRet);
+	if (widened == null as unknown as Node) return ret;
+	callNode.kind = widened.kind;
+	callNode.data = widened.data;
+	callNode.flags = widened.flags;
+	callNode.variantSlot = widened.variantSlot;
 	callNode.nodeType = ret;
 	return ret;
 }

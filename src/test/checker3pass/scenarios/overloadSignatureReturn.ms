@@ -15,7 +15,8 @@ const b = new K().m("x");
 `).errors;
 	const text = errors.join("\n");
 	assert text.contains("Overload signature for 'f' has return type 'boolean' incompatible with implementation return type 'number | string'"), "function: " + text;
-	assert text.contains("has return type 'boolean' incompatible with implementation return type 'number | string'") && errors.length == 2, "method: " + text;
+	assert text.contains("Overload signature for 'm' has return type 'boolean' incompatible with implementation return type 'number | string'") && errors.length == 2, "method: " + text;
+	assert !text.contains("K_m"), "mangled name: " + text;
 }
 
 test "a call takes the chosen signature's return type, for functions and methods" {
@@ -35,4 +36,28 @@ const rt: string = new Reader().read(4);
 const bad: string = parse("a");
 `).errors;
 	assert errors.length == 1, errors.join("\n");
+}
+
+test "a signature return wider than the implementation's, or void, is compatible; unassignable both ways is refused" {
+	const errors = checkOnly(`
+function w(s: string): number | string;
+function w(s: number): number | string;
+function w(s: string | number): number { return 1; }
+function v(s: string): void;
+function v(s: number): void;
+function v(s: string | number): number { return 1; }
+class K {
+	m(s: string): number | string | boolean;
+	m(s: number): number | string | boolean;
+	m(s: string | number): number | string { return 1; }
+}
+const a: number | string = w("x");
+v("x");
+const b: number | string | boolean = new K().m(1);
+function bad(s: string): boolean;
+function bad(s: number): boolean;
+function bad(s: string | number): number { return 1; }
+const c = bad("x");
+`).errors;
+	assert errors.length == 1 && errors[0].contains("Overload signature for 'bad' has return type 'boolean' incompatible with implementation return type 'number'"), errors.join("\n");
 }
