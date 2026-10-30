@@ -36,6 +36,7 @@ import "./enumConstantEvaluation";
 import "./errorPropagation";
 import "./exportSymbols";
 import "./fsRemoveAll";
+import "./fsCopyFile";
 import "./functionCarriers";
 import "./generatorControl";
 import "./genericCallbacks";

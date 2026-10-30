@@ -13,8 +13,44 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <errno.h>
+#if defined(__APPLE__)
+#include <sys/clonefile.h>
+#elif defined(__linux__)
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#if __has_include(<linux/fs.h>)
+#include <linux/fs.h>
+#endif
+#endif
 
 static _Thread_local int _msFsLastErrno = 0;
+
+int32_t msFsCloneFile(const char* src, const char* dst) {
+#if defined(__APPLE__)
+	if (clonefile(src, dst, 0) == 0) return 0;
+	if (errno != EEXIST) return errno;
+	if (unlink(dst) != 0) return errno;
+	return clonefile(src, dst, 0) == 0 ? 0 : errno;
+#elif defined(__linux__) && defined(FICLONE)
+	int in = open(src, O_RDONLY | O_CLOEXEC);
+	if (in < 0) return errno;
+	int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+	if (out < 0) {
+		int err = errno;
+		close(in);
+		return err;
+	}
+	int err = ioctl(out, FICLONE, in) == 0 ? 0 : errno;
+	close(in);
+	close(out);
+	if (err != 0) unlink(dst);
+	return err;
+#else
+	(void)src;
+	(void)dst;
+	return ENOTSUP;
+#endif
+}
 
 int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;

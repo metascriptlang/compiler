@@ -22,6 +22,7 @@ const FAILED_WITHOUT_ERRNO: int32 = -1;
 extern let errno: int32;
 extern const EEXIST: int32;
 extern const ENOENT: int32;
+extern const ENOTSUP: int32;
 extern struct FILE;
 extern function cFwrite(data: Readonly<Ptr<uint8>>, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fwrite";
 extern function cFclose(file: Ptr<FILE>): int32 from "fclose";
@@ -210,6 +211,10 @@ when (windows) {
 		freeWide(targetWide);
 		freeWide(pathWide);
 		return made ? 0 : msFsErrnoFromWin32(failure);
+	}
+
+	function cloneErrno(src: string, dst: string): int32 {
+		return ENOTSUP;
 	}
 
 	// No exec bit: any regular file counts, and the caller matches PATHEXT.
@@ -407,6 +412,10 @@ when (windows) {
 	}
 	function symlinkErrno(target: string, path: string): int32 {
 		return cSymlink(target as cstring, path as cstring) == 0 ? 0 : errno;
+	}
+	extern function msFsCloneFile(src: cstring, dst: cstring): int32;
+	function cloneErrno(src: string, dst: string): int32 {
+		return msFsCloneFile(src as cstring, dst as cstring);
 	}
 	// Any later libc call (free included) may overwrite errno: read it straight after the
 	// syscall, before anything else runs.
@@ -661,6 +670,7 @@ export function writeLines(path: string, lines: string[]): Result<void, IoError>
 }
 
 export function copyFile(src: string, dst: string): Result<void, IoError> {
+	if (cloneErrno(src, dst) == 0) return Result.ok(null);
 	const raw = try readRaw(src);
 	return writeFile(dst, raw);
 }

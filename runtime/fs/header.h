@@ -38,6 +38,10 @@ msString msFsReadFile(msString path);
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
 
+#ifndef _WIN32
+int32_t msFsCloneFile(const char* src, const char* dst);
+#endif
+
 #ifdef _WIN32
 /* Win32 error code as the errno POSIX reports for the same failure. */
 int32_t msFsErrnoFromWin32(uint32_t code);
