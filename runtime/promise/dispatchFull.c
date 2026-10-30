@@ -815,6 +815,7 @@ bool msCompletionQueueDrain(void) {
 /* A push into the thread's own channel sends no wake (msChannelWake), so a worker
  * reads its channel before it parks. */
 bool msWorkerLoopPending(void) {
+    if (gDispatcher != NULL && msDequeLen(&gDispatcher->callbacks) > 0) return true;
     return tlWorkerChannel != NULL
         && atomic_load_explicit(&tlWorkerChannel->queue.tail->next, memory_order_acquire) != NULL;
 }
