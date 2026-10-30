@@ -695,8 +695,13 @@ function checkedByPrelude(db: TransAmDb, modulePath: string, collected: Exported
 	if (prelude == null || !prelude.preludeModuleScopes.has(modulePath)) return collected;
 	const out: ExportedSymInfo[] = [];
 	for (const info of collected) {
+		if (!prelude.preludeModuleScopes.has(info.sym.modulePath)) {
+			out.push(info);
+			continue;
+		}
 		const held = preludeScopeSymbol(prelude, info.sym.modulePath, info.sym.name);
-		out.push(held != null ? buildExportInfo(held, prelude.extensionRegistry, modulePath, prelude, info.name) : info);
+		if (held == null) throw new Error(`internal: the shared prelude holds ${info.sym.modulePath} but no symbol '${info.sym.name}' of it, exported by ${modulePath}`);
+		out.push(buildExportInfo(held, prelude.extensionRegistry, modulePath, prelude, info.name));
 	}
 	return out;
 }
