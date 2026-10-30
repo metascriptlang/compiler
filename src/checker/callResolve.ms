@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, ExtensionRegistry, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, resolveUserOperator, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
 import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
@@ -1299,10 +1299,36 @@ function hashesAsItsBase(t: Type): boolean {
 	return isIntegerType(t) || t.kind == TypeKind.Char || t.kind == TypeKind.Boolean || t.kind == TypeKind.Enum;
 }
 
+function hashDeclaredOnMutableKey(registry: ExtensionRegistry, key: Type): boolean {
+	let mutable = false;
+	for (const ext of findAllExtensionsByName(registry, "hash")) {
+		if (ext.sym == null || ext.isStatic || !extDeclaresReceiver(ext, key)) continue;
+		if (isReadonlyView(getExtFnType(ext).typeChildren[0])) return false;
+		mutable = true;
+	}
+	return mutable;
+}
+
+function refuseKeyOpThroughView(ctx: CheckerContext, owner: Type, key: Type, at: Node): boolean {
+	const view = createReadonlyView(key);
+	if (ctx.extensionRegistry == null || !isReadonlyView(view)) return false;
+	const name = typeDisplayName(key);
+	if (hashDeclaredOnMutableKey(ctx.extensionRegistry, key)) {
+		addError(ctx, `'${name}' cannot be a ${owner.typeName} key: the ${owner.typeName} hashes a key through ${typeDisplayName(view)}, a read-only view, and 'hash' is declared on the mutable '${name}' — declare 'function hash(this k: Readonly<${name}>): int64' (PARALOCK E24)`, at.location.line, at.location.column);
+		return true;
+	}
+	if (resolveUserOperator(ctx, "==", [key, key]) != null && resolveUserOperator(ctx, "==", [view, view]) == null) {
+		addError(ctx, `'${name}' cannot be a ${owner.typeName} key: the ${owner.typeName} compares keys through ${typeDisplayName(view)}, a read-only view, and '==' is declared on the mutable '${name}' — declare 'function \`==\`(a: Readonly<${name}>, b: Readonly<${name}>): boolean' (PARALOCK E24)`, at.location.line, at.location.column);
+		return true;
+	}
+	return false;
+}
+
 export function refuseUnhashableKey(ctx: CheckerContext, collection: Type, at: Node): boolean {
 	const owner = collection.kind == TypeKind.Ref && collection.typeReturn != null ? collection.typeReturn : collection;
 	if (owner.kind != TypeKind.GenericInstance || owner.typeChildren.length == 0 || !isStdCollection(owner)) return false;
 	const key = owner.typeChildren[0];
+	if (refuseKeyOpThroughView(ctx, owner, key, at)) return true;
 	const named = peelThrough(key, PEEL_ALIAS);
 	if (named == null || distinctBody(named) == null || isBrandDistinct(named) || proxyPartsOf(ctx, named) != null) return false;
 	let base: Type | null = named;
