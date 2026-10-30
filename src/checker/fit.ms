@@ -802,7 +802,10 @@ export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean = false): Node | null {
 	const t = expr.nodeType;
 	if (t == null || refuseNamespaceText(ctx, expr)) return null;
-	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
+	if (distinctBody(t) != null) {
+		const inspected = debug ? declaredInspect(ctx, expr) : null;
+		return inspected != null ? inspected : distinctText(ctx, expr, t);
+	}
 	if (bitSetElemType(skipModifier(t) ?? t) != null) return declaredToString(ctx, expr);
 	const peeled = peelToStructOrUnion(t);
 	const dumped = dumpedShape(t, valueShape(t));
