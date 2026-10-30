@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind, CallExprData, declaredCallType } from "std/meta";
+import { Node, NodeKind, declaredCallType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -31,9 +31,9 @@ function isOptionalField(name: string, optionalFields: string[]): boolean {
 // re-emits `jsonValueOf` on `_jsonHooked(x.toJSON())`, a prelude identity the next
 // expansion strips, as the other helpers it emits are prelude functions.
 export macro jsonValueOf(arg: Node): Node {
-	const wrapped = arg.kind == NodeKind.CallExpr && (arg as CallExprData).callee.kind == NodeKind.Identifier
-		&& (arg as CallExprData).callee.name == "_jsonHooked";
-	const t: Node = wrapped ? (arg as CallExprData).arguments[0] : arg;
+	const wrapped = arg.kind == NodeKind.CallExpr && arg.callee.kind == NodeKind.Identifier
+		&& arg.callee.name == "_jsonHooked";
+	const t: Node = wrapped ? arg.arguments[0] : arg;
 	const hooked = wrapped ? null : declaredCallType(t, "toJSON");
 	if (hooked != null) {
 		return {
