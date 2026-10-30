@@ -26,7 +26,7 @@ import {
 import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileHash, getFileId, getFilePath, hasFile,
+	setFileText, recordInputChange, getFileText, getFileHash, getFileId, getFilePath, hasFile,
 	getFileCount, getFilePathByIndex,
 	getFileDurability, setFileDurability
 } from "./fileInput";
@@ -248,8 +248,9 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 	const fileId = getFileId(db.fileInput, filePath);
 	// G2: Mark stdlib files as High durability (skip verification in tryMarkGreen)
 	if (isStdPathFor(db, filePath)) {
-		setFileDurability(db.fileInput, fileId, TaDurability.High);
+		setFileDurability(db.fileInput, fileId, TaDurability.High, db.revision.value);
 	}
+	recordInputChange(db.fileInput, fileId, db.revision.value);
 	invalidateFile(db.cache, db.moduleDeps, fileId);
 	// Invalidate ExportRegistry for this file + transitive dependents
 	dbInvalidateExports(db, fileId);

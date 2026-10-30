@@ -59,7 +59,7 @@ Three states per cached query (`TaQueryState`, `revision.ms`):
 1. Verified at the current revision already: answer from its state.
 2. YELLOW: a cycle, answer false. Otherwise mark YELLOW and walk the recorded dependencies.
 3. A `FileText` dependency compares the file's current content hash with the hash recorded when the entry was computed.
-4. A dependency of HIGH durability is not walked; it invalidates only when it was recomputed after this entry and its output hash differs.
+4. A dependency of HIGH durability is not walked while no HIGH input has changed since this entry was last verified (`getLastChange`, `fileInput.ms`); then it invalidates only when it was recomputed after this entry and its output hash differs. A write at durability D moves the change marker of every durability up to D, and changing a file's durability counts as a write at its old durability. When a HIGH input changed after the entry's last verification, the dependency is walked like any other.
 5. Any other dependency is verified recursively, stamped as verified so shared subtrees are walked once, then the early cutoff applies: recomputed later than this entry and a different output hash means RED; recomputed with the same output hash stays GREEN.
 6. Every dependency held: stamp `verifiedAt`, mark GREEN.
 

@@ -25,6 +25,7 @@ export class TaFileInputStore {
 	files: TaFileEntry[];
 	nextFileId: int32;
 	pathIndex: HashMap<string, int32>;  // filePath → array index (O(1) lookup)
+	lastChange: int32[];                // per TaDurability: revision of the last input change at or above it
 }
 
 export function createFileInputStore(): TaFileInputStore {
@@ -32,6 +33,7 @@ export function createFileInputStore(): TaFileInputStore {
 		files: [],
 		nextFileId: 0,
 		pathIndex: new HashMap<string, int32>(),
+		lastChange: [0, 0, 0],
 	};
 }
 
@@ -122,9 +124,26 @@ export function getFileDurability(store: TaFileInputStore, fileId: int32): TaDur
 	return store.files[idx].durability;
 }
 
-export function setFileDurability(store: TaFileInputStore, fileId: int32, dur: TaDurability): void {
+// A write at durability D moves the marker of every durability up to D, so a High
+// write also leaves Low and Medium entries unverified.
+export function recordInputChange(store: TaFileInputStore, fileId: int32, revision: int32): void {
 	const idx = findByFileId(store, fileId);
-	if (idx >= 0) store.files[idx].durability = dur;
+	if (idx < 0) return;
+	const level = store.files[idx].durability as int32;
+	for (let d = 0; d <= level; d++) store.lastChange[d] = revision;
+}
+
+export function getLastChange(store: TaFileInputStore, dur: TaDurability): int32 {
+	return store.lastChange[dur as int32];
+}
+
+// Changing a file's durability is a write at its old durability: an entry computed
+// while the file was High cannot keep skipping it once the file may change as Low.
+export function setFileDurability(store: TaFileInputStore, fileId: int32, dur: TaDurability, revision: int32): void {
+	const idx = findByFileId(store, fileId);
+	if (idx < 0 || store.files[idx].durability == dur) return;
+	recordInputChange(store, fileId, revision);
+	store.files[idx].durability = dur;
 }
 
 // ===== Tests =====
@@ -200,6 +219,23 @@ test "getFileHash of an unknown id is null, not the hash of an empty file" {
 	assert getFileHash(store, 0) != null;
 	assert getFileHash(store, 1) == null;
 	assert getFileHash(store, -1) == null;
+}
+
+test "a write moves the change marker of its durability and every lower one" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "a");
+	recordInputChange(store, 0, 2);
+	assert getLastChange(store, TaDurability.Low) == 2;
+	assert getLastChange(store, TaDurability.High) == 0;
+	setFileDurability(store, 0, TaDurability.High, 3);
+	assert getLastChange(store, TaDurability.Low) == 3;
+	assert getLastChange(store, TaDurability.High) == 0;
+	recordInputChange(store, 0, 4);
+	assert getLastChange(store, TaDurability.Low) == 4;
+	assert getLastChange(store, TaDurability.Medium) == 4;
+	assert getLastChange(store, TaDurability.High) == 4;
+	setFileDurability(store, 0, TaDurability.Low, 5);
+	assert getLastChange(store, TaDurability.High) == 5;
 }
 
 test "getFileHash nonzero" {

@@ -24,7 +24,7 @@ import {
 	cacheGet, cachePut, cacheContains,
 	markQueriesRedForFile
 } from "./cache";
-import { TaFileInputStore, createFileInputStore, setFileText, getFileHash } from "./fileInput";
+import { TaFileInputStore, createFileInputStore, setFileText, getFileHash, getLastChange, recordInputChange, setFileDurability } from "./fileInput";
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
 
@@ -77,10 +77,8 @@ function markGreen(
 
 		const depEntry = cacheGet(cache, dep.depKey);
 
-		// HIGH durability: skip recursive verification (stdlib assumed stable).
-		// Salsa early cutoff: only invalidate if recomputed AND output actually changed.
 		if (depEntry != null) {
-			if (depEntry.durability == TaDurability.High) {
+			if (depEntry.durability == TaDurability.High && getLastChange(fileInput, TaDurability.High) <= entry.verifiedAt) {
 				if (depEntry.computedAt > entry.computedAt && depEntry.outputHash != dep.expectedHash) {
 					entry.state = TaQueryState.Red;
 					return false;
@@ -530,4 +528,67 @@ test "yellow entry returns false immediately" {
 	cachePut(cache, entry);
 
 	assert !tryMarkGreen(cache, fileInput, key, 1);
+}
+
+function durableConsumer(input: TaFileInputStore, cache: TaCacheStore, graph: TaModuleDepGraph, durability: TaDurability): TaQueryKey {
+	setFileText(input, "/durability/dep.ms", "export const value = 1;");
+	setFileDurability(input, 0, durability, 1);
+	const depKey = createQueryKey(TaQueryKind.Parse, 0);
+	const dep = createCacheEntry(depKey);
+	dep.computedAt = 1;
+	dep.verifiedAt = 1;
+	dep.outputHash = 42;
+	dep.state = TaQueryState.Green;
+	dep.durability = durability;
+	dep.dependencies = [{
+		depKey: createQueryKey(TaQueryKind.FileText, 0),
+		expectedHash: getFileHash(input, 0)!,
+	}];
+	cachePut(cache, dep);
+	const userKey = createQueryKey(TaQueryKind.TypeCheck, 1);
+	const user = createCacheEntry(userKey);
+	user.computedAt = 1;
+	user.verifiedAt = 1;
+	user.state = TaQueryState.Green;
+	user.dependencies = [{ depKey, expectedHash: 42 }];
+	cachePut(cache, user);
+	recordModuleImport(graph, 1, 0);
+	return userKey;
+}
+
+test "a changed high-durability input invalidates its unchecked consumers" {
+	for (const durability of [TaDurability.Low, TaDurability.High]) {
+		const cache = createCacheStore(10);
+		const input = createFileInputStore();
+		const graph = createModuleDepGraph();
+		const userKey = durableConsumer(input, cache, graph, durability);
+		setFileText(input, "/durability/dep.ms", "export const value = 2;");
+		recordInputChange(input, 0, 2);
+		invalidateFile(cache, graph, 0);
+		assert !tryMarkGreen(cache, input, userKey, 2);
+	}
+}
+
+test "a high-durability input changed after a durability downgrade still invalidates" {
+	const cache = createCacheStore(10);
+	const input = createFileInputStore();
+	const graph = createModuleDepGraph();
+	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	setFileDurability(input, 0, TaDurability.Low, 2);
+	setFileText(input, "/durability/dep.ms", "export const value = 3;");
+	recordInputChange(input, 0, 3);
+	invalidateFile(cache, graph, 0);
+	assert !tryMarkGreen(cache, input, userKey, 3);
+}
+
+test "an unchanged high-durability input still skips its walk" {
+	const cache = createCacheStore(10);
+	const input = createFileInputStore();
+	const graph = createModuleDepGraph();
+	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	setFileText(input, "/durability/other.ms", "export const other = 1;");
+	recordInputChange(input, 1, 2);
+	cacheGet(cache, userKey).state = TaQueryState.Red;
+	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies[0].expectedHash = 0;
+	assert tryMarkGreen(cache, input, userKey, 2);
 }

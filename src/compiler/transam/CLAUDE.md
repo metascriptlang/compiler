@@ -10,7 +10,7 @@ Demand-driven cache of compilation results with red-green invalidation and outpu
 - **A query records its dependencies through the frame, never by hand at the call site** — `pushFrame`, compute, then `executeQueryWith` takes the frame's dependencies and minimum durability.
 - **Every derived query supplies an output hash** — early cutoff compares it: a dependency recomputed with the same hash leaves its dependents GREEN.
 - **YELLOW means a cycle and answers false** — verification never recurses into an entry that is being verified.
-- **HIGH durability is for the std root only** — such a dependency is not walked; it invalidates only when recomputed with a different output hash.
+- **HIGH durability is for the std root only** — such a dependency is not walked while no HIGH input changed since the entry was verified (`getLastChange`); it invalidates only when recomputed with a different output hash, and a HIGH change walks it.
 - **Cancellation is version-based** — a query captures the version at start and compares with `checkCancel`; no boolean flag.
 
 ## File map
