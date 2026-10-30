@@ -1047,6 +1047,9 @@ triage_side() {
     ) >"$log" 2>&1; rc=$?
     (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
     if [ "$rc" -ne 0 ] && [ ! -s "$log.reds" ]; then printf 'triage: run %s in %s: exit %s with no named failure\n' "$i" "$tree" "$rc"; return 1; fi
+    for f in ${csv//,/ }; do
+      grep -F -- "$f" "$log" >/dev/null || { printf 'triage: run %s in %s never ran %s\n' "$i" "$tree" "$f"; return 1; }
+    done
     cat "$log.reds" >>"$out"
   done
 }
