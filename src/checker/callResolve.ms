@@ -5646,6 +5646,10 @@ function boundExtensions(member: Node, byName: ExtensionMethod[]): ExtensionMeth
 	return bound;
 }
 
+export function carriesLength(t: Type): boolean {
+	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || isStringLike(t) || t.kind == TypeKind.CString;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
@@ -6052,7 +6056,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 
 	if (d.property == "byteLength" && node != ctx.calleeExpr && isUint8Array(resolvedObjType)) d.property = "length";
 	// Builtin properties: .length on array/string
-	if (d.property == "length" &&(resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || isStringLike(resolvedObjType) || resolvedObjType.kind == TypeKind.CString)) {
+	if (d.property == "length" && carriesLength(resolvedObjType)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;

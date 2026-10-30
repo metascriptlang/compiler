@@ -40,7 +40,7 @@ import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
@@ -2476,8 +2476,10 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': it is an accessor, extension or dynamic member, and destructuring reads stored fields only`, prop.location.line, prop.location.column);
 						}
 					} else if (settled) {
-						const missing = isUnresolvedType(getProperty(iterType, p.propKey));
-						addError(ctx, missing
+						const unresolved = isUnresolvedType(getProperty(iterType, p.propKey));
+						let builtinLength = false;
+						if (p.propKey == "length" && iterType != null) builtinLength = carriesLength(unwrapRef(iterType));
+						addError(ctx, unresolved && !builtinLength
 							? `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`
 							: `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': read it as a member, destructuring lowers stored fields of one struct only`, prop.location.line, prop.location.column);
 					}
