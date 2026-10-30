@@ -821,6 +821,7 @@ typedef struct msActorJob {
     _Atomic(int32_t) refs;        /* live list + each trampoline + each queued post */
     _Atomic(bool) cancelled;
     _Atomic(bool) pending;        /* an interval keeps at most one tick queued */
+    _Atomic(bool) envBusy;        /* a spawn task still reads cb.env: a drop leaves it allocated */
     bool periodic;
     bool dropAfterRun;
     bool envDone;                 /* processing only */
@@ -874,7 +875,7 @@ static inline void msActorJobDropEnv(msActorJobs* j, msActorJob* r) {
     if (r->livePrev != NULL) r->livePrev->liveNext = r->liveNext;
     else j->live = r->liveNext;
     if (r->liveNext != NULL) r->liveNext->livePrev = r->livePrev;
-    if (r->drop != NULL && r->cb.env != NULL) r->drop(r->cb.env);
+    if (r->drop != NULL && r->cb.env != NULL && !atomic_load_explicit(&r->envBusy, memory_order_acquire)) r->drop(r->cb.env);
     msActorJobUnref(r);
 }
 

@@ -143,7 +143,7 @@ msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
     return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };
 }
 
-static void msActorTimerEnvDrop(void* env) {
+static void msActorEnvDrop(void* env) {
     const msTypeInfo* t = msHeader(env)->type;
     if (msDecRefIsLast(env)) {
         MS_DESTROY_DISPATCH(t, env);
@@ -152,11 +152,21 @@ static void msActorTimerEnvDrop(void* env) {
 }
 
 void* msActorStampTimer(msClosure cb, int64_t id, bool periodic) {
-    msActorJob* r = msActorJobNew(cb, msActorTimerEnvDrop, NULL);
+    msActorJob* r = msActorJobNew(cb, msActorEnvDrop, NULL);
     r->timerId = id;
     r->periodic = periodic;
     r->dropAfterRun = true;
     return r;
+}
+
+void* msActorStampEnvRelease(void* env) {
+    msActorJob* r = msActorJobNew((msClosure){ .fn = (msClosureFn)msActorEnvDrop, .env = env }, msActorEnvDrop, NULL);
+    atomic_store_explicit(&r->envBusy, true, memory_order_relaxed);
+    return r;
+}
+
+void msActorJobEnvIdle(void* r) {
+    atomic_store_explicit(&((msActorJob*)r)->envBusy, false, memory_order_release);
 }
 
 void msActorJobFire(void* r) {

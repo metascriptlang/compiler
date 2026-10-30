@@ -61,6 +61,7 @@ typedef struct msSpawnCtx {
 	                               may differ due to alignment padding (e.g., double needs 8-byte
 	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
 	void* ownerQueue;           /* the submitting loop's completion queue: the env release runs there */
+	void* envJob;               /* submitted in an actor visit: the actor job that releases env (M1, A4) */
 	bool claimed;               /* queue slot only, under the pool lock: a waiter took it to run */
 	const struct msTaskFrame* parent;  /* queue slot only: the running task that joins this one, or NULL */
 } msSpawnCtx;
@@ -138,6 +139,12 @@ static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 	 * inline msDecref. The dispatcher drain processes it single-threaded,
 	 * avoiding cross-thread rc races on the env's non-atomic rc field. */
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
+#if MS_ACTOR_JOBS
+		if (__builtin_expect(ctx->envJob != NULL, 0)) {
+			msActorJobFire(ctx->envJob);
+			return;
+		}
+#endif
 #if MS_FUTURE_SUBMIT_REF
 		msCompletionQueuePushEnvRelease(ctx->env, ctx->ownerQueue);
 #elif defined(_WIN32)
@@ -168,11 +175,22 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
 #endif
 	}
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(ctx->envJob != NULL, 0)) msActorJobEnvIdle(ctx->envJob);
+#endif
 	msSpawnWorkerSettle(ctx, result);
 }
 
 /* Forward declaration — pool submit defined in pool.c */
 void msPoolSubmit(msSpawnCtx* ctx);
+
+static inline void msSpawnHoldEnv(msSpawnCtx* ctx) {
+	if (ctx->env == NULL) return;
+	msIncRef(ctx->env);
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) ctx->envJob = msActorStampEnvRelease(ctx->env);
+#endif
+}
 
 /* Spawn a closure on a worker pool thread. Returns void* (msFuture_ptr internally).
  * Reference parity: spawn result compatible with any Future[T] pointer.
@@ -181,9 +199,7 @@ static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) 
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
 	fut->base.spawned = true;
 	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue() };
-	if (fn.env != NULL) {
-		msIncRef(fn.env);
-	}
+	msSpawnHoldEnv(&ctx);
 #if MS_FUTURE_SUBMIT_REF
 	/* Amendment G: queue's completion ref, taken on the owner thread before the
 	 * worker can publish `finished` — paired with the dispatcher drain's
@@ -219,7 +235,7 @@ static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t cop
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	((msFutureBase*)fut)->spawned = true;
-	if (fn.env != NULL) msIncRef(fn.env);
+	msSpawnHoldEnv(&ctx);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
 	msFuturePublishCrossThread(fut);  /* Amendment H */
@@ -265,9 +281,7 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.cancelFlag = &group->cancelled,
 		.ownerQueue = msLoopCompletionQueue(),
 	};
-	if (fn.env != NULL) {
-		msIncRef(fn.env);
-	}
+	msSpawnHoldEnv(&ctx);
 	msPoolSubmit(&ctx);
 }
 

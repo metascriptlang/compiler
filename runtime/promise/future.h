@@ -84,6 +84,8 @@ MS_TLS_EXTERN(msActor*, msCurrentActor);
 #define MS_ACTOR_JOB_PATH __attribute__((cold, noinline))
 MS_ACTOR_JOB_PATH msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
 MS_ACTOR_JOB_PATH void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
+MS_ACTOR_JOB_PATH void* msActorStampEnvRelease(void* env);
+MS_ACTOR_JOB_PATH void msActorJobEnvIdle(void* job);
 MS_ACTOR_JOB_PATH void msActorJobFire(void* job);
 MS_ACTOR_JOB_PATH void msActorJobTick(void* job);
 MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
