@@ -32,7 +32,8 @@ KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana
 # of gate logs to 2026-10-30 (median wall, runs with a new red): cheap lsp 0.5m, tools 1.1m, solana 1.5m, fmt 2.6m;
 # important build 5.9m, suite 3.5m, tests 5.4m (15%); often red guard 5.0m (11%), hcr 5.7m (11%), and corpus 17m
 # (23%), which with san runs the programs the slice adds or edits and those the owner names. Left to the full gate
-# (--full, --release): the corpus select 10.5m and cache 10.1m, never red; boundary 8.4m, red 5%; tsan.
+# (--full, --release): cache 10.1m, never red; boundary 8.4m, red 5%; tsan. No gate emits every corpus program to skip
+# those with a recorded pass any more: over 105 gates that select took 22.5 h and saved at most 11 h of corpus and san.
 LAND_LANES="tools build suite tests lsp fmt solana guard hcr corpus san"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
@@ -51,10 +52,10 @@ after another, and compare every red against src/test/known-red.json.
   --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana
   --programs a,b corpus programs the owner picks for corpus and san, beside the ones the change adds or edits; the owner
                  knows what its change reaches, so this replaces the select's emit of every program
-  --full        the lanes the diff selects, all of them, with the select's narrowing: the full gate a release or a
-                 suspect change asks for
+  --full        the lanes the diff selects, all of them, corpus and san on every program: the full gate a release
+                 or a suspect change asks for
   --with a,b     add these lanes to the core the land gate runs (the owner pays for what its change can reach);
-                 corpus or san named here run every program without a recorded pass, not only the touched ones
+                 corpus or san named here run every program, not only the touched ones
                  (tsan brings san, whose run writes the program list tsan reads)
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
@@ -2106,6 +2107,7 @@ done
 case " $lanes " in *" corpus "*|*" san "*)
   if [ -n "$lanes_arg" ]; then select_why="--lanes runs a lane whole"
   elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then select_why="the full ladder"
+  elif [ "$land" -eq 0 ]; then select_why="the full gate runs them whole"
   else
     select=1
   fi ;;
@@ -2134,7 +2136,7 @@ explain() {
   elif [ "$select" -eq 1 ]; then
     say "gate: $select_label narrowed to the programs with no recorded pass for their emits"
   elif [ -n "$select_why" ]; then
-    say "gate: no narrowing for $select_label ($select_why); its passes are recorded for the next narrowed gate"
+    say "gate: no narrowing for $select_label ($select_why)"
   fi
   case " $lanes " in *" build "*)
     if [ "$rcscan_on" -eq 1 ]; then say "gate: build runs the emit rc scan <- $rcscan_why"; else say "gate: build without the emit rc scan (no change under src/, std/ or runtime/)"; fi ;;
@@ -2554,9 +2556,6 @@ for phase in "${PHASES[@]}"; do
   case " $todo " in *" suite "*|*" tests "*|*" corpus "*|*" san "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
       (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
-    elif [ "$select" -eq 0 ] && [ "$keys_started" -eq 0 ] && [ -n "$select_label" ] && [ -x "$CAND" ]; then
-      keys_started=1
-      (with_slot whole_keys) & keys_pid=$!
     fi ;;
   esac
   pids="" launched=""
