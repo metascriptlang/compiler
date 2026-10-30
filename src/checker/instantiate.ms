@@ -894,8 +894,8 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 		node.kind = inner.kind;
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
-		if (inner.resolvedSym != null && inner.resolvedSym.symbolKind == SymbolKind.EnumMember) node.resolvedSym = inner.resolvedSym;
-		if (inner.flags.has(NodeFlag.ExplicitDeref)) node.flags = node.flags.incl(NodeFlag.ExplicitDeref);
+		node.resolvedSym = inner.resolvedSym;
+		node.flags = node.flags.union(inner.flags);
 	}
 	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
