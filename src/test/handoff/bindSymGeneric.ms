@@ -16,6 +16,7 @@ export macro first(x: Node): Node {
 
 const literalBinding = `const bound = bindSym("pick");`;
 const computedBinding = `const name = "pi" + "ck"; const bound = bindSym(name); if (bound == null) throw new Error("computed symbol is absent");`;
+const missingBinding = `const name = "no" + "pe"; const bound = bindSym(name); if (bound == null) throw new Error("computed symbol is absent");`;
 
 function project(binding: string, main: string): MapEntry[] {
 	return [
@@ -40,21 +41,16 @@ test "bindSymGeneric: a literal bindSym of a generic instantiates at the call si
 	assert js.indexOf("ERROR", 0) < 0, js;
 }
 
-test "bindSymGeneric: a computed lookup observes caller imports and handles a missing symbol" {
+test "bindSymGeneric: a computed lookup binds in the macro's module and handles a missing symbol" {
 	const main = `
 import { first } from "./lib";
 const value: int32 = 4;
 console.log(first(value));
 `;
-	const missed = checkProjectDiagnostics(project(computedBinding, main), "test/main.ms");
+	const missed = checkProjectDiagnostics(project(missingBinding, main), "test/main.ms");
 	assert missed.length == 1, missed.join("\n");
 	assert missed[0].contains("computed symbol is absent"), missed.join("\n");
-	const imported = `
-import { first, pick } from "./lib";
-const value: int32 = 4;
-console.log(first(value));
-`;
-	const found = checkProjectDiagnostics(project(computedBinding, imported), "test/main.ms");
+	const found = checkProjectDiagnostics(project(computedBinding, main), "test/main.ms");
 	assert found.length == 0, found.join("\n");
 }
 
