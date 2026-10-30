@@ -1271,6 +1271,12 @@ interface declaration or universal dynamic dispatch. Export/import the providing
 Keep protocol reads as unsurprising as the syntax they replace; bodies can still allocate,
 convert, mutate shared data or fail.
 
+The design of the protocol family lives in `paper/PROTOCOLS.md` (a local folder outside git, per
+`paper/local.md`, so not a link every reader can follow): the Serde-shaped ladder, per-type derive
+macros such as `jsonValueOf`, cross-module mixin visibility, the naming rule (`to<X>` for
+conversion-out, a JavaScript name kept only at the site JavaScript defines) and the roadmap of which
+protocols exist. `docs/LANG.md` "Convention-based dispatch protocols" is the user-facing reference.
+
 | Convention | Use site and author rule |
 |---|---|
 | `toString` | Formatting in supported concatenation/templates; use explicit formatting at boundaries, not an assumed wire encoder or every console/String site. |

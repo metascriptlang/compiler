@@ -3748,28 +3748,24 @@ console.log(person);          // Person { name: "Alice", age: 30 } (colored debu
 console.log(a, b, c);         // space-separated, each auto-converted
 ```
 
-Structs and classes are printed in a **colored** JSON-like debug format with ANSI color prefixes (blue for structs, green for classes, cyan for anonymous objects, magenta for JsonValue). Enums print their variant name. This colored format is exclusive to `console.log` — it never appears in `.toString()` or string concatenation.
+Structs and classes are printed in a **colored** JSON-like debug format with ANSI color prefixes (blue for structs, green for classes, cyan for anonymous objects, magenta for JsonValue). Enums print their variant name. This colored format is exclusive to `console.log` — it never appears in `.toString()`, `String()`, a template or string concatenation. It is printed for a struct or class value passed directly, with its fields written as `{ a: 1 }` inside; an array of such values passed to `console.log` prints the elements' text joined by commas, with no color (measured 2026-10-30 with the installed `msc` build 73e18a165a on C, `--danger`, JS and the Raiser, which print the same text: for `struct SP { a: int32 }`, `console.log(sp)` prints `SP { a: 3 }` in color and `console.log([sp])` prints `{"a":5}`).
 
-#### String Concatenation (`+`) — Limited Auto-Coercion
+#### String Concatenation (`+`) — Auto-Coercion
 
-The `+` operator auto-coerces only **numbers**, **booleans** and **enums** to strings:
-
-```ms
-const s1 = "value: " + 42;       // OK → "value: 42"
-const s2 = "flag: " + true;      // OK → "flag: true"
-const s3 = "color: " + color;    // OK → "color: Home" (the member name)
-const s4 = "person: " + person;  // ERROR — struct not auto-coerced
-```
-
-For structs and classes in string concatenation, call `.toString()` explicitly; an enum needs no call:
+The `+` operator and `+=` with a string coerce numbers, booleans, enums, structs and classes to text. A number, boolean or enum gives its text (an enum its member name); a struct or class gives its declared `toString` when it has one, else plain JSON:
 
 ```ms
-const s4 = "person: " + person.toString();
+const s1 = "value: " + 42;       // "value: 42"
+const s2 = "flag: " + true;      // "flag: true"
+const s3 = "color: " + color;    // "color: Home" (the member name)
+const s4 = "person: " + person;  // plain JSON, or the declared toString
 ```
+
+Measured 2026-10-30 with the installed `msc` (build 73e18a165a): a struct and a class, each with and without a declared `toString`, concatenated after `"plus "` and appended with `s += x` print `plus SC<1>`, `plus CC<2>`, `plus {"a":3}`, `plus {"a":4}` and `pe SC<1>CC<2>` on C, `--danger`, JS and the Raiser alike, with no error. `.toString()` called explicitly gives the same text.
 
 #### `String()` — Universal Type Coercion Function
 
-`String(x)` converts any value to its string representation. It is a prelude function (no import needed) that delegates to `x.toString()` internally:
+`String(x)` converts any value to its string representation. It is a prelude function (no import needed):
 
 ```ms
 const s1 = String(42);           // "42"
@@ -3778,7 +3774,7 @@ const s3 = String(Color.Red);    // "Red"
 const s4 = String(person);       // plain JSON (or custom toString if defined)
 ```
 
-`String()` and `.toString()` always produce the same result — they share the same underlying infrastructure. Use whichever reads better at the call site.
+For a struct and a class, with and without a declared `toString`, `String(x)`, `` `${x}` `` and `x.toString()` printed the same text on C, `--danger`, JS and the Raiser (`String SC SC<1>`, `String CP {"a":4}`). A struct holding a struct, a class and a plain struct prints `{"s":{"a":1},"c":{"a":2},"p":{"a":3}}` under `String(w)`, a template and `JSON.stringify` alike: a declared `toString` of a field is not read for the enclosing value. Not measured: `String(x)` for a union or a generic instance, and the split JS lane.
 
 Inside template strings, numbers and booleans auto-convert — no `String()` needed:
 
@@ -3831,14 +3827,14 @@ function toString(this p: Person): string {
     return p.name + " (age " + p.age.toString() + ")";
 }
 
-// Now all four contexts use your custom format:
+// Every context that prints the value itself uses your custom format:
 console.log(person);                    // "Alice (age 30)"
 String(person)                          // "Alice (age 30)"
-const s = "hello " + person.toString(); // "hello Alice (age 30)"
+const s = "hello " + person;            // "hello Alice (age 30)"
 person.toString()                       // "Alice (age 30)"
 ```
 
-The custom `toString` takes priority over the default debug format everywhere — including `console.log` and `String()`.
+A declared `toString` takes priority over the default format when the value is the operand itself: `console.log(x)`, `String(x)`, `` `${x}` ``, `"s" + x`, `s += x`, `x.toString()`, and each element of an array passed to `console.log` (`console.log([sc])` prints `SC<1>`). It is not read for a value that sits as a field of another struct or class: `console.log(w)` for `interface W { s: SC; c: CC; p: SP }` prints `W { s: { a: 1 }, c: { a: 2 }, p: { a: 3 } }` in color, and `String(w)` and `JSON.stringify(w)` print `{"s":{"a":1},"c":{"a":2},"p":{"a":3}}`. Measured 2026-10-30 on C, `--danger`, JS and the Raiser with the installed `msc` (build 73e18a165a).
 
 #### Summary Table
 
@@ -3848,8 +3844,8 @@ The custom `toString` takes priority over the default debug format everywhere �
 | boolean | auto | auto | yes | yes |
 | string | identity | identity | identity | identity |
 | enum | auto (variant name) | auto (variant name) | yes | yes |
-| struct | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
-| class | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
+| struct | auto (colored debug; the declared `toString` when there is one) | auto (declared `toString`, else plain JSON) | yes (declared `toString`, else plain JSON) | yes (same) |
+| class | auto (colored debug; the declared `toString` when there is one) | auto (declared `toString`, else plain JSON) | yes (declared `toString`, else plain JSON) | yes (same) |
 
 A template interpolation `${v}` is `String(v)`: an enum interpolates as its variant name, also with explicit values, as a struct field, inside a nested template and as an operand of `+` after a string, on C, `--danger`, JS and split JS (corpus `enumInTemplateTextsAsItsName`, measured 2026-10-30 on a candidate of this slice; before it JS printed the number). The Raiser VM still prints the ordinal (card `2026-09-25-raiser-enum-to-string-prints-the-number`), and `"str" + v` and `s += v` give the same name (corpus `enumCompoundAppendTextsAsItsName`; `"str" + k` measured 2026-10-30 on a candidate of this slice: `strHome` on C and JS, `str1` on the Raiser VM; `s += k` on a local, a field and in a loop, with `s += 7` and `s += true` unchanged: C, `--danger`, JS and split JS agree). Not measured: `s += k` on the Raiser, a union of enums. The language has no string enums.
 
@@ -3916,7 +3912,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 |---|---|---|
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
 | `toPairs(this T): [K, V][]` | `for ([k, v] of obj)` → `for ([k, v] of obj.toPairs())` | non-array obj in `for..of` with an array pattern |
-| `toString(this T): string` | implicit string context | type concat with string |
+| `toString(this T): string` | implicit string context | `"s" + x`, `s += x`, `${x}`, `String(x)`, a value passed directly to `console.log` (not a field of one) |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
@@ -4457,9 +4453,11 @@ const config = try JSON.parse<AppConfig>(raw) catch defaultConfig;
 const app = try JSON.parse<AppConfig>(readFile("config.json"));
 app.server.host    // fully typed through nesting
 
-// Stringify any interface
+// Stringify a struct, class or interface value
 const json = JSON.stringify(person);  // '{"name":"Son","age":30}'
 ```
+
+`JSON.stringify` of a `Map` writes the map's internal fields (`entries`, `indices`, `size`, ...), not `{}` as JavaScript does (measured 2026-10-30 on C with the installed `msc` build 73e18a165a; not measured on JS).
 
 Implemented via monomorphization — `JSON.parse<Person>` generates a specialized parse function at compile time using `T`'s field names and types. Same mechanism as `Array<T>` and `Result<T, E>`.
 
