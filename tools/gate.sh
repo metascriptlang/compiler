@@ -1683,6 +1683,42 @@ slow_starts_self_test() {
   [ "$(slow_starts 2 :)" = 0 ] || { printf 'FAIL slow starts: an instant start was counted\n'; return 1; }
 }
 
+runner_src() {
+  case "$1" in
+    corpus|san|tsan) printf 'src/test/corpus/run.ms' ;;
+    fmt) printf 'src/test/fmt/run.ms' ;;
+  esac
+}
+runner_path() {
+  local src
+  src=$(runner_src "$1")
+  printf '%s/%s-runner%s' "$OUT" "$(basename "$(dirname "$src")")" "$EXE_SUFFIX"
+}
+build_runner() {
+  local src out
+  src=$(runner_src "$1")
+  [ -n "$src" ] || return 0
+  case " $runners_built " in *" $src "*) return 0 ;; esac
+  runners_built="$runners_built $src"
+  out=$(runner_path "$1")
+  rm -f "$out"
+  env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build "$src" --output="$out" >"${out%"$EXE_SUFFIX"}.log" 2>&1 \
+    || say "gate: FAIL could not build $src to $out, see ${out%"$EXE_SUFFIX"}.log"
+}
+
+lane_cmd() {
+  case "$1" in
+    build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
+    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
+    cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
+    corpus) printf '%s%sMSC=%s %s' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$(runner_path corpus)" ;;
+    san) printf '%sMSCORPUS_SAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path san)" ;;
+    tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path tsan)" ;;
+    fmt) printf '%s' "$(runner_path fmt)" ;;
+    lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
+  esac
+}
+
 runner_self_test() {
   local BUILDER=msc CAND=cand CC_FLAG="" narrow="" raiser_on=0 lane cmd bad=0
   for lane in build boundary cache corpus san tsan fmt lsp; do
@@ -2135,42 +2171,6 @@ cand_key=""
 [ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
-
-runner_src() {
-  case "$1" in
-    corpus|san|tsan) printf 'src/test/corpus/run.ms' ;;
-    fmt) printf 'src/test/fmt/run.ms' ;;
-  esac
-}
-runner_path() {
-  local src
-  src=$(runner_src "$1")
-  printf '%s/%s-runner%s' "$OUT" "$(basename "$(dirname "$src")")" "$EXE_SUFFIX"
-}
-build_runner() {
-  local src out
-  src=$(runner_src "$1")
-  [ -n "$src" ] || return 0
-  case " $runners_built " in *" $src "*) return 0 ;; esac
-  runners_built="$runners_built $src"
-  out=$(runner_path "$1")
-  rm -f "$out"
-  env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build "$src" --output="$out" >"${out%"$EXE_SUFFIX"}.log" 2>&1 \
-    || say "gate: FAIL could not build $src to $out, see ${out%"$EXE_SUFFIX"}.log"
-}
-
-lane_cmd() {
-  case "$1" in
-    build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
-    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
-    cache) printf '%s run --target=raiser src/test/cache/run.ms %s' "$CAND" "$CAND" ;;
-    corpus) printf '%s%sMSC=%s %s' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$(runner_path corpus)" ;;
-    san) printf '%sMSCORPUS_SAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path san)" ;;
-    tsan) printf '%sMSCORPUS_TSAN=1 MSC=%s %s' "$narrow" "$CAND" "$(runner_path tsan)" ;;
-    fmt) printf '%s' "$(runner_path fmt)" ;;
-    lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
-  esac
-}
 
 run_tools_lane() {
   local p rc=0 queue=0 py=0
