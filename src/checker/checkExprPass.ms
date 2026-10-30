@@ -2056,6 +2056,10 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
 	// Reference parity: skipTypes({tySink, tyOwned})
 	let objExpected = skipModifier(expectedType);
+	if (objExpected != null && objExpected.kind == TypeKind.Borrow && objExpected.typeReturn != null) {
+		expectedType = objExpected.typeReturn;
+		objExpected = skipModifier(expectedType);
+	}
 	// Union(Ref<T>, Null) — pick the Ref member for context propagation.
 	// Source-level nullable type is preserved on node.nodeType below; this
 	// only affects how field-types flow into the literal's properties.
