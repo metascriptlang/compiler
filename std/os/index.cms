@@ -16,6 +16,7 @@ export extern function type(): string from "msOsType";
 export extern function release(): string from "msOsRelease";
 export extern function machine(): string from "msOsMachine";
 export extern function cpuCount(): int32 from "msOsCpuCount";
+export extern function availableParallelism(): int32 from "msOsAvailableParallelism";
 export extern function totalMem(): int64 from "msOsTotalMem";
 export extern function freeMem(): int64 from "msOsFreeMem";
 export extern function uptime(): number from "msOsUptime";
