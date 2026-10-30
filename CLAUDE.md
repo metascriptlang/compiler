@@ -95,7 +95,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 ## Git Rules
 
-How a slice reaches `main` (ready check, gate queue, RED and GREEN) is in the workspace `CLAUDE.md` §Worktrees and landing and `~/metascript/.gate-host/README.md`. This repository adds:
+How a slice reaches `main` (ready check, gate queue, RED and GREEN) is in the workspace `CLAUDE.md` §Worktrees and landing and `~/metascript/.gate-host/README.md`; what proof a slice needs before it is submitted, and how to answer a red, is `~/metascript/docs/LANDING.md`. This repository adds:
 
 - **One worktree per feature or named arc, many sessions on it, one writer at a time.** `claude --worktree <name>` (or `~/nerdtools/claude/tools/wt.sh new <name>`) creates branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready, and re-enters the same worktree on every later session.
 - **A second worktree needs a reason**: two pieces run at the same time in different sessions and write no common path, or a stray change that belongs to no open arc, which gets a short `fix-<name>` worktree, lands and is retired. Sequential steps of one arc are commits in its worktree.
