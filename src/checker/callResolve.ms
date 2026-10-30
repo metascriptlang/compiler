@@ -3135,6 +3135,12 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	return returnType;
 }
 
+function wrapsIntoMaybe(source: Type, formal: Type): boolean {
+	const maybe = peelSink(formal);
+	if (!isMaybeType(maybe) || maybe.typeReturn == null || isMaybeType(source)) return false;
+	return isAssignable(source, maybe.typeReturn) || arityAdapts(source, maybe.typeReturn);
+}
+
 function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bindings: UnifyBindings): void {
 	const cd = node.data as CallExprData;
 	const lim = cd.arguments.length < fnType.typeChildren.length ? cd.arguments.length : fnType.typeChildren.length;
@@ -3144,7 +3150,7 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
 		if (formal != null && restWithoutElements(formal)) continue;
 		if (formal == null || hasGenericParams(formal)) continue;
-		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal)) {
+		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal) && !wrapsIntoMaybe(arg.nodeType, formal)) {
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal),
 				arg.location.line, arg.location.column);
 			continue;
@@ -3190,7 +3196,7 @@ function bindFromUnfitDestination(fnType: Type, bindings: UnifyBindings, fixed: 
 		if (at == null || isUnresolvedType(at) || at.kind == TypeKind.Error || at.kind == TypeKind.Null) continue;
 		if (!hasGenericParams(fnType.typeChildren[ai])) continue;
 		const formal = applySubstitutions(fnType.typeChildren[ai], rebound);
-		if (hasGenericParams(formal) || slotRefuses(at, formal)) return false;
+		if (hasGenericParams(formal) || (slotRefuses(at, formal) && !wrapsIntoMaybe(at, formal))) return false;
 	}
 	for (let bi = 0; bi < bindings.types.length; bi += 1) bindings.types[bi] = rebound.types[bi];
 	return true;
