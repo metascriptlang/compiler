@@ -4072,19 +4072,19 @@ export function walkTree<T>(n: T, depth: float32): void {
     }
 }
 
-// main.ms — opt-in via exported extensions
+// main.ms — opt-in via extensions, exported or not
 import { walkTree } from "./lib";
 interface Panel { name: string; children: Panel[]; depth: float32; }
 
-export function protoKids(this p: Panel): Panel[] { return p.children; }
-export function protoBump(this p: Panel, v: float32): void { p.depth = v; }
+function protoKids(this p: Panel): Panel[] { return p.children; }
+function protoBump(this p: Panel, v: float32): void { p.depth = v; }
 
 walkTree(panel, 1.0);   // monomorphized: direct static calls, zero dispatch cost
 ```
 
 Rules:
 
-- **Extensions must be `export`ed.** The monomorphized instance is emitted in the defining module's TU and calls the extensions cross-TU. A private extension is not visible to the instantiation and produces a check-time error with an `in instantiation of '...'` note at the call site.
+- **Exported or not, the calling module's extensions are seen.** The instantiation looks up every extension of the calling module, private ones included. The same holds for a key's `hash` and `==` used by `Map`/`Set` (corpus `privateKeyOps`, `privateKeyOpsLib`, `privateMixinExtension`, measured 2026-10-29 on C, `--danger`, JS and ESM).
 - **Conflict is an error.** If the defining module and the calling module both provide an extension with the same name and receiver, instantiation fails with "Ambiguous call to overloaded extension method" — there is no silent preference.
 - **Keep extensions next to the type or next to the walker** (orphan-rule-lite). Defining protocol extensions in an unrelated third module makes instantiation depend on which caller ran first.
 
