@@ -872,13 +872,17 @@ function methodDefinesRoutine(md: MethodDeclData): boolean {
 	return (md.methodBody.data as BlockStmtData).statements.length > 0;
 }
 
+function joinsOverloadSet(md: MethodDeclData): boolean {
+	return methodDefinesRoutine(md) || routineFlagSet(md.methodFlags).has(RoutineFlag.Overload);
+}
+
 function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): Symbol | null {
 	for (let i = 0; i < upTo; i += 1) {
 		const priorNode = methodDeclOfMember(body[i]);
 		if (priorNode == null) continue;
 		const pd = priorNode.data as MethodDeclData;
 		if (pd.methodName != methodName) continue;
-		if (!methodDefinesRoutine(pd)) continue;
+		if (!joinsOverloadSet(pd)) continue;
 		if (priorNode.resolvedSym != null) return priorNode.resolvedSym;
 	}
 	return null;
@@ -989,6 +993,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	const methodSym = declSymbol(ctx, member, mangledName, SymbolKind.Function, fnType, false);
 	fnType.sym = methodSym;
 	if (routineFlagSet(md.methodFlags).has(RoutineFlag.Extern)) setFlag(methodSym, SymbolFlag.ImportC);
+	if (routineFlagSet(md.methodFlags).has(RoutineFlag.Overload)) setFlag(methodSym, SymbolFlag.OverloadSig);
 	if (methodNative != "") {
 		methodSym.nativeName = methodNative;
 		refuseJsPatternOffJs(ctx, "method", md.methodName, methodNative, md.nameLocation);
@@ -1009,7 +1014,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	methodSym.declNode = methodNode;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
-	if (methodDefinesRoutine(md)) {
+	if (joinsOverloadSet(md)) {
 		const primarySym = methodOverloadPrimary(body, memberIdx, md.methodName);
 		if (primarySym != null) {
 			primarySym.overloads.push(methodSym);

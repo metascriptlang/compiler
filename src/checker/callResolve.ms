@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, cal
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership } from "./fit";
+import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -4767,7 +4767,28 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
 	}
-	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+	return narrowToSignatureReturn(callNode, impl, winnerSymFinal, inferGenericReturn(ctx, winnerType, argTypes, null, callNode));
+}
+
+// The call has the chosen signature's return type, while the routine it runs returns the
+// implementation's union: the call reads that member out of the union, checked.
+function narrowToSignatureReturn(callNode: Node, impl: Symbol | null, picked: Symbol, ret: Type): Type {
+	if (impl == null || !hasFlag(picked, SymbolFlag.OverloadSig) || impl.symbolType == null) return ret;
+	const implRet = impl.symbolType.typeReturn;
+	if (implRet == null || hasGenericParams(ret) || hasGenericParams(implRet) || !isSlotUnion(implRet) || sameType(implRet, ret)) return ret;
+	if (tagUnionMemberSlot(implRet, ret) < 0) return ret;
+	const inner = createNodeAt(NodeKind.CallExpr, callNode.data, callNode.location);
+	inner.nodeType = implRet;
+	inner.flags = callNode.flags;
+	inner.variantSlot = callNode.variantSlot;
+	inner.resolvedSym = callNode.resolvedSym;
+	const projected = checkedProjection(inner, implRet, ret);
+	callNode.kind = projected.kind;
+	callNode.data = projected.data;
+	callNode.flags = projected.flags;
+	callNode.variantSlot = projected.variantSlot;
+	callNode.nodeType = ret;
+	return ret;
 }
 
 export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at: SourceLocation): void {
@@ -5214,7 +5235,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	const callee = (callNode.data as CallExprData).callee;
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
-	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+	return narrowToSignatureReturn(callNode, callNode.resolvedSym, extWinnerSym ?? callNode.resolvedSym!, inferGenericReturn(ctx, winnerType, argTypes, null, callNode));
 }
 
 function upcastReceiver(callNode: Node, instType: Type | null): void {
