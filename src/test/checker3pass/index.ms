@@ -88,3 +88,4 @@ import "./scenarios/overrideModifier";
 import "./scenarios/utilityFunctionTypes";
 import "./scenarios/genericRestInference";
 import "./scenarios/inKeywordNarrows";
+import "./scenarios/defaultCheckedAtDeclaration";
