@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: send 1 2
 // @stdout: call 6 5
 // @stdout: stored 3 100
