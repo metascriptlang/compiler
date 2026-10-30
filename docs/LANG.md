@@ -1312,9 +1312,10 @@ what Node 24.1 prints (corpus `forOfClosesIteratorOnEarlyExit`, `iteratorHelpers
 `arrayIterationHelpers`, `generatorInlinedInPlace`, `iteratorChainInlinedInPlace`,
 `iteratorConsumerInlinedInPlace`, `iteratorStoredChainInlinedInPlace`; lang `iteratorHelpers`,
 `iteratorStatics`); the static part measured 2026-10-27, where a `for..of` over `Iterator.range(0, 10)` with
-a `break` leaves no `range` call in the emitted C and prints the same on C and JS. Not yet: `Iterator.from`,
-closing on a labelled `continue` of an outer loop, and `return()` on a helper that was never pulled,
-which closes its source in TS and closes nothing here. On the Raiser the helpers run until one closes
+a `break` leaves no `range` call in the emitted C and prints the same on C and JS. A helper closed with
+`return()` before its first `next()` closes its source once and never pulls it, as in TS (lang
+`iteratorHelpers`, measured 2026-10-30 on C, danger and `--target=js`). Not yet: `Iterator.from` and
+closing on a labelled `continue` of an outer loop. On the Raiser the helpers run until one closes
 its source, which stops the program with `Unknown host function: Maybe_fn_…` (an open Raiser bug).
 
 ## Type System
