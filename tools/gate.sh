@@ -28,6 +28,11 @@ ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard 
 LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
 PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
 KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
+# The land gate runs the core only: the lanes that are cheap and catch most reds per hour. Over 141 gates (2026-10-29/30)
+# build, suite, tests and san caught 50 of about 70 real reds in 52 of 85 host-hours, while corpus with its select took
+# 52 h for 13, hcr and boundary 12 h for 5, and cache and solana 7 h for none. The rest runs in the full gate
+# (--release, `gate-queue submit --full`), at a release or when a change is suspect (the person, 2026-10-30).
+LAND_LANES="tools build suite tests lsp fmt corpus san"
 RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$|^src/test/corpus/programs/'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
@@ -43,6 +48,12 @@ after another, and compare every red against src/test/known-red.json.
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
   --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana
+  --programs a,b corpus programs the owner picks for corpus and san, beside the ones the change adds or edits; the owner
+                 knows what its change reaches, so this replaces the select's emit of every program
+  --full        the lanes the diff selects, all of them, with the select's narrowing: the full gate a release or a
+                 suspect change asks for
+  --with a,b     add these lanes to the core the land gate runs (the owner pays for what its change can reach);
+                 corpus or san named here run every program without a recorded pass, not only the touched ones
                  (tsan brings san, whose run writes the program list tsan reads)
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
@@ -1272,7 +1283,21 @@ select_whole() {
   select_ledger select-whole "$((SECONDS - ${t0:-$SECONDS}))" "" "" "" "" ""
 }
 
+# corpus programs the diff adds or edits, and those the owner names with --programs, by name, among those the tree has
+touched_programs() {
+  local names
+  names=$({ printf '%s\n' "$paths" | sed -n 's#^src/test/corpus/programs/\([^/]*\).*#\1#p' | sed 's/\.ms$//'; printf '%s\n' "$programs_arg" | tr ',' '\n'; } | sed '/^$/d' | sort -u)
+  [ -n "$names" ] || return 0
+  list_programs | cut -d' ' -f1 | grep -xF -f <(printf '%s\n' "$names")
+}
+
 select_programs() {
+  if [ "${land:-0}" -eq 1 ]; then
+    mkdir -p "$EMIT" && touched_programs >"$EMIT/only.corpus" && cp "$EMIT/only.corpus" "$EMIT/only.san"
+    say "gate: select core only · corpus and san run the $(grep -c . "$EMIT/only.corpus" | tr -d ' ') program(s) the change adds or edits or --programs names"
+    selected=1
+    return
+  fi
   local t0=$SECONDS n_all run_c run_s keyed line
   result_keys || { select_whole "the candidate's emits or their keys could not be made"; return; }
   n_all=$(grep -c . "$EMIT/programs" | tr -d ' ')
@@ -1990,12 +2015,15 @@ CASES
   return $bad
 }
 
-base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" select_only=0
+base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" with_arg="" programs_arg="" full=0 select_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base=${2:?--base needs a rev}; shift ;;
     --release) release=1 ;;
     --lanes) lanes_arg=${2:?--lanes needs a list}; shift ;;
+    --full) full=1 ;;
+    --with) with_arg=${2:?--with needs a list}; shift ;;
+    --programs) programs_arg=${2:?--programs needs a list}; shift ;;
     --dry-run) dry=1 ;;
     --select) select_only=1 ;;
     --record) record=1 ;;
@@ -2022,6 +2050,7 @@ mkdir -p "$OUT" || die "cannot create $OUT"
 : >"$OUT/why"
 paths=$(changed_paths)
 
+land=0
 if [ -n "$lanes_arg" ]; then
   chosen=$(printf '%s\n' "$lanes_arg" | tr ',' '\n')
   for l in $chosen; do
@@ -2034,6 +2063,29 @@ elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then
 else
   printf '%s\n' "$paths" | route_paths | sort -u >"$OUT/why"
   chosen=$(cut -f1 "$OUT/why" | sort -u)
+fi
+if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && [ "$full" -eq 0 ]; then
+  land=1
+  full_only=$(printf '%s\n' $chosen | grep -vxF -f <(printf '%s\n' $LAND_LANES) | paste -sd' ' -)
+  chosen=$(printf '%s\n' $chosen | grep -xF -f <(printf '%s\n' $LAND_LANES))
+  # corpus and san run only the programs the change adds or edits; the owner proves the programs it reaches (LANDING.md)
+  [ -n "$(touched_programs)" ] || chosen=$(printf '%s\n' $chosen | grep -vx 'corpus\|san')
+  for n in $(printf '%s\n' "$programs_arg" | tr ',' ' '); do
+    list_programs | cut -d' ' -f1 | grep -xF "$n" >/dev/null || die "--programs names '$n', which is not a corpus program"
+  done
+  if [ -n "$programs_arg" ] && [ -n "$(touched_programs)" ]; then
+    chosen=$(printf '%s\n' $chosen corpus san | sort -u)
+    printf 'corpus\t--programs\nsan\t--programs\n' >>"$OUT/why"
+  fi
+  for l in $(printf '%s\n' "$with_arg" | tr ',' ' '); do
+    case " $ORDER " in *" $l "*) ;; *) die "unknown lane '$l' in --with" ;; esac
+    chosen=$(printf '%s\n' $chosen "$l")
+    printf '%s\t%s\n' "$l" "--with (the owner pays for it)" >>"$OUT/why"
+    full_only=$(printf '%s\n' $full_only | grep -vx "$l" | paste -sd' ' -)
+    # a corpus or san the owner asks for runs what its pass records leave, not only the touched programs
+    case $l in corpus|san) land=0 ;; esac
+  done
+  [ -z "$full_only" ] || say "gate: core only; $full_only run in the full gate (--full or --release; gate-queue submit --full)"
 fi
 if printf '%s\n' $chosen | grep -x tsan >/dev/null && ! printf '%s\n' $chosen | grep -x san >/dev/null; then
   printf 'san\t%s\n' "tsan reads the program list the san run writes" >>"$OUT/why"
@@ -2076,7 +2128,9 @@ explain() {
     n=$(awk -F'\t' -v l="$l" '$1==l' "$OUT/why" | wc -l | tr -d ' ')
     say "gate: $l <- $(awk -F'\t' -v l="$l" '$1==l{print $2}' "$OUT/why" | head -3 | paste -sd, - | sed 's/,/, /g')$([ "$n" -gt 3 ] && printf ' (+%d more)' $((n - 3)))"
   done
-  if [ "$select" -eq 1 ]; then
+  if [ "$select" -eq 1 ] && [ "$land" -eq 1 ]; then
+    say "gate: $select_label narrowed to the corpus programs the change adds or edits and those --programs names: $(touched_programs | paste -sd' ' -)"
+  elif [ "$select" -eq 1 ]; then
     say "gate: $select_label narrowed to the programs with no recorded pass for their emits"
   elif [ -n "$select_why" ]; then
     say "gate: no narrowing for $select_label ($select_why); its passes are recorded for the next narrowed gate"
