@@ -31,6 +31,8 @@ export function createDefineTable(): DefineTable {
 	defineSymbol(t, "mscHasDeclaredCallType", "true");
 	// A number argument ranks as an exact match for a float64 parameter only under this symbol: std keeps its number overloads for a compiler that predates it, which would take the generic overload instead, so the guard goes one sync cycle after the compiler lands.
 	defineSymbol(t, "mscRanksNumberAsFloat64", "true");
+	// The Raiser prelude builds its actor and timer tables only under this symbol: a compiler that predates it checks a collection constructor before the extensions it calls, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscBuildsPreludeTables", "true");
 	return t;
 }
 
@@ -229,6 +231,7 @@ test "define: a fresh table carries the compiler feature symbol" {
 	assert isDefined(t, "mscEmitsDecrefFuture");
 	assert isDefined(t, "mscHasDeclaredCallType");
 	assert isDefined(t, "mscRanksNumberAsFloat64");
+	assert isDefined(t, "mscBuildsPreludeTables");
 }
 
 test "define: unknown flag is false, never an error" {
