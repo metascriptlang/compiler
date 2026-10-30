@@ -82,9 +82,9 @@ Build a candidate per compiler edit, in the same `run-remote.sh` call as the che
 
 ### Land gate
 
-**When the slice is finished, run its ready check and submit it at once** (`gate-queue ready-check`, `submit`, then `wait` in the background; workspace `CLAUDE.md` §Worktrees and landing, the Mac land queue only when that section says so). Do not run a separate gate first, because that duplicates the land gate. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract.
+**When the slice is finished and every consumer it reaches has passed on a Linux candidate, run its ready check and submit it at once** (`gate-queue ready-check`, `submit`, then `wait` in the background; workspace `CLAUDE.md` §Worktrees and landing, the Mac land queue only when that section says so). What the change reaches and the evidence each reach needs is `~/metascript/docs/LANDING.md`; `tools/gate.sh --dry-run` names the lanes the paths select, a floor of that reach. Do not run a separate gate first, because that duplicates the land gate.
 
-**After a RED, return to the edit loop: rerun the named failures (`queue/<slice>.red`) through `run-remote.sh` on a candidate of the tip, redo the ready check, then submit the new tip** (`~/metascript/.gate-host/README.md` §RED). The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains.
+**After a RED, return to the edit loop: reproduce the named failures (`queue/<slice>.red`) through `run-remote.sh` on a candidate of the tip, name why the ready proof missed them and add that check, then fix, redo the ready check and submit the new tip** (`~/metascript/docs/LANDING.md` §Answering a red). The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains.
 
 ### Traps
 
