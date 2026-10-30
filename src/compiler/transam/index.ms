@@ -14,7 +14,7 @@ import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb } fr
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
-	TaRevision, createRevision, incrementRevision,
+	TaRevision, createRevision, incrementRevision, nextRevision, TA_REVISION_MAX,
 	createQueryKey, queryKeysEqual
 } from "./revision";
 import {
@@ -226,14 +226,20 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 	};
 }
 
-// Cache key offsets for different query types
-function parseNodeKey(fileId: int32): int32 { return fileId; }
-function checkCtxKey(fileId: int32): int32 { return fileId + 10000; }
-function checkNodeKey(fileId: int32): int32 { return fileId + 15000; }
-function transformNodeKey(fileId: int32): int32 { return fileId + 20000; }
-function analyzeNodeKey(fileId: int32): int32 { return fileId + 30000; }
-function lowerNodeKey(fileId: int32): int32 { return fileId + 40000; }
-function exportNodeKey(fileId: int32): int32 { return fileId + 50000; }
+const STAGE_COUNT: int32 = 7;
+
+function stageKey(fileId: int32, stage: int32): int32 {
+	if (fileId < 0 || fileId > (2147483647 - stage) / STAGE_COUNT) throw new Error(`internal: Trans-Am file id ${fileId} has no stage key`);
+	return fileId * STAGE_COUNT + stage;
+}
+
+function parseNodeKey(fileId: int32): int32 { return stageKey(fileId, 0); }
+function checkCtxKey(fileId: int32): int32 { return stageKey(fileId, 1); }
+function checkNodeKey(fileId: int32): int32 { return stageKey(fileId, 2); }
+function transformNodeKey(fileId: int32): int32 { return stageKey(fileId, 3); }
+function analyzeNodeKey(fileId: int32): int32 { return stageKey(fileId, 4); }
+function lowerNodeKey(fileId: int32): int32 { return stageKey(fileId, 5); }
+function exportNodeKey(fileId: int32): int32 { return stageKey(fileId, 6); }
 
 // ===== Public API =====
 
@@ -242,9 +248,11 @@ function exportNodeKey(fileId: int32): int32 { return fileId + 50000; }
 // .ms files are stored with unresolved .h imports. The Preprocess query handles both,
 // with dep tracking so .h changes propagate to dependent .ms files automatically.
 export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string): boolean {
-	const revision = db.revision.value + 1;
-	if (!setFileText(db.fileInput, filePath, rawSource, revision)) return false;
-	incrementRevision(db.revision);
+	const known = getFileId(db.fileInput, filePath);
+	if (known >= 0 && getFileText(db.fileInput, known) == rawSource) return false;
+	const revision = nextRevision(db.revision);
+	setFileText(db.fileInput, filePath, rawSource, revision);
+	db.revision.value = revision;
 	const fileId = getFileId(db.fileInput, filePath);
 	// G2: Mark stdlib files as High durability (skip verification in tryMarkGreen)
 	if (isStdPathFor(db, filePath)) {
@@ -816,6 +824,7 @@ function bindInputs(db: TransAmDb, filePath: string): int32[] {
 		if (fileId < 0 || seen.has(fileId)) continue;
 		seen.add(fileId);
 		inputs.push(fileId);
+		inputs.push(getFileChangedAt(db.fileInput, fileId) ?? ABSENT_ENTRY);
 		for (const kind of [TaQueryKind.Parse, TaQueryKind.TypeCheck]) {
 			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
 			inputs.push(entry != null ? entry.changedAt : ABSENT_ENTRY);
@@ -825,9 +834,9 @@ function bindInputs(db: TransAmDb, filePath: string): int32[] {
 	return inputs;
 }
 
-function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
+function reusableBound(db: TransAmDb, filePath: string): BoundModule | null {
 	const entry = db.bound.get(filePath);
-	return entry != null && entry.revision == db.revision.value ? entry.unit : null;
+	return entry != null && boundInputsUnchanged(db, filePath) ? entry.unit : null;
 }
 
 function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: ImportEntry[], globals: CheckerContext[], startVersion: int32): BoundModule {
@@ -863,7 +872,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const fileId = getFileId(db.fileInput, modulePath);
 	if (fileId < 0) return null;
 	const filePath = getFilePath(db.fileInput, fileId);
-	const bound = boundAtRevision(db, filePath);
+	const bound = reusableBound(db, filePath);
 	if (bound != null) return bound.ctx;
 	if (db.checkInProgress.has(filePath)) return null;
 	const unchecked: string[] = [];
@@ -933,7 +942,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	// A kept db clones the parse tree so its cached tree stays clean for other consumers
 	// (semantic tokens, syntax queries); a db that is not kept checks the tree itself.
-	const bound = boundAtRevision(db, filePath);
+	const bound = reusableBound(db, filePath);
 	const program = bound != null ? bound.program : db.handedToCheck != null ? cachedProgram : cloneNodeForCheck(cachedProgram);
 
 	// Macro-declaring deps need a FULL check first: checkProgram registers their
@@ -2392,6 +2401,54 @@ test "a same-hash edit of an import this db only binds re-checks its reader" {
 	dbSetFileText(db, `${root}/dep.ms`, texts[1]);
 	assert dbTypeCheck(db, `${root}/user.ms`).errors.length > 0;
 	assert db.cache.bound - bound == 2, `${db.cache.bound - bound}`;
+}
+
+test "an edited bind-only import whose parse entry is gone is not reused" {
+	const root = "/boundEvicted";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/dep.ms`, "export const Az: int32 = 1;");
+	dbSetFileText(db, `${root}/user.ms`, 'import { Az } from "./dep";\nexport const seen = Az;');
+	const depId = getFileId(db.fileInput, `${root}/dep.ms`);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/user.ms`), depId);
+	assert dbTypeCheck(db, `${root}/user.ms`).errors.length == 0;
+	assert boundInputsUnchanged(db, `${root}/dep.ms`);
+	cacheRemove(db.cache, createQueryKey(TaQueryKind.Parse, depId));
+	cacheRemove(db.cache, createQueryKey(TaQueryKind.Preprocess, depId));
+	dbSetFileText(db, `${root}/dep.ms`, "export const BY: int32 = 1;");
+	assert !boundInputsUnchanged(db, `${root}/dep.ms`);
+}
+
+test "stage keys of different files never meet" {
+	const keys = new HashSet<int32>();
+	for (let fileId: int32 = 0; fileId <= 6000; fileId += 1) {
+		for (const key of [parseNodeKey(fileId), checkCtxKey(fileId), checkNodeKey(fileId), transformNodeKey(fileId), analyzeNodeKey(fileId), lowerNodeKey(fileId), exportNodeKey(fileId)]) keys.add(key);
+	}
+	assert keys.size == 7 * 6001;
+}
+
+test "a stage key past the int32 range is refused" {
+	const last: int32 = (2147483647 - 6) / STAGE_COUNT;
+	assert exportNodeKey(last) == last * STAGE_COUNT + 6;
+	let refused = false;
+	try { exportNodeKey(last + 1); } catch (e) { refused = true; }
+	assert refused;
+}
+
+test "at the revision maximum an edit is refused before anything changes" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/ceiling/a.ms", "export const a = 1;");
+	const fileId = getFileId(db.fileInput, "/ceiling/a.ms");
+	db.revision.value = TA_REVISION_MAX;
+	const changedAt = getFileChangedAt(db.fileInput, fileId);
+	const marker = getLastChange(db.fileInput, TaDurability.Low);
+	assert !dbSetFileText(db, "/ceiling/a.ms", "export const a = 1;");
+	let refused = false;
+	try { dbSetFileText(db, "/ceiling/a.ms", "export const a = 2;"); } catch (e) { refused = true; }
+	assert refused;
+	assert getFileText(db.fileInput, fileId) == "export const a = 1;";
+	assert getFileChangedAt(db.fileInput, fileId) == changedAt;
+	assert getLastChange(db.fileInput, TaDurability.Low) == marker;
+	assert db.revision.value == TA_REVISION_MAX;
 }
 
 test "a file under the std path is written at high durability" {

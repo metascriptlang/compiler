@@ -45,8 +45,15 @@ export function createRevision(): TaRevision {
 	return { value: 0 };
 }
 
+export const TA_REVISION_MAX: int32 = 2147483647;
+
+export function nextRevision(rev: TaRevision): int32 {
+	if (rev.value >= TA_REVISION_MAX) throw new Error("internal: Trans-Am revision exhausted at " + rev.value);
+	return rev.value + 1;
+}
+
 export function incrementRevision(rev: TaRevision): void {
-	rev.value = rev.value + 1;
+	rev.value = nextRevision(rev);
 }
 
 // ===== Query Key — uniquely identifies a cached query =====
@@ -117,4 +124,14 @@ test "query states are distinct" {
 test "durability levels are distinct" {
 	assert TaDurability.Low != TaDurability.Medium;
 	assert TaDurability.Medium != TaDurability.High;
+}
+
+test "the revision refuses to pass its maximum" {
+	const rev: TaRevision = { value: TA_REVISION_MAX - 1 };
+	incrementRevision(rev);
+	assert rev.value == TA_REVISION_MAX;
+	let refused = false;
+	try { incrementRevision(rev); } catch (e) { refused = true; }
+	assert refused;
+	assert rev.value == TA_REVISION_MAX;
 }
