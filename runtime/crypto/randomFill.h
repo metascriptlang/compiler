@@ -8,7 +8,19 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+static int ms_random_fill(uint8_t *buf, size_t len) {
+	while (len > 0) {
+		ULONG chunk = len > 0x40000000u ? 0x40000000u : (ULONG)len;
+		if (BCryptGenRandom(NULL, buf, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return -1;
+		buf += chunk;
+		len -= chunk;
+	}
+	return 0;
+}
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <stdlib.h>
 static int ms_random_fill(uint8_t *buf, size_t len) {
 	arc4random_buf(buf, len);
