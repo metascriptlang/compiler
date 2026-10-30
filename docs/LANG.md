@@ -1151,7 +1151,7 @@ the diagnostic):
    (arithmetic, comparison, equality, the right side of `op=`, `+` with a string). Not at: a condition,
    a receiver (`b.length` is still "no member"), an assignment or `++` target, a formal with open
    generic parameters, or overload scoring (an overloaded call needs a candidate that takes the value).
-   For `+` with a string a type that declares `valueOf` reads `valueOf` first, as JavaScript does.
+   For `+` with a string a type that declares `valueOf` reads `valueOf` first, as JavaScript does. A template interpolation reads `toString` first.
 6. **One step**: the converter's return type must be the target, or the target is `T | null` of it;
    `float64 → Seconds` and `Seconds → Minutes` do not make `float64 → Minutes`.
 7. **No self-application**: inside its own body the converter does not apply ("'boxToText' does not
@@ -3924,7 +3924,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
 reads through `valueOf` only when the type has none for it, or has one for another target (corpus
 `782-protocolSiteBeforeValueOf`: a `Box` with a converter to `string` meeting an `int32` slot reads
-`valueOf`, `fallback 100`). `+` with a string reads `valueOf` first, as JavaScript does (`concat v=100`). The choice is made while
+`valueOf`, `fallback 100`). `+` with a string reads `valueOf` first, as JavaScript does (`concat v=100`), while a template interpolation `${v}` reads `toString` first and `valueOf` only when the type has no `toString` (corpus `templateTextsWithToStringBeforeValueOf`, a struct and a class with both give `100C` in the template and `at 100` after `"at " +`, measured 2026-10-30 on a candidate of this slice: C, `--danger`, JS, ESM and the Raiser VM agree). The choice is made while
 checking, by the static type; the chosen call runs at run time.
 
 **Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.

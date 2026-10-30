@@ -1471,7 +1471,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		const rightConverted = leftConverted != null ? null : operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
 		if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
 		if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
-		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
+		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right, node.flags.has(NodeFlag.TemplateStep) ? ReadNeed.Text : ReadNeed.Value)) rightType = d.right.nodeType;
 		const leftUnion = readUnionOperand(ctx, d.operator, node, d.left, d.right, true);
 		if (leftUnion == UnionRead.Read) leftType = d.left.nodeType;
 		const rightUnion = leftUnion == UnionRead.Refused ? UnionRead.Untouched : readUnionOperand(ctx, d.operator, node, d.right, d.left, false);
