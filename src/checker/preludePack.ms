@@ -155,8 +155,10 @@ function packDisabled(): boolean {
 
 function atomicWritePack(path: string, content: string): boolean {
 	const tmp = `${path}.tmp.${performance.now()}`;
-	const w = writeFile(tmp, content);
-	if (!w.ok) return false;
+	if (!writeFile(tmp, content).ok) {
+		ensureDir(path.slice(0, path.lastIndexOf("/")));
+		if (!writeFile(tmp, content).ok) return false;
+	}
 	const r = rename(tmp, path);
 	if (r.ok) return true;
 	remove(tmp);
@@ -2307,6 +2309,16 @@ test "the prelude pack key moves with the parser defines" {
 	const keyed = preludePackKey("/std", ".cms");
 	setParserDefines(saved);
 	assert plain != keyed;
+}
+
+test "a pack is written even when the collector removed its emptied format directory after the writer created it" {
+	const root = `/tmp/msc-pack-rmdir-${performance.now()}`;
+	const dir = `${root}/fmt`;
+	ensureDir(dir);
+	removeAll(dir);
+	assert atomicWritePack(`${dir}/k.pk`, "pack");
+	assert (try readFile(`${dir}/k.pk`) catch "") == "pack";
+	removeAll(root);
 }
 
 test "a pack unused for a day is collected with its deps record, a pack used within the day stays" {
