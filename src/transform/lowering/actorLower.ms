@@ -668,7 +668,6 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			// BEFORE this point — sym now refers to the proxy.
 			if (m.resolvedSym != null) {
 				m.resolvedSym.symbolType = proxyFnType;
-				markValueLayoutParamsAsMutated(m.resolvedSym, proxyParamTypes);
 				// The analyzer reads this to classify UNPARKED calls to the proxy as
 				// SEND-class handoffs (plain-ref args consumed into the message);
 				// parked calls carry NodeFlag.AwaitParked instead and stay borrows.
