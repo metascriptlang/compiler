@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: buffer 6 4 10 true false 2 12 6 4
 
 import { Buffer } from "std/core/buffer";

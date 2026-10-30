@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: interval: no tick inside a method: true, ticked: true
 // @stdout: async loop: no tick inside a method: true, ticked: true
 // @stdout: then: no tick inside a method: true, ticked: true
