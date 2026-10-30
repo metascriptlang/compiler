@@ -1252,7 +1252,7 @@ function classModifierAhead(state: ParserState): boolean {
 			next.kind == TokenKind.String || next.kind == TokenKind.Number);
 }
 
-function parseClassMember(state: ParserState): NodeResult {
+function parseClassMember(state: ParserState, isExtern: boolean = false): NodeResult {
 	const memberToken = current(state);
 
 	// Decorator before class member: @name(...) member
@@ -1262,7 +1262,7 @@ function parseClassMember(state: ParserState): NodeResult {
 			const dec = try parseMacroInvocation(state);
 			decorators.push(dec);
 		}
-		const member = try parseClassMember(state);
+		const member = try parseClassMember(state, isExtern);
 		return Result.ok(createNode(NodeKind.DecoratedDecl, {
 			decorators,
 			decoratedNode: finishOnce(state, member),
@@ -1323,7 +1323,8 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for extern modifier on methods
 	let memberFlags = "";
-	if (current(state).kind == TokenKind.Extern && classModifierAhead(state)) {
+	const memberIsExtern = current(state).kind == TokenKind.Extern && classModifierAhead(state);
+	if (memberIsExtern) {
 		memberFlags = "extern";
 		advance(state);
 	}
@@ -1385,7 +1386,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		if (memberIsOptional) {
 			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
 		}
-		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
+		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility, memberIsAbstract || isExtern || memberIsExtern);
 		if (memberIsAbstract) method.flags = method.flags.incl(NodeFlag.Abstract);
 		return Result.ok(method);
 	}
@@ -1553,7 +1554,7 @@ function parseStructAccessor(state: ParserState, structName: string, genericName
 	return Result.ok(fnNode);
 }
 
-function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string): NodeResult {
+function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string, isAbstractOrExtern: boolean): NodeResult {
 	// Capture optional generic params: method<T>(...) — same as regular function parser
 	const genericNames = captureGenericParams(state);
 	if (genericNames != "") {
@@ -1599,9 +1600,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		return Result.ok(mNode1);
 	}
 
-	// Abstract methods / extern without 'from' — just semicolon
 	if (current(state).kind == TokenKind.Semicolon) {
 		consumeSemicolon(state);
+		if (!isAbstractOrExtern) flags = flags == "" ? "overload" : `${flags}|overload`;
 		const mNode2 = createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
 			methodParams,
@@ -2006,7 +2007,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			const members: Node[] = [];
 			while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 				if (current(state).kind == TokenKind.Semicolon) { advance(state); continue; }
-				const member = finishNode(state, try parseClassMember(state));
+				const member = finishNode(state, try parseClassMember(state, true));
 				const refusal = autoAccessorRefusal(member, "an extern class");
 				if (refusal != "") return Result.err(refusal);
 				members.push(member);
@@ -2622,6 +2623,40 @@ function parsedMethod(source: string, index: int32 = 0): MethodDeclData {
 	if (!programOk(source)) throw new Error("Invalid method fixture: " + source);
 	const cls = stmtAt(source, 0).data as ClassDeclData;
 	return cls.classBody[index].data as MethodDeclData;
+}
+
+test "class semicolon methods carry the existing overload flag" {
+	assert parsedMethod("class C { read(x: int32): int32; }").methodFlags == "overload";
+	const staticMethod = parsedMethod("class C { static read(x: int32): int32; }");
+	assert staticMethod.methodIsStatic;
+	assert staticMethod.methodFlags == "overload";
+	assert parsedMethod("class C { read<T>(x: T): T; }").methodFlags == "gen:T|overload";
+	assert parsedMethod("class C { async read<T>(x: T): T; }").methodFlags == "async|gen:T|overload";
+	assert parsedMethod("class C { read(x: int32): int32 { return x; } }").methodFlags == "";
+}
+
+test "abstract and extern semicolon methods keep declaration meaning" {
+	const abstractClass = stmtAt("abstract class C { abstract read<T>(x: T): T; }", 0).data as ClassDeclData;
+	const abstractNode = abstractClass.classBody[0];
+	assert abstractNode.flags.has(NodeFlag.Abstract);
+	assert (abstractNode.data as MethodDeclData).methodFlags == "gen:T";
+	assert parsedMethod("class C { extern read<T>(x: T): T; }").methodFlags == "extern|gen:T";
+	assert parsedMethod("class C { extern async read(): int32; }").methodFlags == "extern_async";
+	assert parsedMethod("class C { extern *read(): int32; }").methodFlags == "generator";
+	assert parsedMethod("class C { extern async *read(): int32; }").methodFlags == "generator";
+	const native = parsedMethod("class C { extern read(): int32 from \"hostRead\"; }");
+	assert native.methodFlags == "extern";
+	assert native.nativeName == "hostRead";
+}
+
+test "extern class methods keep ambient meaning through decorators" {
+	const ambient = stmtAt("extern class Host { read<T>(x: T): T; }", 0);
+	assert ambient.flags.has(NodeFlag.ExternC);
+	const member = (ambient.data as ClassDeclData).classBody[0];
+	assert (member.data as MethodDeclData).methodFlags == "gen:T";
+	const decorated = stmtAt("extern class Host { @marker read(): int32; }", 0).data as ClassDeclData;
+	const method = (decorated.classBody[0].data as DecoratedDeclData).decoratedNode;
+	assert (method.data as MethodDeclData).methodFlags == "";
 }
 
 test "modifier words retain ordinary property identity" {
