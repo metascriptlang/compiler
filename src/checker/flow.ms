@@ -2219,7 +2219,7 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		if (narrowed == t.typeReturn) return t;
 		return narrowed.kind == TypeKind.Never ? nullType() : nullableUnionOf([narrowed, nullType()]);
 	}
-	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return assumeTrue ? t : filterByLiteral(t, value, false);
 	const narrowed = filterByLiteral(t, value, assumeTrue);
 	return narrowed.kind == TypeKind.Never && assumeTrue ? t : narrowed;
 }
