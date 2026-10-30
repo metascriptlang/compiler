@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: cbor-self-ref ok b c 3
 import { cborEncode, decode, cborValueToStruct, cborInt, _cborArrayOfStructs, _cborToStructArray } from "std/serialize/cbor";
 
