@@ -1267,6 +1267,8 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 					} else if (stopping) {
 						msNetClose(evFd);
 						conns[evFd] = CONN_CLOSED;
+					} else if (clients[evFd].data.byteLength() > 0) {
+						conns[evFd] = dispatchUringRecv(cfg, clients[evFd], evFd, handler);
 					} else {
 						msUringSubmitRecv(evFd, "", 4096);
 						conns[evFd] = CONN_RECV;
