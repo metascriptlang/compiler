@@ -1099,9 +1099,11 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 		if (slot >= 0) hits.push(slot);
 		return hits;
 	}
+	const memberEnum = ek == TypeKind.EnumLiteral ? literalBase(exprType) : null;
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
+		if (!hit && memberEnum != null) hit = child == memberEnum || (child.kind == TypeKind.Enum && child.typeName == memberEnum.typeName);
 		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) hit = child.kind == ek;
 		if (hit) hits.push(vi);
 		vi += 1;
