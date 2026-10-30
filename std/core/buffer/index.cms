@@ -4,7 +4,7 @@ import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
 import { newEncodingOutput, freshEncodingOutputBytes } from "std/core/encoding/output";
 import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
-import { asciiWords, utf8String } from "../string/bytes";
+import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
 export type Buffer = uint8[];
 
@@ -311,13 +311,6 @@ export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
 
 const HIGH_BITS: uint64 = 0x8080808080808080;
 
-// Through memcpy, which clang folds into one load at any alignment.
-function wordAt(bytes: Readonly<Ptr<uint8>>): uint64 {
-	let cell: uint64[1] = [0];
-	cMemcpy(((cell as Span<uint64>) as Ptr<uint64>) as Ptr<uint8>, bytes, 8);
-	return cell[0];
-}
-
 // Thin LTO inlines this into the caller's loop, where clang 18 keeps the length tests: byte 0 is
 // tested before any size dispatch (1.6-2.1x on x86 behind it), under 8 bytes run the C byte loop,
 // longer input joins one result from the words and the overlapping last word.
@@ -334,12 +327,11 @@ export function isAscii(this typeof Buffer, value: Buffer): boolean {
 		}
 		return true;
 	}
-	const words = bytes as Readonly<Ptr<uint64>>;
 	const wordCount = length >> 3;
-	let high = words[0] & HIGH_BITS;
+	let high = wordAt(bytes) & HIGH_BITS;
 	let word: int64 = 1;
 	while (high == 0 && word < wordCount) {
-		high = words[word] & HIGH_BITS;
+		high = wordAt(bytes + (word << 3)) & HIGH_BITS;
 		word += 1;
 	}
 	return ((high | wordAt(bytes + (length - 8))) & HIGH_BITS) == 0;
