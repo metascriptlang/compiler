@@ -5150,7 +5150,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
 	if (winnerType.kind == TypeKind.Function) {
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
-			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai]) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
+			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], ai < contextFormals[idx].typeChildren.length ? contextFormals[idx].typeChildren[ai] : null) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
 		}
 		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
 	}
