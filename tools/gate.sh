@@ -2312,8 +2312,8 @@ part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__
 # test processes (10:48Z, 16:21Z, 17:08Z 2026-10-30). So the lane starts another tier only while the RAM available keeps
 # one more of them above a tenth of the host's RAM (earlyoom's kill line, doubled), counting each tier started in the last
 # minute at its full peak too, because a tier reaches its peak only after it has compiled for a while; it always runs one.
-# The estimate still misses (earlyoom killed tiers at 18:39Z and 18:49Z), so a tier killed by a signal earlyoom sends runs
-# again alone once the others finish: a tier that is itself too big is killed again and stays red.
+# The estimate still misses (earlyoom killed tiers at 18:39Z and 18:49Z, the suite at 19:41Z), so a tier or the suite
+# killed by a signal earlyoom sends runs again once, alone: one that is itself too big is killed again and stays red.
 TEST_JOB_KB=$((3500 * 1024))
 test_ram_room() {
   [ -r /proc/meminfo ] || return 0
@@ -2323,7 +2323,15 @@ test_ram_room() {
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
-    suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
+    suite)
+      part=$(part_of suite src/index.ms)
+      with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part"
+      case "$(cat "$part.rc" 2>/dev/null)" in
+        137|143)
+          printf 'gate: %s was killed under host memory pressure; running it again once the RAM holds it\n' "${part##*/}"
+          until test_ram_room 0; do sleep 5; done
+          with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part" ;;
+      esac ;;
     tests)
       jobs=$(test_jobs)
       if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && tier_select; then
