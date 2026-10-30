@@ -4,7 +4,7 @@
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty } from "../codegen/c/names";
-import { isAssignable } from "./compat";
+import { isAssignable, sameNominal } from "./compat";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -1103,7 +1103,7 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
-		if (!hit && memberEnum != null) hit = child == memberEnum || (child.kind == TypeKind.Enum && child.typeName == memberEnum.typeName);
+		if (!hit && memberEnum != null) hit = child.kind == TypeKind.Enum && sameNominal(child, memberEnum);
 		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) hit = child.kind == ek;
 		if (hit) hits.push(vi);
 		vi += 1;
