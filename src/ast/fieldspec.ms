@@ -108,97 +108,186 @@ export interface FieldXform {
 	floats: XfFloatsFn;
 }
 
+function rebuildNumberLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as NumberLiteralData; return { value: X.float(d.value), isFloat: X.bool(d.isFloat), intVal: X.integer(d.intVal), outOfRangeText: X.str(d.outOfRangeText), isBitPattern: X.bool(d.isBitPattern) } as NodeData; }
+function rebuildStringLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as StringLiteralData; return { value: X.str(d.value) } as NodeData; }
+function rebuildBooleanLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as BooleanLiteralData; return { boolValue: X.bool(d.boolValue) } as NodeData; }
+function rebuildBigIntLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as BigIntLiteralData; return { bigintValue: X.str(d.bigintValue) } as NodeData; }
+function rebuildRegexLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as RegexLiteralData; return { regexPattern: X.str(d.regexPattern) } as NodeData; }
+function rebuildIdentifier(n: Node, X: FieldXform): NodeData { const d = n.data as IdentifierData; return { name: X.str(d.name) } as NodeData; }
+function rebuildBinaryExpr(n: Node, X: FieldXform): NodeData { const d = n.data as BinaryExprData; return { operator: X.str(d.operator), left: X.node(d.left) as Node, right: X.node(d.right) as Node } as NodeData; }
+function rebuildUnaryExpr(n: Node, X: FieldXform): NodeData { const d = n.data as UnaryExprData; return { unaryOp: X.str(d.unaryOp), operand: X.node(d.operand) as Node } as NodeData; }
+function rebuildUpdateExpr(n: Node, X: FieldXform): NodeData { const d = n.data as UpdateExprData; return { updateOp: X.str(d.updateOp), updateArg: X.node(d.updateArg) as Node, isPrefix: X.bool(d.isPrefix) } as NodeData; }
+function rebuildCallExpr(n: Node, X: FieldXform): NodeData { const d = n.data as CallExprData; return { callee: X.node(d.callee) as Node, arguments: X.nodes(d.arguments) as Node[], isDirectCall: X.bool(d.isDirectCall), resolvedOverloadIdx: X.float(d.resolvedOverloadIdx) } as NodeData; }
+function rebuildMemberExpr(n: Node, X: FieldXform): NodeData { const d = n.data as MemberExprData; return { object: X.node(d.object) as Node, property: X.str(d.property), isOptional: X.bool(d.isOptional) } as NodeData; }
+function rebuildArrayAccess(n: Node, X: FieldXform): NodeData { const d = n.data as ArrayAccessData; return { array: X.node(d.array) as Node, index: X.node(d.index) as Node } as NodeData; }
+function rebuildObjectLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as ObjectLiteralData; return { properties: X.nodes(d.properties) as Node[], keys: X.strArr(d.keys), keyLocations: X.locs(d.keyLocations) } as NodeData; }
+function rebuildArrayLiteral(n: Node, X: FieldXform): NodeData { const d = n.data as ArrayLiteralData; return { elements: X.nodes(d.elements) as Node[] } as NodeData; }
+function rebuildArrowFunction(n: Node, X: FieldXform): NodeData { const d = n.data as ArrowFunctionData; return { arrowParams: X.strArr(d.arrowParams), arrowParamTypes: X.strArr(d.arrowParamTypes), arrowBody: X.node(d.arrowBody) as Node, arrowFlags: X.str(d.arrowFlags), arrowReturnType: X.str(d.arrowReturnType), arrowDefaults: X.nodes(d.arrowDefaults) } as NodeData; }
+function rebuildFunctionExpr(n: Node, X: FieldXform): NodeData { const d = n.data as FunctionExprData; return { funcExprParams: X.strArr(d.funcExprParams), funcExprParamTypes: X.strArr(d.funcExprParamTypes), funcExprBody: X.node(d.funcExprBody) as Node, funcExprFlags: X.str(d.funcExprFlags), funcExprReturnType: X.str(d.funcExprReturnType) } as NodeData; }
+function rebuildTypeAssertion(n: Node, X: FieldXform): NodeData { const d = n.data as TypeAssertionData; return { asExpr: X.node(d.asExpr) as Node, asType: X.str(d.asType) } as NodeData; }
+function rebuildConditionalExpr(n: Node, X: FieldXform): NodeData { const d = n.data as ConditionalExprData; return { ternaryCondition: X.node(d.ternaryCondition) as Node, ternaryConsequent: X.node(d.ternaryConsequent) as Node, ternaryAlternate: X.node(d.ternaryAlternate) as Node } as NodeData; }
+function rebuildSpreadExpr(n: Node, X: FieldXform): NodeData { const d = n.data as SpreadExprData; return { spreadArg: X.node(d.spreadArg) as Node } as NodeData; }
+function rebuildNewExpr(n: Node, X: FieldXform): NodeData { const d = n.data as NewExprData; return { newCallee: X.node(d.newCallee) as Node, newArguments: X.nodes(d.newArguments) as Node[] } as NodeData; }
+function rebuildTryExpr(n: Node, X: FieldXform): NodeData { const d = n.data as TryExprData; return { tryArg: X.node(d.tryArg) as Node, hasCatch: X.bool(d.hasCatch), catchVal: X.node(d.catchVal) as Node } as NodeData; }
+function rebuildMatchExpr(n: Node, X: FieldXform): NodeData { const d = n.data as MatchExprData; return { matchDisc: X.node(d.matchDisc) as Node, matchCases: X.nodes(d.matchCases) as Node[] } as NodeData; }
+function rebuildMatchCase(n: Node, X: FieldXform): NodeData { const d = n.data as MatchCaseData; return { casePatterns: X.nodes(d.casePatterns) as Node[], caseGuard: X.node(d.caseGuard) as Node, caseBody: X.node(d.caseBody) as Node } as NodeData; }
+function rebuildAwaitExpr(n: Node, X: FieldXform): NodeData { const d = n.data as AwaitExprData; return { awaitArg: X.node(d.awaitArg) as Node } as NodeData; }
+function rebuildYieldExpr(n: Node, X: FieldXform): NodeData { const d = n.data as YieldExprData; return { yieldArg: X.node(d.yieldArg) as Node, isDelegate: X.bool(d.isDelegate) } as NodeData; }
+function rebuildMoveExpr(n: Node, X: FieldXform): NodeData { const d = n.data as MoveExprData; return { moveArg: X.node(d.moveArg) as Node } as NodeData; }
+function rebuildOutExpr(n: Node, X: FieldXform): NodeData { const d = n.data as OutExprData; return { outArg: X.node(d.outArg) as Node } as NodeData; }
+function rebuildSizeofExpr(n: Node, X: FieldXform): NodeData { const d = n.data as SizeofExprData; return { sizeofType: X.str(d.sizeofType), sizeofResolved: X.typ(d.sizeofResolved) as Type } as NodeData; }
+function rebuildHiddenStdConv(n: Node, X: FieldXform): NodeData { const d = n.data as HiddenStdConvData; return { convExpr: X.node(d.convExpr) as Node, convType: X.typ(d.convType) as Type } as NodeData; }
+function rebuildHiddenDeref(n: Node, X: FieldXform): NodeData { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
+function rebuildTypeAnnotation(n: Node, X: FieldXform): NodeData { const d = n.data as TypeAnnotationData; return { annotationType: X.str(d.annotationType) } as NodeData; }
+function rebuildArrayPattern(n: Node, X: FieldXform): NodeData { const d = n.data as ArrayPatternData; return { patternElements: X.nodes(d.patternElements) as Node[], hasRestElement: X.bool(d.hasRestElement), patternDefaults: X.nodes(d.patternDefaults) as Node[] } as NodeData; }
+function rebuildObjectPattern(n: Node, X: FieldXform): NodeData { const d = n.data as ObjectPatternData; return { patternProps: X.nodes(d.patternProps) as Node[], hasRestProp: X.bool(d.hasRestProp) } as NodeData; }
+function rebuildObjectPatternProp(n: Node, X: FieldXform): NodeData { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node, propDefault: X.node(d.propDefault) } as NodeData; }
+function rebuildDestructuringDecl(n: Node, X: FieldXform): NodeData { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst) } as NodeData; }
+function rebuildVariableDecl(n: Node, X: FieldXform): NodeData { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+function rebuildIfStmt(n: Node, X: FieldXform): NodeData { const d = n.data as IfStmtData; return { condition: X.node(d.condition) as Node, consequent: X.node(d.consequent) as Node, alternate: X.node(d.alternate) as Node } as NodeData; }
+function rebuildWhileStmt(n: Node, X: FieldXform): NodeData { const d = n.data as WhileStmtData; return { whileCondition: X.node(d.whileCondition) as Node, whileBody: X.node(d.whileBody) as Node, whileLabel: X.str(d.whileLabel) } as NodeData; }
+function rebuildForStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ForStmtData; return { forInit: X.node(d.forInit) as Node, forCondition: X.node(d.forCondition) as Node, forUpdate: X.node(d.forUpdate) as Node, forBody: X.node(d.forBody) as Node } as NodeData; }
+function rebuildForOfStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ForOfStmtData; return { forOfBinding: X.str(d.forOfBinding), forOfIsConst: X.bool(d.forOfIsConst), forOfIterable: X.node(d.forOfIterable) as Node, forOfBody: X.node(d.forOfBody) as Node, forOfPattern: X.node(d.forOfPattern) as Node, bindingLocation: X.loc(d.bindingLocation) as SourceLocation } as NodeData; }
+function rebuildForInStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ForInStmtData; return { forInBinding: X.str(d.forInBinding), forInIsConst: X.bool(d.forInIsConst), forInObject: X.node(d.forInObject) as Node, forInBody: X.node(d.forInBody) as Node } as NodeData; }
+function rebuildBlockStmt(n: Node, X: FieldXform): NodeData { const d = n.data as BlockStmtData; return { statements: X.nodes(d.statements) as Node[] } as NodeData; }
+function rebuildExprStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
+function rebuildReturnStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ReturnStmtData; return { argument: X.node(d.argument) } as NodeData; }
+function rebuildBreakStmt(n: Node, X: FieldXform): NodeData { const d = n.data as BreakStmtData; return { breakLabel: X.str(d.breakLabel) } as NodeData; }
+function rebuildContinueStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ContinueStmtData; return { continueLabel: X.str(d.continueLabel) } as NodeData; }
+function rebuildFunctionDecl(n: Node, X: FieldXform): NodeData { const d = n.data as FunctionDeclData; return { fnName: X.str(d.fnName), params: X.strArr(d.params), fnParamTypes: X.strArr(d.fnParamTypes), fnBody: X.node(d.fnBody) as Node, fnFlags: X.str(d.fnFlags), fnReturnType: X.str(d.fnReturnType), fnDefaults: X.nodes(d.fnDefaults) as Node[], nativeName: X.str(d.nativeName), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+function rebuildDoWhileStmt(n: Node, X: FieldXform): NodeData { const d = n.data as DoWhileStmtData; return { doBody: X.node(d.doBody) as Node, doCondition: X.node(d.doCondition) as Node } as NodeData; }
+function rebuildSwitchStmt(n: Node, X: FieldXform): NodeData { const d = n.data as SwitchStmtData; return { switchDisc: X.node(d.switchDisc) as Node, switchCases: X.nodes(d.switchCases) as Node[] } as NodeData; }
+function rebuildSwitchCase(n: Node, X: FieldXform): NodeData { const d = n.data as SwitchCaseData; return { caseTests: X.nodes(d.caseTests) as Node[], caseStmts: X.nodes(d.caseStmts) as Node[], isDefault: X.bool(d.isDefault) } as NodeData; }
+function rebuildUnreachableStmt(n: Node, X: FieldXform): NodeData { const d = n.data as UnreachableStmtData; return { unreachableMsg: X.str(d.unreachableMsg) } as NodeData; }
+function rebuildMatchStmt(n: Node, X: FieldXform): NodeData { const d = n.data as MatchStmtData; return { matchStmtDisc: X.node(d.matchStmtDisc) as Node, matchStmtCases: X.nodes(d.matchStmtCases) as Node[] } as NodeData; }
+function rebuildImportDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ImportDeclData; return { importNames: X.strArr(d.importNames), importAliases: X.strArr(d.importAliases), importSource: X.str(d.importSource), nameLocations: X.locs(d.nameLocations), aliasLocations: X.locs(d.aliasLocations), importTypeNames: X.strArr(d.importTypeNames) } as NodeData; }
+function rebuildExportDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ExportDeclData; return { exportedDecl: X.node(d.exportedDecl) as Node } as NodeData; }
+function rebuildTypeAliasDecl(n: Node, X: FieldXform): NodeData { const d = n.data as TypeAliasDeclData; return { aliasName: X.str(d.aliasName), aliasType: X.str(d.aliasType), aliasIsDistinct: X.bool(d.aliasIsDistinct), aliasGenericParams: X.str(d.aliasGenericParams), discriminantName: X.str(d.discriminantName), discriminantType: X.str(d.discriminantType), variantKeys: X.strArr(d.variantKeys), variantTypes: X.strArr(d.variantTypes), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+function rebuildEnumDecl(n: Node, X: FieldXform): NodeData { const d = n.data as EnumDeclData; return { enumName: X.str(d.enumName), enumMembers: X.strArr(d.enumMembers), enumValues: X.floats(d.enumValues), nameLocation: X.loc(d.nameLocation) as SourceLocation, memberLocations: X.locs(d.memberLocations), enumInits: X.nodes(d.enumInits) } as NodeData; }
+function rebuildInterfaceDecl(n: Node, X: FieldXform): NodeData { const d = n.data as InterfaceDeclData; return { interfaceName: X.str(d.interfaceName), interfaceFields: X.strArr(d.interfaceFields), interfaceFieldTypes: X.strArr(d.interfaceFieldTypes), interfaceExtends: X.strArr(d.interfaceExtends), nameLocation: X.loc(d.nameLocation) as SourceLocation, interfaceFieldVisibility: X.strArr(d.interfaceFieldVisibility), interfaceFieldDecorators: X.nodesNested(d.interfaceFieldDecorators) as Node[][], interfaceOptionalFields: X.strArr(d.interfaceOptionalFields), nativeName: X.str(d.nativeName) } as NodeData; }
+function rebuildClassDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ClassDeclData; return { className: X.str(d.className), classDisplayName: X.str(d.classDisplayName), classExtends: X.str(d.classExtends), classBody: X.nodes(d.classBody) as Node[], nameLocation: X.loc(d.nameLocation) as SourceLocation, classImplements: X.strArr(d.classImplements) } as NodeData; }
+function rebuildPropertyDecl(n: Node, X: FieldXform): NodeData { const d = n.data as PropertyDeclData; return { propName: X.str(d.propName), propType: X.str(d.propType), propIsStatic: X.bool(d.propIsStatic), propIsReadonly: X.bool(d.propIsReadonly), propVisibility: X.str(d.propVisibility), propInitializer: X.node(d.propInitializer) as Node } as NodeData; }
+function rebuildMethodDecl(n: Node, X: FieldXform): NodeData { const d = n.data as MethodDeclData; return { methodName: X.str(d.methodName), methodParams: X.strArr(d.methodParams), methodParamTypes: X.strArr(d.methodParamTypes), methodBody: X.node(d.methodBody) as Node, methodIsStatic: X.bool(d.methodIsStatic), methodFlags: X.str(d.methodFlags), methodVisibility: X.str(d.methodVisibility), methodReturnType: X.str(d.methodReturnType), methodDefaults: X.nodes(d.methodDefaults) as Node[], nativeName: X.str(d.nativeName), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+function rebuildConstructorDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ConstructorDeclData; return { ctorParams: X.strArr(d.ctorParams), ctorParamTypes: X.strArr(d.ctorParamTypes), ctorBody: X.node(d.ctorBody) as Node, ctorDefaults: X.nodes(d.ctorDefaults) as Node[], ctorVisibility: X.str(d.ctorVisibility), ctorParamProps: X.nodes(d.ctorParamProps) as Node[] } as NodeData; }
+function rebuildThrowStmt(n: Node, X: FieldXform): NodeData { const d = n.data as ThrowStmtData; return { throwArg: X.node(d.throwArg) as Node } as NodeData; }
+function rebuildTryCatchStmt(n: Node, X: FieldXform): NodeData { const d = n.data as TryCatchStmtData; return { tryBody: X.node(d.tryBody) as Node, catchName: X.str(d.catchName), catchBody: X.node(d.catchBody) as Node, finallyBody: X.node(d.finallyBody) as Node, catchBindingLocation: X.loc(d.catchBindingLocation) as SourceLocation, hasCatchClause: X.bool(d.hasCatchClause) } as NodeData; }
+function rebuildMacroInvocation(n: Node, X: FieldXform): NodeData { const d = n.data as MacroInvocationData; return { macroName: X.str(d.macroName), macroArgs: X.nodes(d.macroArgs) as Node[], macroHasParens: X.bool(d.macroHasParens) } as NodeData; }
+function rebuildDecoratedDecl(n: Node, X: FieldXform): NodeData { const d = n.data as DecoratedDeclData; return { decorators: X.nodes(d.decorators) as Node[], decoratedNode: X.node(d.decoratedNode) as Node } as NodeData; }
+function rebuildDeferStmt(n: Node, X: FieldXform): NodeData { const d = n.data as DeferStmtData; return { deferExpr: X.node(d.deferExpr) as Node } as NodeData; }
+function rebuildTestDecl(n: Node, X: FieldXform): NodeData { const d = n.data as TestDeclData; return { testName: X.str(d.testName), testBody: X.node(d.testBody) as Node } as NodeData; }
+function rebuildAssertStmt(n: Node, X: FieldXform): NodeData { const d = n.data as AssertStmtData; return { assertExpr: X.node(d.assertExpr) as Node, assertSource: X.str(d.assertSource), assertMessage: X.str(d.assertMessage), assertMessageExpr: X.node(d.assertMessageExpr) } as NodeData; }
+function rebuildExternDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ExternDeclData; return { externKind: X.integer(d.externKind as int32 as int64) as int32 as ExternKind, externName: X.str(d.externName), nativeName: X.str(d.nativeName), externType: X.str(d.externType) } as NodeData; }
+function rebuildMacroDecl(n: Node, X: FieldXform): NodeData { const d = n.data as MacroDeclData; return { macroDeclName: X.str(d.macroDeclName), macroDeclParams: X.strArr(d.macroDeclParams), macroDeclParamTypes: X.strArr(d.macroDeclParamTypes), macroDeclReturnType: X.str(d.macroDeclReturnType), macroDeclBody: X.node(d.macroDeclBody) as Node } as NodeData; }
+function rebuildQuoteExpr(n: Node, X: FieldXform): NodeData { const d = n.data as QuoteExprData; return { quoteBody: X.node(d.quoteBody) as Node } as NodeData; }
+function rebuildComptimeBlock(n: Node, X: FieldXform): NodeData { const d = n.data as ComptimeBlockData; return { comptimeBody: X.node(d.comptimeBody) as Node } as NodeData; }
+function rebuildTypeGeneric(n: Node, X: FieldXform): NodeData { const d = n.data as TypeGenericData; return { typExprBase: X.node(d.typExprBase) as Node, typExprArgs: X.nodes(d.typExprArgs) as Node[] } as NodeData; }
+function rebuildTypeArray(n: Node, X: FieldXform): NodeData { const d = n.data as TypeArrayData; return { typExprElement: X.node(d.typExprElement) as Node, typExprSize: X.float(d.typExprSize) } as NodeData; }
+function rebuildTypeUnion(n: Node, X: FieldXform): NodeData { const d = n.data as TypeUnionData; return { typExprMembers: X.nodes(d.typExprMembers) as Node[], discFieldName: X.str(d.discFieldName), variantKeys: X.strArr(d.variantKeys), discKind: X.str(d.discKind) } as NodeData; }
+function rebuildTypeIntersection(n: Node, X: FieldXform): NodeData { const d = n.data as TypeIntersectionData; return { typExprMembers: X.nodes(d.typExprMembers) as Node[] } as NodeData; }
+function rebuildTypeFunction(n: Node, X: FieldXform): NodeData { const d = n.data as TypeFunctionData; return { typExprParams: X.nodes(d.typExprParams) as Node[], typExprReturn: X.node(d.typExprReturn) as Node, typExprParamNames: X.strArr(d.typExprParamNames) } as NodeData; }
+function rebuildTypeObject(n: Node, X: FieldXform): NodeData { const d = n.data as TypeObjectData; return { typExprFieldNames: X.strArr(d.typExprFieldNames), typExprFieldTypes: X.nodes(d.typExprFieldTypes) as Node[], typExprIndexKey: X.node(d.typExprIndexKey) as Node, typExprIndexValue: X.node(d.typExprIndexValue) as Node, typExprFieldDecorators: X.nodesNested(d.typExprFieldDecorators) as Node[][], typExprTypeName: X.str(d.typExprTypeName), typExprOptionalFields: X.strArr(d.typExprOptionalFields) } as NodeData; }
+function rebuildProgram(n: Node, X: FieldXform): NodeData { const d = n.data as ProgramData; return { programStmts: X.nodes(d.programStmts) as Node[] } as NodeData; }
+function rebuildActorDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ActorDeclData; return { actorName: X.str(d.actorName), actorBody: X.nodes(d.actorBody) as Node[], nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+function rebuildSpliceMany(n: Node, X: FieldXform): NodeData { const d = n.data as SpliceManyData; return { spliceNodes: X.nodes(d.spliceNodes) as Node[] } as NodeData; }
+function rebuildJSXElement(n: Node, X: FieldXform): NodeData { const d = n.data as JSXElementData; return { jsxTag: X.str(d.jsxTag), jsxAttrs: X.nodes(d.jsxAttrs) as Node[], jsxChildren: X.nodes(d.jsxChildren) as Node[], jsxSelfClosing: X.bool(d.jsxSelfClosing) } as NodeData; }
+function rebuildJSXFragment(n: Node, X: FieldXform): NodeData { const d = n.data as JSXFragmentData; return { jsxFragChildren: X.nodes(d.jsxFragChildren) as Node[] } as NodeData; }
+function rebuildJSXText(n: Node, X: FieldXform): NodeData { const d = n.data as JSXTextData; return { jsxText: X.str(d.jsxText) } as NodeData; }
+function rebuildJSXExpressionContainer(n: Node, X: FieldXform): NodeData { const d = n.data as JSXExpressionContainerData; return { jsxExpr: X.node(d.jsxExpr) as Node } as NodeData; }
+function rebuildJSXAttribute(n: Node, X: FieldXform): NodeData { const d = n.data as JSXAttributeData; return { jsxAttrName: X.str(d.jsxAttrName), jsxAttrValue: X.node(d.jsxAttrValue) as Node } as NodeData; }
+function rebuildJSXSpreadAttribute(n: Node, X: FieldXform): NodeData { const d = n.data as JSXSpreadAttributeData; return { jsxSpreadArg: X.node(d.jsxSpreadArg) as Node } as NodeData; }
+function rebuildComputedProperty(n: Node, X: FieldXform): NodeData { const d = n.data as ComputedPropertyData; return { computedKey: X.node(d.computedKey) as Node, computedValue: X.node(d.computedValue) as Node } as NodeData; }
+
 export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	const kind = n.kind;
-	if (kind == NodeKind.NumberLiteral) { const d = n.data as NumberLiteralData; return { value: X.float(d.value), isFloat: X.bool(d.isFloat), intVal: X.integer(d.intVal), outOfRangeText: X.str(d.outOfRangeText), isBitPattern: X.bool(d.isBitPattern) } as NodeData; }
-	if (kind == NodeKind.StringLiteral) { const d = n.data as StringLiteralData; return { value: X.str(d.value) } as NodeData; }
-	if (kind == NodeKind.BooleanLiteral) { const d = n.data as BooleanLiteralData; return { boolValue: X.bool(d.boolValue) } as NodeData; }
+	if (kind == NodeKind.NumberLiteral) return rebuildNumberLiteral(n, X);
+	if (kind == NodeKind.StringLiteral) return rebuildStringLiteral(n, X);
+	if (kind == NodeKind.BooleanLiteral) return rebuildBooleanLiteral(n, X);
 	if (kind == NodeKind.NullLiteral) return { nullPlaceholder: true } as NodeData;
-	if (kind == NodeKind.BigIntLiteral) { const d = n.data as BigIntLiteralData; return { bigintValue: X.str(d.bigintValue) } as NodeData; }
-	if (kind == NodeKind.RegexLiteral) { const d = n.data as RegexLiteralData; return { regexPattern: X.str(d.regexPattern) } as NodeData; }
-	if (kind == NodeKind.Identifier) { const d = n.data as IdentifierData; return { name: X.str(d.name) } as NodeData; }
-	if (kind == NodeKind.BinaryExpr) { const d = n.data as BinaryExprData; return { operator: X.str(d.operator), left: X.node(d.left) as Node, right: X.node(d.right) as Node } as NodeData; }
-	if (kind == NodeKind.UnaryExpr) { const d = n.data as UnaryExprData; return { unaryOp: X.str(d.unaryOp), operand: X.node(d.operand) as Node } as NodeData; }
-	if (kind == NodeKind.UpdateExpr) { const d = n.data as UpdateExprData; return { updateOp: X.str(d.updateOp), updateArg: X.node(d.updateArg) as Node, isPrefix: X.bool(d.isPrefix) } as NodeData; }
-	if (kind == NodeKind.CallExpr) { const d = n.data as CallExprData; return { callee: X.node(d.callee) as Node, arguments: X.nodes(d.arguments) as Node[], isDirectCall: X.bool(d.isDirectCall), resolvedOverloadIdx: X.float(d.resolvedOverloadIdx) } as NodeData; }
-	if (kind == NodeKind.MemberExpr) { const d = n.data as MemberExprData; return { object: X.node(d.object) as Node, property: X.str(d.property), isOptional: X.bool(d.isOptional) } as NodeData; }
-	if (kind == NodeKind.ArrayAccess) { const d = n.data as ArrayAccessData; return { array: X.node(d.array) as Node, index: X.node(d.index) as Node } as NodeData; }
-	if (kind == NodeKind.ObjectLiteral) { const d = n.data as ObjectLiteralData; return { properties: X.nodes(d.properties) as Node[], keys: X.strArr(d.keys), keyLocations: X.locs(d.keyLocations) } as NodeData; }
-	if (kind == NodeKind.ArrayLiteral) { const d = n.data as ArrayLiteralData; return { elements: X.nodes(d.elements) as Node[] } as NodeData; }
-	if (kind == NodeKind.ArrowFunction) { const d = n.data as ArrowFunctionData; return { arrowParams: X.strArr(d.arrowParams), arrowParamTypes: X.strArr(d.arrowParamTypes), arrowBody: X.node(d.arrowBody) as Node, arrowFlags: X.str(d.arrowFlags), arrowReturnType: X.str(d.arrowReturnType), arrowDefaults: X.nodes(d.arrowDefaults) } as NodeData; }
-	if (kind == NodeKind.FunctionExpr) { const d = n.data as FunctionExprData; return { funcExprParams: X.strArr(d.funcExprParams), funcExprParamTypes: X.strArr(d.funcExprParamTypes), funcExprBody: X.node(d.funcExprBody) as Node, funcExprFlags: X.str(d.funcExprFlags), funcExprReturnType: X.str(d.funcExprReturnType) } as NodeData; }
-	if (kind == NodeKind.TypeAssertion) { const d = n.data as TypeAssertionData; return { asExpr: X.node(d.asExpr) as Node, asType: X.str(d.asType) } as NodeData; }
-	if (kind == NodeKind.ConditionalExpr) { const d = n.data as ConditionalExprData; return { ternaryCondition: X.node(d.ternaryCondition) as Node, ternaryConsequent: X.node(d.ternaryConsequent) as Node, ternaryAlternate: X.node(d.ternaryAlternate) as Node } as NodeData; }
-	if (kind == NodeKind.SpreadExpr) { const d = n.data as SpreadExprData; return { spreadArg: X.node(d.spreadArg) as Node } as NodeData; }
-	if (kind == NodeKind.NewExpr) { const d = n.data as NewExprData; return { newCallee: X.node(d.newCallee) as Node, newArguments: X.nodes(d.newArguments) as Node[] } as NodeData; }
-	if (kind == NodeKind.TryExpr) { const d = n.data as TryExprData; return { tryArg: X.node(d.tryArg) as Node, hasCatch: X.bool(d.hasCatch), catchVal: X.node(d.catchVal) as Node } as NodeData; }
-	if (kind == NodeKind.MatchExpr) { const d = n.data as MatchExprData; return { matchDisc: X.node(d.matchDisc) as Node, matchCases: X.nodes(d.matchCases) as Node[] } as NodeData; }
-	if (kind == NodeKind.MatchCase) { const d = n.data as MatchCaseData; return { casePatterns: X.nodes(d.casePatterns) as Node[], caseGuard: X.node(d.caseGuard) as Node, caseBody: X.node(d.caseBody) as Node } as NodeData; }
-	if (kind == NodeKind.AwaitExpr) { const d = n.data as AwaitExprData; return { awaitArg: X.node(d.awaitArg) as Node } as NodeData; }
-	if (kind == NodeKind.YieldExpr) { const d = n.data as YieldExprData; return { yieldArg: X.node(d.yieldArg) as Node, isDelegate: X.bool(d.isDelegate) } as NodeData; }
-	if (kind == NodeKind.MoveExpr) { const d = n.data as MoveExprData; return { moveArg: X.node(d.moveArg) as Node } as NodeData; }
-	if (kind == NodeKind.OutExpr) { const d = n.data as OutExprData; return { outArg: X.node(d.outArg) as Node } as NodeData; }
-	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; return { sizeofType: X.str(d.sizeofType), sizeofResolved: X.typ(d.sizeofResolved) as Type } as NodeData; }
-	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; return { convExpr: X.node(d.convExpr) as Node, convType: X.typ(d.convType) as Type } as NodeData; }
-	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
-	if (kind == NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; return { annotationType: X.str(d.annotationType) } as NodeData; }
-	if (kind == NodeKind.ArrayPattern) { const d = n.data as ArrayPatternData; return { patternElements: X.nodes(d.patternElements) as Node[], hasRestElement: X.bool(d.hasRestElement), patternDefaults: X.nodes(d.patternDefaults) as Node[] } as NodeData; }
-	if (kind == NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; return { patternProps: X.nodes(d.patternProps) as Node[], hasRestProp: X.bool(d.hasRestProp) } as NodeData; }
-	if (kind == NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node, propDefault: X.node(d.propDefault) } as NodeData; }
-	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst) } as NodeData; }
-	if (kind == NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.IfStmt) { const d = n.data as IfStmtData; return { condition: X.node(d.condition) as Node, consequent: X.node(d.consequent) as Node, alternate: X.node(d.alternate) as Node } as NodeData; }
-	if (kind == NodeKind.WhileStmt) { const d = n.data as WhileStmtData; return { whileCondition: X.node(d.whileCondition) as Node, whileBody: X.node(d.whileBody) as Node, whileLabel: X.str(d.whileLabel) } as NodeData; }
-	if (kind == NodeKind.ForStmt) { const d = n.data as ForStmtData; return { forInit: X.node(d.forInit) as Node, forCondition: X.node(d.forCondition) as Node, forUpdate: X.node(d.forUpdate) as Node, forBody: X.node(d.forBody) as Node } as NodeData; }
-	if (kind == NodeKind.ForOfStmt) { const d = n.data as ForOfStmtData; return { forOfBinding: X.str(d.forOfBinding), forOfIsConst: X.bool(d.forOfIsConst), forOfIterable: X.node(d.forOfIterable) as Node, forOfBody: X.node(d.forOfBody) as Node, forOfPattern: X.node(d.forOfPattern) as Node, bindingLocation: X.loc(d.bindingLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.ForInStmt) { const d = n.data as ForInStmtData; return { forInBinding: X.str(d.forInBinding), forInIsConst: X.bool(d.forInIsConst), forInObject: X.node(d.forInObject) as Node, forInBody: X.node(d.forInBody) as Node } as NodeData; }
-	if (kind == NodeKind.BlockStmt) { const d = n.data as BlockStmtData; return { statements: X.nodes(d.statements) as Node[] } as NodeData; }
-	if (kind == NodeKind.ExprStmt) { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
-	if (kind == NodeKind.ReturnStmt) { const d = n.data as ReturnStmtData; return { argument: X.node(d.argument) } as NodeData; }
-	if (kind == NodeKind.BreakStmt) { const d = n.data as BreakStmtData; return { breakLabel: X.str(d.breakLabel) } as NodeData; }
-	if (kind == NodeKind.ContinueStmt) { const d = n.data as ContinueStmtData; return { continueLabel: X.str(d.continueLabel) } as NodeData; }
-	if (kind == NodeKind.FunctionDecl) { const d = n.data as FunctionDeclData; return { fnName: X.str(d.fnName), params: X.strArr(d.params), fnParamTypes: X.strArr(d.fnParamTypes), fnBody: X.node(d.fnBody) as Node, fnFlags: X.str(d.fnFlags), fnReturnType: X.str(d.fnReturnType), fnDefaults: X.nodes(d.fnDefaults) as Node[], nativeName: X.str(d.nativeName), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.DoWhileStmt) { const d = n.data as DoWhileStmtData; return { doBody: X.node(d.doBody) as Node, doCondition: X.node(d.doCondition) as Node } as NodeData; }
-	if (kind == NodeKind.SwitchStmt) { const d = n.data as SwitchStmtData; return { switchDisc: X.node(d.switchDisc) as Node, switchCases: X.nodes(d.switchCases) as Node[] } as NodeData; }
-	if (kind == NodeKind.SwitchCase) { const d = n.data as SwitchCaseData; return { caseTests: X.nodes(d.caseTests) as Node[], caseStmts: X.nodes(d.caseStmts) as Node[], isDefault: X.bool(d.isDefault) } as NodeData; }
-	if (kind == NodeKind.UnreachableStmt) { const d = n.data as UnreachableStmtData; return { unreachableMsg: X.str(d.unreachableMsg) } as NodeData; }
-	if (kind == NodeKind.MatchStmt) { const d = n.data as MatchStmtData; return { matchStmtDisc: X.node(d.matchStmtDisc) as Node, matchStmtCases: X.nodes(d.matchStmtCases) as Node[] } as NodeData; }
-	if (kind == NodeKind.ImportDecl) { const d = n.data as ImportDeclData; return { importNames: X.strArr(d.importNames), importAliases: X.strArr(d.importAliases), importSource: X.str(d.importSource), nameLocations: X.locs(d.nameLocations), aliasLocations: X.locs(d.aliasLocations), importTypeNames: X.strArr(d.importTypeNames) } as NodeData; }
-	if (kind == NodeKind.ExportDecl) { const d = n.data as ExportDeclData; return { exportedDecl: X.node(d.exportedDecl) as Node } as NodeData; }
-	if (kind == NodeKind.TypeAliasDecl) { const d = n.data as TypeAliasDeclData; return { aliasName: X.str(d.aliasName), aliasType: X.str(d.aliasType), aliasIsDistinct: X.bool(d.aliasIsDistinct), aliasGenericParams: X.str(d.aliasGenericParams), discriminantName: X.str(d.discriminantName), discriminantType: X.str(d.discriminantType), variantKeys: X.strArr(d.variantKeys), variantTypes: X.strArr(d.variantTypes), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.EnumDecl) { const d = n.data as EnumDeclData; return { enumName: X.str(d.enumName), enumMembers: X.strArr(d.enumMembers), enumValues: X.floats(d.enumValues), nameLocation: X.loc(d.nameLocation) as SourceLocation, memberLocations: X.locs(d.memberLocations), enumInits: X.nodes(d.enumInits) } as NodeData; }
-	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) { const d = n.data as InterfaceDeclData; return { interfaceName: X.str(d.interfaceName), interfaceFields: X.strArr(d.interfaceFields), interfaceFieldTypes: X.strArr(d.interfaceFieldTypes), interfaceExtends: X.strArr(d.interfaceExtends), nameLocation: X.loc(d.nameLocation) as SourceLocation, interfaceFieldVisibility: X.strArr(d.interfaceFieldVisibility), interfaceFieldDecorators: X.nodesNested(d.interfaceFieldDecorators) as Node[][], interfaceOptionalFields: X.strArr(d.interfaceOptionalFields), nativeName: X.str(d.nativeName) } as NodeData; }
-	if (kind == NodeKind.ClassDecl) { const d = n.data as ClassDeclData; return { className: X.str(d.className), classDisplayName: X.str(d.classDisplayName), classExtends: X.str(d.classExtends), classBody: X.nodes(d.classBody) as Node[], nameLocation: X.loc(d.nameLocation) as SourceLocation, classImplements: X.strArr(d.classImplements) } as NodeData; }
-	if (kind == NodeKind.PropertyDecl) { const d = n.data as PropertyDeclData; return { propName: X.str(d.propName), propType: X.str(d.propType), propIsStatic: X.bool(d.propIsStatic), propIsReadonly: X.bool(d.propIsReadonly), propVisibility: X.str(d.propVisibility), propInitializer: X.node(d.propInitializer) as Node } as NodeData; }
-	if (kind == NodeKind.MethodDecl) { const d = n.data as MethodDeclData; return { methodName: X.str(d.methodName), methodParams: X.strArr(d.methodParams), methodParamTypes: X.strArr(d.methodParamTypes), methodBody: X.node(d.methodBody) as Node, methodIsStatic: X.bool(d.methodIsStatic), methodFlags: X.str(d.methodFlags), methodVisibility: X.str(d.methodVisibility), methodReturnType: X.str(d.methodReturnType), methodDefaults: X.nodes(d.methodDefaults) as Node[], nativeName: X.str(d.nativeName), nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.ConstructorDecl) { const d = n.data as ConstructorDeclData; return { ctorParams: X.strArr(d.ctorParams), ctorParamTypes: X.strArr(d.ctorParamTypes), ctorBody: X.node(d.ctorBody) as Node, ctorDefaults: X.nodes(d.ctorDefaults) as Node[], ctorVisibility: X.str(d.ctorVisibility), ctorParamProps: X.nodes(d.ctorParamProps) as Node[] } as NodeData; }
-	if (kind == NodeKind.ThrowStmt) { const d = n.data as ThrowStmtData; return { throwArg: X.node(d.throwArg) as Node } as NodeData; }
-	if (kind == NodeKind.TryCatchStmt) { const d = n.data as TryCatchStmtData; return { tryBody: X.node(d.tryBody) as Node, catchName: X.str(d.catchName), catchBody: X.node(d.catchBody) as Node, finallyBody: X.node(d.finallyBody) as Node, catchBindingLocation: X.loc(d.catchBindingLocation) as SourceLocation, hasCatchClause: X.bool(d.hasCatchClause) } as NodeData; }
-	if (kind == NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; return { macroName: X.str(d.macroName), macroArgs: X.nodes(d.macroArgs) as Node[], macroHasParens: X.bool(d.macroHasParens) } as NodeData; }
-	if (kind == NodeKind.DecoratedDecl) { const d = n.data as DecoratedDeclData; return { decorators: X.nodes(d.decorators) as Node[], decoratedNode: X.node(d.decoratedNode) as Node } as NodeData; }
-	if (kind == NodeKind.DeferStmt) { const d = n.data as DeferStmtData; return { deferExpr: X.node(d.deferExpr) as Node } as NodeData; }
-	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; return { testName: X.str(d.testName), testBody: X.node(d.testBody) as Node } as NodeData; }
-	if (kind == NodeKind.AssertStmt) { const d = n.data as AssertStmtData; return { assertExpr: X.node(d.assertExpr) as Node, assertSource: X.str(d.assertSource), assertMessage: X.str(d.assertMessage), assertMessageExpr: X.node(d.assertMessageExpr) } as NodeData; }
-	if (kind == NodeKind.ExternDecl) { const d = n.data as ExternDeclData; return { externKind: X.integer(d.externKind as int32 as int64) as int32 as ExternKind, externName: X.str(d.externName), nativeName: X.str(d.nativeName), externType: X.str(d.externType) } as NodeData; }
-	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; return { macroDeclName: X.str(d.macroDeclName), macroDeclParams: X.strArr(d.macroDeclParams), macroDeclParamTypes: X.strArr(d.macroDeclParamTypes), macroDeclReturnType: X.str(d.macroDeclReturnType), macroDeclBody: X.node(d.macroDeclBody) as Node } as NodeData; }
-	if (kind == NodeKind.QuoteExpr) { const d = n.data as QuoteExprData; return { quoteBody: X.node(d.quoteBody) as Node } as NodeData; }
-	if (kind == NodeKind.ComptimeBlock) { const d = n.data as ComptimeBlockData; return { comptimeBody: X.node(d.comptimeBody) as Node } as NodeData; }
-	if (kind == NodeKind.TypeGeneric) { const d = n.data as TypeGenericData; return { typExprBase: X.node(d.typExprBase) as Node, typExprArgs: X.nodes(d.typExprArgs) as Node[] } as NodeData; }
-	if (kind == NodeKind.TypeArray) { const d = n.data as TypeArrayData; return { typExprElement: X.node(d.typExprElement) as Node, typExprSize: X.float(d.typExprSize) } as NodeData; }
-	if (kind == NodeKind.TypeUnion) { const d = n.data as TypeUnionData; return { typExprMembers: X.nodes(d.typExprMembers) as Node[], discFieldName: X.str(d.discFieldName), variantKeys: X.strArr(d.variantKeys), discKind: X.str(d.discKind) } as NodeData; }
-	if (kind == NodeKind.TypeIntersection) { const d = n.data as TypeIntersectionData; return { typExprMembers: X.nodes(d.typExprMembers) as Node[] } as NodeData; }
-	if (kind == NodeKind.TypeFunction) { const d = n.data as TypeFunctionData; return { typExprParams: X.nodes(d.typExprParams) as Node[], typExprReturn: X.node(d.typExprReturn) as Node, typExprParamNames: X.strArr(d.typExprParamNames) } as NodeData; }
-	if (kind == NodeKind.TypeObject) { const d = n.data as TypeObjectData; return { typExprFieldNames: X.strArr(d.typExprFieldNames), typExprFieldTypes: X.nodes(d.typExprFieldTypes) as Node[], typExprIndexKey: X.node(d.typExprIndexKey) as Node, typExprIndexValue: X.node(d.typExprIndexValue) as Node, typExprFieldDecorators: X.nodesNested(d.typExprFieldDecorators) as Node[][], typExprTypeName: X.str(d.typExprTypeName), typExprOptionalFields: X.strArr(d.typExprOptionalFields) } as NodeData; }
-	if (kind == NodeKind.Program) { const d = n.data as ProgramData; return { programStmts: X.nodes(d.programStmts) as Node[] } as NodeData; }
-	if (kind == NodeKind.ActorDecl) { const d = n.data as ActorDeclData; return { actorName: X.str(d.actorName), actorBody: X.nodes(d.actorBody) as Node[], nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
-	if (kind == NodeKind.SpliceMany) { const d = n.data as SpliceManyData; return { spliceNodes: X.nodes(d.spliceNodes) as Node[] } as NodeData; }
-	if (kind == NodeKind.JSXElement) { const d = n.data as JSXElementData; return { jsxTag: X.str(d.jsxTag), jsxAttrs: X.nodes(d.jsxAttrs) as Node[], jsxChildren: X.nodes(d.jsxChildren) as Node[], jsxSelfClosing: X.bool(d.jsxSelfClosing) } as NodeData; }
-	if (kind == NodeKind.JSXFragment) { const d = n.data as JSXFragmentData; return { jsxFragChildren: X.nodes(d.jsxFragChildren) as Node[] } as NodeData; }
-	if (kind == NodeKind.JSXText) { const d = n.data as JSXTextData; return { jsxText: X.str(d.jsxText) } as NodeData; }
-	if (kind == NodeKind.JSXExpressionContainer) { const d = n.data as JSXExpressionContainerData; return { jsxExpr: X.node(d.jsxExpr) as Node } as NodeData; }
-	if (kind == NodeKind.JSXAttribute) { const d = n.data as JSXAttributeData; return { jsxAttrName: X.str(d.jsxAttrName), jsxAttrValue: X.node(d.jsxAttrValue) as Node } as NodeData; }
-	if (kind == NodeKind.JSXSpreadAttribute) { const d = n.data as JSXSpreadAttributeData; return { jsxSpreadArg: X.node(d.jsxSpreadArg) as Node } as NodeData; }
-	if (kind == NodeKind.ComputedProperty) { const d = n.data as ComputedPropertyData; return { computedKey: X.node(d.computedKey) as Node, computedValue: X.node(d.computedValue) as Node } as NodeData; }
+	if (kind == NodeKind.BigIntLiteral) return rebuildBigIntLiteral(n, X);
+	if (kind == NodeKind.RegexLiteral) return rebuildRegexLiteral(n, X);
+	if (kind == NodeKind.Identifier) return rebuildIdentifier(n, X);
+	if (kind == NodeKind.BinaryExpr) return rebuildBinaryExpr(n, X);
+	if (kind == NodeKind.UnaryExpr) return rebuildUnaryExpr(n, X);
+	if (kind == NodeKind.UpdateExpr) return rebuildUpdateExpr(n, X);
+	if (kind == NodeKind.CallExpr) return rebuildCallExpr(n, X);
+	if (kind == NodeKind.MemberExpr) return rebuildMemberExpr(n, X);
+	if (kind == NodeKind.ArrayAccess) return rebuildArrayAccess(n, X);
+	if (kind == NodeKind.ObjectLiteral) return rebuildObjectLiteral(n, X);
+	if (kind == NodeKind.ArrayLiteral) return rebuildArrayLiteral(n, X);
+	if (kind == NodeKind.ArrowFunction) return rebuildArrowFunction(n, X);
+	if (kind == NodeKind.FunctionExpr) return rebuildFunctionExpr(n, X);
+	if (kind == NodeKind.TypeAssertion) return rebuildTypeAssertion(n, X);
+	if (kind == NodeKind.ConditionalExpr) return rebuildConditionalExpr(n, X);
+	if (kind == NodeKind.SpreadExpr) return rebuildSpreadExpr(n, X);
+	if (kind == NodeKind.NewExpr) return rebuildNewExpr(n, X);
+	if (kind == NodeKind.TryExpr) return rebuildTryExpr(n, X);
+	if (kind == NodeKind.MatchExpr) return rebuildMatchExpr(n, X);
+	if (kind == NodeKind.MatchCase) return rebuildMatchCase(n, X);
+	if (kind == NodeKind.AwaitExpr) return rebuildAwaitExpr(n, X);
+	if (kind == NodeKind.YieldExpr) return rebuildYieldExpr(n, X);
+	if (kind == NodeKind.MoveExpr) return rebuildMoveExpr(n, X);
+	if (kind == NodeKind.OutExpr) return rebuildOutExpr(n, X);
+	if (kind == NodeKind.SizeofExpr) return rebuildSizeofExpr(n, X);
+	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) return rebuildHiddenStdConv(n, X);
+	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) return rebuildHiddenDeref(n, X);
+	if (kind == NodeKind.TypeAnnotation) return rebuildTypeAnnotation(n, X);
+	if (kind == NodeKind.ArrayPattern) return rebuildArrayPattern(n, X);
+	if (kind == NodeKind.ObjectPattern) return rebuildObjectPattern(n, X);
+	if (kind == NodeKind.ObjectPatternProp) return rebuildObjectPatternProp(n, X);
+	if (kind == NodeKind.DestructuringDecl) return rebuildDestructuringDecl(n, X);
+	if (kind == NodeKind.VariableDecl) return rebuildVariableDecl(n, X);
+	if (kind == NodeKind.IfStmt) return rebuildIfStmt(n, X);
+	if (kind == NodeKind.WhileStmt) return rebuildWhileStmt(n, X);
+	if (kind == NodeKind.ForStmt) return rebuildForStmt(n, X);
+	if (kind == NodeKind.ForOfStmt) return rebuildForOfStmt(n, X);
+	if (kind == NodeKind.ForInStmt) return rebuildForInStmt(n, X);
+	if (kind == NodeKind.BlockStmt) return rebuildBlockStmt(n, X);
+	if (kind == NodeKind.ExprStmt) return rebuildExprStmt(n, X);
+	if (kind == NodeKind.ReturnStmt) return rebuildReturnStmt(n, X);
+	if (kind == NodeKind.BreakStmt) return rebuildBreakStmt(n, X);
+	if (kind == NodeKind.ContinueStmt) return rebuildContinueStmt(n, X);
+	if (kind == NodeKind.FunctionDecl) return rebuildFunctionDecl(n, X);
+	if (kind == NodeKind.DoWhileStmt) return rebuildDoWhileStmt(n, X);
+	if (kind == NodeKind.SwitchStmt) return rebuildSwitchStmt(n, X);
+	if (kind == NodeKind.SwitchCase) return rebuildSwitchCase(n, X);
+	if (kind == NodeKind.UnreachableStmt) return rebuildUnreachableStmt(n, X);
+	if (kind == NodeKind.MatchStmt) return rebuildMatchStmt(n, X);
+	if (kind == NodeKind.ImportDecl) return rebuildImportDecl(n, X);
+	if (kind == NodeKind.ExportDecl) return rebuildExportDecl(n, X);
+	if (kind == NodeKind.TypeAliasDecl) return rebuildTypeAliasDecl(n, X);
+	if (kind == NodeKind.EnumDecl) return rebuildEnumDecl(n, X);
+	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return rebuildInterfaceDecl(n, X);
+	if (kind == NodeKind.ClassDecl) return rebuildClassDecl(n, X);
+	if (kind == NodeKind.PropertyDecl) return rebuildPropertyDecl(n, X);
+	if (kind == NodeKind.MethodDecl) return rebuildMethodDecl(n, X);
+	if (kind == NodeKind.ConstructorDecl) return rebuildConstructorDecl(n, X);
+	if (kind == NodeKind.ThrowStmt) return rebuildThrowStmt(n, X);
+	if (kind == NodeKind.TryCatchStmt) return rebuildTryCatchStmt(n, X);
+	if (kind == NodeKind.MacroInvocation) return rebuildMacroInvocation(n, X);
+	if (kind == NodeKind.DecoratedDecl) return rebuildDecoratedDecl(n, X);
+	if (kind == NodeKind.DeferStmt) return rebuildDeferStmt(n, X);
+	if (kind == NodeKind.TestDecl) return rebuildTestDecl(n, X);
+	if (kind == NodeKind.AssertStmt) return rebuildAssertStmt(n, X);
+	if (kind == NodeKind.ExternDecl) return rebuildExternDecl(n, X);
+	if (kind == NodeKind.MacroDecl) return rebuildMacroDecl(n, X);
+	if (kind == NodeKind.QuoteExpr) return rebuildQuoteExpr(n, X);
+	if (kind == NodeKind.ComptimeBlock) return rebuildComptimeBlock(n, X);
+	if (kind == NodeKind.TypeGeneric) return rebuildTypeGeneric(n, X);
+	if (kind == NodeKind.TypeArray) return rebuildTypeArray(n, X);
+	if (kind == NodeKind.TypeUnion) return rebuildTypeUnion(n, X);
+	if (kind == NodeKind.TypeIntersection) return rebuildTypeIntersection(n, X);
+	if (kind == NodeKind.TypeFunction) return rebuildTypeFunction(n, X);
+	if (kind == NodeKind.TypeObject) return rebuildTypeObject(n, X);
+	if (kind == NodeKind.Program) return rebuildProgram(n, X);
+	if (kind == NodeKind.ActorDecl) return rebuildActorDecl(n, X);
+	if (kind == NodeKind.SpliceMany) return rebuildSpliceMany(n, X);
+	if (kind == NodeKind.JSXElement) return rebuildJSXElement(n, X);
+	if (kind == NodeKind.JSXFragment) return rebuildJSXFragment(n, X);
+	if (kind == NodeKind.JSXText) return rebuildJSXText(n, X);
+	if (kind == NodeKind.JSXExpressionContainer) return rebuildJSXExpressionContainer(n, X);
+	if (kind == NodeKind.JSXAttribute) return rebuildJSXAttribute(n, X);
+	if (kind == NodeKind.JSXSpreadAttribute) return rebuildJSXSpreadAttribute(n, X);
+	if (kind == NodeKind.ComputedProperty) return rebuildComputedProperty(n, X);
 	// Unknown kind: share the original payload (the pre-unification clone's
 	// fallback semantics for not-yet-handled kinds).
 	return n.data;
