@@ -8,7 +8,8 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 - **Every exported type carries the `Ta` prefix** — interfaces share one global C namespace (`TaQueryKey`, `TaCacheStore`, `TaRevision`); `TransAmDb` is the one exception.
 - **Arrays are bare `T[]` fields** — they pass by pointer, `push()` reaches the caller; no `interface FooList { items: Foo[] }` wrappers.
 - **A query records its dependencies through the frame, never by hand at the call site** — `pushFrame`, compute, then `executeQueryWith` takes the frame's dependencies and minimum durability.
-- **Every derived query passes the revision its output changed at** — `executeQueryWith` stores it as `changedAt`: the current revision, unless an exact comparison shows the output equals the previous one (`Preprocess` by its text, `Parse` by taking its `Preprocess`'s). Validity never rests on a hash, because two texts with one hash are not equal content.
+- **Every derived query passes the revision its output changed at** — `executeQueryWith` stores it as `changedAt`: the current revision, unless an exact comparison shows the output equals the previous one (`Preprocess` by its text, `Parse` by taking its `Preprocess`'s, `TypeCheck` by its interface text while no import's check changed since it was verified, `Impl` by its parse text while its check kept its own). Validity never rests on a hash, because two texts with one hash are not equal content.
+- **A backdated check hands its importers the Symbols they already hold** — a recheck adopts the previous export Symbols (`adopt.ms`), because an importer that stayed GREEN keeps the old ones and a fresh `Box` beside them reads as `Box is not a Box`.
 - **A write records its own revision** — `setFileText` takes the revision of the write and sets the file's `changedAt` and the durability change markers itself; `dbSetFileText` passes the next revision and increments only when the text differs.
 - **YELLOW means a cycle and answers false** — verification never recurses into an entry that is being verified.
 - **HIGH durability is for the std root only** — such a dependency is not walked while no HIGH input changed since the entry was verified (`getLastChange`); it invalidates only when its `changedAt` is after the entry's `verifiedAt`, and a HIGH change walks it.
@@ -24,7 +25,10 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 | `redGreen.ms` | `tryMarkGreen`, `executeQueryWith`, `invalidateFile` |
 | `fileInput.ms` | `TaFileInputStore`, `setFileText`, `getFileText`, `getFileChangedAt`, `getFileId`, `getFileDurability`, `setFileDurability`, `getLastChange` |
 | `moduleDeps.ms` | `TaModuleDepGraph`, `recordModuleImport`, `clearImportsFor`, `getTransitiveDependents`, `detectCycle` |
-| `hash.ms` | `taHashString`, `transAmHashNode` |
+| `hash.ms` | `taHashString`, `transAmHashNode`, `nodeText`, `surfaceText`, `TaText` |
+| `digest.ms` | `ifaceDigest` (a check's exact interface text), `implDigest` |
+| `outputs.ms` | `TaOutputStore`, `outputChangedAt` |
+| `adopt.ms` | `adoptDecls`, `verifyAdoption` |
 | `cancel.ms` | `getCancelVersion`, `checkCancel`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
 | `index.ms` | `TransAmDb`, `createTransAmDb`, `dbBindGraph`, `dbSetGlobalImports`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 
