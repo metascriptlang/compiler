@@ -1639,12 +1639,13 @@ export function checkRelationalOperands(ctx: CheckerContext, op: string, leftTyp
 		node.location.line, node.location.column);
 }
 
-export function refuseMixedSignedCompare(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): void {
+export function refuseMixedSignedOperands(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): void {
 	if (leftType == null || rightType == null) return;
 	if (!isIntegerType(leftType) || !isIntegerType(rightType)) return;
 	if (isUnsignedIntegerType(leftType) == isUnsignedIntegerType(rightType)) return;
 	if (!refusesIntConv(leftType, rightType) || !refusesIntConv(rightType, leftType)) return;
-	addError(ctx, "operator '" + op + "' cannot compare '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
+	const what = binaryOperandClass(op) == "arith" ? "cannot be applied to" : "cannot compare";
+	addError(ctx, "operator '" + op + "' " + what + " '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
 		+ "': neither type holds every value of the other — convert one side with `as`", node.location.line, node.location.column);
 }
 

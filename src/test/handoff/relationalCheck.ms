@@ -282,3 +282,20 @@ test "comparing a signed and an unsigned integer one of which holds the other is
 		assert strictErrorCount(pre + "const c = " + cmp + ";") == 0, cmp;
 	}
 }
+
+test "arithmetic between a signed and an unsigned integer neither of which holds the other is rejected" {
+	const pre = "function count(): uint64 { return 3 as uint64; }\nconst li: int32 = -1;\nconst u32: uint32 = 3;\nconst i8: int8 = -1;\nconst u8: uint8 = 200;\n";
+	for (const op of ["/", "%", "+", "-", "*"]) {
+		for (const expr of ["li " + op + " u32", "u32 " + op + " li", "i8 " + op + " u8", "li " + op + " count()"]) {
+			assert hasError(pre + "const c = " + expr + ";", "operator '" + op + "' cannot be applied to"), expr;
+			assert hasError(pre + "const c = " + expr + ";", "neither type holds every value of the other"), expr;
+		}
+	}
+}
+
+test "arithmetic between a signed and an unsigned integer one of which holds the other, a literal or an explicit cast is valid" {
+	const pre = "const li: int32 = -1;\nconst wide: int64 = -1;\nconst u32: uint32 = 3;\nconst u8: uint8 = 200;\nconst i8: int8 = -1;\n";
+	for (const expr of ["li / u8", "li % u8", "u8 + li", "wide * u32", "u32 - wide", "li / 3", "u32 % 3", "li / (u32 as int32)", "(li as uint32) % u32", "(i8 as uint8) / u8"]) {
+		assert strictErrorCount(pre + "const c = " + expr + ";") == 0, expr;
+	}
+}
