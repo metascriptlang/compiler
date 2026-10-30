@@ -14,7 +14,7 @@
 @compile("vendor/miniz/miniz_tdef.c");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { Bytes } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
@@ -23,10 +23,20 @@ export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
 // ===== Extern bindings =====
 
 extern function msDeflateNew(format: int32, level: int32): int64;
-extern function msDeflateFeed(handle: int64, chunk: string, isLast: int32): int32;
-extern function msDeflateDrain(handle: int64, maxBytes: int32): string;
+extern function msDeflateFeed(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32;
+extern function msDeflateDrain(handle: int64, maxBytes: int32): Buffer;
 extern function msDeflateFree(handle: int64): void;
-extern function msDeflateOneShot(data: string, format: int32, level: int32): string;
+extern function msDeflateOneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Buffer;
+
+function feedBytes(handle: int64, chunk: Bytes, isLast: int32): int32 {
+	if (typeof chunk == "string") return msDeflateFeed(handle, chunk.asBytes(), isLast);
+	return msDeflateFeed(handle, chunk, isLast);
+}
+
+function oneShot(data: Bytes, format: int32, level: int32): Buffer {
+	if (typeof data == "string") return msDeflateOneShot(data.asBytes(), format, level);
+	return msDeflateOneShot(data, format, level);
+}
 
 // ===== Streaming API =====
 
@@ -53,11 +63,11 @@ export function deflateFeed(s: DeflateStream, chunk: Bytes): Result<Buffer, Comp
 	if (s.finished) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "feed after finish"));
 	}
-	const st = msDeflateFeed(s.handle, rawString(chunk), 0);
+	const st = feedBytes(s.handle, chunk, 0);
 	if (st < 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "compression failed"));
 	}
-	return Result.ok(rawBuffer(msDeflateDrain(s.handle, 0)));
+	return Result.ok(msDeflateDrain(s.handle, 0));
 }
 
 // Signal end of input, flush the compressor, drain the remaining output,
@@ -68,7 +78,7 @@ export function deflateFinish(s: DeflateStream): Result<Buffer, CompressError> {
 	}
 	if (s.finished) return Result.ok(Buffer.alloc(0));
 	s.finished = true;
-	const st = msDeflateFeed(s.handle, "", 1);
+	const st = msDeflateFeed(s.handle, "".asBytes(), 1);
 	if (st < 0) {
 		msDeflateFree(s.handle);
 		s.handle = 0;
@@ -77,35 +87,35 @@ export function deflateFinish(s: DeflateStream): Result<Buffer, CompressError> {
 	const tail = msDeflateDrain(s.handle, 0);
 	msDeflateFree(s.handle);
 	s.handle = 0;
-	return Result.ok(rawBuffer(tail));
+	return Result.ok(tail);
 }
 
 // ===== One-shot helpers =====
 
 // Compress to a complete gzip blob (RFC 1952).
 export function gzip(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
-	const out = msDeflateOneShot(rawString(data), CompressFormat.Gzip as int32, level);
+	const out = oneShot(data, CompressFormat.Gzip as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "gzip compression failed"));
 	}
-	return Result.ok(rawBuffer(out));
+	return Result.ok(out);
 }
 
 // Compress to a zlib-wrapped DEFLATE blob (RFC 1950).
 export function deflate(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
-	const out = msDeflateOneShot(rawString(data), CompressFormat.Zlib as int32, level);
+	const out = oneShot(data, CompressFormat.Zlib as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "zlib compression failed"));
 	}
-	return Result.ok(rawBuffer(out));
+	return Result.ok(out);
 }
 
 // Compress to a raw DEFLATE stream (RFC 1951). Empty input is allowed and
 // produces a 2-byte end-of-stream marker.
 export function deflateRaw(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
-	const out = msDeflateOneShot(rawString(data), CompressFormat.Deflate as int32, level);
+	const out = oneShot(data, CompressFormat.Deflate as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "deflate compression failed"));
 	}
-	return Result.ok(rawBuffer(out));
+	return Result.ok(out);
 }
