@@ -1,7 +1,6 @@
 // @stdout: call 6
 // @stdout: send 4
 // @stdout: spawn 6
-// @xfail(raiser): error: Cannot resolve module 'std/actor'
 import { stop, ExitReason } from "std/actor";
 
 interface Box { f: (n: int32) => int32; }

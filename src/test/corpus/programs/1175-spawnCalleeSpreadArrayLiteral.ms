@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: Cannot resolve module 'std/actor'
 // @stdout: counts 3 4 3
 
 actor Sink {
