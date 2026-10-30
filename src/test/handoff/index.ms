@@ -165,6 +165,7 @@ import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
 import "./fieldVisibility";
 import "./constructorVisibility";
+import "./classExtendsInterface";
 import "./useBeforeAssign";
 import "./outParameterWrites";
 import "./sinkParamModes";

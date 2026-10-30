@@ -3257,6 +3257,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
 		if (parentSym != null) ensureShaped(parentSym, ctx);
+		if (parentSym != null && parentSym.symbolKind == SymbolKind.Interface) {
+			addError(ctx, "Cannot extend an interface '" + bareParentName.trim() + "'. Did you mean 'implements'?", node.location.line, node.location.column);
+		}
 		if (parentSym != null) refuseExtendingPrivateConstructor(ctx, parentSym, node.location.line, node.location.column);
 		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
 		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);

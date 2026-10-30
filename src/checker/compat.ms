@@ -1360,6 +1360,7 @@ export function explainMemberPrefix(source: Type | null, target: Type | null): s
 		return " (the literal froze as an anonymous type before reaching '" + t.typeName
 			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
 	}
+	const classOverInterface = classBodyOf(s) != null && t.sym != null && t.sym.symbolKind == SymbolKind.Interface;
 	let ti = 0;
 	for (const tProp of t.typeNames) {
 		let foundAt = 0 - 1;
@@ -1374,8 +1375,8 @@ export function explainMemberPrefix(source: Type | null, target: Type | null): s
 				+ " but field " + String(foundAt) + " of " + s.typeName
 				+ "; a structural match is a pointer cast, so " + t.typeName
 				+ "'s fields must be a leading prefix of " + s.typeName
-				+ " — declare " + s.typeName + " as `extends " + t.typeName + "`"
-				+ " or reorder its fields)";
+				+ (classOverInterface ? " — reorder its fields)" : " — declare " + s.typeName + " as `extends " + t.typeName + "`"
+					+ " or reorder its fields)");
 		}
 		ti += 1;
 	}
