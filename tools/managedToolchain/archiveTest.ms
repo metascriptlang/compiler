@@ -29,6 +29,16 @@ function archive(parts: Buffer[]): Buffer {
 	return data;
 }
 
+function coffArchive(names: Buffer, parts: Buffer[]): Buffer {
+	const all: Buffer[] = [
+		member("/", [0, 0, 0, 0]),
+		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
+		member("//", names),
+	];
+	for (const part of parts) { all.push(part); }
+	return archive(all);
+}
+
 function truncated(data: Buffer, count: int32): Buffer {
 	const copy = Buffer.copy(data);
 	copy.length = copy.length - count;
@@ -62,6 +72,62 @@ function expectRefusal(data: Buffer, expectedFragment: string): void {
 
 when (!testBuild) {
 	expectMembers(MAGIC, []);
+	const firstName = "long-first-object-name.obj";
+	const secondName = "é🚀-second.obj";
+	const coffNames = bytes(firstName + "\0" + secondName + "\0");
+	const secondOffset = bytes(firstName).length + 1;
+	expectMembers(coffArchive(coffNames, [
+		member("/0", [0, 255, 1]),
+		member("/" + String(secondOffset), [2, 0, 3]),
+	]), [
+		{ name: firstName, data: [0, 255, 1] },
+		{ name: secondName, data: [2, 0, 3] },
+	]);
+	expectMembers(coffArchive(coffNames, [
+		member("/0", bytes("one")), member("/0", bytes("two")),
+	]), [
+		{ name: firstName, data: bytes("one") },
+		{ name: firstName, data: bytes("two") },
+	]);
+	expectMembers(archive([
+		member("/", [0, 0, 0, 0]),
+		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
+		member("short.o/", [7]),
+	]), [{ name: "short.o", data: [7] }]);
+	expectMembers(coffArchive(bytes("has/\ninside.obj\0"), [member("/0", [8])]),
+		[{ name: "has/\ninside.obj", data: [8] }]);
+	expectMembers(coffArchive([], []), []);
+	expectMembers(archive([
+		member("/SYM64/", [0, 0, 0, 0]),
+		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
+		member("//", bytes("mixed-prefix.obj\0")), member("/0", [9]),
+	]), [{ name: "mixed-prefix.obj", data: [9] }]);
+	for (const names of [bytes("no terminator.obj"), bytes("gnu-only.obj/\n")]) {
+		expectRefusal(coffArchive(names, [member("/0", [1])]),
+			"long name reference");
+	}
+	expectRefusal(coffArchive([0], [member("/0", [1])]),
+		"invalid ar member name");
+	expectRefusal(coffArchive(bytes(" bad.obj\0"), [member("/0", [1])]),
+		"invalid ar member name");
+	expectRefusal(coffArchive([255, 0], [member("/0", [1])]), "not UTF-8");
+	expectRefusal(coffArchive(coffNames, [
+		member("/" + String(coffNames.length), [1]),
+	]), "long name reference");
+	expectRefusal(coffArchive(coffNames, [
+		member("/" + String(coffNames.length - 1), [1]),
+	]), "invalid ar member name");
+	expectRefusal(archive([
+		member("ordinary.o/", [1]),
+		member("/", [0, 0, 0, 0]), member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
+		member("//", bytes("not-coff.obj\0")), member("/0", [1]),
+	]), "long name reference");
+	for (const symbol of ["/", "/SYM64/"]) {
+		expectRefusal(archive([
+			member(symbol, [0, 0, 0, 0]),
+			member("//", bytes("not-coff.obj\0")), member("/0", [1]),
+		]), "long name reference");
+	}
 	expectMembers(archive([
 		member("/", [0, 0, 0, 0]),
 		member("//", bytes("/private/tmp/cache/closedir.o/\n")),
@@ -169,5 +235,5 @@ when (!testBuild) {
 		throw new Error("archive result aliases the borrowed input");
 	}
 	cases += 1;
-	console.log("GNU/BSD archive: " + String(cases) + " cases OK");
+	console.log("GNU/BSD/COFF archive: " + String(cases) + " cases OK");
 }
