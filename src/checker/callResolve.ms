@@ -1259,6 +1259,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		if (argExpected != null && argType != null) {
 			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
 		}
+		if (classSym != null && classSym.symbolKind == SymbolKind.Actor) checkActorArgSendable(ctx, node, d.newArguments[ai], ai, true);
 		ai = ai + 1;
 	}
 	const ctorOwner = generic.instance != null ? generic.instance : classSym;
