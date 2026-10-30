@@ -84,3 +84,59 @@ function main(): void {
 	const c = compileToCWithStd(src);
 	assert c.ok;
 }
+
+test "E2E C: a blocking server handler that decodes the body as text compiles" {
+	const src = `
+import { HttpRequest, ServerResponse } from "std/http";
+import { createServer, sendJson, serve } from "std/http/server";
+
+function main(): void {
+	const server = createServer((req: HttpRequest, res: ServerResponse): void => {
+		sendJson(res, req.bodyText());
+	});
+	const lr = server.listen("127.0.0.1", 9999);
+	if (!lr.ok) { return; }
+	serve(server);
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E C: a concurrent server handler that decodes the body as text compiles" {
+	const src = `
+import { HttpRequest, ServerResponse } from "std/http";
+import { createServer, sendJson, serveConcurrent } from "std/http/server";
+import { cpuCount } from "std/os";
+
+function main(): void {
+	const server = createServer((req: HttpRequest, res: ServerResponse): void => {
+		sendJson(res, req.bodyText());
+	});
+	const lr = server.listen("127.0.0.1", 9999);
+	if (!lr.ok) { return; }
+	serveConcurrent(server, cpuCount());
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E C: a server handler that repairs surrogates in the body reaches the private std chain" {
+	const src = `
+import { HttpRequest, ServerResponse } from "std/http";
+import { createServer, sendJson, serve } from "std/http/server";
+import { utf8String } from "std/core/string/bytes";
+
+function main(): void {
+	const server = createServer((req: HttpRequest, res: ServerResponse): void => {
+		sendJson(res, utf8String(req.bytes, true));
+	});
+	const lr = server.listen("127.0.0.1", 9999);
+	if (!lr.ok) { return; }
+	serve(server);
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
