@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: ascii cases=1681 mismatches=0 accepted=41
 // @stdout: utf8 cases=360 mismatches=0 accepted=120 signature=111111111100000000000000000000
 // @stdout: reverse cases=97 mismatches=0
