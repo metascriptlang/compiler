@@ -25,7 +25,7 @@ async function main(): Promise<void> {
 		console.log(`tick ${ticks}`);
 		if (ticks == 3) clearInterval(interval);
 	}, 10);
-	await sleepAsync(60);
+	while (ticks < 3) await sleepAsync(10);
 	console.log("done");
 }
 main();
