@@ -392,17 +392,21 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 registerMacroEngineCompiler(compileMacroIntoEngine);
 registerEngineStdSymbol((name: string): Symbol | null => stdSymbol(raiserPreludeCtx(), name));
 
-function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
-	const own = seed.sym;
-	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return seed;
+function raiserCounterpart(own: Symbol): Symbol {
+	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return own;
 	const dot = own.modulePath.lastIndexOf(".");
 	const raiserPath = own.modulePath.slice(0, dot) + ".rms";
 	const scope = raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
-	if (scope == null) return seed;
+	if (scope == null) return own;
 	for (const held of scope) {
-		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0) return { name: seed.name, sym: held };
+		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0) return held;
 	}
-	return seed;
+	return own;
+}
+
+function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
+	const counterpart = raiserCounterpart(seed.sym);
+	return counterpart == seed.sym ? seed : { name: seed.name, sym: counterpart };
 }
 
 function seedCtxForSym(sym: Symbol): CheckerContext {
@@ -556,6 +560,12 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	recordBodyRead(sym.modulePath);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
+	const counterpart = raiserCounterpart(sym);
+	if (counterpart != sym) {
+		const counterpartIdx = ensureCompiledIntoEngine(counterpart);
+		if (counterpartIdx >= 0) _engine.funcMap.symbolIndices.set(sym, counterpartIdx);
+		return counterpartIdx;
+	}
 	const name = isClass ? sym.name + "_new" : sym.name;
 	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
