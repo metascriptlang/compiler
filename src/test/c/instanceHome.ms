@@ -111,6 +111,25 @@ test "overloads of one generic keep their own instance over the same type argume
 	assert ran.exitCode == 0 && ran.output.trim() == "7 6", ran.output;
 }
 
+function runsHook(name: string, main: string): string {
+	const dir = project(name, main);
+	writeFile(`${dir}/lib.ms`, "let destroyed: int32 = 0;\nexport class Marker<T> {\n\ttag: int32;\n\tconstructor(tag: int32) { this.tag = tag; }\n\tonDestroy(): void { destroyed += this.tag; }\n}\nexport function total(): int32 { return destroyed; }\n");
+	const built = execFileResult(msc, ["build", `${dir}/main.ms`, "--output=prog"], dir);
+	if (built.exitCode != 0) return `BUILD-FAILED ${built.output}${built.errorOutput}`;
+	const ran = execFileResult(`${dir}/prog`, [], dir);
+	return ran.exitCode == 0 ? ran.output.trim() : `exit ${ran.exitCode} ${ran.output}${ran.errorOutput}`;
+}
+
+test "a generic class instance minted by an importer still runs its onDestroy" {
+	const out = runsHook("hookPrim", "import { Marker, total } from \"./lib\";\nfunction make(): int32 { const m = new Marker<int32>(2); return m.tag; }\nconsole.log(make(), total());\n");
+	assert out == "2 2", out;
+}
+
+test "a generic class instance over the importer's own type still runs its onDestroy" {
+	const out = runsHook("hookLocal", "import { Marker, total } from \"./lib\";\nenum Token { A, B }\nfunction make(): int32 { const m = new Marker<Token>(5); return m.tag; }\nconsole.log(make(), total());\n");
+	assert out == "5 5", out;
+}
+
 function libCFrom(dir: string, entry: string): string {
 	removeAll(`${dir}/out`);
 	const r = execFileResult(msc, ["build", `${dir}/${entry}.ms`, "--emit=c", "--output=prog"], dir);

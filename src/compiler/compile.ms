@@ -1537,7 +1537,7 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 		for (const instNode of placed) {
 			const sym = instNode.resolvedSym!;
 			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
-			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
+			if (instNode.kind == NodeKind.FunctionDecl || instNode.kind == NodeKind.ClassDecl) sym.modulePath = home;
 			if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
 		}
 		byHome.set(home, placed);
