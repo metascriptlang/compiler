@@ -717,6 +717,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.QuoteExpr => {
 			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
+			reportUnconsumedJsx(ctx, node, "quote", expectedType);
 			node.nodeType = noneType(); return;
 		},
 		NodeKind.RegexLiteral | NodeKind.JSXText => noneType(),
