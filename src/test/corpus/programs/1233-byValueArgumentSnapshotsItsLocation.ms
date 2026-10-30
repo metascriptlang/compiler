@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM binds a by-value struct parameter to the caller's object, so each writer is read through it
 // @stdout: flat 1
 // @stdout: p.x=5
 // @stdout: globalField 1

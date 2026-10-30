@@ -38,6 +38,7 @@ import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
+import { lowerValueParamSnapshot } from "./lowering/valueParamSnapshot";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
@@ -92,6 +93,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = lowerClosureEqualities(result, ctx);
+	result = lowerValueParamSnapshot(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);

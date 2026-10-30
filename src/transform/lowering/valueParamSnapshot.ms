@@ -52,7 +52,7 @@ function snapshotSyms(routine: Node): Symbol[] {
 // element, a field) cannot reach it; the assignment is the parameter's own copy
 // (it rebinds, like any assignment to a view binding). A body that only reads
 // cannot be written under its parameter, so it keeps the caller's object.
-export function lowerJsValueParamSnapshot(program: Node, ctx: TransformContext): Node {
+export function lowerValueParamSnapshot(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => {
 		if (!isRoutineNode(node) || runsAtFirstResume(node)) return node;
 		const syms = snapshotSyms(node);
