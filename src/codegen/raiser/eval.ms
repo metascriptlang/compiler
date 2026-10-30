@@ -2059,6 +2059,18 @@ test "engine: a write through a pointer past its element traps instead of writin
 	assert ctx.output == "";
 }
 
+test "engine: a refused pointer read keeps its integer register class under every bitwise operator" {
+	const ops = ["&", "|", "^", ">>", "<<"];
+	const widths = ["uint8", "uint32", "uint64"];
+	for (const op of ops) {
+		for (const width of widths) {
+			const ctx = evalOrcVM(`function read(p: Ptr<${width}>, i: int64): ${width} { return p[i] ${op} 3; }`
+				+ ` let xs: ${width}[] = [1, 2, 3]; const view: Span<${width}> = xs; console.log(\`\${read(view as Ptr<${width}>, 1)}\`);`);
+			assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), `${op} ${width}: ${ctx.error}`;
+		}
+	}
+}
+
 test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
 	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
 	assert ctx.error == "", ctx.error;

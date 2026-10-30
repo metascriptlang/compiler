@@ -736,7 +736,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			// Unsupported node kind: report instead of silently splicing nil.
 			const msg = `cannot compile node kind ${node.kind} at comptime: unsupported by the Raiser bytecode compiler`;
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
-			return emitTrapNil(s, msg);
+			return emitTrapValue(s, msg, node.nodeType);
 		},
 	};
 }
@@ -890,12 +890,12 @@ function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, tar
 	if (refusal == null) return -1;
 	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
-	return emitTrapNil(s, msg);
+	return emitTrapValue(s, msg, node.nodeType);
 }
 
 function refuseBigInt(s: RaiserCompState, node: Node): int32 {
 	queueRaiserCompileError(RAISER_NO_BIGINT_MSG, node.location.line, node.location.column);
-	return emitTrapNil(s, RAISER_NO_BIGINT_MSG);
+	return emitTrapValue(s, RAISER_NO_BIGINT_MSG, node.nodeType);
 }
 
 function refusePointerOp(s: RaiserCompState, node: Node): int32 {
@@ -903,7 +903,7 @@ function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	if (refusal == null) return -1;
 	const msg = refusal + " on the Raiser VM" + NO_ADDRESS_ARITHMETIC;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
-	return emitTrapNil(s, msg);
+	return emitTrapValue(s, msg, node.nodeType);
 }
 
 export function classTargetKey(t: Type | null): string {
@@ -931,7 +931,7 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 	if (key == "") {
 		const msg = "internal: a checked object conversion has no class target";
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
-		return emitTrapNil(s, msg);
+		return emitTrapValue(s, msg, node.nodeType);
 	}
 	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, classTargetOperand(s, node.nodeType, key), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
@@ -958,7 +958,7 @@ function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): i
 	if (key == "") {
 		const msg = "internal: the right side of instanceof did not resolve to a class";
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
-		return emitTrapNil(s, msg);
+		return emitTrapValue(s, msg, node.nodeType);
 	}
 	const held = compileExpr(s, d.left);
 	const dest = allocBool(s);
@@ -1260,7 +1260,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	const msg = `cannot evaluate operator '${op}' at comptime`;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
-	return emitTrapNil(s, msg);
+	return emitTrapValue(s, msg, node.nodeType);
 }
 
 // --- Unary ---
@@ -2143,7 +2143,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 
 	const newMsg = "cannot compile 'new' here: no matching constructor in the Raiser function table";
 	queueRaiserCompileError(newMsg, node.location.line, node.location.column);
-	return emitTrapNil(s, newMsg);
+	return emitTrapValue(s, newMsg, node.nodeType);
 }
 
 // --- Array ---
