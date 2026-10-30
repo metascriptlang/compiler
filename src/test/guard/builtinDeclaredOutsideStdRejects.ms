@@ -69,14 +69,18 @@ const cases: Case[] = [
 
 const HELPER = "@iteratorHelper\n";
 const NEEDS_SOURCE = "@iteratorHelper needs the source iterator (an Iterator<T>) as the first parameter";
+const ALIASES = "type It = Iterator<int32>;\ntype Count = int32;\n";
 const SHAPE_REFUSALS: { name: string, text: string, refusal: string }[] = [
 	{ name: "no parameters", text: `${HELPER}function* h(): Iterator<int32> { yield 1; }`, refusal: NEEDS_SOURCE },
 	{ name: "a first parameter that is not an iterator", text: `${HELPER}function* h(n: int32): Iterator<int32> { yield n; }`, refusal: NEEDS_SOURCE },
 	{ name: "a function that is not a generator", text: `${HELPER}function h(it: Iterator<int32>): Iterator<int32> { return it; }`, refusal: "@iteratorHelper applies to a generator function with a body" },
 	{ name: "a return type that is not an iterator", text: `${HELPER}function* h(it: Iterator<int32>): int32 { yield 1; }`, refusal: "@iteratorHelper must return an Iterator<T>" },
+	{ name: "a first parameter whose alias is not an iterator", text: `${ALIASES}${HELPER}function* h(n: Count): Iterator<int32> { yield n; }`, refusal: NEEDS_SOURCE },
+	{ name: "a return type whose alias is not an iterator", text: `${ALIASES}${HELPER}function* h(it: It): Count { yield 1; }`, refusal: "@iteratorHelper must return an Iterator<T>" },
 	{ name: "an async generator", text: `${HELPER}async function* h(it: Iterator<int32>): Iterator<int32> { yield 1; }`, refusal: "@iteratorHelper does not apply to an async generator" },
 ];
 const USER_HELPERS = `${HELPER}function* dedupe<T>(it: Iterator<T>): Iterator<T> { for (const x of it) yield x; }\n${HELPER}function* twice(this it: Iterator<int32>): Iterator<int32> { for (const x of it) { yield x; yield x; } }\nconsole.log(1);\n`;
+const ALIAS_HELPER = `${ALIASES}${HELPER}function* aliased(it: It): It { for (const x of it) yield x; }\nconsole.log(1);\n`;
 
 let slot = 0;
 for (const c of cases) {
@@ -104,13 +108,14 @@ function checkUserFile(label: string, text: string, refusal: string): void {
 		const out = `${r.output}${r.errorOutput}`;
 		if (refusal == "") {
 			if (r.exitCode != 0) report(`${label} [${target}]: refused: ${out}`);
-		} else if (r.exitCode == 0 || !out.includes(refusal) || !out.includes("/main.ms:1:1")) {
+		} else if (r.exitCode == 0 || !out.includes(refusal) || !out.includes("/main.ms:")) {
 			report(`${label} [${target}]: not refused at its declaration: ${out}`);
 		}
 	}
 }
 
 checkUserFile("a well-shaped user @iteratorHelper", USER_HELPERS, "");
+checkUserFile("a user @iteratorHelper whose source and return are an alias of Iterator", ALIAS_HELPER, "");
 for (const c of SHAPE_REFUSALS) checkUserFile(`@iteratorHelper on ${c.name}`, `${c.text}\nconsole.log(1);\n`, c.refusal);
 
 if (failed != 0) exit(1);

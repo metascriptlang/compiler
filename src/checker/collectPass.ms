@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
-import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
+import { ITERATOR_HELPER_NEEDS_SOURCE, extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
@@ -328,13 +328,8 @@ function iteratorHelperMisuse(ctx: CheckerContext, dd: DecoratedDeclData): strin
 	const kind = routineKindFlag(fd.fnFlags);
 	if (kind == "async_generator") return "@iteratorHelper does not apply to an async generator; it applies to a synchronous generator function";
 	if (kind != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
-	if (fd.params.length == 0 || !spellsIterator(fd.fnParamTypes[0])) return "@iteratorHelper needs the source iterator (an Iterator<T>) as the first parameter";
-	if (!spellsIterator(fd.fnReturnType)) return "@iteratorHelper must return an Iterator<T>";
+	if (fd.params.length == 0) return ITERATOR_HELPER_NEEDS_SOURCE;
 	return "";
-}
-
-function spellsIterator(spelling: string): boolean {
-	return spelling.trim().startsWith("Iterator<");
 }
 
 function stdBuiltinKind(ctx: CheckerContext, kind: string, decl: Node): string {
