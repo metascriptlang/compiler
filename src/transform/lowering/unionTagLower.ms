@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
 import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots, joinBranchTypes } from "../../checker/fit";
-import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, nullType, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
+import { isLiteralSet, isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, nullType, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
@@ -160,7 +160,7 @@ function readFieldOfValue(node: Node, md: MemberExprData): Node {
 
 function lowerIdentifier(node: Node, field: string, ctx: TransformContext): Node {
 	const t = node.nodeType;
-	if (t == null || t.kind == TypeKind.Union) return node;
+	if (t == null || (t.kind == TypeKind.Union && !isLiteralSet(t))) return node;
 	const declared = declaredTagUnionOf(node);
 	if (declared == null || !storesUnionTag(declared)) return node;
 	const conv: Node | null = narrowUnionToVariant(node, t);
