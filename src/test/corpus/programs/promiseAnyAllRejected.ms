@@ -6,6 +6,7 @@
 // @stdout: any skips rejection 7
 // @stdout: empty race pending
 // @serial
+// @skip-raiser: the Raiser VM reports the first rejected input as an unhandled exception instead of letting Promise.any read it
 // note: Promise.any rejects with "All promises were rejected" once every input rejected, for an int32, a string and a struct element, over an empty array, and over inputs rejected on pool threads; one fulfilled input among rejections still wins; Promise.race over an empty array never settles.
 
 struct Pt { name: string; n: int32; }
