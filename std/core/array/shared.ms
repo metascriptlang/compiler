@@ -18,6 +18,7 @@ export function lastIndexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = -1
 	return -1;
 }
 
+@inline
 export function findIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): number {
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
@@ -26,6 +27,7 @@ export function findIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean)
 	return -1;
 }
 
+@inline
 export function findLastIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): number {
 	for (let i = arr.length - 1; i >= 0; i -= 1) {
 		if (i < arr.length && fn(arr[i], i)) return i;
@@ -33,6 +35,7 @@ export function findLastIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => bool
 	return -1;
 }
 
+@inline
 export function filter<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T[] {
 	const out: T[] = [];
 	const n = arr.length;
@@ -43,6 +46,7 @@ export function filter<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T
 	return out;
 }
 
+@inline
 export function flatMap<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U[]): U[] {
 	const out: U[] = [];
 	const n = arr.length;
@@ -57,10 +61,12 @@ export function flat<T>(this arr: Vec<T[]>): T[] {
 	return arr.flatMap((x: T[]): T[] => x);
 }
 
+@inline
 export function some<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
 	return arr.findIndex(fn) >= 0;
 }
 
+@inline
 export function find<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T | null {
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
@@ -83,6 +89,7 @@ export function spliceCount(deleteCount: number, room: int64): int64 {
 	return deleteCount as int64;
 }
 
+@inline
 export function every<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
@@ -91,6 +98,7 @@ export function every<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): bo
 	return true;
 }
 
+@inline
 export function reduce<T, U>(this arr: Vec<T>, fn: (acc: U, x: T, i: number) => U, init: U): U {
 	const n = arr.length;
 	let acc = init;
@@ -100,6 +108,7 @@ export function reduce<T, U>(this arr: Vec<T>, fn: (acc: U, x: T, i: number) => 
 	return acc;
 }
 
+@inline
 export function reduce<T>(this arr: Vec<T>, fn: (acc: T, x: T, i: number) => T): T {
 	const n = arr.length;
 	if (n == 0) throw new TypeError("Reduce of empty array with no initial value");
