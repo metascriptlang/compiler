@@ -54,11 +54,27 @@ export function sign(this typeof Math, x: float64): float64 {
 }
 
 export function min<T>(this typeof Math, a: T, b: T): T {
-	return a < b ? a : b;
+	return a < b || a != a ? a : b;
+}
+
+export function min(this typeof Math, ...values: float64[]): float64 {
+	let best = Infinity;
+	for (const v of values) {
+		if (v < best || v != v) best = v;
+	}
+	return best;
 }
 
 export function max<T>(this typeof Math, a: T, b: T): T {
-	return a > b ? a : b;
+	return a > b || a != a ? a : b;
+}
+
+export function max(this typeof Math, ...values: float64[]): float64 {
+	let best = -Infinity;
+	for (const v of values) {
+		if (v > best || v != v) best = v;
+	}
+	return best;
 }
 
 @include("time.h");

@@ -31,10 +31,26 @@ export extern function log2(this typeof Math, x: float64): float64 from "Math.lo
 export extern function log10(this typeof Math, x: float64): float64 from "Math.log10";
 export extern function hypot(this typeof Math, x: float64, y: float64): float64 from "Math.hypot";
 export function min<T>(this typeof Math, a: T, b: T): T {
-	return a < b ? a : b;
+	return a < b || a != a ? a : b;
+}
+
+export function min(this typeof Math, ...values: float64[]): float64 {
+	let best = Infinity;
+	for (const v of values) {
+		if (v < best || v != v) best = v;
+	}
+	return best;
 }
 export function max<T>(this typeof Math, a: T, b: T): T {
-	return a > b ? a : b;
+	return a > b || a != a ? a : b;
+}
+
+export function max(this typeof Math, ...values: float64[]): float64 {
+	let best = -Infinity;
+	for (const v of values) {
+		if (v > best || v != v) best = v;
+	}
+	return best;
 }
 export extern function random(this typeof Math): float64 from "Math.random";
 export extern function sin(this typeof Math, x: float64): float64 from "Math.sin";
