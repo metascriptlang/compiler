@@ -79,6 +79,7 @@ import "./cFunctionPointer";
 import "./headerSizeof";
 import "./headerScalarRefusal";
 import "./headerSizeTSlots";
+import "./headerPointerConstArgument";
 import "./notCallable";
 import "./callResultInPlace";
 import "./websocket";
