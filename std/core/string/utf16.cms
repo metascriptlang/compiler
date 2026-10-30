@@ -23,14 +23,34 @@ function bytesOf(sb: Readonly<Span<uint8>>, first: int64, end: int64): string {
 	return text;
 }
 
-// Stride-1 on purpose: a lead-byte skip loop gets if-converted to a select under LTO, which
-// serializes every step on the load (~6x); with a fixed advance there is nothing to serialize.
+extern function msLoadU64(data: Readonly<Span<uint8>>, at: int64): uint64;
+
+const highBits: uint64 = 0x8080808080808080;
+const lowBits: uint64 = 0x0101010101010101;
+
+// Eight bytes at a time: a byte counts one unit unless it is a continuation (10xxxxxx) and one
+// more when it leads a 4-byte sequence (F0 and up), so no step waits on the previous byte.
 @noinline
 function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
+	const length = b.length as int64;
 	let count: int64 = 0;
-	for (let i: int64 = 0; i < b.length; i++) {
-		const c = b[i];
+	let i: int64 = 0;
+	while (i + 8 <= length) {
+		const word = msLoadU64(b, i);
+		const continuation = word & ~(word << 1) & highBits;
+		const fourByte = word & (word << 1) & (word << 2) & (word << 3) & highBits;
+		let lanes = (fourByte >> 7) + (lowBits - (continuation >> 7));
+		lanes = lanes + (lanes >> 32);
+		lanes = lanes + (lanes >> 16);
+		lanes = lanes + (lanes >> 8);
+		count += (lanes & 0xFF) as int64;
+		i += 8;
+	}
+	const bytes = b as Readonly<Ptr<uint8>>;
+	while (i < length) {
+		const c = bytes[i];
 		count += ((c & 0xC0) != 0x80 ? 1 : 0) + (c >= 0xF0 ? 1 : 0);
+		i += 1;
 	}
 	return count;
 }
@@ -283,4 +303,21 @@ export function stringUnicodeLength(s: string): int64 {
 		count = count + 1;
 	}
 	return count;
+}
+
+test "length counts UTF-16 units on every word-boundary size of mixed text" {
+	const pieces = ["a", "é", "€", "😀"];
+	const widths = [1, 1, 1, 2];
+	for (let seed: uint32 = 1; seed <= 40; seed++) {
+		let state = seed;
+		let text = "";
+		let expected = 0;
+		for (let pieceCount = 0; pieceCount <= 40; pieceCount++) {
+			assert text.length == expected;
+			state = state * 1664525 + 1013904223;
+			const pick = ((state >> 16) % 4) as int32;
+			text += pieces[pick];
+			expected += widths[pick];
+		}
+	}
 }

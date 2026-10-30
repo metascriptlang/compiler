@@ -22,9 +22,6 @@ int32_t msFsLastErrno(void) {
 
 /* ===== Read ===== */
 
-/* The file's bytes are read straight into the string's payload when fstat sizes it, so a
-   regular file is neither copied nor staged; a file that outgrows its size, or reports none
-   (a pipe, /proc), continues in a growing buffer. */
 msString msFsReadFile(msString path) {
 	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), "rb");
