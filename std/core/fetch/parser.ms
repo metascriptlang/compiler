@@ -46,6 +46,11 @@ function findCRLF(data: string, pos: int32): int32 {
 	return -1;
 }
 
+function emptyBody(): Buffer {
+	const none: uint8[] = [];
+	return none as Buffer;
+}
+
 function joinPieces(pieces: Readonly<Buffer[]>): Buffer {
 	let total = 0;
 	for (const piece of pieces) total += piece.length;
@@ -313,11 +318,11 @@ function chunkedReady(body: Buffer, bytesConsumed: int32): ChunkedDecodeResult {
 }
 
 function chunkedNeedMore(): ChunkedDecodeResult {
-	return { kind: "needMore", body: Buffer.alloc(0), bytesConsumed: 0 };
+	return { kind: "needMore", body: emptyBody(), bytesConsumed: 0 };
 }
 
 function chunkedMalformed(): ChunkedDecodeResult {
-	return { kind: "malformed", body: Buffer.alloc(0), bytesConsumed: 0 };
+	return { kind: "malformed", body: emptyBody(), bytesConsumed: 0 };
 }
 
 // Verify two bytes at `pos` form a CRLF separator.
@@ -370,11 +375,11 @@ function frameReady(body: Buffer, bytesConsumed: int32): FrameResult {
 }
 
 function frameNeedMore(): FrameResult {
-	return { kind: "needMore", body: Buffer.alloc(0), bytesConsumed: 0, rejectStatus: 0 };
+	return { kind: "needMore", body: emptyBody(), bytesConsumed: 0, rejectStatus: 0 };
 }
 
 function frameReject(status: int32): FrameResult {
-	return { kind: "reject", body: Buffer.alloc(0), bytesConsumed: 0, rejectStatus: status };
+	return { kind: "reject", body: emptyBody(), bytesConsumed: 0, rejectStatus: status };
 }
 
 // Frame a request body from the bytes already buffered after the header block.
@@ -430,7 +435,7 @@ export function frameRequest(
 	if (method == HttpMethod.POST || method == HttpMethod.PUT || method == HttpMethod.PATCH) {
 		return frameReject(411);
 	}
-	return frameReady(Buffer.alloc(0), 0);
+	return frameReady(emptyBody(), 0);
 }
 
 // ===== Hex Helpers =====
