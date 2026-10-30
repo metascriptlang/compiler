@@ -2,11 +2,12 @@ import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, SymbolState, Type, TypeKi
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
+import { isReadonlyView, withoutReadonlyView, typeDisplayName, instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap, raiseFromHost } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, builtNodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
+import { declaredCallResultType } from "../../checker/fit";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
 import { definedValue } from "../defines";
@@ -188,6 +189,23 @@ function hostTypeKind(args: RaiserValue[]): RaiserValue {
 	return raiserInt(peelAlias(t).kind as int64);
 }
 
+function hostDeclaredCallType(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null || args.length < 2 || args[1].kind != RaiserValueKind.String) return raiserNil();
+	const t = typeArgOf(args[0]);
+	if (t == null) return queryError(ctx, "node carries no type");
+	const loc = makeLoc(activeMetaLine(), activeMetaColumn());
+	const result = declaredCallResultType(ctx, t, unboxString(args[1]), loc);
+	if (result == null) {
+		const name = unboxString(args[1]);
+		if (isReadonlyView(t) && declaredCallResultType(ctx, withoutReadonlyView(t), name, loc) != null) {
+			return queryError(ctx, `'${name}' is declared on ${typeDisplayName(withoutReadonlyView(t))} but cannot be called through the read-only view ${typeDisplayName(t)}: declare '${name}(this: ${typeDisplayName(t)})' on the class, or 'function ${name}(this x: ${typeDisplayName(t)})' as an extension`);
+		}
+		return raiserNil();
+	}
+	return emitTypeNode(mapTypeToAst(result, loc, false), result);
+}
+
 function layoutTypeArg(args: RaiserValue[], name: string, ctx: CheckerContext): Type | null {
 	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) {
 		queryError(ctx, `${name}: expected a typed node`);
@@ -289,6 +307,7 @@ export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaGetSize", hostGetSize, HostCapability.Pure);
 	registerHostFn("msMetaGetAlign", hostGetAlign, HostCapability.Pure);
 	registerHostFn("msMetaGetOffset", hostGetOffset, HostCapability.Pure);
+	registerHostFn("msMetaDeclaredCallType", hostDeclaredCallType, HostCapability.Pure);
 	registerHostFn("msMetaSameType", hostSameType, HostCapability.Pure);
 	registerHostFn("msMetaSymKind", hostSymKind, HostCapability.Pure);
 }

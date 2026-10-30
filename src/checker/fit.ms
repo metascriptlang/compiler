@@ -817,24 +817,36 @@ export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | n
 }
 
 function declaredToString(ctx: CheckerContext, expr: Node): Node | null {
+	const call = declaredCall(ctx, expr, "toString");
+	return call != null && call.nodeType != null && isStringLike(call.nodeType) ? call : null;
+}
+
+// The trial is silent: a member that cannot serve a zero-argument call is not a
+// user error, it just leaves the operand on the builtin path. The receiver's own
+// diagnostics were already recorded when the caller checked it, so the trial's
+// output is dropped either way.
+function declaredCall(ctx: CheckerContext, expr: Node, name: string): Node | null {
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
-		{ object: expr, property: "toString", isOptional: false }, loc);
+		{ object: expr, property: name, isOptional: false }, loc);
 	const synthCall = createNodeAt(NodeKind.CallExpr,
 		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
-	// The trial is silent: a `toString` that cannot serve a zero-argument
-	// string-returning call is not a user error, it just leaves this operand on
-	// the builtin path. The receiver's own diagnostics were already recorded when
-	// the caller checked it, so the trial's output is dropped either way.
 	const errMark = ctx.errors.length;
 	_probedToString = synthCall;
 	callCheckExpr(ctx, synthCall, null);
 	_probedToString = null;
 	const fits = ctx.errors.length == errMark;
 	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
-	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
+	const userBound = fits && synthCall.nodeType != null
 		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
 	return userBound ? synthCall : null;
+}
+
+// The result type of a user-declared zero-argument `name` member or extension of `t`, or null.
+export function declaredCallResultType(ctx: CheckerContext, t: Type, name: string, loc: SourceLocation): Type | null {
+	const holder = newSym(ctx, SymbolKind.Parameter, "u", t);
+	const call = declaredCall(ctx, holderRead(holder, t, loc), name);
+	return call == null ? null : call.nodeType;
 }
 
 let _probedToString: Node | null = null;

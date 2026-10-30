@@ -30,7 +30,7 @@ export {
 // defining module's. Here `jsonStringify` body emits `jsonValueOf(...)`
 // calls, so we must import `jsonValueOf` even though we never call it
 // directly. Same for the other two macros.
-import { jsonStringify, jsonValueOf, jsonValueToStruct, jsonValueToStructE } from "std/serialize/json";
+import { jsonStringify, jsonValueOf, _jsonValueOfWith, jsonValueToStruct, jsonValueToStructE } from "std/serialize/json";
 
 function _jsonStringifyTyped<T>(value: T): string {
 	return jsonStringify(value);

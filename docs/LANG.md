@@ -3917,6 +3917,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `toJSON(this T): U` | `JSON.stringify(x)` serializes `x.toJSON()` in place of `x` | a value of static type T at the top level, as a field or as an array element of a `JSON.stringify` |
 | `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
@@ -4456,6 +4457,16 @@ app.server.host    // fully typed through nesting
 // Stringify a struct, class or interface value
 const json = JSON.stringify(person);  // '{"name":"Son","age":30}'
 ```
+
+A declared `toJSON` is honoured, as ECMAScript SerializeJSONProperty does: a class method or an extension `function toJSON(this x: T): U` with no parameter besides the receiver is called on a value of static type `T` (top level, field, array element, `T | null`), and its result is serialized in place of the value. The result's own `toJSON` is not called again, but its fields' are. The name stays `toJSON` rather than the `to<X>` convention because `JSON.stringify` is a JavaScript site whose protocol is that name. Array elements are read-only views, so a class method that must serve an array element declares `toJSON(this: Readonly<T>)`; a plain `toJSON()` there is refused at the call with the message that names the declaration to write. The key argument ECMAScript passes is not passed.
+
+```ms
+class Money { cents: int32; toJSON(this: Readonly<Money>): string { return "$" + this.cents.toString(); } }
+struct Pt { x: int32; y: int32 }
+function toJSON(this p: Pt): number[] { return [p.x, p.y]; }
+```
+
+Measured 2026-10-30 on a candidate of this slice (corpus lanes C, `--danger`, JS and ESM, not the Raiser; corpus `jsonToJsonHonoured`, red on the installed `msc` build 73e18a165a, green on the candidate): `JSON.stringify(new Money(5))` prints `"$5"`, a `Pt` prints `[3,4]`, `interface Wrap { m: Money; p: Pt; n: Money | null }` prints `{"m":"$5","p":[1,2],"n":null}`, `Money[]` prints `["$1","$2"]`, a class whose `toJSON` returns an object prints that object (`{"v":7}`), one returning a `Money` prints `{"cents":9}` (not `"$9"`), one returning a holder of a `Money` prints `{"m":"$5"}`, and a class that declares only `toString` prints its fields as before. Not measured: `toJSON` on a union member or a generic instance, and a `Map` value (a `Map` is not serialized as JavaScript does, see above).
 
 `JSON.stringify` of a `Map` writes the map's internal fields (`entries`, `indices`, `size`, ...), not `{}` as JavaScript does (measured 2026-10-30 on C with the installed `msc` build 73e18a165a; not measured on JS).
 

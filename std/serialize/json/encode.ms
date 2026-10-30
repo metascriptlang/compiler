@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, declaredCallType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -27,6 +27,29 @@ function isOptionalField(name: string, optionalFields: string[]): boolean {
 }
 
 export macro jsonValueOf(t: Node): Node {
+	return {
+		kind: NodeKind.CallExpr, line: t.line, column: t.column,
+		callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonValueOfWith" },
+		arguments: [t, { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: true }],
+	};
+}
+
+// A declared `toJSON` is called once and its result serialized without a second
+// hook lookup on the result itself, as SerializeJSONProperty does.
+export macro _jsonValueOfWith(t: Node, hook: Node): Node {
+	const hooked = hook.boolValue ? declaredCallType(t, "toJSON") : null;
+	if (hooked != null) {
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonValueOfWith" },
+			arguments: [{
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: "toJSON", isOptional: false },
+				arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
+				nodeType: hooked,
+			}, { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: false }],
+		};
+	}
 	let tt = implementationOf(t);
 	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 

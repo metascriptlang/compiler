@@ -63,6 +63,7 @@ extern function msMetaGetType(n: Node, impl: boolean): Node | null;
 extern function msMetaGetImpl(n: Node): Node | null;
 extern function msMetaResolveType(text: string): Node | null;
 extern function msMetaTypeKind(n: Node | null): int32;
+extern function msMetaDeclaredCallType(n: Node | null, name: string): Node | null;
 extern function msMetaSameType(a: Node | null, b: Node | null): boolean;
 extern function msMetaSymKind(n: Node | null): int32;
 extern function msMetaGetSize(n: Node): int32;
@@ -77,6 +78,8 @@ export function getTypeImpl(n: Node | null): Node | null { if (n == null) return
 export function getImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetImpl(n); }
 export function resolveType(text: string): Node | null { return msMetaResolveType(text); }
 export function typeKind(n: Node | null): TypeKind { return msMetaTypeKind(n) as TypeKind; }
+// The result type of the user-declared zero-argument method or extension `name` of the node's type, or null when none resolves.
+export function declaredCallType(n: Node | null, name: string): Node | null { return msMetaDeclaredCallType(n, name); }
 export function sameType(a: Node | null, b: Node | null): boolean { return msMetaSameType(a, b); }
 export function symKind(n: Node | null): SymbolKind { return msMetaSymKind(n) as SymbolKind; }
 

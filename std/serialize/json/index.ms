@@ -6,7 +6,7 @@
 // `jsonValueOf` along (recursive expansion calls it by name in the emitted
 // AST — must be in the importer's symbol table).
 
-export { jsonStringify, jsonValueOf } from "./encode";
+export { jsonStringify, jsonValueOf, _jsonValueOfWith } from "./encode";
 export { jsonValueToStruct, jsonValueToStructE } from "./decode";
 export { parseJson } from "./parser";
 export { JsonValue, JsonKind } from "./types";
