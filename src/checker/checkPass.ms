@@ -28,7 +28,7 @@ import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
-import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
+import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseNames, paramSymbol } from "./bindNames";
@@ -425,6 +425,7 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
+	if (local && node.kind == NodeKind.DecoratedDecl) refuseComputedGotoDecorator(ctx, (node.data as DecoratedDeclData).decorators);
 	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
 	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
