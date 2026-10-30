@@ -75,7 +75,7 @@ export extern function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: 
 export extern function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
 @builtin("MapFromPairs")
 @compilerFunc
-export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((key, i) => [key, #[i]]))";
 
 @builtin("StdSet")
 export extern class HashSet<T> {
