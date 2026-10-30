@@ -12,6 +12,7 @@ import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
+import "./ast/cloneDepthGuard";
 import "./compiler/lsp/handlers/positionsTest";
 import "./compiler/transam/cutoff";
 import { exists } from "std/fs";
