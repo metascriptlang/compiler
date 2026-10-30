@@ -731,6 +731,24 @@ function* twice(this it: Iterator<int32>): Iterator<int32> {
 	}
 }
 
+type IntIter = Iterator<int32>;
+
+@iteratorHelper
+function* aliased(it: IntIter): IntIter {
+	for (const x of it) yield x;
+}
+
+test "user @iteratorHelper: a source and return spelled through a type alias close the source" {
+	const log: string[] = [];
+	const a = aliased(counter("s", 3, log));
+	closeNow(a);
+	closeNow(a);
+	const b = aliased(counter("t", 3, log));
+	assert b.next().value == 1;
+	closeNow(b);
+	assert log.join(",") == "s.return,t.next,t.return";
+}
+
 test "user @iteratorHelper: a stored helper closed before its first next closes the source once and never pulls it" {
 	const log: string[] = [];
 	const d = dedupe(counter("s", 3, log));
