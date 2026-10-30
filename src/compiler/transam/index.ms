@@ -653,6 +653,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 		const registeredAtNow = getRegisteredAt(db.moduleDeps, depId);
 		if (registeredAtNow != null && registeredAtNow >= db.revision.value) continue;
+		if (registerCheckedExports(db, depPath, depId)) continue;
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
@@ -676,6 +677,15 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion);
 	}
+}
+
+function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): boolean {
+	const ctx = db.contexts.get(checkCtxKey(depId));
+	if (ctx == null || checkedElsewhere(db, depPath)) return false;
+	if (!tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, depId), db.revision.value)) return false;
+	updateModuleExports(db.exportRegistry, depPath, collectExports(ctx, depPath));
+	setRegisteredAt(db.moduleDeps, depId, db.revision.value);
+	return true;
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)

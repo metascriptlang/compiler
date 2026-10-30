@@ -9,6 +9,7 @@ import { recordModuleImport } from "./moduleDeps";
 import { Node, NodeKind, ProgramData } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
 import { lookupLocal, symbolKey } from "../../checker/symbol";
+import { typeDisplayName } from "../../checker/types";
 import { ifaceDigest } from "./digest";
 import { resetInstantiationState } from "../../checker/instantiate";
 import { lowerIterInline } from "../../transform/lowering/iterInline";
@@ -126,6 +127,23 @@ test "a signature edit rechecks every importer along the chain" {
 	assert check(db, FORWARD) == `${DEP},${USER},${FAR}`;
 	dbSetFileText(db, DEP, DEP_TEXT.replace("foo(): int32", "foo(): int64") + "\n// note");
 	assert check(db, FORWARD) == DEP;
+}
+
+test "an importer rechecked after an edit below a kept module reads that module's inferred types" {
+	const routine = ['import { foo } from "./dep";\nexport function mid() { return foo(); }', 'import { mid } from "./user";\nexport const m = mid();'];
+	const binding = [USER_TEXT, FAR_TEXT];
+	for (const texts of [routine, binding]) {
+		for (const depEdit of ["// note\n" + DEP_TEXT, DEP_TEXT.replace("return 1", "return 2")]) {
+			const db = openDb([DEP, USER, FAR], [DEP_TEXT, texts[0], texts[1]], [[1, 0], [2, 1]]);
+			check(db, FORWARD);
+			dbSetFileText(db, DEP, depEdit);
+			assert check(db, FORWARD) == DEP;
+			dbSetFileText(db, FAR, "\n" + texts[1]);
+			assert check(db, FORWARD) == FAR;
+			const m = lookupLocal(dbTypeCheck(db, FAR).table, "m");
+			assert m != null && typeDisplayName(m.symbolType) == "int32", m != null ? typeDisplayName(m.symbolType) : "no m";
+		}
+	}
 }
 
 test "an exporter's error state reaches its importer until it is fixed" {
