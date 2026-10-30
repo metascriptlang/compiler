@@ -7,20 +7,15 @@
 // note: behind a header with non-ASCII text, a request body of non-UTF-8 bytes, sent in two writes cut inside a character, reaches the handler byte for byte, and the pipelined request after it is framed at the right byte
 
 import { HttpRequest, ServerResponse } from "std/http";
-import { createServer, createServerAsync, sendText, serveConcurrent, serveConcurrentAsync, stop } from "std/http/server";
-import { createSocket, bind, connect, send, recv, close } from "std/net";
+import { HttpServer, createServer, createServerAsync, sendText, serveConcurrent, serveConcurrentAsync, stop } from "std/http/server";
+import { createSocket, connect, send, recv, close } from "std/net";
 import { Buffer } from "std/core/buffer";
 import { lockedRead, lockedUpdate } from "std/core/promise";
 
-function freePort(): int32 {
+function listenFree(s: HttpServer): int32 {
 	let port = (20000 + Date.now() % 20000) as int32;
-	while (true) {
-		const fd = createSocket();
-		const ok = bind(fd, "127.0.0.1", port) >= 0;
-		close(fd);
-		if (ok) return port;
-		port = port + 1;
-	}
+	while (!s.listen("127.0.0.1", port).ok) port = port + 1;
+	return port;
 }
 
 function settle(ms: int32): void {
@@ -84,8 +79,7 @@ const serverAsync = createServerAsync(replyAsync);
 
 function syncServer(): void {
 	lockedUpdate(served, (s: Served): Served => { return { n: 0 }; });
-	const port = freePort();
-	server.listen("127.0.0.1", port);
+	const port = listenFree(server);
 	const c = spawn(() => exchange(port));
 	const timer = setInterval(() => { if (servedCount() >= 2) stop(server); }, 5);
 	serveConcurrent(server, 2);
@@ -95,8 +89,7 @@ function syncServer(): void {
 
 function asyncServer(): void {
 	lockedUpdate(served, (s: Served): Served => { return { n: 0 }; });
-	const port = freePort();
-	serverAsync.listen("127.0.0.1", port);
+	const port = listenFree(serverAsync);
 	const c = spawn(() => exchange(port));
 	const timer = setInterval(() => { if (servedCount() >= 2) stop(serverAsync); }, 5);
 	serveConcurrentAsync(serverAsync, replyAsync, 2);
