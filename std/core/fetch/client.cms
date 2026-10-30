@@ -134,15 +134,22 @@ export function doRequestOver(
 
 	// Read response headers — loop until \r\n\r\n. The buffer may also hold the
 	// start of the body once headers terminate.
-	let data: Buffer = [];
+	const headPieces: Buffer[] = [];
+	let headTail: Buffer = [];
+	let headTotal = 0;
 	let headEnd = -1;
 	while (headEnd < 0) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
 		if (chunk.length == 0) break;
-		data = Buffer.concat(data, chunk);
-		headEnd = indexOfText(data, "\r\n\r\n");
-		if (data.length > MAX_HEADER_BYTES) break;
+		headPieces.push(chunk);
+		const window = Buffer.concat(headTail, chunk);
+		const found = indexOfText(window, "\r\n\r\n");
+		if (found >= 0) headEnd = headTotal - (headTail.length as int32) + found;
+		headTotal += chunk.length as int32;
+		headTail = lastBytes(window, 3);
+		if (headTotal > MAX_HEADER_BYTES) break;
 	}
+	const data = Buffer.concatList(headPieces);
 	if (data.length == 0) {
 		closeFn();
 		return Result.err(invalidResponse("empty response"));
@@ -163,12 +170,22 @@ export function doRequestOver(
 	let body: Buffer = [];
 
 	if (isChunked(parsed.value.headers)) {
-		let chunkedData = [...data[bodyStart..data.length]];
-		while (indexOfText(chunkedData, "0\r\n") != 0 && indexOfText(chunkedData, "\r\n0\r\n") < 0) {
-			const more = recvFn(RECV_CHUNK_SIZE);
+		const chunkPieces: Buffer[] = [];
+		let chunkTail: Buffer = [];
+		let chunkTotal = 0;
+		let more: Buffer = [...data[bodyStart..data.length]];
+		while (true) {
+			chunkPieces.push(more);
+			const window = Buffer.concat(chunkTail, more);
+			const windowStart = chunkTotal - (chunkTail.length as int32);
+			const ended = (windowStart == 0 && indexOfText(window, "0\r\n") == 0) || indexOfText(window, "\r\n0\r\n") >= 0;
+			chunkTotal += more.length as int32;
+			chunkTail = lastBytes(window, 4);
+			if (ended) break;
+			more = recvFn(RECV_CHUNK_SIZE);
 			if (more.length == 0) break;
-			chunkedData = Buffer.concat(chunkedData, more);
 		}
+		const chunkedData = Buffer.concatList(chunkPieces);
 		closeFn();
 		const decoded = decodeChunked(chunkedData);
 		if (!decoded.ok) return Result.err(decoded.error);
@@ -189,6 +206,12 @@ export function doRequestOver(
 		headers: parsed.value.headers,
 		bytes: body,
 	});
+}
+
+function lastBytes(data: Buffer, count: int32): Buffer {
+	const length = data.length as int32;
+	const from = length > count ? length - count : 0;
+	return [...data[from..data.length]];
 }
 
 function indexOfText(data: Buffer, needle: string): int32 {
@@ -390,6 +413,49 @@ test "a chunked body keeps a character split across the chunk boundary" {
 	const response = fetchOver([wire]);
 	assert response.ok;
 	if (response.ok) assert response.value.bytes.toHex() == "c380ff41";
+}
+
+test "a head terminator split across reads at every offset is found" {
+	const head = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n";
+	const wire = wireOf(head, [0x68, 0x69]);
+	const headEnd = head.length as int32;
+	for (let cut = headEnd - 3; cut < headEnd; cut++) {
+		const response = fetchOver([[...wire[0..cut]], [...wire[cut..wire.length]]]);
+		assert response.ok;
+		if (response.ok) assert response.value.bytes.toHex() == "6869";
+	}
+}
+
+test "a chunked terminator split across reads at every offset is found" {
+	const head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+	const tailText = "\r\n0\r\n\r\n";
+	const wire = Buffer.concatList([wireOf(head, []), Buffer.fromString("1\r\nA", "utf8"), Buffer.fromString(tailText, "utf8")]);
+	const tailStart = (wire.length as int32) - (tailText.length as int32);
+	for (let cut = tailStart + 1; cut < tailStart + 5; cut++) {
+		const response = fetchOver([[...wire[0..cut]], [...wire[cut..wire.length]]]);
+		assert response.ok;
+		if (response.ok) assert response.value.bytes.toHex() == "41";
+	}
+}
+
+test "a head and a chunked body delivered one byte per read arrive exact" {
+	const head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+	const wire = Buffer.concatList([wireOf(head, []), Buffer.fromString("3\r\nabc\r\n0\r\n\r\n", "utf8")]);
+	const pieces: Buffer[] = [];
+	for (let i = 0; i < wire.length; i++) pieces.push(Buffer.fromArray([wire[i]]));
+	const response = fetchOver(pieces);
+	assert response.ok;
+	if (response.ok) assert response.value.bytes.toHex() == "616263";
+}
+
+test "two thousand tiny chunks arrive exact" {
+	const head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+	const pieces: Buffer[] = [wireOf(head, [])];
+	for (let i = 0; i < 2000; i++) pieces.push(Buffer.fromString("1\r\nx\r\n", "utf8"));
+	pieces.push(Buffer.fromString("0\r\n\r\n", "utf8"));
+	const response = fetchOver(pieces);
+	assert response.ok;
+	if (response.ok) assert response.value.bytes.length == 2000;
 }
 
 test "a body read until close keeps every byte" {
