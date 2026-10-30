@@ -988,6 +988,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	const mangledName = className + "_" + md.methodName;
 	const methodSym = declSymbol(ctx, member, mangledName, SymbolKind.Function, fnType, false);
 	fnType.sym = methodSym;
+	if (routineFlagSet(md.methodFlags).has(RoutineFlag.Extern)) setFlag(methodSym, SymbolFlag.ImportC);
 	if (methodNative != "") {
 		methodSym.nativeName = methodNative;
 		refuseJsPatternOffJs(ctx, "method", md.methodName, methodNative, md.nameLocation);
