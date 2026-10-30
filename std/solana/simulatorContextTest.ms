@@ -62,7 +62,7 @@ test "repeats past the fourth slot and a lone first record resolve to the first 
 	assert table[4] == table[1] && table[5] == table[0] && table[6] == table[3] && table[7] == table[2];
 	assert table[1] == table[0] + (recordSize(0) as uint64) && table[2] == table[1] + (recordSize(5) as uint64) && table[3] == table[2] + (recordSize(10) as uint64);
 	assert msSolLoadU8(table[0] + 4) == 2 && msSolLoadU8(table[1] + 4) == 2 && msSolLoadU8(table[2] + 4) == 2 && msSolLoadU8(table[3] + 4) == 2;
-	assert parsed.instructionData == base + 8 + (recordSize(0) + recordSize(5) + recordSize(10) + recordSize(4) + 4 * 8 + 8) as uint64;
+	assert parsed.instructionData == base + 8 + ((recordSize(0) + recordSize(5) + recordSize(10) + recordSize(4) + 4 * 8 + 8) as uint64);
 }
 
 test "a table smaller than the instruction keeps its first accounts and leaves the slots past it alone" {

@@ -86,7 +86,7 @@ export function msSolHostTryFindProgramAddress(seeds: uint64, count: uint64, pro
 @exportName("msSolHostDeriveAddress")
 export function msSolHostDeriveAddress(seeds: uint64, count: uint64, bump: uint64, programId: uint64, out: uint64): uint64 {
 	const hasBump = bump != 0;
-	if (count + (hasBump ? 1 : 0) > MAX_SEEDS) { return 0; }
+	if (count + ((hasBump ? 1 : 0) as uint64) > MAX_SEEDS) { return 0; }
 	const digest = derivedDigest(joinSlices(seeds, count), hasBump ? msSolLoadU8(bump) as int32 : NO_BUMP, readBytes(programId, 32));
 	writeBytes(out, digest.bytes);
 	return isOffCurve(digest) ? 1 : 0;
