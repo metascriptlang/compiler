@@ -41,12 +41,12 @@ test "a build checks each module on the tree the loader parsed" {
 	assert cycle == "", cycle;
 }
 
-test "a session rechecks an unchanged module on the tree its next load parsed" {
+test "a session rechecks the importer of a changed interface on the tree its next load parsed" {
 	resetBuildState();
 	const session = createCheckSession();
 	const first = checksLoaderTrees([{ entryPath: "/s/lib.ms", entrySource: LIB }, { entryPath: "/s/main.ms", entrySource: MAIN }], session);
 	assert first == "", first;
-	const edited = "export function twice(n: int32): int32 { return n + n; }";
+	const edited = "export function twice(n: int32): int32 { return n + n; }\nexport function thrice(n: int32): int32 { return n * 3; }";
 	const second = checksLoaderTrees([{ entryPath: "/s/lib.ms", entrySource: edited }, { entryPath: "/s/main.ms", entrySource: MAIN }], session);
 	assert second == "", second;
 	assert session.rechecked.has("/s/main.ms");
