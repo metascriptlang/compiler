@@ -1,11 +1,17 @@
 import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, NodeKind, FunctionDeclData } from "../../ast/node";
-import { ExportedSymInfo, isExtensionRoutine, isGenericFn } from "../../checker/context";
+import { ExportedSymInfo, LIFECYCLE_HOOK_NAMES, isExtensionRoutine, isGenericFn, lifecycleHookOp } from "../../checker/context";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
-import { PEEL_ALIAS, hasGenericParams, isMaybeType, peelThrough, typeDisplayNameUnprofiled } from "../../checker/types";
+import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isMaybeType, isStructType, peelThrough, typeDisplayNameUnprofiled } from "../../checker/types";
 import { dirname, relative } from "std/fs/path";
 
 export enum BoundaryKind {
-	Bool, I8, I16, I32, U8, U16, U32, I64, U64, F32, F64, Void, Callback, String,
+	Bool, I8, I16, I32, U8, U16, U32, I64, U64, F32, F64, Void, Callback, String, Struct, Vec,
+}
+
+export interface BoundaryLeaf {
+	path: string[];
+	kind: BoundaryKind;
 }
 
 export enum BoundaryMode {
@@ -25,6 +31,8 @@ export interface BoundaryParam {
 	kind: BoundaryKind;
 	mode: BoundaryMode;
 	callback: BoundaryCallback | null;
+	leaves: BoundaryLeaf[];
+	element: BoundaryKind;
 }
 
 export interface BoundaryFunction {
@@ -34,6 +42,8 @@ export interface BoundaryFunction {
 	exportSymbol: string;
 	params: BoundaryParam[];
 	result: BoundaryKind;
+	resultLeaves: BoundaryLeaf[];
+	resultElement: BoundaryKind;
 }
 
 export interface Manifest {
@@ -162,6 +172,73 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 	return { params, result, signature: signatureLetter(result) + "_" + letters };
 }
 
+export function leafLiteral(leaves: BoundaryLeaf[], values: string[], depth: int32): string {
+	const parts: string[] = [];
+	let i = 0;
+	while (i < leaves.length) {
+		const key = leaves[i].path[depth];
+		let j = i;
+		while (j < leaves.length && leaves[j].path[depth] == key) j += 1;
+		const value = leaves[i].path.length == depth + 1 ? values[i] : leafLiteral(leaves.slice(i, j), values.slice(i, j), depth + 1);
+		parts.push(`${key}: ${value}`);
+		i = j;
+	}
+	return parts.length == 0 ? "{}" : `{ ${parts.join(", ")} }`;
+}
+
+interface ValueShape {
+	kind: BoundaryKind;
+	leaves: BoundaryLeaf[];
+	element: BoundaryKind;
+}
+
+function declaresHook(t: Type): boolean {
+	for (const name of LIFECYCLE_HOOK_NAMES) {
+		const op = lifecycleHookOp(name);
+		if (getAttachedOp(t, op) != null || lookupInstanceHook(t, op) != null) return true;
+	}
+	return false;
+}
+
+function structLeaves(c: Collector, what: string, t: Type, path: string[], out: BoundaryLeaf[]): boolean {
+	if (declaresHook(t)) {
+		refuse(c, what, t, "which declares a lifecycle hook, and a copy made field by field would skip it");
+		return false;
+	}
+	let ok = true;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const fieldPath = path.concat([t.typeNames[i]]);
+		const ft = peeled(t.typeChildren[i]);
+		const fieldWhat = `field '${fieldPath.join(".")}' of ${what}`;
+		const scalar = isMaybeType(ft) ? null : scalarKind(ft);
+		if (scalar != null) out.push({ path: fieldPath, kind: scalar });
+		else if (ft.kind == TypeKind.String) out.push({ path: fieldPath, kind: BoundaryKind.String });
+		else if (isStructType(ft) && !isMaybeType(ft)) ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
+		else {
+			refuse(c, fieldWhat, ft, "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
+			ok = false;
+		}
+	}
+	return ok;
+}
+
+function valueShape(c: Collector, what: string, t: Type): ValueShape | null {
+	if (isStructType(t)) {
+		const leaves: BoundaryLeaf[] = [];
+		return structLeaves(c, what, t, [], leaves) ? { kind: BoundaryKind.Struct, leaves, element: BoundaryKind.Void } : null;
+	}
+	if (t.kind == TypeKind.Array && t.typeReturn != null) {
+		const et = peeled(t.typeReturn!);
+		const element = isMaybeType(et) ? null : scalarKind(et);
+		if (element == null) {
+			refuse(c, what, t, "and a Vec crosses the boundary as a copy of bool, integer or float elements");
+			return null;
+		}
+		return { kind: BoundaryKind.Vec, leaves: [], element };
+	}
+	return null;
+}
+
 function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 	const t = peeled(type);
 	const what = `parameter '${name}'`;
@@ -170,27 +247,33 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 		return null;
 	}
 	const scalar = scalarKind(t);
-	if (scalar != null) return { name, kind: scalar, mode: BoundaryMode.Copied, callback: null };
-	if (t.kind == TypeKind.String) return { name, kind: BoundaryKind.String, mode: BoundaryMode.Copied, callback: null };
+	if (scalar != null) return { name, kind: scalar, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
+	if (t.kind == TypeKind.String) return { name, kind: BoundaryKind.String, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.Function) {
 		const cb = callbackOf(c, what, t);
-		return cb == null ? null : { name, kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb };
+		return cb == null ? null : { name, kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void };
 	}
-	refuse(c, what, t, "which has no JS/wasm boundary form: use bool, integers, floats, string or a callback");
+	const errorsBefore = c.errors.length;
+	const shape = valueShape(c, what, t);
+	if (shape != null) return { name, kind: shape.kind, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
+	if (c.errors.length == errorsBefore) refuse(c, what, t, "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec of numbers or a callback");
 	return null;
 }
 
-function resultOf(c: Collector, type: Type | null): BoundaryKind | null {
-	if (isVoidType(type)) return BoundaryKind.Void;
+function resultOf(c: Collector, type: Type | null): ValueShape | null {
+	if (isVoidType(type)) return { kind: BoundaryKind.Void, leaves: [], element: BoundaryKind.Void };
 	const t = peeled(type!);
 	if (isMaybeType(t)) {
 		refuse(c, "the result", t, "which is not supported: return a plain value");
 		return null;
 	}
 	const scalar = scalarKind(t);
-	if (scalar != null) return scalar;
-	if (t.kind == TypeKind.String) return BoundaryKind.String;
-	refuse(c, "the result", t, "which has no JS/wasm boundary form: return void, bool, an integer, a float or a string");
+	if (scalar != null) return { kind: scalar, leaves: [], element: BoundaryKind.Void };
+	if (t.kind == TypeKind.String) return { kind: BoundaryKind.String, leaves: [], element: BoundaryKind.Void };
+	const errorsBefore = c.errors.length;
+	const shape = valueShape(c, "the result", t);
+	if (shape != null) return shape;
+	if (c.errors.length == errorsBefore) refuse(c, "the result", t, "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
 	return null;
 }
 
@@ -223,7 +306,7 @@ function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol):
 	}
 	const result = resultOf(c, ft.typeReturn);
 	if (!ok || result == null) return null;
-	return { modulePath: c.modulePath, moduleKey: key, name, exportSymbol: `msb_${key}_${name}`, params, result };
+	return { modulePath: c.modulePath, moduleKey: key, name, exportSymbol: `msb_${key}_${name}`, params, result: result.kind, resultLeaves: result.leaves, resultElement: result.element };
 }
 
 export function manifestFor(modulePath: string, entryPath: string, exports: ExportedSymInfo[], placed: string[]): Manifest {

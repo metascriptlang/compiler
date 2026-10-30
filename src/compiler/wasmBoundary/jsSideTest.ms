@@ -5,6 +5,10 @@ import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, manifestFor } f
 import { jsBindings } from "./jsSide";
 
 const SOURCE = `
+struct Point { x: float64; y: float64; }
+struct Label { at: Point; text: string; count: int32; }
+export function tag(l: Label): Label { return l; }
+export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
 export function add64(a: int64, b: int64): int64 { return a + b; }
 export function mul64u(a: uint64, b: uint64): uint64 { return a * b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
@@ -72,8 +76,8 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	const m: Manifest = {
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", exportSymbol: "msb_calc_note",
-			params: [{ name: "cb", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb }],
-			result: BoundaryKind.Void,
+			params: [{ name: "cb", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void }],
+			result: BoundaryKind.Void, resultLeaves: [], resultElement: BoundaryKind.Void,
 		}],
 		errors: [],
 	};
@@ -93,4 +97,22 @@ test "js side: a failed wasm allocation throws instead of writing at address 0" 
 	const p = bindingsFor(["twice"]).prelude;
 	assert p.includes("if (p === 0) throw new RangeError(");
 	assert !p.includes("const p = __msbMod._malloc(n || 1);") && !p.includes("const p = __msbMod._malloc(n * 3);");
+}
+
+test "js side: a struct is passed leaf by leaf and its result is built by a taker pushed for the call" {
+	const js = bindingsFor(["tag"]).modules[0].code;
+	assert js.includes("e0_2 = __msbEnc(a0.text);");
+	assert js.includes("__msbMod._msb_calc_tag(a0.at.x, a0.at.y, e0_2[0], e0_2[1], a0.count);");
+	assert js.includes("const d = __msb.takes.push((x0, x1, x2, x3, x4) => { r = { at: { x: x0, y: x1 }, text: __msbDec(x2, x3), count: x4 }; }) - 1;");
+	assert js.includes("__msb.takes.length = d;");
+	assert js.includes("return r;");
+}
+
+test "js side: a Vec is copied into wasm memory and its result copied out into an array" {
+	const js = bindingsFor(["scale"]).modules[0].code;
+	assert js.includes("e0 = __msbVecIn(a0, Float32Array);");
+	assert js.includes("__msbMod._msb_calc_scale(e0[0], e0[1], a1);");
+	assert js.includes("(p, n) => { r = __msbVecOut(p >>> 0, n, Uint16Array, false); }");
+	assert js.includes("if (e0) __msbMod._free(e0[0]);");
+	assert bindingsFor(["scale"]).prelude.includes("function __msbVecOut(p, n, T, bool) {");
 }
