@@ -171,5 +171,5 @@ test "JS: a std static pattern extern read through its class is refused" {
 	const js = compileToJSWithStd("function make(f: (n: number) => Buffer): number { return f(3).length; }\n"
 		+ "console.log(make(Buffer.alloc));");
 	assert !js.ok;
-	assert js.error.contains("extern function 'alloc' is the pattern \"new Uint8Array(#)\"");
+	assert js.error.contains("extern function 'alloc' is the pattern \"new Array(#).fill(0)\"");
 }
