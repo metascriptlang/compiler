@@ -29,6 +29,19 @@ function equal(actual: string, expected: string): void {
 	cases += 1;
 }
 
+function rejectPolicies(
+	rendered: string,
+	forbidden: string[],
+	message: string,
+): void {
+	for (const policy of forbidden) {
+		if (rendered.indexOf(policy) >= 0) {
+			throw new Error(message + policy);
+		}
+		cases += 1;
+	}
+}
+
 for (const target of [WindowsTarget.X64, WindowsTarget.Arm64]) {
 	const name = target == WindowsTarget.X64 ?
 		"x86_64-windows-gnu" : "aarch64-windows-gnu";
@@ -38,12 +51,12 @@ for (const target of [WindowsTarget.X64, WindowsTarget.Arm64]) {
 		throw new Error("target parse changed");
 	}
 	cases += 1;
-	const expected = target == WindowsTarget.X64 ? EXE : EXE
+	const targetExe = target == WindowsTarget.X64 ? EXE : EXE
 		.replaceAll("x86_64", "aarch64")
 		.replaceAll("x86-64", "generic");
 	for (const major of [22, 23]) {
 		for (const variant of [WindowsVariant.Exe, WindowsVariant.Dll]) {
-			let golden = expected.replaceAll("/23", "/" + String(major));
+			let golden = targetExe.replaceAll("/23", "/" + String(major));
 			const directory = name + (variant == WindowsVariant.Dll ? ".dll" : "");
 			if (variant == WindowsVariant.Dll) {
 				golden = golden
@@ -60,28 +73,18 @@ for (const target of [WindowsTarget.X64, WindowsTarget.Arm64]) {
 				"windows/" + directory + ".cfg");
 			equal(windowsConfigPath(target, variant, true),
 				"windows/" + directory + ".cxx.cfg");
-			for (const forbidden of [
+			rejectPolicies(rendered.value, [
 				"-nostdlib", "-nodefaultlibs", "-nostartfiles", "-nolibc",
 				"-fsanitize", "asan", "ubsan", "crt2", "$-l", "-lgcc",
-			]) {
-				if (rendered.value.indexOf(forbidden) >= 0) {
-					throw new Error("C config adds forbidden policy: " + forbidden);
-				}
-				cases += 1;
-			}
+			], "C config adds forbidden policy: ");
 		}
 	}
 	const cpp = renderWindowsCppConfig(target);
 	equal(cpp, CXX.replaceAll("x86_64-windows-gnu", name));
-	for (const forbidden of [
+	rejectPolicies(cpp, [
 		"--unwindlib", "-nostdlib", "-lstdc++", "-lpthread",
 		"-resource-dir", "--sysroot", "include/cxx",
-	]) {
-		if (cpp.indexOf(forbidden) >= 0) {
-			throw new Error("C++ config adds forbidden policy: " + forbidden);
-		}
-		cases += 1;
-	}
+	], "C++ config adds forbidden policy: ");
 }
 for (const major of [0, -1]) {
 	if (renderWindowsSourceConfig(WindowsTarget.X64, WindowsVariant.Exe,
