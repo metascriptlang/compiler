@@ -2987,7 +2987,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				}
 				if (!isLocation(lvArg)) {
 					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": " + (isOutParam(paramType) ? "out" : "ref") + " parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
 					const ro = readonlyRootType(lvArg);
 					const refusal = writeThroughArc(lvArg)
