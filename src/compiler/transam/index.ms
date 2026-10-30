@@ -2403,8 +2403,8 @@ test "a same-hash edit of an import this db only binds re-checks its reader" {
 	assert db.cache.bound - bound == 2, `${db.cache.bound - bound}`;
 }
 
-test "an edited bind-only import whose parse entry is gone is not reused" {
-	const root = "/boundEvicted";
+test "an edited bind-only import is not reused before its parse reruns" {
+	const root = "/boundStale";
 	const db = createTransAmDb(100);
 	dbSetFileText(db, `${root}/dep.ms`, "export const Az: int32 = 1;");
 	dbSetFileText(db, `${root}/user.ms`, 'import { Az } from "./dep";\nexport const seen = Az;');
@@ -2412,8 +2412,6 @@ test "an edited bind-only import whose parse entry is gone is not reused" {
 	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/user.ms`), depId);
 	assert dbTypeCheck(db, `${root}/user.ms`).errors.length == 0;
 	assert boundInputsUnchanged(db, `${root}/dep.ms`);
-	cacheRemove(db.cache, createQueryKey(TaQueryKind.Parse, depId));
-	cacheRemove(db.cache, createQueryKey(TaQueryKind.Preprocess, depId));
 	dbSetFileText(db, `${root}/dep.ms`, "export const BY: int32 = 1;");
 	assert !boundInputsUnchanged(db, `${root}/dep.ms`);
 }
