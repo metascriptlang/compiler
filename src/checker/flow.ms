@@ -1190,18 +1190,15 @@ function narrowTypeByAssertion(t: Type | null, call: Node, refNode: Node): Type 
 }
 
 function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boolean): Type {
-	// TrueCondition: narrow to the predicate target, but only if it's
-	// compatible with the current type `t` (intersection semantics).
-	// Returning predicateTarget for a type outside `t` would widen past
-	// the declared union. Uses `typeRelation` for cross-module resilience
-	// (no pointer-identity or string-key assumptions).
 	if (assumeTrue) {
 		if (t.kind == TypeKind.Union && t.typeChildren != null) {
+			const kept: Type[] = [];
 			for (const v of t.typeChildren) {
-				const rel = typeRelation(predicateTarget, v);
-				if (rel != TypeRelation.None) return predicateTarget;
+				if (typeRelation(predicateTarget, v) != TypeRelation.None) appendIfUnique(kept, v);
+				else if (typeRelation(v, predicateTarget) != TypeRelation.None) appendIfUnique(kept, predicateTarget);
 			}
-			return t;
+			if (kept.length == 0) return t;
+			return kept.length == 1 ? kept[0] : createUnion(kept);
 		}
 		return predicateTarget;
 	}
