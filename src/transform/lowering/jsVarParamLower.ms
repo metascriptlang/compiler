@@ -293,7 +293,7 @@ function arrowBodyBlock(d: ArrowFunctionData): Node {
 	return d.arrowBody;
 }
 
-function routineBodyBlock(routine: Node): Node | null {
+export function routineBodyBlock(routine: Node): Node | null {
 	return match (routine.kind) {
 		NodeKind.FunctionDecl => (routine.data as FunctionDeclData).fnBody,
 		NodeKind.FunctionExpr => (routine.data as FunctionExprData).funcExprBody,
