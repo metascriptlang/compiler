@@ -1,6 +1,7 @@
 // Platform-specific @compile (dispatch, pool, selectors) moved to src/compiler/compile.ms
 // — the compiler knows osTarget and picks only the right files.
 @compile("runtime/promise/combinator.c");
+import "./combinator";
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
 @builtin("Promise")
