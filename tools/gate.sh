@@ -919,7 +919,9 @@ test_one() {
   local bin=$1 f=$2 part=$3; shift 3
   printf 'gate: test job=%s %s\n' "${part##*/}" "$*" >"$part"
   env -u NO_COLOR -u FORCE_COLOR "$bin" test --time "$f" "$@" >>"$part" 2>&1
-  echo $? >"$part.rc"
+  local rc=$?
+  case $rc in 137|143) echo "(exit $rc)" >>"$part" ;; esac
+  echo $rc >"$part.rc"
 }
 
 test_one_self_test() (
