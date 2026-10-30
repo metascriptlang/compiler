@@ -43,6 +43,7 @@ void msPoolPendingAdd(int32_t delta) { (void)delta; }
 #include "runtime/promise/pool.h"
 #include "runtime/io/engine.h"  /* msIoEngine, msIoEngineWake — Amendment B targeted wake */
 #include "runtime/promise/locked.h"
+#include "runtime/core/cpus.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -133,16 +134,8 @@ MS_TLS_PUBLISH(msIsPoolWorker)
 /* ===== CPU Detection ===== */
 
 static int msDetectCPUs(void) {
-#ifdef _WIN32
-	SYSTEM_INFO si;
-	GetSystemInfo(&si);
-	return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 4;
-#elif defined(_SC_NPROCESSORS_ONLN)
-	int n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+	int n = msAvailableCpus();
 	return n > 0 ? n : 4;
-#else
-	return 4; /* fallback */
-#endif
 }
 
 /* ===== Queue Length (must hold lock) ===== */
