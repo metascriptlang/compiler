@@ -2358,6 +2358,8 @@ function hookReceiverFault(hook: string, key: string, written: string, recv: Typ
 		return "'" + shown + "' is not a type a hook can belong to, so the hook would never run";
 	}
 	if (name != key) return "'" + display + "' is not the type's own name, and a hook is found by the name its receiver is declared with, so the hook would never run";
+	const classTakesHook = hook == "onDestroy" || hook == "onTrace";
+	if (byVar && byClass && !classTakesHook) return "";
 	if (byVar && byClass) return "'" + display + "' points at the class reference, and a class receiver already is the reference the hook writes through: take it as 'this x: " + name + "'";
 	if (hookWritesItsReceiver(hook)) {
 		if (readonlyView) return "'" + display + "' is a read-only view, and the hook has to write its receiver";
@@ -2415,7 +2417,8 @@ function hookTakes(hook: string): string {
 
 function hookParamFault(hook: string, paramTypes: Type[]): string {
 	if (hook != "onDestroy" && hook != "onTrace" && paramTypes.length > 0) {
-		const recv = paramTypes[0];
+		let recv = paramTypes[0];
+		if (recv.kind == TypeKind.Var && recv.typeReturn != null) recv = recv.typeReturn;
 		if (recv.kind == TypeKind.Ref && recv.typeReturn != null && refWrapsNominal(recv)) {
 			return "'" + typeDisplayName(recv) + "' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
 		}

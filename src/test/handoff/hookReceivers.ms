@@ -39,6 +39,14 @@ function expectRefused(problems: string[], hook: string, receiver: string, owner
 	else if (errors[0].indexOf(why) < 0) problems.push(label + errors[0]);
 }
 
+function expectClassRefused(problems: string[], hook: string, receiver: string): void {
+	const errors = errorsOf(hookSource(hook, receiver, "C"));
+	const label = hook + "(" + receiver + ") on C: ";
+	const wanted = "signature for '" + hook + "' is wrong: 'C' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
+	if (errors.length != 1) problems.push(label + errors.length.toString() + " errors: " + errors.join(" | "));
+	else if (errors[0] != wanted) problems.push(label + errors[0]);
+}
+
 function expectAccepted(problems: string[], hook: string, receiver: string, owner: string): void {
 	const errors = errorsOf(hookSource(hook, receiver, owner));
 	if (errors.length > 0) problems.push(hook + "(" + receiver + ") on " + owner + ": " + errors[0]);
@@ -74,8 +82,13 @@ test "hook receivers: a receiver that is not the type's own name is refused at t
 test "hook receivers: a class receiver is the class itself, never a pointer to its reference" {
 	const problems: string[] = [];
 	for (const hook of hooks) {
-		expectRefused(problems, hook, "this ref x: C", "C", "points at the class reference");
-		expectRefused(problems, hook, "this x: Var<C>", "C", "points at the class reference");
+		if (hook == "onDestroy" || hook == "onTrace") {
+			expectRefused(problems, hook, "this ref x: C", "C", "points at the class reference");
+			expectRefused(problems, hook, "this x: Var<C>", "C", "points at the class reference");
+		} else {
+			expectClassRefused(problems, hook, "this ref x: C");
+			expectClassRefused(problems, hook, "this x: Var<C>");
+		}
 	}
 	assert problems.length == 0, problems.join("\n");
 }
