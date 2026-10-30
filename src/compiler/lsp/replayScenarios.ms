@@ -128,6 +128,12 @@ export function positionParams(uri: string, line: int32, character: int32): stri
 	return `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`;
 }
 
+export function referenceParams(uri: string, line: int32, character: int32, includeDeclaration: boolean): string {
+	const at = positionParams(uri, line, character);
+	return at.byteSlice(0, at.byteLength - 1)
+		+ `,"context":{"includeDeclaration":${includeDeclaration ? "true" : "false"}}}`;
+}
+
 const BAD_VALUE = "export const value: int32 = \"wrong\";";
 const GOOD_VALUE = "export const value: int32 = 42;";
 const NOT_ASSIGNABLE = "Type 'string' is not assignable to type 'int32'";
@@ -1581,6 +1587,46 @@ function referenceRows(r: LspReplay, key: string): string {
 	return rows.join("; ");
 }
 
+function referencesHonorDeclarationContext(): LspScenario {
+	const uri = "file:///lspwire/refs/flag.ms";
+	const text = "const value = 1;\nconst result = value;\n";
+	const all = `${uri} 0:6-0:11; ${uri} 1:15-1:20`;
+	const uses = `${uri} 1:15-1:20`;
+	const at = positionParams(uri, 0, 6);
+	const fields = at.byteSlice(0, at.byteLength - 1);
+	return {
+		name: "references honor declaration context and reject missing or nonboolean flags",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+			frames([
+				request("10", "textDocument/references", referenceParams(uri, 0, 6, true)),
+				request("11", "textDocument/references", referenceParams(uri, 0, 6, false)),
+				request("12", "textDocument/references", referenceParams(uri, 1, 15, true)),
+				request("13", "textDocument/references", referenceParams(uri, 1, 15, false)),
+				request("20", "textDocument/references", at),
+				request("21", "textDocument/references", fields + ",\"context\":{}}"),
+				request("22", "textDocument/references", fields + ",\"context\":{\"includeDeclaration\":\"false\"}}"),
+				request("23", "textDocument/references", fields + ",\"context\":null}"),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("declaration with true", all, referenceRows(r, "n:10")),
+			sameText("declaration with false", uses, referenceRows(r, "n:11")),
+			sameText("use with true", all, referenceRows(r, "n:12")),
+			sameText("use with false", uses, referenceRows(r, "n:13")),
+			sameText("missing context", "-32602", answerField(r, "n:20", "error.code")),
+			sameText("missing flag", "-32602", answerField(r, "n:21", "error.code")),
+			sameText("nonboolean flag", "-32602", answerField(r, "n:22", "error.code")),
+			sameText("null context", "-32602", answerField(r, "n:23", "error.code")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 function referencesFollowTheImportedSymbol(): LspScenario {
 	const dep = "file:///lspwire/refs/b.ms";
 	const user = "file:///lspwire/refs/a.ms";
@@ -1593,7 +1639,7 @@ function referencesFollowTheImportedSymbol(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
 			frames([notification("textDocument/didOpen", openParams(user, userText))]),
-			frames([request("10", "textDocument/references", positionParams(dep, 0, 16))]),
+			frames([request("10", "textDocument/references", referenceParams(dep, 0, 16, true))]),
 		],
 		check: (r: LspReplay) => firstFailure([
 			containsText("the declaration", dep + " 0:16-0:17", referenceRows(r, "n:10")),
@@ -2166,6 +2212,7 @@ export function lspScenarios(): LspScenario[] {
 		hoverDocFollowsTheSymbol(),
 		signatureHelpFollowsTheCalleeSymbol(),
 		referencesFollowTheImportedSymbol(),
+		referencesHonorDeclarationContext(),
 		renameEditsEachCallOnce(),
 		enumMemberDefinitionIsTheMembersDeclaration(),
 		renameFollowsTheBindingOfAnImport(),

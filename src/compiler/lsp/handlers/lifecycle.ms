@@ -796,7 +796,7 @@ test "completion among JSX attributes with no JSX namespace anywhere offers noth
 test "find references from a JSX tag finds the other usages" {
 	const src = "function Counter(): number { return 0; }\nconst a = <Counter/>;\nconst b = <Counter/>;";
 	const db = testDb("file:///test.ms", src);
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("66", params, db);
 	assert r.indexOf("\"line\":2") >= 0;
 	assert r.indexOf("\"line\":0") >= 0;
@@ -1235,24 +1235,26 @@ test "try-expr in var-decl produces no duplicate hints (real pipeline)" {
 
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("50", params, db);
 	assert lspGetNumberField(r, "id") == 50;
-	assert r.length > 60;
+	assert lspGetArrayItems(lspGetObjectField(r, "result")).length == 2;
 }
 
 test "unknown doc returns empty refs" {
 	const db = createTransAmDb(100);
-	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("51", params, db);
 	assert lspGetNumberField(r, "id") == 51;
+	assert lspGetObjectField(r, "result") == "[]";
 }
 
 test "dispatch routes refs" {
 	const db = testDb("file:///test.ms", "const x = 1;");
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"context\":{\"includeDeclaration\":true}}";
 	const r = lspDispatch("textDocument/references", "52", params, db, testCache());
 	assert lspGetNumberField(r, "id") == 52;
+	assert lspGetArrayItems(lspGetObjectField(r, "result")).length == 1;
 }
 
 test "renames variable occurrences" {
@@ -1578,7 +1580,7 @@ test "queries read and answer UTF-16 positions after non-ASCII text" {
 		const label = "utf16 case " + i;
 		assert utf16SpansMatch(label + " definition", lspGetArrayItems(lspGetObjectField(handleDefinition("80", params + "}", db), "result")), [decl]);
 		assert utf16SpansMatch(label + " hover", [lspGetObjectField(handleHover("81", params + "}", db), "result")], [use]);
-		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + "}", db), "result")), [decl, use]);
+		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + ",\"context\":{\"includeDeclaration\":true}}", db), "result")), [decl, use]);
 		assert utf16SpansMatch(label + " highlight", lspGetArrayItems(lspGetObjectField(handleDocumentHighlight("83", params + "}", db), "result")), [decl, use]);
 		const rename = handleRename("84", params + ",\"newName\":\"v\"}", db);
 		const edits = lspGetArrayItems(lspGetObjectField(lspGetObjectField(lspGetObjectField(rename, "result"), "changes"), uri));
