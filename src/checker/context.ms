@@ -1525,6 +1525,7 @@ export class CheckerContext {
 	calleeExpr: Node;            // the callee of the call being checked: a @comptime routine named there is folded, named anywhere else it is a run-time value
 	conversionOperand: Node;     // the operand of the numeric `as` being checked: a ternary or `??` there converts each arm the target does not take implicitly, as converting the joined value would
 	conversionTarget: Type;
+	constContext: Node[];        // object literals in a const context: the operand of an `as const` and each object literal held by one of those
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	disambAfterCheck: HashMap<string, int32> | null; // copy of disambTable when the check finished; every lowering of the module starts from it
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
@@ -1635,6 +1636,7 @@ export function createContext(): CheckerContext {
 		calleeExpr: null as unknown as Node,
 		conversionOperand: null as unknown as Node,
 		conversionTarget: null as unknown as Type,
+		constContext: [],
 		preludeCtx: null as unknown as CheckerContext,
 		globalImportsCtx: null,
 		instantiatingCtx: null as unknown as CheckerContext,

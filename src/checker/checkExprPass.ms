@@ -2473,8 +2473,12 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		const optionalNames: string[] = [];
 		let pi = 0;
 		let spreadSeen = false;
+		const inConstContext = ctx.constContext.includes(node);
 		while (pi < d.properties.length) {
-			checkExpr(ctx, d.properties[pi], null);
+			const value = d.properties[pi];
+			if (inConstContext && value.kind == NodeKind.ObjectLiteral) ctx.constContext.push(value);
+			checkExpr(ctx, value, inConstContext ? constLiteralType(value) : null);
+			if (inConstContext && value.kind == NodeKind.ArrayLiteral) refuseConstArray(ctx, value);
 			const readFt = d.properties[pi].nodeType;
 			const rawFt = readFt != null ? storedTypeOfNullRead(d.properties[pi], readFt, readFt) : readFt;
 			const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
@@ -2516,7 +2520,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		const anonName = anonStructName(fieldNames, fieldTypes);
 		const built = spelled(createStruct(anonName, fieldNames, fieldTypes, false));
 		if (optionalNames.length > 0) built.optionalFields = optionalNames;
-		node.nodeType = createRef(built); return;
+		node.nodeType = inConstContext ? createReadonlyView(createRef(built)) : createRef(built); return;
 	}
 }
 
@@ -2531,24 +2535,18 @@ function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
 	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
 }
 
-function constAssertionType(node: Node): Type | null {
+function constLiteralType(node: Node): Type | null {
 	if (node.kind == NodeKind.StringLiteral) return createStringLiteral((node.data as StringLiteralData).value);
 	if (node.kind == NodeKind.BooleanLiteral) return createBooleanLiteral((node.data as BooleanLiteralData).boolValue);
 	if (node.kind == NodeKind.NumberLiteral) return constNumberType(node, false);
-	if (node.kind == NodeKind.UnaryExpr) {
-		const u = node.data as UnaryExprData;
-		if ((u.unaryOp != "-" && u.unaryOp != "+") || u.operand.kind != NodeKind.NumberLiteral) return null;
-		return constNumberType(u.operand, u.unaryOp == "-");
-	}
-	if (node.kind != NodeKind.ObjectLiteral) return null;
-	const o = node.data as ObjectLiteralData;
-	const types: Type[] = [];
-	for (const property of o.properties) {
-		const t = constAssertionType(property);
-		if (t == null) return null;
-		types.push(t);
-	}
-	return createReadonlyView(createRef(createStruct("", o.keys, types, true)));
+	if (node.kind != NodeKind.UnaryExpr) return null;
+	const u = node.data as UnaryExprData;
+	if ((u.unaryOp != "-" && u.unaryOp != "+") || u.operand.kind != NodeKind.NumberLiteral) return null;
+	return constNumberType(u.operand, u.unaryOp == "-");
+}
+
+function refuseConstArray(ctx: CheckerContext, node: Node): void {
+	addError(ctx, "'as const' on an array literal is not supported: it would need a readonly tuple type", node.location.line, node.location.column);
 }
 
 function constNumberType(node: Node, negated: boolean): Type | null {
@@ -2558,18 +2556,13 @@ function constNumberType(node: Node, negated: boolean): Type | null {
 
 function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionData): void {
 	const operand = d.asExpr;
-	const literal = constAssertionType(operand);
-	if (literal != null) {
-		checkExpr(ctx, operand, literal);
-	} else {
-		checkExpr(ctx, operand, null);
-		if (operand.kind == NodeKind.ArrayLiteral) {
-			addError(ctx, "'as const' on an array literal is not supported: it would need a readonly tuple type", operand.location.line, operand.location.column);
-		} else if (operand.kind == NodeKind.ObjectLiteral) {
-			addError(ctx, "'as const' on an object literal needs every property value to be a string, number, boolean or object literal", operand.location.line, operand.location.column);
-		} else if (enumMemberLiteralOf(operand) == null) {
-			addError(ctx, "a 'const' assertion can only be applied to references to enum members, or string, number, boolean or object literals", operand.location.line, operand.location.column);
-		}
+	const literal = constLiteralType(operand);
+	if (operand.kind == NodeKind.ObjectLiteral) ctx.constContext.push(operand);
+	checkExpr(ctx, operand, literal);
+	if (operand.kind == NodeKind.ArrayLiteral) {
+		refuseConstArray(ctx, operand);
+	} else if (literal == null && operand.kind != NodeKind.ObjectLiteral && enumMemberLiteralOf(operand) == null) {
+		addError(ctx, "a 'const' assertion can only be applied to references to enum members, or string, number, boolean or object literals", operand.location.line, operand.location.column);
 	}
 	const member = enumMemberLiteralOf(operand);
 	node.kind = operand.kind;
