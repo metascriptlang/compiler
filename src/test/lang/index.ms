@@ -22,6 +22,7 @@ import "./syntax";
 import "./testBlockScope";
 import "./whenStmt";
 import "./whenBooleanLiterals";
+import "./quotedObjectBindings";
 import "./multimod/main";
 import "./accessorContexts";
 import "./aliasRepresentation";

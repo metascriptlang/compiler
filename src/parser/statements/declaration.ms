@@ -1669,7 +1669,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			elements.push(nested);
 		} else if (current(state).kind == TokenKind.LBrace) {
 			// Nested object pattern
-			const nested = try parseObjectPattern(state);
+			const nested = try parseObjectPattern(state, false);
 			elements.push(nested);
 		} else if (isIdentLike(current(state))) {
 			const elemToken = current(state);
@@ -1702,7 +1702,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	}, bracketToken)));
 }
 
-export function parseObjectPattern(state: ParserState): NodeResult {
+export function parseObjectPattern(state: ParserState, allowQuotedKeys: boolean = true): NodeResult {
 	const braceToken = current(state);
 	advance(state); // consume '{'
 	const props: Node[] = [];
@@ -1720,14 +1720,20 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					spreadArg: finishToken(createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent), restIdent),
 				}, spreadToken)));
 			}
-		} else if (isIdentLike(current(state))) {
+		} else if (isIdentLike(current(state)) || current(state).kind == TokenKind.String) {
 			const keyToken = current(state);
 			advance(state);
+			if (keyToken.kind == TokenKind.String) {
+				if (!allowQuotedKeys) return Result.err(`Quoted object binding key in a nested pattern is not supported at line ${keyToken.line}`);
+				if (current(state).kind != TokenKind.Colon || !isIdentLike(peek(state, 1))) {
+					return Result.err(`Quoted object binding key requires ':' and a direct identifier target at line ${keyToken.line}`);
+				}
+			}
 			// Check for rename: { key: alias } or { key: { nested } } or { key: [nested] }
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume ':'
 				if (current(state).kind == TokenKind.LBrace) {
-					const nested = try parseObjectPattern(state);
+					const nested = try parseObjectPattern(state, false);
 					props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
@@ -2826,4 +2832,53 @@ test "a binding pattern parameter cannot be optional in an implementation signat
 
 test "an optional receiver is refused" {
 	assert parseError("function f(this?: int32): void { }").indexOf("The 'this' parameter cannot be optional") >= 0;
+}
+
+test "quoted object bindings carry their decoded key and direct alias" {
+	const source = "const { \"a:b;c,d\": label = 3, ...rest } = value;";
+	assert programOk(source);
+	const data = stmtAt(source, 0).data as DestructuringDeclData;
+	const pattern = data.destrPattern.data as ObjectPatternData;
+	assert pattern.patternProps.length == 2;
+	assert pattern.hasRestProp;
+	const prop = pattern.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey == "a:b;c,d";
+	assert prop.propAlias.kind == NodeKind.Identifier;
+	assert prop.propDefault != null;
+}
+
+test "quoted direct bindings parse in parameter and iteration contexts" {
+	assert programOk("function f({ \"x\": value }: { x: int32 }): int32 { return value; }");
+	assert programOk("for (const { \"x\": value } of values) { log(value); }");
+}
+
+test "quoted keys stay gated inside unsupported nested patterns" {
+	for (const source of [
+		"function f([{ \"x\": value }]: { x: int32 }[]): void {}",
+		"const { outer: { \"x\": value } } = source;",
+		"const [{ \"x\": value }] = source;",
+	]) {
+		assert !programOk(source);
+	}
+}
+
+test "quoted object binding keys require a direct identifier target" {
+	for (const source of [
+		"const { \"x\" } = value;",
+		"const { \"x\" target } = value;",
+		"const { \"x\": } = value;",
+		"const { \"x\": 1 } = value;",
+		"const { \"x\": { nested } } = value;",
+		"const { \"x\": [nested] } = value;",
+	]) {
+		assert parseError(source).indexOf("Quoted object binding key") >= 0;
+	}
+}
+
+test "quoted declaration bindings retain their annotation carrier" {
+	const source = "const { \"x\": value }: { x: string } = src;";
+	assert programOk(source);
+	const node = stmtAt(source, 0);
+	assert (node.data as DestructuringDeclData).destrType != "";
+	assert node.typeExpr != null;
 }
