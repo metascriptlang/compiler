@@ -47,7 +47,7 @@ Every run belongs to one of three flows, chosen by when it runs:
 | flow | when | what runs | wall |
 |---|---|---|---|
 | **edit loop** | while a slice is in work, including before each commit; ends at ready | `./msc check src/index.ms`, then one check per changed contract, red on the old compiler and green on the candidate; last, the ready check | candidate build 2–2.5 min on 8 cores, then under 60 s per check; ready check 10–20 min on Linux |
-| **land gate** | once per slice, submitted the moment it is finished and ready (workspace `CLAUDE.md` §Worktrees and landing) | `tools/gate.sh` through the gate queue: lanes picked from the diff, compared with `known-red.json` | `~/metascript/.gate-host/README.md` §The gate; waited on with `gate-queue wait` in the background |
+| **land gate** | once per slice, submitted the moment it is finished and ready (workspace `CLAUDE.md` §Worktrees and landing) | `tools/gate.sh` through the gate queue: the core lanes the diff picks, plus the lanes and corpus programs the owner names at submit, compared with `known-red.json`; `--full` at a release or when a change is suspect | `~/metascript/.gate-host/README.md` §The gate; waited on with `gate-queue wait` in the background |
 | **release ladder** | cutting a release (`docs/GIT-FLOW.md`); landing on `main` and syncing the binary are not releases | `tools/gate.sh --release` plus the fixpoint check | hours |
 
 Lanes, `msc test src/index.ms`, the tier indexes and corpus sweeps run only in the land gate and the release ladder, because one of them during an edit holds a host and the person for tens of minutes while the land gate runs it anyway.
@@ -82,7 +82,7 @@ Build a candidate per compiler edit, in the same `run-remote.sh` call as the che
 
 ### Land gate
 
-**When the slice is finished and every consumer it reaches has passed on a Linux candidate, run its ready check and submit it at once** (`gate-queue ready-check`, `submit`, then `wait` in the background; workspace `CLAUDE.md` §Worktrees and landing, the Mac land queue only when that section says so). What the change reaches and the evidence each reach needs is `~/metascript/docs/LANDING.md`; `tools/gate.sh --dry-run` names the lanes the paths select, a floor of that reach. Do not run a separate gate first, because that duplicates the land gate.
+**When the slice is finished and every consumer it reaches has passed on a Linux candidate, run its ready check and submit it at once** (`gate-queue ready-check`, `submit`, then `wait` in the background; workspace `CLAUDE.md` §Worktrees and landing, the Mac land queue only when that section says so). What the change reaches and the evidence each reach needs is `~/metascript/docs/LANDING.md`; `tools/gate.sh --dry-run` names the core it runs and the lanes it leaves to the full gate, a floor of that reach; name what else the change reaches with `gate-queue submit <slice> --with <lanes> --programs <names>`, or `--full` when you cannot bound it. Do not run a separate gate first, because that duplicates the land gate.
 
 **After a RED, return to the edit loop: reproduce the named failures (`queue/<slice>.red`) through `run-remote.sh` on a candidate of the tip, name why the ready proof missed them and add that check, then fix, redo the ready check and submit the new tip** (`~/metascript/docs/LANDING.md` §Answering a red). The corpus FAIL line quotes the stdout the cell printed. Fix new reds; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains.
 
