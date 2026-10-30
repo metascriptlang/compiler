@@ -1515,6 +1515,23 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64
 	return result;
 }
 
+function isExpressionKind(kind: NodeKind): boolean {
+	return match (kind) {
+		NodeKind.CallExpr | NodeKind.NewExpr | NodeKind.UpdateExpr | NodeKind.BinaryExpr | NodeKind.UnaryExpr
+			| NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.ConditionalExpr | NodeKind.MemberExpr
+			| NodeKind.ArrayAccess | NodeKind.Identifier | NodeKind.MacroInvocation | NodeKind.TryExpr | NodeKind.MatchExpr => true,
+		_ => false,
+	};
+}
+
+function readStatements(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[] {
+	const nodes = readNodes(objHeap, arrHeap, h, name, fallbackLoc);
+	for (let i = 0; i < nodes.length; i += 1) {
+		if (isExpressionKind(nodes[i].kind)) nodes[i] = createNodeAt(NodeKind.ExprStmt, { expr: nodes[i] }, nodes[i].location);
+	}
+	return nodes;
+}
+
 function readNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): number[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: number[] = [];
@@ -2115,7 +2132,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.DeferStmt, { deferExpr }, loc);
 		},
 		NodeKind.BlockStmt => {
-			const statements = readNodes(objHeap, arrHeap, h, "statements", loc);
+			const statements = readStatements(objHeap, arrHeap, h, "statements", loc);
 			return createNodeAt(NodeKind.BlockStmt, { statements }, loc);
 		},
 		NodeKind.VariableDecl => {
@@ -2382,7 +2399,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Program ===
 		NodeKind.Program => {
-			const programStmts = readNodes(objHeap, arrHeap, h, "programStmts", loc);
+			const programStmts = readStatements(objHeap, arrHeap, h, "programStmts", loc);
 			return createNodeAt(NodeKind.Program, { programStmts }, loc);
 		},
 
