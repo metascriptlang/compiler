@@ -11,7 +11,7 @@
 //   f("hello", ["a", "b", "c"]);
 
 import {
-	Node, NodeKind, NodeData, Type, TypeKind,
+	Node, NodeKind, NodeFlag, NodeData, Type, TypeKind,
 	CallExprData, IdentifierData, NewExprData, TypeAssertionData,
 	createNode,
 } from "../../ast/node";
@@ -93,7 +93,7 @@ function lowerRest(node: Node): Node {
 	}
 	let named: Node = callee;
 	while (named.kind == NodeKind.TypeAssertion && (named.data as TypeAssertionData).asType == "!") named = (named.data as TypeAssertionData).asExpr;
-	let sym = named.resolvedSym;
+	let sym = node.flags.has(NodeFlag.ExtCall) && node.resolvedSym != null ? node.resolvedSym : named.resolvedSym;
 	if (sym == null) return node;
 	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
@@ -112,8 +112,8 @@ function lowerRest(node: Node): Node {
 	// stays aligned. Static extension calls (`Math.floor(x)`) and free function
 	// calls keep their natural alignment.
 	const typeNames = fnType.typeNames;
-	const hasThisSlot = typeNames.length > 0 && typeNames[0] == "this"
-		&& named.kind == NodeKind.MemberExpr;
+	const hasThisSlot = node.flags.has(NodeFlag.ExtCall)
+		|| (typeNames.length > 0 && typeNames[0] == "this" && named.kind == NodeKind.MemberExpr);
 	const restIdx = (typeChildren.length - 1) - (hasThisSlot ? 1 : 0);
 
 	// Peel Varargs → user's array type (e.g. string[]) for the ArrayLiteral.
