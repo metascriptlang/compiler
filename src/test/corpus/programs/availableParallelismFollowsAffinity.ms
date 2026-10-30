@@ -2,6 +2,7 @@
 // Axes: an unrestricted run counts at most the online CPUs (a confined host counts fewer), run under `taskset -c 0` reports 1.
 //
 // @skip-js: the JS backend has no std/os availableParallelism
+// @skip-raiser: std/os has no Raiser tier for CPU counts, and the Raiser VM has no thread pool
 // @stdout: unrestricted ok
 // @stdout: pinned 1
 import { argv, execFileCapture, platform } from "std/process";
