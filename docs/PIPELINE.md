@@ -197,8 +197,9 @@ current mechanism.
 ## Trans-Am — incremental computation (`src/compiler/transam`)
 
 Memoized query engine (incremental rebuild): each phase result is a cache entry keyed by
-(query kind, file id), and a dependency recomputed to the same output hash leaves its dependents
-valid, so re-compilation only recomputes what changed. `checkModuleGraph` and the LSP use it.
+(query kind, file id) that records the revision its output last changed, and an entry stays valid
+while none of its dependencies changed after it was verified, so re-compilation only recomputes
+what changed. `checkModuleGraph` and the LSP use it.
 Design: [`TRANSAM.md`](TRANSAM.md).
 
 ---
