@@ -135,8 +135,6 @@ function paramSlotWidth(paramTypes: Type[], idx: int32): int32 {
 	return mk == "string" ? 2 : 1;
 }
 
-// Force T* on actor proxy/impl for value-layout params so msSinkBoxStruct's
-// memset reaches caller's local (not just proxy's copy) — prevents double-free.
 function markValueLayoutParamsAsMutated(sym: Symbol, paramTypes: Type[]): void {
 	if (sym == null) return;
 	let bits: int32 = sym.mutatedParams;
