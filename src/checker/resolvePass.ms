@@ -21,7 +21,7 @@ import { createState, isAtEnd } from "../parser/cursor";
 import { definedValue } from "../compiler/defines";
 import { headerTarget } from "../module/loader";
 import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/cimport/emit";
-import { ITERATOR_HELPER_NEEDS_SOURCE, ITERATOR_HELPER_RETURNS_ITERATOR } from "./decoratorHelpers";
+import { ITERATOR_HELPER_NEEDS_SOURCE, ITERATOR_HELPER_RETURNS_ITERATOR } from "./iteratorHelperTexts";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";

@@ -156,9 +156,6 @@ export function reloadHandlerDecorator(decorators: Node[]): Node | null {
 	return null;
 }
 
-export const ITERATOR_HELPER_NEEDS_SOURCE = "@iteratorHelper needs the source iterator (an Iterator<T>) as the first parameter";
-export const ITERATOR_HELPER_RETURNS_ITERATOR = "@iteratorHelper must return an Iterator<T>";
-
 export function exportedFunctionOf(decorated: Node): Node | null {
 	let decl = decorated;
 	if (decl != null && decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
