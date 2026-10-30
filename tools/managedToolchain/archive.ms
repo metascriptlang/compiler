@@ -70,6 +70,9 @@ export function parseArchive(
 	}
 	const members: ArchiveMember[] = [];
 	let longNames = data[0..0];
+	let memberIndex: int64 = 0;
+	let firstLinker = false;
+	let coff = false;
 	let offset = magic.length as int64;
 	while (offset < data.length) {
 		if (data.length - offset < HEADER_SIZE ||
@@ -95,6 +98,12 @@ export function parseArchive(
 		}
 		const bodyEnd = bodyStart + size.value;
 		offset = bodyEnd + padding;
+		if (memberIndex == 0) {
+			firstLinker = rawName.value == "/" || rawName.value == "/SYM64/";
+		} else if (memberIndex == 1 && firstLinker && rawName.value == "/") {
+			coff = true;
+		}
+		memberIndex += 1;
 		if (rawName.value == "/" || rawName.value == "/SYM64/") { continue; }
 		if (rawName.value == "//") {
 			longNames = data[bodyStart..bodyEnd];
@@ -120,12 +129,19 @@ export function parseArchive(
 				return Result.err("invalid ar long name reference: " + rawName.value);
 			}
 			let end = start;
-			while (end + 1 < longNames.length &&
-				!(longNames[end] == "/".code && longNames[end + 1] == "\n".code)) {
-				end += 1;
-			}
-			if (end + 1 >= longNames.length) {
-				return Result.err("invalid ar long name reference: " + rawName.value);
+			if (coff) {
+				while (end < longNames.length && longNames[end] != 0) { end += 1; }
+				if (end == longNames.length) {
+					return Result.err("invalid ar long name reference: " + rawName.value);
+				}
+			} else {
+				while (end + 1 < longNames.length &&
+					!(longNames[end] == "/".code && longNames[end + 1] == "\n".code)) {
+					end += 1;
+				}
+				if (end + 1 >= longNames.length) {
+					return Result.err("invalid ar long name reference: " + rawName.value);
+				}
 			}
 			nameBytes = longNames[start..end];
 		} else {
