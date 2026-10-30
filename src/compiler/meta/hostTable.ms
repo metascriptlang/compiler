@@ -2113,6 +2113,7 @@ test "cms extern closure: declared externs are bridged, intercepted, or listed u
 		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
 		"&msRefArraySplice3", "&msUint8ArraySplice3",
 		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "msStringSetSlice", "&msStringStripInPlace",
+		"msStringNewUninit", "msMemCopyTo",
 	];
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
