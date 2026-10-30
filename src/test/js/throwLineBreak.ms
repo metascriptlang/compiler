@@ -16,7 +16,7 @@ function f(): void {
 }
 f();
 `);
-	assert js.indexOf("Line break not permitted here", 0) >= 0;
+	assert js.indexOf("Line break is not permitted after 'throw'", 0) >= 0;
 }
 
 test "E2E JS: throw followed by a block comment that spans a line break is refused" {
@@ -27,7 +27,7 @@ function f(): void {
 }
 f();
 `);
-	assert js.indexOf("Line break not permitted here", 0) >= 0;
+	assert js.indexOf("Line break is not permitted after 'throw'", 0) >= 0;
 }
 
 test "E2E JS: throw with its value on the same line or inside parentheses is kept" {
