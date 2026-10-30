@@ -3750,6 +3750,24 @@ console.log(a, b, c);         // space-separated, each auto-converted
 
 Structs and classes are printed in a **colored** JSON-like debug format with ANSI color prefixes (blue for structs, green for classes, cyan for anonymous objects, magenta for JsonValue). Enums print their variant name. This colored format is exclusive to `console.log` — it never appears in `.toString()`, `String()`, a template or string concatenation. It is printed for a struct or class value passed directly, with its fields written as `{ a: 1 }` inside; an array of such values passed to `console.log` prints the elements' text joined by commas, with no color (measured 2026-10-30 with the installed `msc` build 73e18a165a on C, `--danger`, JS and the Raiser, which print the same text: for `struct SP { a: int32 }`, `console.log(sp)` prints `SP { a: 3 }` in color and `console.log([sp])` prints `{"a":5}`).
 
+##### Custom debug representation — `inspect`
+
+`console.log` reads a declared `inspect(this x: T): string` (a class method or an extension, no parameter besides the receiver) before `toString`, and a printed struct, class, tuple or array reads it for each field and element, so a nested value shows its own `inspect`. A type with no `inspect` prints as before: its `toString` when passed directly, else the colored dump. `String(x)`, a template, `+`, `+=` and `.toString()` never read it.
+
+```ms
+class Money {
+    cents: int32;
+    inspect(): string { return "Money<" + this.cents.toString() + ">"; }
+    toString(): string { return "$" + this.cents.toString(); }
+}
+console.log(money);         // Money<5>
+console.log(`${money}`);    // $5
+```
+
+The name is Node's: `util.inspect` calls an object's `[util.inspect.custom]` method, and before Node 11 a method named `inspect`. MetaScript has no symbol-keyed members, so the method form with Node's own name is the closest TS-surface spelling that keeps Node's precedence (inspect hook, then `toString`, for the console only). The mechanism follows the reference's separate `repr` family (an overloadable debug representation distinct from its `$` text operation: a user's definition wins over the generic one, and the generic object, tuple and collection `repr` applies the same operation to each field and element, so a nested value uses its own).
+
+Measured 2026-10-30 on a candidate of this slice (corpus `consoleInspectHonoured`: C, `--danger`, JS and ESM, not the Raiser; red on the installed `msc` build 73e18a165a, green on the candidate): for a class and a struct each declaring `inspect` and `toString`, `console.log(x)` prints `CI[2]` and `SI[3]` while `` `${x}` ``, `String(x)` and `"" + x` print `CI<2>` and `SI<3>`; a class declaring only `toString` prints `CT<7>` as before; `console.log([a, b])` prints `CI[2],CI[4]` (an array of `toString`-only values still prints `CT<7>,CT<8>`); and a struct holding such a class, such a struct and an array of them prints `Holder { c: CI[2], s: SI[3], cs: [CI[2], CI[4]], n: 5 }` (colored). Not measured: an `inspect` that does not return `string` (the code ignores it), a union member, a generic instance, `Map` or `Set` values, and an `inspect` on a read-only view receiver.
+
 #### String Concatenation (`+`) — Auto-Coercion
 
 The `+` operator and `+=` with a string coerce numbers, booleans, enums, structs and classes to text. A number, boolean or enum gives its text (an enum its member name); a struct or class gives its declared `toString` when it has one, else plain JSON:
@@ -3918,6 +3936,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
 | `toJSON(this T): U` | `JSON.stringify(x)` serializes `x.toJSON()` in place of `x` | a value of static type T at the top level, as a field or as an array element of a `JSON.stringify` |
+| `inspect(this T): string` | `console.log(x)` prints `x.inspect()` in place of `x`'s debug dump or `toString` | a value of static type T passed to `console.log`, an element of an array passed to it, or a field or element inside a struct or class it prints; never `String(x)`, a template, `+` or `.toString()` |
 | `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter

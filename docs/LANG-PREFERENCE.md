@@ -1281,6 +1281,7 @@ protocols exist. `docs/LANG.md` "Convention-based dispatch protocols" is the use
 |---|---|
 | `toString` | Formatting in supported concatenation/templates; use explicit formatting at boundaries, not an assumed wire encoder or every console/String site. |
 | `toJSON` | `JSON.stringify` of a value of that static type, at the top level, as a field or as an array element. Called once; the result is serialized, and its own `toJSON` is not called again. A wire encoder, not a formatter: it does not affect `toString` or the console. |
+| `inspect` | `console.log` of a value of that static type and of the fields and elements it prints; read before `toString`, never by `String`, templates or `+`. A debug view, not a wire format or a formatter: keep it readable and free of side effects. |
 | `hash` and `==` | Native collection-key hashing/equality. Equal keys must hash alike; do not mutate key semantics while stored. There is no implicit `equals`/`hashCode` protocol. |
 | `toItems` / `toPairs` | Element versus key/value traversal. Supply the required array/Iterator shape; returned views still need live owners. |
 | `getDynamicField` | Otherwise unknown dotted field reads. Deliberately gives up typo checking on opted-in types. |

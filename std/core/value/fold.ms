@@ -1,7 +1,7 @@
 // Compile-time folds behind the std value routines: each expands, per instantiated type,
 // into one step per field, element or variant.
 
-import { Node, NodeKind, TypeKind, getType, getTypeImpl, typeKind, stringValue } from "std/meta";
+import { Node, NodeKind, TypeKind, getType, getTypeImpl, typeKind, stringValue, declaredCallType } from "std/meta";
 
 export macro equalsFold(a: Node, b: Node): Node {
 	const ln = a.line;
@@ -33,6 +33,20 @@ export macro equalsFold(a: Node, b: Node): Node {
 		error("no value equality for this type: only a struct, tuple, fixed array, nullable value or Result is compared by value", a);
 	}
 	return { kind: NodeKind.SpliceMany, line: ln, column: col, spliceNodes: steps };
+}
+
+// A declared `inspect(): string` of the dumped type, read when the dump is the console's (color on).
+export macro inspectFold(x: Node, color: Node): Node {
+	const ln = x.line;
+	const col = x.column;
+	const hooked = declaredCallType(x, "inspect");
+	if (hooked == null || typeKind(hooked) != TypeKind.String) return { kind: NodeKind.SpliceMany, line: ln, column: col, spliceNodes: [] };
+	const step: Node = { kind: NodeKind.IfStmt, line: ln, column: col, condition: color,
+		consequent: { kind: NodeKind.ReturnStmt, line: ln, column: col, argument: {
+			kind: NodeKind.CallExpr, line: ln, column: col,
+			callee: { kind: NodeKind.MemberExpr, line: ln, column: col, object: x, property: "inspect", isOptional: false },
+			arguments: [], isDirectCall: true, resolvedOverloadIdx: -1, nodeType: hooked } } };
+	return { kind: NodeKind.SpliceMany, line: ln, column: col, spliceNodes: [step] };
 }
 
 function typeofTag(name: string): string {

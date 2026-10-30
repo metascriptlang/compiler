@@ -787,8 +787,12 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	const dumped = dumpedShape(t, valueShape(t));
 	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum))) return null;
 	const loc = expr.location;
-	const declared = declaredToString(ctx, expr);
 	const slotUnion = textedSlotUnion(t);
+	if (debug && slotUnion == null) {
+		const inspected = declaredInspect(ctx, expr);
+		if (inspected != null) return inspected;
+	}
+	const declared = declaredToString(ctx, expr);
 	if (declared != null && (slotUnion == null || receivesUnion(declared.resolvedSym!))) return declared;
 	if (slotUnion != null) return unionTextCall(ctx, expr, slotUnion, debug, loc);
 	if (!dumped) return null;
@@ -814,6 +818,21 @@ export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | n
 	const text = declaredToString(ctx, expr);
 	if (text == null && !textsAsItsBase(t)) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
 	return text;
+}
+
+// A debug representation hook for the console: `inspect(): string`, read before `toString`, for the value itself
+// and, through `valueDump`, for each field and element; an array whose elements declare it joins their texts.
+function declaredInspect(ctx: CheckerContext, expr: Node): Node | null {
+	const own = declaredCall(ctx, expr, "inspect");
+	if (own != null && own.nodeType != null && isStringLike(own.nodeType)) return own;
+	const arrayType = expr.nodeType!;
+	const elem = isArrayShaped(arrayType) ? getElementType(arrayType.kind == TypeKind.Ref ? arrayType.typeReturn! : arrayType) : null;
+	if (elem == null) return null;
+	const elemText = declaredCallResultType(ctx, elem, "inspect", expr.location);
+	if (elemText == null || !isStringLike(elemText)) return null;
+	const join = boundCall(ctx, "inspectJoin", [expr], expr.location);
+	callCheckExpr(ctx, join, null);
+	return join;
 }
 
 function declaredToString(ctx: CheckerContext, expr: Node): Node | null {
@@ -4083,7 +4102,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral, layoutFromC, unwrapRefBase, classBodyOf, declaredBasesOf } from "./types";
+import { getElementType, createNumberLiteral, layoutFromC, unwrapRefBase, classBodyOf, declaredBasesOf } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);
