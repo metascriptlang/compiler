@@ -1876,10 +1876,11 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pRcInfo = classifyRc(paramTypes[pi], dctx);
 		if (pRcInfo.needsCleanup) {
+			if (paramSyms == null || pi >= paramSyms.length || paramSyms[pi] == null) throw new Error(`internal: DRC: parameter '${paramNames[pi]}' reached the analyzer without a resolved symbol`);
 			// Params are borrows registered as cursors: the caller owns the value and a
 			// store inside the callee copies at the assignment point. A constructor's
 			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, (!isSinkTypeForParam(paramTypes[pi]) && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			registerVar(dctx, pRcInfo, (!isSinkTypeForParam(paramTypes[pi]) && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms[pi]);
 		}
 	}
 }
@@ -2523,6 +2524,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionDeclData;
 	if (d.fnBody == null) return stmt;
+	if (stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.Borrow)) return stmt;
 	// Generic template: its T-unbound body never reaches codegen (monomorphization emits the
 	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
 	// — its members are untyped — so skip it; only real instances get DRC.
