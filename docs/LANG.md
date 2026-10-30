@@ -867,47 +867,45 @@ Measured 2026-10-03 on a candidate built from tree `3c0765fc6b98bb83a2aedf4dae04
 
 #### Struct Parameter Passing
 
-Struct params are **TS-compatible** — mutation propagates to the caller, just like TypeScript objects. The compiler auto-selects the optimal C ABI per parameter based on size and mutation analysis:
+A struct parameter is a **read-only view** of the caller's value (see Value Bindings Are Read-Only Views): the callee reads it at no copy cost, and a write through it is a compile error. To change the caller's value, declare the parameter `ref`; for a scratch copy, copy it into a local. The compiler picks the C ABI from the size:
 
 ```typescript
 struct Vec2 { x: float64; y: float64; }
-struct BigData { name: string; items: number[100]; }
 
-// Not mutated → compiler uses value (small) or const T* (big) — zero copy
+// Read only → value (small) or const T* (big) — zero copy
 function length(v: Vec2): float64 {
     return Math.sqrt(v.x * v.x + v.y * v.y);
 }
 
-// Mutated → compiler uses T* — mutation propagates to caller
-function reset(v: Vec2): void {
-    v.x = 0;  // caller's v.x becomes 0
+// ref → T* — the write reaches the caller
+function reset(ref v: Vec2): void {
+    v.x = 0;
     v.y = 0;
 }
 
-// readonly → explicit copy, caller's value is never affected
-function tryParse(readonly data: BigData): boolean {
-    data.name = "test";  // mutates local copy only
-    return validate(data);
+// A local copy is the caller-safe way to work on a changed value
+function shifted(v: Vec2): float64 {
+    let local = v;
+    local.x = 10;
+    return local.x;
 }
 ```
 
-| Size | Mutated? | `readonly`? | C output |
-|------|----------|-------------|----------|
-| Small (≤24B) | No | No | `void f(Vec2 v)` — value, registers |
-| Small (≤24B) | Yes | No | `void f(Vec2* v)` — pointer, mutation propagates |
-| Small (≤24B) | — | Yes | `void f(Vec2 v)` — forced copy |
-| Big (>24B) | No | No | `void f(const BigData* v)` — zero copy |
-| Big (>24B) | Yes | No | `void f(BigData* v)` — pointer, mutation propagates |
-| Big (>24B) | — | Yes | Copy-on-entry — explicit isolation |
+Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v': value parameters are read-only views; copy it locally first`, and in a `readonly` parameter `cannot mutate readonly parameter 'v'`. Measured 2026-10-30 with installed msc 73e18a165a: the example above prints `5`, `10 3`, `0 0` on C and with `--target=js`.
 
-Developer writes normal code — the compiler picks the fastest path automatically.
+| Parameter | C output (measured on the same build) |
+|------|----------|
+| `v: Vec2` (16 B) | `double f(Vec2 v)`: value, registers |
+| `v: BigData` (32 B) | `double f(const BigData* v)`: zero copy |
+| `readonly v: Vec2` | `double f(Vec2 v)` |
+| `ref v: Vec2` | `void f(Vec2* v)`: the write reaches the caller |
 
 #### Parameter Modifiers
 
 | Modifier | Syntax | Purpose |
 |---|---|---|
-| *(default)* | `f(v: Struct)` | Auto-optimized: compiler picks best ABI |
-| `readonly` | `f(readonly v: Struct)` | Explicit copy — caller's value unaffected |
+| *(default)* | `f(v: Struct)` | Read-only view; the compiler picks the ABI |
+| `readonly` | `f(readonly v: Struct)` | Read-only; a write is refused |
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
 
