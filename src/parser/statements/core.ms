@@ -239,6 +239,10 @@ function parseWhenTrait(state: ParserState, nameTok: Token): NodeResult {
 
 function parseWhenPrimary(state: ParserState): NodeResult {
 	const tok = current(state);
+	if (tok.kind == TokenKind.True || tok.kind == TokenKind.False) {
+		advance(state);
+		return Result.ok(whenFlag(tok.kind == TokenKind.True, tok));
+	}
 	if (tok.kind == TokenKind.LParen) {
 		advance(state);
 		const inner = try parseWhenOr(state);
@@ -598,4 +602,16 @@ test "an unclosed bracket is an error naming its opener, before the next stateme
 
 test "closed brackets of every shape still parse" {
 	assert firstParseError("log(\"a \" + xs.join(\",\"));\nf(g(1));\nnew C(1);\nconst r = [1, 2];\nconst p = (1 + 2);\nconst q = a[0];\nconst o = { a: 1, [k]: 2 };\nconst s = a[1..2];\nconst e = [];\nf();") == "";
+}
+
+test "boolean when literals select the first branch without adding a scope" {
+	assert firstStmtKind("when (true) { const value = 1; } else { function other() {} }") == NodeKind.VariableDecl;
+	assert firstStmtKind("when (false) { function other() {} } else { const value = 1; }") == NodeKind.VariableDecl;
+	assert firstStmtKind("when (!(true && false) && (true || false)) { const value = 1; }") == NodeKind.VariableDecl;
+}
+
+test "boolean when admission does not add literal truthiness or arbitrary calls" {
+	assert !parseSource("when (1) { const value = 1; }").ok;
+	assert !parseSource("when (\"text\") { const value = 1; }").ok;
+	assert !parseSource("when (test()) { const value = 1; }").ok;
 }

@@ -21,6 +21,7 @@ import "./promiseOwnedResult";
 import "./syntax";
 import "./testBlockScope";
 import "./whenStmt";
+import "./whenBooleanLiterals";
 import "./multimod/main";
 import "./accessorContexts";
 import "./aliasRepresentation";
