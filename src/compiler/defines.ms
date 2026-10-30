@@ -27,6 +27,8 @@ export function createDefineTable(): DefineTable {
 	defineSymbol(t, "mscKeepsRootsWithOwner", "true");
 	// The runtime's plain msDecref skips the future test only under this symbol: a compiler built by one that predates it emits msDecref for a future, so the fast form goes one sync cycle after the compiler lands.
 	defineSymbol(t, "mscEmitsDecrefFuture", "true");
+	// std reads the declared toJSON and inspect of a type only under this symbol: a compiler built by one that predates the host function builds the tree with the lookup answering none, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscHasDeclaredCallType", "true");
 	return t;
 }
 
@@ -184,6 +186,7 @@ test "define: a fresh table carries the compiler feature symbol" {
 	assert isDefined(t, "mscDeclaresRuntime");
 	assert isDefined(t, "mscKeepsRootsWithOwner");
 	assert isDefined(t, "mscEmitsDecrefFuture");
+	assert isDefined(t, "mscHasDeclaredCallType");
 }
 
 test "define: unknown flag is false, never an error" {
