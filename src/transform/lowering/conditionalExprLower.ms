@@ -596,7 +596,7 @@ function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): bool
 	if (isFunctionNode(n)) return false;
 	if (inCall && n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=") return true;
 	if (inLiteral && callMayRaiseValue(n)) return true;
-	if ((n.kind == NodeKind.ArrayAccess || n.kind == NodeKind.CallExpr) && firstReadPrecedesCall(n)) return true;
+	if (n.kind == NodeKind.ArrayAccess && handleReadPrecedesCall(n)) return true;
 	const call = inCall || n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr;
 	const literal = inLiteral || n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral;
 	let found = false;
@@ -606,13 +606,14 @@ function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): bool
 	return found;
 }
 
-function firstReadPrecedesCall(n: Node): boolean {
+function handleReadPrecedesCall(access: Node): boolean {
 	const kids: Node[] = [];
-	forEachChild(n, (child: Node): void => { kids.push(child); });
-	let laterCall = false;
-	for (let i = 1; i < kids.length && !laterCall; i += 1) laterCall = holdsCall(kids[i]);
-	if (!laterCall) return false;
-	return n.kind == NodeKind.ArrayAccess ? arrayHandleRead(kids[0]) != null : readsBeforeHoist(kids[0]);
+	forEachChild(access, (child: Node): void => { kids.push(child); });
+	if (kids.length < 2 || arrayHandleRead(kids[0]) == null) return false;
+	for (let i = 1; i < kids.length; i += 1) {
+		if (holdsCall(kids[i])) return true;
+	}
+	return false;
 }
 
 function isStringAppendOverCall(stmt: Node): boolean {
