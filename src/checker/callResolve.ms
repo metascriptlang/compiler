@@ -893,7 +893,7 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 export function adoptAwaitedValue(ctx: CheckerContext, d: AwaitExprData): void {
 	const t = d.awaitArg.nodeType;
 	if (t == null || isAwaitable(t) || isUnresolvedType(t) || isUnknownType(t) || hasGenericParams(t)) return;
-	if (t.kind == TypeKind.Error || t.kind == TypeKind.Void) return;
+	if (t.kind == TypeKind.Error || t.kind == TypeKind.Void || thenSignatureOf(ctx, t) != null) return;
 	const lift = ctx.compilerFuncs.get("promiseOfValue");
 	if (lift == null) throw new Error("internal: the prelude declares no @compilerFunc promiseOfValue");
 	const call = boundCallOf(lift, [d.awaitArg], d.awaitArg.location);
