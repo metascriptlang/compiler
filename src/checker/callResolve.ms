@@ -5582,6 +5582,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
+	if (objType.kind == TypeKind.Error) {
+		node.nodeType = objType;
+		return objType;
+	}
+	if (isMaybeType(objType) && !d.isOptional) {
+		const subject = d.object.kind == NodeKind.Identifier ? `'${(d.object.data as IdentifierData).name}'` : "object";
+		addError(ctx, `${subject} is possibly 'null' (${typeDisplayName(objType)}): narrow it with a null check, or unwrap it with '!' or '??', before reading '${d.property}'`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).

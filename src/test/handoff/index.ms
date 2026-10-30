@@ -76,6 +76,7 @@ import "./paramMutationScan";
 import "./maybeGenericPayload";
 import "./genericReturnIntoMaybe";
 import "./extGenericFromArg";
+import "./nullableMemberRefusal";
 import "./arrowInGenericLiteral";
 import "./literalAwaitsBinding";
 import "./functionValueMisuse";
