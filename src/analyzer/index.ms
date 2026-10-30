@@ -5,7 +5,7 @@
 // analyzeProgram is the main entry point called from src/index.ms.
 
 import { reportShareIfRequested } from "../transform/shareCount";
-import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, CallingConvention, ExportDeclData, FunctionDeclData, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, ExportDeclData, FunctionDeclData, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
 import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
@@ -51,7 +51,7 @@ function callbackReader(w: WriteEffects, stmt: Node): Node | null {
 	if (d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt || routineFlagSet(d.fnFlags).has(RoutineFlag.Generic) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern)) return null;
 	if (sym.overloads.length > 0 || sym.overloadIdx != 0 || sym.exportName != "" || sym.nativeName != "" || dispatchEntryFor(sym) != null) return null;
 	if (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow) || hasFlag(sym, SymbolFlag.CompileTime)) return null;
-	if (sym.symbolType == null || sym.symbolType.callConv == CallingConvention.CcInline || isGeneratorBody(d.fnBody)) return null;
+	if (sym.symbolType == null || isGeneratorBody(d.fnBody)) return null;
 	return decl;
 }
 
