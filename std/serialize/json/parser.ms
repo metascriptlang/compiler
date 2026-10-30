@@ -43,6 +43,13 @@ function skipWs(input: string, pos: int32): int32 {
 	return p;
 }
 
+function charAt(input: string, pos: int32): string {
+	const lead = input.byteAt(pos);
+	const width = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+	const end = pos + width;
+	return input.byteSlice(pos, end < input.byteLength ? end : input.byteLength);
+}
+
 function errorAt(msg: string, pos: int32): ParseResult {
 	return Result.err(`${msg} at position ${pos}`);
 }
@@ -65,7 +72,7 @@ function parseValue(input: string, pos: int32, depth: int32): ParseResult {
 			if (ch == "-".code || (ch >= "0".code && ch <= "9".code)) {
 				return parseNumber(input, pos);
 			}
-			return errorAt(`Unexpected character '${input.byteSlice(pos, pos + 1)}'`, pos);
+			return errorAt(`Unexpected character '${charAt(input, pos)}'`, pos);
 		},
 	};
 }
@@ -225,7 +232,7 @@ function parseString(input: string, pos: int32): ParseResult {
 					result += fromCodePoint(codePoint);
 					p = p + 4;
 				},
-				_ => { return errorAt(`Invalid escape '\\${input.byteSlice(p, p + 1)}'`, p); },
+				_ => { return errorAt(`Invalid escape '\\${charAt(input, p)}'`, p); },
 			};
 			// Escape consumed — the next plain run starts after it.
 			runStart = p + 1;
@@ -477,6 +484,31 @@ test "parse error unterminated string" {
 test "parse error invalid" {
 	const r = parseJson("xyz");
 	assert !r.ok;
+}
+
+test "an unexpected non-ASCII character is named whole" {
+	for (const ch of ["é", "€", "😀"]) {
+		const r = parseJson(ch);
+		assert !r.ok;
+		if (!r.ok) assert r.error == `Unexpected character '${ch}' at position 0`;
+	}
+}
+
+test "an unexpected non-ASCII character mid-document keeps its byte position" {
+	const r = parseJson("[1, €]");
+	assert !r.ok;
+	if (!r.ok) assert r.error == "Unexpected character '€' at position 4";
+}
+
+test "an invalid escape of a non-ASCII character is named whole" {
+	for (const ch of ["é", "€", "😀"]) {
+		const r = parseJson(`"\\${ch}"`);
+		assert !r.ok;
+		if (!r.ok) assert r.error == `Invalid escape '\\${ch}' at position 2`;
+	}
+	const ascii = parseJson("\"\\x\"");
+	assert !ascii.ok;
+	if (!ascii.ok) assert ascii.error == "Invalid escape '\\x' at position 2";
 }
 
 test "parse whitespace" {
