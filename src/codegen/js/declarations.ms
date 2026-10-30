@@ -9,7 +9,7 @@ import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, j
 import { ACTOR_EXIT_STOP, useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
-import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
+import { jsDefaultValue, emitCopyOnRead, valueCopyFnName } from "./valueCopy";
 import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
@@ -392,7 +392,14 @@ function emitActorMessageMethod(gen: JSGenerator, node: Node): void {
 	emit(gen, memberName);
 	emit(gen, "(");
 	emitJoinedSafeParams(gen, node, params, ", ", safeJsName);
-	emit(gen, isVoid ? ") { msActorRt().send(this, () => this." : ") { return msActorRt().call(this, () => this.");
+	emit(gen, ") { ");
+	const skipped = d.methodParams.length - params.length;
+	for (let i = 0; i < params.length; i += 1) {
+		const sym = node.paramSyms != null && i + skipped < node.paramSyms.length ? node.paramSyms[i + skipped] : null;
+		const copyFn = sym != null ? valueCopyFnName(gen, sym.symbolType) : "";
+		if (copyFn != "") emit(gen, `${safeJsName(params[i])} = ${copyFn}(${safeJsName(params[i])}); `);
+	}
+	emit(gen, isVoid ? "msActorRt().send(this, () => this." : "return msActorRt().call(this, () => this.");
 	emit(gen, implName);
 	emit(gen, "(");
 	emitJoinedSafeParams(gen, node, params, ", ", safeJsName);
