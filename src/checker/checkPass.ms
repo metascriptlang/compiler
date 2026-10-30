@@ -42,7 +42,6 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
-import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
 import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
@@ -3105,14 +3104,16 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Type): void {
+function checkDefaultInParamScope(ctx: CheckerContext, defaults: Node[], at: int32, paramType: Type): void {
+	const def = defaults[at];
 	if (paramType == null || hasGenericParams(paramType) || ctx.inGenericContext > 0) return;
 	const hoistMark = ctx.pendingHoisted.length;
-	const probe = cloneNodeForCheck(def);
-	checkExpr(ctx, probe, paramType);
-	if (probe.nodeType != null) fitNode(ctx, probe, paramType, probe.nodeType);
+	checkExpr(ctx, def, paramType);
+	const checked = def.nodeType != null ? fitNode(ctx, def, paramType, def.nodeType) : def;
 	ctx.pendingHoisted.shrink(hoistMark);
 	noteDefaultCheckedAtDeclaration(def);
+	noteDefaultCheckedAtDeclaration(checked);
+	defaults[at] = checked;
 }
 
 export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null, defaults: Node[] | null = null): Symbol[] {
@@ -3164,7 +3165,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
 		}
 		paramTypes.push(paramType);
-		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
+		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults, i, paramType);
 		const paramSym = paramSymbol(ctx, body, i, param, SymbolKind.Parameter, paramType);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
