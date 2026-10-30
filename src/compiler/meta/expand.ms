@@ -2013,7 +2013,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		marshalArgs.push(builtNodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
 	}
 	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
-	pushActiveMetaCtx(ctx, node.location.line, node.location.column);
+	pushActiveMetaCtx(ctx, node.location.line, node.location.column, regCtx, macroSym.name);
 	const resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
 	popActiveMetaCtx();
 

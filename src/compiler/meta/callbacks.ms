@@ -107,12 +107,14 @@ interface ActiveMetaFrame {
 	ctx: CheckerContext;
 	line: int32;
 	column: int32;
+	macroScope: CheckerContext | null;
+	definer: string;
 }
 
 let _activeMetaFrames: ActiveMetaFrame[] = [];
 
-export function pushActiveMetaCtx(ctx: CheckerContext, line: int32, column: int32): void {
-	_activeMetaFrames.push({ ctx, line, column });
+export function pushActiveMetaCtx(ctx: CheckerContext, line: int32, column: int32, macroScope: CheckerContext | null = null, definer: string = ""): void {
+	_activeMetaFrames.push({ ctx, line, column, macroScope, definer });
 }
 
 export function popActiveMetaCtx(): void {
@@ -122,6 +124,16 @@ export function popActiveMetaCtx(): void {
 export function activeMetaCtx(): CheckerContext | null {
 	if (_activeMetaFrames.length == 0) return null;
 	return _activeMetaFrames[_activeMetaFrames.length - 1].ctx;
+}
+
+export function activeMacroScope(): CheckerContext | null {
+	if (_activeMetaFrames.length == 0) return null;
+	return _activeMetaFrames[_activeMetaFrames.length - 1].macroScope;
+}
+
+export function activeMacroDefiner(): string {
+	if (_activeMetaFrames.length == 0) return "";
+	return _activeMetaFrames[_activeMetaFrames.length - 1].definer;
 }
 
 export function activeMetaLine(): int32 {

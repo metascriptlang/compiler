@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, SymbolState, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
 import { CheckerContext, addError } from "../../checker/context";
-import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, ScopeKind, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { isReadonlyView, withoutReadonlyView, typeDisplayName, instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
@@ -8,7 +8,7 @@ import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHe
 import { mapTypeToAst, nodeToValue, builtNodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { declaredCallResultType } from "../../checker/fit";
-import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
+import { activeMetaCtx, activeMacroScope, activeMacroDefiner, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
 import { definedValue } from "../defines";
 import { getParserDefines } from "../../parser/context";
@@ -120,7 +120,17 @@ function hostBindSym(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null || args.length < 2 || args[0].kind != RaiserValueKind.String) return raiserNil();
 	const bound = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int32 : args[1].intVal as int32;
-	const sym = bound >= 0 ? boundSymAt(bound) : lookupSymbol(ctx.table, unboxString(args[0]));
+	const macroScope = activeMacroScope();
+	const name = unboxString(args[0]);
+	let sym: Symbol | null = bound >= 0 ? boundSymAt(bound) : null;
+	if (bound < 0 && macroScope != null) {
+		const home = scopeDefining(macroScope.table, activeMacroDefiner(), name);
+		if (home != null && home.scopeKind != ScopeKind.Global) {
+			sym = lookupSymbolInDefiningScope(macroScope.table, activeMacroDefiner(), name);
+			if (sym != null && sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, macroScope);
+		}
+	}
+	if (bound < 0 && sym == null) sym = lookupSymbol(ctx.table, name);
 	if (sym == null) return raiserNil();
 	const ident = createNodeAt(NodeKind.Identifier, { name: bound >= 0 ? unboxString(args[0]) : sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
 	ident.resolvedSym = sym;
