@@ -836,8 +836,14 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
-	collectStaleEntries(packBase(), nowSeconds(), [".pk", ".deps"]);
+	collectUnusedPacks(nowSeconds());
 	_writeMs = _writeMs + (performance.now() - _w0);
+}
+
+const PACK_UNUSED_SECONDS: float64 = 24 * 3600;
+
+export function collectUnusedPacks(now: float64): void {
+	collectStaleEntries(packBase(), now, [".pk", ".deps"], PACK_UNUSED_SECONDS);
 }
 
 // Emit-phase sink: appends each field's serialized column. Byte-for-byte the
@@ -2301,4 +2307,24 @@ test "the prelude pack key moves with the parser defines" {
 	const keyed = preludePackKey("/std", ".cms");
 	setParserDefines(saved);
 	assert plain != keyed;
+}
+
+test "a pack unused for a day is collected with its deps record, a pack used within the day stays" {
+	const saved = env.get("MSC_GLOBAL_CACHE_DIR");
+	const root = `/tmp/msc-pack-age-${performance.now()}`;
+	env.set("MSC_GLOBAL_CACHE_DIR", root);
+	try {
+		const dir = packRoot();
+		ensureDir(dir);
+		writeFile(`${dir}/old.pk`, "pack");
+		writeFile(`${dir}/old.deps`, "deps");
+		const written = nowSeconds();
+		collectUnusedPacks(written + 2 * 3600);
+		assert exists(`${dir}/old.pk`) && exists(`${dir}/old.deps`);
+		collectUnusedPacks(written + 25 * 3600);
+		assert !exists(`${dir}/old.pk`) && !exists(`${dir}/old.deps`);
+	} finally {
+		env.set("MSC_GLOBAL_CACHE_DIR", saved);
+		removeAll(root);
+	}
 }
