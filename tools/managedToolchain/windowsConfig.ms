@@ -48,7 +48,8 @@ export function renderWindowsSourceConfig(
 	major: int32,
 ): Result<string, string> {
 	if (major < 1) { return Result.err("LLVM major must be positive"); }
-	const name = windowsVariantDirectory(target, variant);
+	const directory = windowsVariantDirectory(target, variant);
+	const resourceDirectory = "<CFGDIR>/../../lib/clang/" + String(major);
 	const triple = match (target) {
 		WindowsTarget.X64 => "x86_64-w64-windows-gnu",
 		WindowsTarget.Arm64 => "aarch64-w64-windows-gnu",
@@ -58,17 +59,17 @@ export function renderWindowsSourceConfig(
 		"-target " + triple,
 		"-Xclang -target-cpu -Xclang " + cpu,
 		"-nostdinc",
-		"-isystem <CFGDIR>/../../lib/clang/" + String(major) + "/include",
+		"-isystem " + resourceDirectory + "/include",
 		"-isystem <CFGDIR>/include/libc/mingw-w64",
 		"--rtlib=compiler-rt",
 		"--unwindlib=none",
 	];
 	if (variant == WindowsVariant.Dll) { lines.push("-shared"); }
 	lines.push("--ld-path=<CFGDIR>/../../bin/ld.lld");
-	lines.push("-Xlinker -L -Xlinker <CFGDIR>/" + name);
-	lines.push("-resource-dir <CFGDIR>/../../lib/clang/" + String(major));
-	lines.push("--sysroot=<CFGDIR>/" + name);
-	lines.push("-B<CFGDIR>/" + name);
+	lines.push("-Xlinker -L -Xlinker <CFGDIR>/" + directory);
+	lines.push("-resource-dir " + resourceDirectory);
+	lines.push("--sysroot=<CFGDIR>/" + directory);
+	lines.push("-B<CFGDIR>/" + directory);
 	lines.push("-Xlinker --error-limit=0");
 	if (variant == WindowsVariant.Exe) {
 		lines.push("-Xlinker --stack=16777216");
