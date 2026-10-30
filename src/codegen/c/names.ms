@@ -352,6 +352,7 @@ export function mangledFunctionName(roots: Readonly<ModuleNameRoots>, sym: Reado
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
 	const baseName = name;
+	if (sym != null && sym.instantiatedFrom != null && sym.modulePath != "") return safeName(baseName);
 	if (sym != null && sym.modulePath != "") {
 		// The _u suffix is the symbol's per-(module, name) ordinal minted at
 		// declaration — NOT the overload-set slot. A routine that never joins
@@ -571,6 +572,18 @@ test "mangledFunctionName qualifies main by its module" {
 	sym.modulePath = "src/app.ms";
 	assert mangledFunctionName(buildModuleNameRoots(), sym, "main", 0) != "main_";
 	assert mangledFunctionName(buildModuleNameRoots(), sym, "main", 0).startsWith("main__");
+}
+
+test "mangledFunctionName names a generic instance by its own spelling whichever module homes it" {
+	const generic = makeSymbol("twice", SymbolKind.Function, noneType(), false);
+	const first = makeSymbol("twice_x__int32", SymbolKind.Function, noneType(), false);
+	first.instantiatedFrom = generic;
+	first.modulePath = "src/a.ms";
+	const second = makeSymbol("twice_x__int32", SymbolKind.Function, noneType(), false);
+	second.instantiatedFrom = generic;
+	second.modulePath = "src/b.ms";
+	assert mangledFunctionName(buildModuleNameRoots(), first, "twice_x__int32", 0) == "twice_x__int32";
+	assert mangledFunctionName(buildModuleNameRoots(), second, "twice_x__int32", 0) == "twice_x__int32";
 }
 
 test "mangledFunctionName plain name no sym" {
