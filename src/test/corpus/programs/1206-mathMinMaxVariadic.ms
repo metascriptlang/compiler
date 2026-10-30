@@ -3,6 +3,7 @@
 // @stdout: true true
 // @stdout: 7 2 2 NaN NaN NaN NaN
 // @stdout: Infinity Infinity -Infinity -Infinity Infinity -Infinity Infinity -Infinity
+// @stdout: 9 9 1 2 2
 function pick(xs: float64[]): float64 {
 	return Math.max(...xs);
 }
@@ -23,3 +24,5 @@ const pz: float64 = 0.0;
 const nz: float64 = -0.0;
 const zs: float64[] = [nz, pz, nz];
 console.log(1 / Math.max(pz, nz), 1 / Math.max(nz, pz), 1 / Math.min(pz, nz), 1 / Math.min(nz, pz), 1 / Math.max(...zs), 1 / Math.min(...zs), 1 / Math.max(nz, pz, nz), 1 / Math.min(pz, pz, nz));
+const ns: number[] = [3, 9, 1];
+console.log(Math.max(...ns), Math.max(1, ...ns), Math.min(...ns), Math.max(1.5, 2), Math.max(1, 2));
