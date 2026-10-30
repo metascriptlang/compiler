@@ -36,7 +36,7 @@ When measuring TypeScript compatibility, read [`compat/typescript/README.md`](co
 Every heavy job (workspace `CLAUDE.md` §Shared machines: any compiler build, any test runner including `msc test <file>`, a corpus, guard, SAN, perf, fmt or LSP run, whatever its length) goes to a gate host through `~/metascript/.gate-host/run-remote.sh`, and to the Mac only with `MAC_ONLY=1` when it needs macOS. `run-remote.sh` copies only tracked and unignored files and each call may pick another host, so `./msc` never travels: build the candidate and run every check that uses it in one call:
 
 ```bash
-~/metascript/.gate-host/run-remote.sh --cores 8 --ram 8 --job "<session>: <what>" -- bash -c \
+~/metascript/.gate-host/run-remote.sh --cores 8 --job "<session>: <what>" -- bash -c \
   'msc build src/index.ms --danger --lto=off --output=msc && ./msc test <owner-file> --tests-in-dir && MSC=$PWD/msc MSCORPUS_ONLY=<names> msc run src/test/corpus/run.ms'
 ```
 
