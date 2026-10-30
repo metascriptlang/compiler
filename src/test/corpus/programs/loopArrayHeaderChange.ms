@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: expected an object, got value kind Array (inbox 2026-10-18-raiser-length-assign-on-typed-array-expects-object)
 // Loops of element loads and stores may hold an array's length and data in locals; loops that push, pop,
 // set `.length`, call something that does, or assign the array variable must see the change next iteration.
 // @stdout: fill 0,2,4,6,8,10,12,14 sum=56
