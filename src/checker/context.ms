@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -747,6 +747,11 @@ function parentLevel(level: (Type | null)[]): (Type | null)[] {
 		const parent = classBaseStruct(t);
 		if (parent != null) {
 			parents.push(parent);
+			continue;
+		}
+		const widened = distinctWidenBody(t);
+		if (widened != null && isArrayShaped(widened)) {
+			parents.push(widened);
 			continue;
 		}
 		for (const base of declaredBasesOf(t)) parents.push(base);

@@ -4802,6 +4802,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyTypeGuard(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
 	}
+	if (formal.kind != TypeKind.Distinct && isBrandDistinct(concrete) && concrete.typeReturn != null && isArrayShaped(concrete.typeReturn)) {
+		unifyTypeGuard(formal, concrete.typeReturn, bindings);
+		return;
+	}
 	if (formal.kind == TypeKind.Span) {
 		const source = unwrapRef(concrete);
 		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray

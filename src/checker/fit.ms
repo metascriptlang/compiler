@@ -732,6 +732,16 @@ function brandBase(t: Type | null): Type | null {
 	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
 }
 
+export function brandArrayBase(t: Type | null): Type | null {
+	const base = brandBase(t);
+	return base != null && isArrayShaped(skipModifier(base)!) ? base : null;
+}
+
+export function widenArrayBrand(expr: Node): Node {
+	const base = brandArrayBase(expr.nodeType);
+	return base != null ? wrapInConv(expr, base) : expr;
+}
+
 function textOperandOrBase(op: string, t: Type, other: Type): Type | null {
 	const base = brandBase(t);
 	if (base == null || op != "+" || isStringLike(base)) return base;

@@ -372,6 +372,13 @@ function takesUnknown(target: Type): boolean {
 	};
 }
 
+function unionHoldsMember(union: Type, member: Type): boolean {
+	for (const m of union.typeChildren) {
+		if (sameType(m, member)) return true;
+	}
+	return false;
+}
+
 function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
 	if (union.kind != TypeKind.Union || !isMaybeType(carrier)) return null;
 	const payload = nonNullMemberOfNullable(union);
@@ -526,6 +533,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// Brand widens implicitly to its base (CubeId → string); base → brand needs `as`.
 	if (isBrandDistinct(source) && source.typeReturn != null && target.kind != TypeKind.Distinct) {
+		if (target.kind == TypeKind.Union && unionHoldsMember(target, source)) return true;
 		return isAssignable(source.typeReturn, target);
 	}
 	if (source.kind == TypeKind.GenericInstance && !isNominalType(target)) {
