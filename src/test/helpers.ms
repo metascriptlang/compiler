@@ -214,7 +214,7 @@ function entryOnlyFacts(entry: Node, ctx: CheckerContext, modPath: string, alive
 }
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
-export function compileToJS(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(), danger: boolean = false): CompileResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -236,7 +236,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	refusePointerOpsOnJs(checkerCtx, unit.program);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
-	const transformed = transformProgram(unit.program, checkerCtx, true);
+	const transformed = transformProgram(unit.program, checkerCtx, true, [], false, null, !danger);
 	// Mirrors the drain compile.ms runs after the JS transform: a pass that
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
@@ -245,7 +245,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 
 // compileToJS with the JS prelude read from disk: a lowering that synthesizes a call to a
 // prelude routine (a string for-of's byte reads, a bigint conversion) needs the routine declared.
-export function compileToJSWithStd(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+export function compileToJSWithStd(source: string, target: TargetInfo = hostTargetInfo(), danger: boolean = false): CompileResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -269,7 +269,7 @@ export function compileToJSWithStd(source: string, target: TargetInfo = hostTarg
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 	placeOwnedInstances([unit], true);
 
-	const transformed = transformProgram(unit.program, checkerCtx, true);
+	const transformed = transformProgram(unit.program, checkerCtx, true, [], false, null, !danger);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
 }
@@ -316,8 +316,8 @@ function stripRuntimeMangle(js: string): string {
 	return out;
 }
 
-export function compileToJSBare(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
-	const r = compileToJSWithStd(source, target);
+export function compileToJSBare(source: string, target: TargetInfo = hostTargetInfo(), danger: boolean = false): CompileResult {
+	const r = compileToJSWithStd(source, target, danger);
 	if (!r.ok) return r;
 	return Result.ok(stripRuntimeMangle(r.value));
 }

@@ -1716,7 +1716,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		refusePointerOpsOnJs(unitCtxs[ui], unitPrograms[ui]);
 		const reexports = modPath == entryPath ? checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]) : [];
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
-		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
+		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true, [], false, null, opts.mode != MODE_DANGER);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
 		const moduleId = replaceExt(moduleDisplayPath(modPath), "");
@@ -4676,7 +4676,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			if (fn.resolvedSym != null) written.add(fn.resolvedSym);
 			else writtenUnresolved.add((fn.data as FunctionDeclData).fnName);
 		}
-		const transformed = transformProgram(unitPrograms[ui], ctx, true);
+		const transformed = transformProgram(unitPrograms[ui], ctx, true, [], false, null, opts.mode != MODE_DANGER);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
 		const own: Node[] = [];
