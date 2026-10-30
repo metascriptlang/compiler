@@ -66,11 +66,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const elems = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
-						elems.nodeType = createPtr(spanTarget.typeReturn);
-						const dataExpr = makeHiddenStdConv(elems, spanDataPtr(spanTarget.typeReturn), loc);
-						const lenExpr = makeMember(secondRead(d.convExpr), "length", loc);
-						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
+						return arraySpanLiteral(d.convExpr, spanTarget.typeReturn, targetType, loc);
 					} else if (srcType.kind == TypeKind.SizedArray) {
 						// SizedArray -> Span: { data: arr.data, len: N }
 						const dataExpr = makeMember(d.convExpr, "data", loc);
@@ -255,6 +251,14 @@ function hasSpreadElement(literal: Node): boolean {
 		if (el.kind == NodeKind.SpreadExpr) return true;
 	}
 	return false;
+}
+
+export function arraySpanLiteral(array: Node, elem: Type | null, spanType: Type, loc: SourceLocation): Node {
+	const elems = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(array, "p", loc)], loc);
+	elems.nodeType = createPtr(elem);
+	const dataExpr = makeHiddenStdConv(elems, spanDataPtr(elem), loc);
+	const lenExpr = makeMember(secondRead(array), "length", loc);
+	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
 }
 
 function spanDataPtr(elem: Type | null): Type {

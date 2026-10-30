@@ -7,7 +7,8 @@
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
 //  5. optionalCoercion    — wrap T returns for T|null return types
 //  6. builtinLower        — rewrite @builtin calls + extern extensions to C-compatible AST
-//  7. inductionPointer    — carry a Span index of a @computedGoto loop as a pointer under --danger (last: it reads the final shape of every access and call)
+//  7. inductionPointer    — carry a Span index of a @computedGoto loop as a pointer under --danger (it reads the final shape of every access and call)
+//  8. loopSpanCache      — hold the length and data of the arrays a call-free loop reads or fills in a local Span under --danger (last, so it leaves a computed-goto loop as inductionPointer shaped it)
 //
 // NOTE: moveExprLower removed — MoveExpr survives to Phase 4 (analyzer) and Phase 5 (codegen).
 // Analyzer handles RC semantics (wasMoved, errFailedMove). Codegen unwraps to inner expression.
@@ -28,6 +29,7 @@ import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerInductionPointers } from "./inductionPointer";
+import { lowerLoopSpans } from "./loopSpanCache";
 import { reportShareIfRequested } from "../shareCount";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
@@ -56,6 +58,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.insertVarParamDerefs");
 	result = lowerInductionPointers(result, ctx);
 	flowLap("pass.lowerInductionPointers");
+	result = lowerLoopSpans(result, ctx);
+	flowLap("pass.lowerLoopSpans");
 	reportShareIfRequested(result, "native");
 	return result;
 }
