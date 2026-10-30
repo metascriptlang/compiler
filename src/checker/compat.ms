@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef, isOutParam } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef, isOutParam, isStringLike, isArrayType } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -354,7 +354,15 @@ export function unmetConstraint(param: Type, bound: Type, params: Type[], types:
 	if (raw == null) return null;
 	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
-	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) ? null : constraint;
+	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) || holdsOnlyLength(bound, constraint) ? null : constraint;
+}
+
+// A `{ length: number }` constraint is met by a string or an array: the bound keeps its own type and no value is converted to the object type.
+function holdsOnlyLength(bound: Type, constraint: Type): boolean {
+	if (!isStringLike(bound) && !isArrayType(bound)) return false;
+	const shape = peelToStruct(constraint);
+	if (shape == null || shape.kind != TypeKind.Struct || shape.typeNames.length != 1 || shape.typeNames[0] != "length") return false;
+	return isAssignable(int32Type(), shape.typeChildren[0]);
 }
 
 export function isAssignable(source: Type | null, target: Type | null): boolean {
