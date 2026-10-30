@@ -29,7 +29,7 @@ function main(): void {
 	let hit = false;
 	if (b[pick()]++ == (65535 as uint16)) { hit = true; }
 
-	console.log(cells[0].v, before, c[0], d[0], b[0], a[0] == (0 as uint8) ? 1 : 0, hit, calls - shown);
+	console.log(cells[0].v, before, c[0], d[0], b[0], a[0] == (0 as uint8) ? 1 : 0, hit, calls - (shown as int32));
 }
 
 main();
