@@ -5586,7 +5586,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		node.nodeType = objType;
 		return objType;
 	}
-	if (isMaybeType(objType) && !d.isOptional) {
+	if (isMaybeType(objType) && !d.isOptional && objType.typeNames.indexOf(d.property) >= 0) {
 		const subject = d.object.kind == NodeKind.Identifier ? `'${(d.object.data as IdentifierData).name}'` : "object";
 		addError(ctx, `${subject} is possibly 'null' (${typeDisplayName(objType)}): narrow it with a null check, or unwrap it with '!' or '??', before reading '${d.property}'`, node.location.line, node.location.column);
 		node.nodeType = errorType();
@@ -6307,7 +6307,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					}
 				}
 			}
-			if (suggestion != "") {
+			if (isMaybeType(resolvedObjType)) {
+				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}': it is possibly 'null', narrow it with a null check, or unwrap it with '!' or '??'`, node.location.line, node.location.column);
+			} else if (suggestion != "") {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
 			} else {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
