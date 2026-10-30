@@ -15,6 +15,14 @@ The local cache holds per-file fingerprints, emitted C, objects and link records
 The global store holds native objects keyed by content, header records and the prelude pack, so
 a second worktree restores what the first compiled instead of compiling it again.
 
+Restore and publish copy an object with std `copyFile`, which clones it where the filesystem can
+(`clonefile` on APFS, `FICLONE` on Linux filesystems with reflinks) and copies the bytes elsewhere.
+A clone is copy-on-write, so a later write to either file never reaches the other; a hard link
+would share one file, and a compiler that rewrites its output in place would change the stored
+object under every tree. Measured 2026-10-30 with a 500 MB file: macOS APFS 1 ms cloned against
+1424 ms copied by the compiler before; the gate host `oci-u` is ext4, has no reflinks and copies
+(50 MB in 42 ms).
+
 Code: `src/utils/cachePaths.ms` (`localCacheDir`, `globalCacheRoot`: the one place a root is
 resolved), `src/compiler/options.ms` (`applyCacheConfig`), `src/compiler/cache.ms` (`initCache`, `objectStoreKey`,
 `nativeStoreSource`, `moduleStoreSource`, `storeManifest`, `restoreModuleObject`,
@@ -94,15 +102,15 @@ compilation itself; keep it so.
 ## Collection
 
 The global store has no byte budget; an age sweep bounds it. On each invocation, at most once an
-hour per bucket, `collectGlobalCache` removes an entry not written or used for seven days, and
-a temporary file of an entry left over an hour:
+hour per bucket, `collectGlobalCache` removes an entry not written or used for seven days (the
+prelude pack: one day), and a temporary file of an entry left over an hour:
 
 | Bucket | Entry | Refreshed on use |
 |---|---|---|
 | `store/<shard>/` | `<key>.m` with its `<key>.o` | yes, at most hourly |
 | `headers/<shard>/` | `<key>.hi` | yes, at most hourly |
 | `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
-| `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write | yes, at most hourly, on a pack hit |
+| `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write, unused for a day | yes, at most hourly, on a pack hit |
 
 The collector deletes only files with those names, record before companion, so a reader never
 finds a companion without its record; it never enters a directory whose real path leaves the
@@ -120,8 +128,10 @@ may still be compiling the older version. The emitted `.c` is named by its conte
 shared by every configuration, so retention never removes it; only the per-configuration `.d`,
 `.d.q`, presence memo, `.o` and `.cfp` go. Removing the `.c` per configuration deleted it under a
 running compile on 2026-10-29 (suite reds `no such file …c` in gates q1029044026, q1029084125 and
-q1029100952). The price: the `.c` of every edit stays until `out/` is removed. When that grows
-enough to matter, the upgrade is a use record kept beside the `.c`.
+q1029100952). The price: the `.c` of every edit stays until `out/` is removed. In neon's local
+cache on this Mac, 2026-10-30, `.c` files held 1.1 GB of 13 GB (`.o` 10.2 GB, `.q` 1.15 GB) and none
+was older than two days, so the upgrade (a use record kept beside the `.c`) waits until the `.c`
+share grows.
 
 ## Known limits, measured
 
@@ -187,6 +197,11 @@ builds slower or still missed inputs: unconditional preprocessing of every nativ
 bare snapshots of native compiler inputs (they miss `.incbin`). Numbers:
 [BUILD-PERF.md](BUILD-PERF.md) "Measured 2026-10-03" and "Rejected 2026-10-05". A fix for the
 false hit must not bring either back.
+
+The prelude pack key keeps the absolute std path: a pack holds the absolute paths of the modules
+it was checked from, so a pack shared across std paths would name another tree's files. The
+builds that could share it gain little, because builds of the installed `msc` already share
+`~/.metascript/std` and every candidate build has its own compiler stamp.
 
 ## Measuring reuse
 
