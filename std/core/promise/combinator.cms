@@ -187,7 +187,7 @@ function promiseAllTyped(futures: Ptr<void>, shareFn: Ptr<void>, vt: Ptr<void>):
 
 extern function msPromiseFirstGeneric(): Ptr<void>;
 extern function msPromiseFirstCreate(vt: Ptr<void>): Ptr<void>;
-extern function msPromiseFirstDeliver(vt: Ptr<void>, result: Ptr<void>, input: Ptr<void>, shareFn: Ptr<void>, dropFn: Ptr<void>, dropEnv: Ptr<void>): void;
+extern function msPromiseFirstDeliver(vt: Ptr<void>, result: Ptr<void>, input: Ptr<void>, shareFn: Ptr<void> | null, dropFn: Ptr<void> | null, dropEnv: Ptr<void> | null): void;
 extern function msPromiseAllRejectedError(): Ptr<void>;
 extern function msPromiseFetchAddAcqRel(p: Ptr<void>, amount: int32): int32;
 extern function msPromiseFirstWatch(fut: Ptr<void>, env: Ptr<void>): void;
@@ -195,9 +195,9 @@ extern function msFutureFail(fut: Ptr<void>, error: Ptr<void>): void;
 
 struct FirstState {
 	result: Ptr<void>;
-	shareFn: Ptr<void>;
-	dropFn: Ptr<void>;
-	dropEnv: Ptr<void>;
+	shareFn: Ptr<void> | null;
+	dropFn: Ptr<void> | null;
+	dropEnv: Ptr<void> | null;
 	vt: Ptr<void>;
 	count: int32;
 	any: int32;
@@ -238,7 +238,7 @@ function firstCallback(env: Ptr<void>): void {
 }
 
 @exportName("msPromiseFirstTyped")
-function promiseFirstTyped(futures: Ptr<void>, shareFn: Ptr<void>, dropFn: Ptr<void>, dropEnv: Ptr<void>, any: int32, vt: Ptr<void>): Ptr<void> {
+function promiseFirstTyped(futures: Ptr<void>, shareFn: Ptr<void> | null, dropFn: Ptr<void> | null, dropEnv: Ptr<void> | null, any: int32, vt: Ptr<void>): Ptr<void> {
 	const count = msPromiseArrayCount(futures);
 	const result = msPromiseFirstCreate(vt);
 	if (count == 0) {
@@ -268,10 +268,10 @@ function promiseFirstTyped(futures: Ptr<void>, shareFn: Ptr<void>, dropFn: Ptr<v
 
 @exportName("msPromiseRace")
 function promiseRace(futures: Ptr<void>): Ptr<void> {
-	return promiseFirstTyped(futures, 0 as Ptr<void>, 0 as Ptr<void>, 0 as Ptr<void>, 0, msPromiseFirstGeneric());
+	return promiseFirstTyped(futures, null, null, null, 0, msPromiseFirstGeneric());
 }
 
 @exportName("msPromiseAny")
 function promiseAny(futures: Ptr<void>): Ptr<void> {
-	return promiseFirstTyped(futures, 0 as Ptr<void>, 0 as Ptr<void>, 0 as Ptr<void>, 1, msPromiseFirstGeneric());
+	return promiseFirstTyped(futures, null, null, null, 1, msPromiseFirstGeneric());
 }
