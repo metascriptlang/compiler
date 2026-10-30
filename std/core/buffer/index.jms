@@ -368,23 +368,74 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 }
 
 export extern function readUInt8(this b: Buffer, o: number): int32 from "#[#]";
-export extern function readUInt16BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getUint16(0, false)";
-export extern function readUInt16LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getUint16(0, true)";
-export extern function readUInt32BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getUint32(0, false)";
-export extern function readUInt32LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getUint32(0, true)";
-export extern function readInt8(this b: Buffer, o: number): number from "msBufLoad(#, #, 1).getInt8(0)";
-export extern function readInt16BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getInt16(0, false)";
-export extern function readInt16LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getInt16(0, true)";
-export extern function readInt32BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getInt32(0, false)";
-export extern function readInt32LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getInt32(0, true)";
-export extern function readFloatBE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getFloat32(0, false)";
-export extern function readFloatLE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getFloat32(0, true)";
-export extern function readDoubleBE(this b: Buffer, o: number): number from "msBufLoad(#, #, 8).getFloat64(0, false)";
-export extern function readDoubleLE(this b: Buffer, o: number): number from "msBufLoad(#, #, 8).getFloat64(0, true)";
-export extern function readBigUInt64LE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigUint64(0, true)";
-export extern function readBigUInt64BE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigUint64(0, false)";
-export extern function readBigInt64LE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigInt64(0, true)";
-export extern function readBigInt64BE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigInt64(0, false)";
+export function readUInt16BE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 2).getUint16(0, false);`);
+	unreachable;
+}
+export function readUInt16LE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 2).getUint16(0, true);`);
+	unreachable;
+}
+export function readUInt32BE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getUint32(0, false);`);
+	unreachable;
+}
+export function readUInt32LE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getUint32(0, true);`);
+	unreachable;
+}
+export function readInt8(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 1).getInt8(0);`);
+	unreachable;
+}
+export function readInt16BE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 2).getInt16(0, false);`);
+	unreachable;
+}
+export function readInt16LE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 2).getInt16(0, true);`);
+	unreachable;
+}
+export function readInt32BE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getInt32(0, false);`);
+	unreachable;
+}
+export function readInt32LE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getInt32(0, true);`);
+	unreachable;
+}
+export function readFloatBE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getFloat32(0, false);`);
+	unreachable;
+}
+export function readFloatLE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 4).getFloat32(0, true);`);
+	unreachable;
+}
+export function readDoubleBE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getFloat64(0, false);`);
+	unreachable;
+}
+export function readDoubleLE(this b: Buffer, o: number): number {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getFloat64(0, true);`);
+	unreachable;
+}
+export function readBigUInt64LE(this b: Buffer, o: number): bigint {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getBigUint64(0, true);`);
+	unreachable;
+}
+export function readBigUInt64BE(this b: Buffer, o: number): bigint {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getBigUint64(0, false);`);
+	unreachable;
+}
+export function readBigInt64LE(this b: Buffer, o: number): bigint {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getBigInt64(0, true);`);
+	unreachable;
+}
+export function readBigInt64BE(this b: Buffer, o: number): bigint {
+	@emit(`return msBufLoad(${b}, ${o}, 8).getBigInt64(0, false);`);
+	unreachable;
+}
 
 extern function dvSetBigU64LE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigUint64(0, #, true))";
 extern function dvSetBigU64BE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigUint64(0, #, false))";
