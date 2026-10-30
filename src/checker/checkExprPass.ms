@@ -16,7 +16,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
+import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -2531,6 +2531,58 @@ function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
 	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
 }
 
+function constAssertionType(node: Node): Type | null {
+	if (node.kind == NodeKind.StringLiteral) return createStringLiteral((node.data as StringLiteralData).value);
+	if (node.kind == NodeKind.BooleanLiteral) return createBooleanLiteral((node.data as BooleanLiteralData).boolValue);
+	if (node.kind == NodeKind.NumberLiteral) return constNumberType(node, false);
+	if (node.kind == NodeKind.UnaryExpr) {
+		const u = node.data as UnaryExprData;
+		if ((u.unaryOp != "-" && u.unaryOp != "+") || u.operand.kind != NodeKind.NumberLiteral) return null;
+		return constNumberType(u.operand, u.unaryOp == "-");
+	}
+	if (node.kind != NodeKind.ObjectLiteral) return null;
+	const o = node.data as ObjectLiteralData;
+	const types: Type[] = [];
+	for (const property of o.properties) {
+		const t = constAssertionType(property);
+		if (t == null) return null;
+		types.push(t);
+	}
+	return createReadonlyView(createRef(createStruct("", o.keys, types, true)));
+}
+
+function constNumberType(node: Node, negated: boolean): Type | null {
+	const name = numberLiteralName(node, negated);
+	return name == "" ? null : numberLiteralTypeOf(name);
+}
+
+function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionData): void {
+	const operand = d.asExpr;
+	const literal = constAssertionType(operand);
+	if (literal != null) {
+		checkExpr(ctx, operand, literal);
+	} else {
+		checkExpr(ctx, operand, null);
+		if (operand.kind == NodeKind.ArrayLiteral) {
+			addError(ctx, "'as const' on an array literal is not supported: it would need a readonly tuple type", operand.location.line, operand.location.column);
+		} else if (operand.kind == NodeKind.ObjectLiteral) {
+			addError(ctx, "'as const' on an object literal needs every property value to be a string, number, boolean or object literal", operand.location.line, operand.location.column);
+		} else if (enumMemberLiteralOf(operand) == null) {
+			addError(ctx, "a 'const' assertion can only be applied to references to enum members, or string, number, boolean or object literals", operand.location.line, operand.location.column);
+		}
+	}
+	const member = enumMemberLiteralOf(operand);
+	node.kind = operand.kind;
+	node.data = operand.data;
+	node.flags = operand.flags.incl(NodeFlag.Sem);
+	node.typeExpr = null as unknown as Node;
+	node.resolvedSym = operand.resolvedSym;
+	node.variantSlot = operand.variantSlot;
+	node.typeArg = operand.typeArg;
+	node.flowNode = operand.flowNode;
+	node.nodeType = member != null ? member : literal != null ? literal : operand.nodeType;
+}
+
 function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	let d = node.data as TypeAssertionData;
 	// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
@@ -2549,6 +2601,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.flags = node.flags.incl(NodeFlag.Sem);
 		return;
 	}
+	if (d.asType == "const") { checkConstAssertion(ctx, node, d); return; }
 	const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 			const targetType = (d.asType != "") ? annotatedType(d.asType, node.typeExpr, ctx, asLoc.line, asLoc.column) : inferredType();
 	// TS parity: `expr as T` propagates T as contextual type to expr.
