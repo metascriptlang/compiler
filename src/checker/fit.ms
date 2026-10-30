@@ -47,23 +47,53 @@ export function branchContributesToJoin(t: Type | null): boolean {
 		&& t.kind != TypeKind.Error;
 }
 
+function enumSubsumes(base: Type, lit: Type): boolean {
+	return base.kind == TypeKind.Enum && lit.kind == TypeKind.EnumLiteral && lit.typeReturn != null && sameNominal(base, lit.typeReturn);
+}
+
+function enumLiteralArms(t: Type): Type[] {
+	if (t.kind != TypeKind.Union) return [t];
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.EnumLiteral) return [t];
+	}
+	return t.typeChildren as Type[];
+}
+
+function dropSubsumedEnumLiterals(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let absorbed = false;
+		for (const base of members) {
+			if (enumSubsumes(base, members[i])) { absorbed = true; break; }
+		}
+		if (!absorbed) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.shrink(kept);
+}
+
 export function joinBranchTypes(types: Type[]): Type {
 	const prepared: Type[] = [];
 	for (const t of types) {
 		if (!branchContributesToJoin(t)) continue;
-		const w = widenBranchLiteral(t);
-		let dup = false;
-		for (let pi = 0; pi < prepared.length; pi++) {
-			const p = prepared[pi];
-			if (p == w || sameType(p, w)) { dup = true; break; }
-			if (isPointerKindJoinPair(p, w)) {
-				prepared[pi] = joinedPointerMember(p, w);
-				dup = true;
-				break;
+		for (const arm of enumLiteralArms(t)) {
+			const w = widenBranchLiteral(arm);
+			let dup = false;
+			for (let pi = 0; pi < prepared.length; pi++) {
+				const p = prepared[pi];
+				if (p == w || sameType(p, w)) { dup = true; break; }
+				if (isPointerKindJoinPair(p, w)) {
+					prepared[pi] = joinedPointerMember(p, w);
+					dup = true;
+					break;
+				}
 			}
+			if (!dup) prepared.push(w);
 		}
-		if (!dup) prepared.push(w);
 	}
+	dropSubsumedEnumLiterals(prepared);
 	if (prepared.length == 0) return inferredType();
 	dropSubclassMembers(prepared);
 	if (prepared.length == 1) return prepared[0];
