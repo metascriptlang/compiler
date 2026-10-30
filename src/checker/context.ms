@@ -606,7 +606,7 @@ export function nominalTypeSym(t: Type): Symbol | null {
 	}
 	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
 	const kind = s.sym.symbolKind;
-	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
+	return kind == SymbolKind.Class || kind == SymbolKind.Actor || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
 }
 
 export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol, name: string): boolean {
