@@ -23,7 +23,7 @@ listen(recvListen, 4);
 const server = spawn((): int32 => { const c = accept(recvListen); send(c, "hello"); return c; });
 const client = createSocket();
 connect(client, "127.0.0.1", basePort);
-const got = await recvAsync(client, 16);
+const got = (await recvAsync(client, 16)).asString();
 console.log(`recv awaited at top level: ${got}`);
 close(await server);
 close(client);

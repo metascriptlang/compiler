@@ -25,7 +25,7 @@ listen(listenFd, 4);
 const server = spawn((): string => {
 	const c = accept(listenFd);
 	send(c, "hello");
-	const got = recv(c, 16);
+	const got = recv(c, 16).asString();
 	close(c);
 	return got;
 });
@@ -33,7 +33,7 @@ const client = createSocket();
 connect(client, "127.0.0.1", port);
 
 async function exchange(fd: int32): Promise<void> {
-	const got = await recvAsync(fd, 16);
+	const got = (await recvAsync(fd, 16)).asString();
 	console.log(`recv in a host loop: ${got}`);
 	const sent = await sendAsync(fd, "world");
 	console.log(`send in a host loop: ${sent}`);
