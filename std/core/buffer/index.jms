@@ -1,16 +1,11 @@
-// Buffer on the js target is a Uint8Array: `uint8[]` already emits as one,
-// so the alias keeps every array operation native. String methods do not
-// apply here — this module re-provides the byte surface that std/core/buffer
-// adds on top of the C string alias:
-//   - hot paths (set/byteAt/endian reads/search/fill) bind via `from`
-//     templates, emitting native subscripts and DataView calls with zero
-//     wrapper frame;
+// Buffer on the js target is a plain growable Array of bytes, the
+// representation a `uint8[]` literal has, so push and aliasing match the C
+// side. String methods do not apply here; this module re-provides the byte
+// surface that std/core/buffer adds on top of the C string alias:
+//   - hot paths (set/byteAt/search/fill) bind via `from` templates, emitting
+//     native subscripts with zero wrapper frame;
+//   - endian reads and writes go through one scratch DataView;
 //   - encoders (hex/base64/utf8) are pure loops over that surface.
-//
-// Invariant leveraged by the DataView templates: every Buffer value produced
-// by this module is a whole, offset-0 view of its own ArrayBuffer (alloc/
-// fromArray/slice all copy); subarray() appears only transiently inside
-// copyTo, never stored or returned.
 
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
@@ -27,6 +22,23 @@ export function toString(this b: Buffer): string {
 
 // ===== private native bindings =====
 
+@emit(`const msBufWord = new DataView(new ArrayBuffer(8));
+function msBufCheck(b, o, n) {
+	o = Math.trunc(o);
+	if (!(o >= 0 && o + n <= b.length)) throw new RangeError("Offset is outside the bounds of the Buffer");
+	return o;
+}
+function msBufLoad(b, o, n) {
+	o = msBufCheck(b, o, n);
+	for (let i = 0; i < n; i++) msBufWord.setUint8(i, b[o + i]);
+	return msBufWord;
+}
+function msBufStore(b, o, n, put) {
+	o = msBufCheck(b, o, n);
+	put(msBufWord);
+	for (let i = 0; i < n; i++) b[o + i] = msBufWord.getUint8(i);
+}`);
+
 function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 	let i = 0;
 	while (i < src.length) {
@@ -37,12 +49,12 @@ function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 
 // ===== Free Functions (constructors / static-like) =====
 
-export extern function alloc(this typeof Buffer, size: number): Buffer from "new Uint8Array(#)";
+export extern function alloc(this typeof Buffer, size: number): Buffer from "new Array(#).fill(0)";
 
 // js has no unsafe allocation; a zero-filled array is a semantic superset.
-export extern function allocUnsafe(this typeof Buffer, size: number): Buffer from "new Uint8Array(#)";
+export extern function allocUnsafe(this typeof Buffer, size: number): Buffer from "new Array(#).fill(0)";
 
-export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "new Uint8Array(#)";
+export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "Array.from(#, (x) => x & 255)";
 
 // utf8 (or binary/latin1 char codes < 128 — identical bytes) of a string.
 function encodeUtf8(s: string): Buffer {
@@ -82,9 +94,9 @@ function encodeUtf8(s: string): Buffer {
 	return out;
 }
 
-extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(#.subarray(#, #))";
+extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(Uint8Array.from(#.slice(#, #)))";
 
-extern function prefixOf(b: Buffer, length: number): Buffer from "#.subarray(0, #)";
+extern function prefixOf(b: Buffer, length: number): Buffer from "#.slice(0, #)";
 
 function isHex(encoding: string): boolean {
 	return encoding.equalsIgnoreCase("hex");
@@ -219,7 +231,7 @@ export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 export extern function byteAt(this b: Buffer, i: number): int32 from "#[#]";
 export extern function byteLength(this b: Buffer): number from "#.length";
 
-export extern function set(this b: Buffer, i: number, v: number): void from "#[#] = #";
+export extern function set(this b: Buffer, i: number, v: number): void from "#[#] = (#) & 255";
 
 export function toHex(this b: Buffer): string {
 	return encodeHex(b);
@@ -270,7 +282,7 @@ export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sour
 	return len;
 }
 
-export extern function fill(this b: Buffer, value: number, start: number, end: number): void from "#.fill(#, #, #)";
+export extern function fill(this b: Buffer, value: number, start: number, end: number): void from "#.fill((#) & 255, #, #)";
 export extern function indexOf(this b: Buffer, value: number, byteOffset: number): number from "#.indexOf(#, #)";
 export extern function lastIndexOf(this b: Buffer, value: number, byteOffset: number): number from "#.lastIndexOf(#, #)";
 export extern function includes(this b: Buffer, value: number, byteOffset: number): boolean from "#.includes(#, #)";
@@ -356,28 +368,28 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 }
 
 export extern function readUInt8(this b: Buffer, o: number): int32 from "#[#]";
-export extern function readUInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, false)";
-export extern function readUInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint16(#, true)";
-export extern function readUInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, false)";
-export extern function readUInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getUint32(#, true)";
-export extern function readInt8(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt8(#)";
-export extern function readInt16BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, false)";
-export extern function readInt16LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt16(#, true)";
-export extern function readInt32BE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, false)";
-export extern function readInt32LE(this b: Buffer, o: number): number from "new DataView(#.buffer).getInt32(#, true)";
-export extern function readFloatBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, false)";
-export extern function readFloatLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat32(#, true)";
-export extern function readDoubleBE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, false)";
-export extern function readDoubleLE(this b: Buffer, o: number): number from "new DataView(#.buffer).getFloat64(#, true)";
-export extern function readBigUInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, true)";
-export extern function readBigUInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigUint64(#, false)";
-export extern function readBigInt64LE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, true)";
-export extern function readBigInt64BE(this b: Buffer, o: number): bigint from "new DataView(#.buffer).getBigInt64(#, false)";
+export extern function readUInt16BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getUint16(0, false)";
+export extern function readUInt16LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getUint16(0, true)";
+export extern function readUInt32BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getUint32(0, false)";
+export extern function readUInt32LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getUint32(0, true)";
+export extern function readInt8(this b: Buffer, o: number): number from "msBufLoad(#, #, 1).getInt8(0)";
+export extern function readInt16BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getInt16(0, false)";
+export extern function readInt16LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 2).getInt16(0, true)";
+export extern function readInt32BE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getInt32(0, false)";
+export extern function readInt32LE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getInt32(0, true)";
+export extern function readFloatBE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getFloat32(0, false)";
+export extern function readFloatLE(this b: Buffer, o: number): number from "msBufLoad(#, #, 4).getFloat32(0, true)";
+export extern function readDoubleBE(this b: Buffer, o: number): number from "msBufLoad(#, #, 8).getFloat64(0, false)";
+export extern function readDoubleLE(this b: Buffer, o: number): number from "msBufLoad(#, #, 8).getFloat64(0, true)";
+export extern function readBigUInt64LE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigUint64(0, true)";
+export extern function readBigUInt64BE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigUint64(0, false)";
+export extern function readBigInt64LE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigInt64(0, true)";
+export extern function readBigInt64BE(this b: Buffer, o: number): bigint from "msBufLoad(#, #, 8).getBigInt64(0, false)";
 
-extern function dvSetBigU64LE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, true)";
-extern function dvSetBigU64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigUint64(#, #, false)";
-extern function dvSetBigI64LE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigInt64(#, #, true)";
-extern function dvSetBigI64BE(this b: Buffer, o: number, v: bigint): void from "new DataView(#.buffer).setBigInt64(#, #, false)";
+extern function dvSetBigU64LE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigUint64(0, #, true))";
+extern function dvSetBigU64BE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigUint64(0, #, false))";
+extern function dvSetBigI64LE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigInt64(0, #, true))";
+extern function dvSetBigI64BE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigInt64(0, #, false))";
 
 export function writeBigUInt64LE(this b: Buffer, value: bigint, o: number): number {
 	dvSetBigU64LE(b, o, value);
@@ -399,14 +411,14 @@ export function writeBigInt64BE(this b: Buffer, value: bigint, o: number): numbe
 	return o + 8;
 }
 
-extern function dvSetU16BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, false)";
-extern function dvSetU16LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint16(#, #, true)";
-extern function dvSetU32BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint32(#, #, false)";
-extern function dvSetU32LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setUint32(#, #, true)";
-extern function dvSetF32LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat32(#, #, true)";
-extern function dvSetF32BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat32(#, #, false)";
-extern function dvSetF64LE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat64(#, #, true)";
-extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "new DataView(#.buffer).setFloat64(#, #, false)";
+extern function dvSetU16BE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 2, (w) => w.setUint16(0, #, false))";
+extern function dvSetU16LE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 2, (w) => w.setUint16(0, #, true))";
+extern function dvSetU32BE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 4, (w) => w.setUint32(0, #, false))";
+extern function dvSetU32LE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 4, (w) => w.setUint32(0, #, true))";
+extern function dvSetF32LE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 4, (w) => w.setFloat32(0, #, true))";
+extern function dvSetF32BE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 4, (w) => w.setFloat32(0, #, false))";
+extern function dvSetF64LE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 8, (w) => w.setFloat64(0, #, true))";
+extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 8, (w) => w.setFloat64(0, #, false))";
 
 export function writeUInt8(this b: Buffer, v: number, o: number): number {
 	b.set(o, (v as int32) & 255);

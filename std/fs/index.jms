@@ -16,9 +16,9 @@
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 extern function readFileSync(path: string, encoding: string): string;
-extern function readBytesSync(path: string): Buffer from "new Uint8Array(readFileSync(#))";
+extern function readBytesSync(path: string): Buffer from "Array.from(readFileSync(#))";
 extern function copyFileSync(src: string, dst: string): void;
-extern function writeBytesSync(path: string, data: Buffer): void from "writeFileSync(#, #)";
+extern function writeBytesSync(path: string, data: Buffer): void from "writeFileSync(#, Uint8Array.from(#))";
 extern function writeFileSync(path: string, data: string): void;
 extern function appendFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
