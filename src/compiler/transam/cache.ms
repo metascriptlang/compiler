@@ -240,14 +240,14 @@ test "put existing key updates in place" {
 	const cache = createCacheStore(10);
 	const key = createQueryKey(TaQueryKind.Parse, 1);
 	const e1 = createCacheEntry(key);
-	e1.outputHash = 100;
+	e1.changedAt = 100;
 	cachePut(cache, e1);
 	const e2 = createCacheEntry(key);
-	e2.outputHash = 200;
+	e2.changedAt = 200;
 	cachePut(cache, e2);
 	assert cache.entries.length == 1;
 	const got = cacheGet(cache, key);
-	assert got.outputHash == 200;
+	assert got.changedAt == 200;
 }
 
 test "remove existing" {

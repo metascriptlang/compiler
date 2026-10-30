@@ -11,7 +11,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
 - **LSP latency** — re-parsing and re-checking a project on every keystroke is too slow; a per-file edit costs O(changed) instead of O(project).
 - **Correctness** — the red-green algorithm keeps every served result consistent with the current file contents.
 
-**Core insight** (the Salsa early cutoff): when a dependency is recomputed, its dependents are not invalidated right away. The engine compares the dependency's **output hash** first. A hash has to cover everything a consumer reads: a parse is hashed by its text, because positions and comments reach diagnostics, `#line` and hover, and a check folds the hashes of its inputs, so an edit rechecks the file and every module that imports it, transitively. That is the reference's rule for a kept graph (nimsuggest `markDirtyIfNeeded` → `markDirty` + `markClientsDirty`, `modulegraphs.nim`). Until 2026-09-25 the parse hash skipped positions and comments and a check hashed only exported names and type kinds: a line shift kept a module's old checked tree, and a module two imports away kept an `int32` after an inferred export became `int64`.
+**Core insight** (the Salsa early cutoff): validity follows change revisions, not hashes. Every input file and every cache entry records `changedAt`, the revision at which its content last differed, and every entry records `verifiedAt`, the revision it was last known current. An entry stays valid while each dependency is current and none changed after the entry's `verifiedAt`. Equal content is established by comparing the content, never an equal hash: `setFileText` compares the two source strings and moves `changedAt` only on a real difference, `Preprocess` compares its new output with the cached output and keeps its old `changedAt` when they match, and `Parse`, a pure function of that text, takes its `changedAt` from `Preprocess`. Every other query is stamped changed at the current revision whenever it is recomputed: a parse changes with its text because positions and comments reach diagnostics, `#line` and hover, and a recomputed check is always changed, so an edit rechecks the file and every module that imports it, transitively. That is the reference's rule for a kept graph (nimsuggest `markDirtyIfNeeded` → `markDirty` + `markClientsDirty`, `modulegraphs.nim`). Before the change-revision model every decision rested on a 32-bit DJB2 string hash or a fold of such hashes, so two different texts with the same hash (`Az` and `BY`) were taken for equal and renaming an export kept the old checked symbols.
 
 ## 2. Architecture
 
@@ -27,7 +27,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
                     |       v                v                        |
                     |  +----------+    +----------+    +----------+   |
                     |  |  File    |    |  Cache   |    |  Module  |   |
-                    |  |  Hashes  |    |  Store   |    |  Deps    |   |
+                    |  |  Changes |    |  Store   |    |  Deps    |   |
                     |  +----------+    +----------+    +----------+   |
                     +-------------------------------------------------+
 
@@ -42,7 +42,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
 
 `TransAmDb` (`index.ms`) is a thin facade over one store per concern: revision, file input, dependency stack, cache, module dep graph, cancel context, plus the checker's `ExportRegistry`, the resolver config, the prelude context and a preprocess cache.
 
-`Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude db) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
+`Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude db) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions (`computedAt`, `verifiedAt`, `changedAt`), dependencies, durability.
 
 ## 3. Red-Green
 
@@ -58,12 +58,14 @@ Three states per cached query (`TaQueryState`, `revision.ms`):
 
 1. Verified at the current revision already: answer from its state.
 2. YELLOW: a cycle, answer false. Otherwise mark YELLOW and walk the recorded dependencies.
-3. A `FileText` dependency compares the file's current content hash with the hash recorded when the entry was computed.
-4. A dependency of HIGH durability is not walked while no HIGH input has changed since this entry was last verified (`getLastChange`, `fileInput.ms`); then it invalidates only when it was recomputed after this entry and its output hash differs. A write at durability D moves the change marker of every durability up to D, and changing a file's durability counts as a write at its old durability. When a HIGH input changed after the entry's last verification, the dependency is walked like any other.
-5. Any other dependency is verified recursively, stamped as verified so shared subtrees are walked once, then the early cutoff applies: recomputed later than this entry and a different output hash means RED; recomputed with the same output hash stays GREEN.
-6. Every dependency held: stamp `verifiedAt`, mark GREEN.
+3. A `FileText` dependency is current when the file's `changedAt` is not after the entry's `verifiedAt`.
+4. A dependency of HIGH durability is not walked while no HIGH input has changed since this entry was last verified (`getLastChange`, `fileInput.ms`); then it invalidates only when its `changedAt` is after the entry's `verifiedAt`. A write at durability D moves the change marker of every durability up to D, and changing a file's durability counts as a write at its old durability. When a HIGH input changed after the entry's last verification, the dependency is walked like any other.
+5. Any other dependency is verified recursively, then the early cutoff applies: a `changedAt` after this entry's `verifiedAt` means RED; a dependency recomputed to the same output kept its old `changedAt`, so this entry stays GREEN.
+6. Every dependency held: stamp `verifiedAt`, refresh the entry's durability from its inputs, mark GREEN.
 
-A query function in `index.ms` (`dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbTransform`, `dbAnalyze`) follows one shape: `tryMarkGreen` and serve from the value cache, else `pushFrame`, compute while sub-queries record themselves into the frame (`recordDependency`, `recordDurability`), hash the output, then `executeQueryWith` stores the entry with the frame's dependencies and its minimum durability.
+A dependency records only its key; the revisions on both sides decide. Verification never recomputes, so an entry whose dependency was not recomputed first is recomputed even when that dependency would come out the same; `Parse` still keeps its `changedAt` then, so its dependents stay GREEN.
+
+A query function in `index.ms` (`dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbTransform`, `dbAnalyze`) follows one shape: `tryMarkGreen` and serve from the value cache, else `pushFrame`, compute while sub-queries record themselves into the frame (`recordDependency`, `recordDurability`), then `executeQueryWith` stores the entry with the frame's dependencies, its minimum durability and the revision its output changed at.
 
 Dependency tracking is frame-based on purpose: a sub-query records itself into whatever frame is active, so a query cannot forget a dependency.
 
@@ -100,7 +102,7 @@ Import edges are recorded into the module dep graph while a module's exports are
 
 `dbSetFileText(path, source)`:
 
-1. `setFileText` compares content hashes; identical content returns false and nothing else happens.
+1. `setFileText` compares the two texts; identical content returns false and nothing else happens. A difference records the file's `changedAt` and moves the durability change markers at the revision of the write, the next revision.
 2. The revision increments.
 3. A path under the configured std root gets HIGH durability.
 4. `invalidateFile` marks the file's queries RED, then those of every transitive importer (BFS with a visited set, so import cycles terminate).
@@ -108,6 +110,8 @@ Import edges are recorded into the module dep graph while a module's exports are
 6. The next query call verifies lazily through `tryMarkGreen`.
 
 A type check of a module whose dependency declares a macro runs a full check of that dependency first; `checkInProgress` guards that pre-check against cycles.
+
+An import a db only binds, outside a loaded graph (`db.bound`), is reused while its import closure lists the same files in the same order and every `Parse` and `TypeCheck` entry in it has the `changedAt` it had at bind. A bound-only module has no `TypeCheck` entry, so an entry absent at bind must still be absent.
 
 ### Bound to a loaded graph
 
@@ -147,7 +151,6 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Pattern | Reference file | Why |
 |---------|----------------|-----|
 | Red-green algorithm | `red_green.zig` | Core correctness, Salsa-proven |
-| Content-addressed output hashing | `red_green.zig` | A recomputed dependency whose output did not change leaves its dependents GREEN |
 | Durability levels LOW / MEDIUM / HIGH | `types.zig` | Std files skip verification |
 | BFS transitive invalidation | `module_graph.zig` | Correct propagation, cycle-safe |
 | Dependency stack with push / pop frames | `types.zig` | Automatic dependency tracking |
@@ -160,6 +163,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Module per concern | god struct | 9 files | DRC safety, testability |
 | Dependency tracking | manual `recordDependency()` at each site | frame-based scope | Cannot be forgotten |
 | Cache | pointer-based doubly-linked LRU | one `TaCacheStore`: lookup and invalidation through a `fileId` index, access-clock LRU with linear-scan eviction | DRC does not manage arbitrary graph pointers; an O(1) eviction list is an upgrade to make when a profile asks for it |
+| Early cutoff | output hash per entry, compared with the hash a dependent recorded | `changedAt` revision per entry and per input file, kept by `Preprocess` and `Parse` when an exact comparison shows no change | An equal hash is not equal content: `Az` and `BY` share a hash, and a hash fold only makes a collision rarer |
 | Query results | `*anyopaque` + type id | typed value caches beside `Node` and `CheckerContext` | Type safety, destructors resolve in the owning module |
 | Trivial derivations | all cached | `dbResolveImport` is a plain function | Less memory, less eviction |
 

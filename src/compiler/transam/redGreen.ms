@@ -4,8 +4,6 @@
 // executeQuery: cache-or-compute with auto dependency recording
 // invalidateFile: mark queries RED for a changed file + BFS dependents
 //
-// Implements Salsa output-hash early cutoff: when a dependency is recomputed
-// but its output hash is unchanged (e.g., comment-only edit), dependents stay GREEN.
 // Uses callback registration for query executor (avoids closure codegen issues).
 
 import {
@@ -14,17 +12,17 @@ import {
 } from "./revision";
 import {
 	createCacheEntry,
-	TaDependencyEntry, TaDependencyStack,
+	TaDependencyStack,
 	pushFrame, popFrame,
 	recordDependency, hasActiveFrame,
 	createDependencyStack
 } from "./query";
 import {
 	TaCacheStore, createCacheStore,
-	cacheGet, cachePut, cacheContains,
+	cacheGet, cachePut, cacheContains, cacheRemove,
 	markQueriesRedForFile
 } from "./cache";
-import { TaFileInputStore, createFileInputStore, setFileText, getFileHash, getLastChange, recordInputChange, setFileDurability, getFileDurability } from "./fileInput";
+import { TaFileInputStore, createFileInputStore, setFileText, getFileChangedAt, getLastChange, setFileDurability, getFileDurability } from "./fileInput";
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
 
@@ -70,52 +68,33 @@ function markGreen(
 	// Check each dependency
 	let durability = TaDurability.High;
 	for (const dep of entry.dependencies) {
-		if (dep.depKey.queryKind == TaQueryKind.FileText) {
-			// Input query: check if file content hash changed
-			const currentHash = getFileHash(fileInput, dep.depKey.fileId);
-			if (currentHash == null || currentHash != dep.expectedHash) {
+		if (dep.queryKind == TaQueryKind.FileText) {
+			const changedAt = getFileChangedAt(fileInput, dep.fileId);
+			if (changedAt == null || changedAt > entry.verifiedAt) {
 				entry.state = TaQueryState.Red;
 				return false;
 			}
-			durability = lowerDurability(durability, getFileDurability(fileInput, dep.depKey.fileId));
+			durability = lowerDurability(durability, getFileDurability(fileInput, dep.fileId));
 			continue;
 		}
 
-		const depEntry = cacheGet(cache, dep.depKey);
-
-		if (depEntry != null) {
-			if (depEntry.durability == TaDurability.High && getLastChange(fileInput, TaDurability.High) <= entry.verifiedAt) {
-				if (depEntry.computedAt > entry.computedAt && depEntry.outputHash != dep.expectedHash) {
-					entry.state = TaQueryState.Red;
-					return false;
-				}
-				continue;
-			}
-		}
-
-		// Recursively verify dependency
-		if (!markGreen(cache, fileInput, dep.depKey, currentRevision)) {
+		const depEntry = cacheGet(cache, dep);
+		if (depEntry == null) {
 			entry.state = TaQueryState.Red;
 			return false;
 		}
 
-		// Stamp verified dep so shared subtrees don't re-walk
-		if (depEntry != null && depEntry.verifiedAt < currentRevision) {
-			depEntry.verifiedAt = currentRevision;
+		const skipWalk = depEntry.durability == TaDurability.High && getLastChange(fileInput, TaDurability.High) <= entry.verifiedAt;
+		if (!skipWalk && !markGreen(cache, fileInput, dep, currentRevision)) {
+			entry.state = TaQueryState.Red;
+			return false;
 		}
 
-		// Salsa early cutoff: dep recomputed, but did output actually change?
-		if (depEntry != null) {
-			if (depEntry.computedAt > entry.computedAt) {
-				// Compare output hash — if unchanged, this dep is semantically identical
-				if (depEntry.outputHash != dep.expectedHash) {
-					entry.state = TaQueryState.Red;
-					return false;
-				}
-				// Output hash matches — comment/whitespace-only change, stay green
-			}
-			durability = lowerDurability(durability, depEntry.durability);
+		if (depEntry.changedAt > entry.verifiedAt) {
+			entry.state = TaQueryState.Red;
+			return false;
 		}
+		durability = lowerDurability(durability, depEntry.durability);
 	}
 
 	// All deps verified
@@ -126,7 +105,6 @@ function markGreen(
 }
 
 // ===== executeQueryWith — cache-or-compute =====
-// outputHash: caller provides the output hash after computing the query result
 
 export function executeQueryWith(
 	cache: TaCacheStore,
@@ -134,7 +112,7 @@ export function executeQueryWith(
 	depStack: TaDependencyStack,
 	key: TaQueryKey,
 	currentRevision: int32,
-	outputHash: int64,  // content hash
+	changedAt: int32,
 	wasComputed: boolean
 ): void {
 	if (!wasComputed) return;
@@ -151,7 +129,7 @@ export function executeQueryWith(
 	entry.state = TaQueryState.Green;
 	entry.computedAt = currentRevision;
 	entry.verifiedAt = currentRevision;
-	entry.outputHash = outputHash;
+	entry.changedAt = changedAt;
 
 	// Collect dependencies from the frame if active
 	if (hasActiveFrame(depStack)) {
@@ -178,12 +156,8 @@ export function invalidateFile(
 
 // ===== Test Helpers =====
 
-function makeTestDeps(fileId: int32, expectedHash: int64): TaDependencyEntry[] {
-	const deps: TaDependencyEntry[] = [];
-	const dk = createQueryKey(TaQueryKind.FileText, fileId);
-	const de: TaDependencyEntry = { depKey: dk, expectedHash: expectedHash };
-	deps.push(de);
-	return deps;
+function fileTextKey(fileId: int32): TaQueryKey {
+	return createQueryKey(TaQueryKind.FileText, fileId);
 }
 
 // ===== Tests =====
@@ -217,33 +191,44 @@ test "entry with no deps verifies green" {
 	assert tryMarkGreen(cache, fileInput, key, 1);
 }
 
-test "file dependency hash mismatch -> false" {
+test "a file changed after the entry was verified -> false" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
-	setFileText(fileInput, "a.ms", "original");
+	setFileText(fileInput, "a.ms", "original", 3);
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(parseKey);
 	entry.state = TaQueryState.Red;
-	entry.verifiedAt = 0;
-	entry.dependencies = makeTestDeps(0, 999);
+	entry.verifiedAt = 2;
+	entry.dependencies = [fileTextKey(0)];
 	cachePut(cache, entry);
-	assert !tryMarkGreen(cache, fileInput, parseKey, 1);
+	assert !tryMarkGreen(cache, fileInput, parseKey, 3);
 	assert cache.hits == 0 && cache.misses == 1;
 }
 
-test "file dependency hash match -> true" {
+test "a file changed no later than the entry was verified -> true" {
+	for (const changedAt of [1, 2]) {
+		const cache = createCacheStore(100);
+		const fileInput = createFileInputStore();
+		setFileText(fileInput, "a.ms", "source", changedAt);
+		const parseKey = createQueryKey(TaQueryKind.Parse, 0);
+		const entry = createCacheEntry(parseKey);
+		entry.state = TaQueryState.Red;
+		entry.verifiedAt = 2;
+		entry.dependencies = [fileTextKey(0)];
+		cachePut(cache, entry);
+		assert tryMarkGreen(cache, fileInput, parseKey, 3);
+		assert cache.hits == 1 && cache.misses == 0;
+	}
+}
+
+test "a file the store does not know -> false" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
-	setFileText(fileInput, "a.ms", "source");
-	const actualHash = getFileHash(fileInput, 0)!;
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(parseKey);
-	entry.state = TaQueryState.Red;
-	entry.verifiedAt = 0;
-	entry.dependencies = makeTestDeps(0, actualHash);
+	entry.dependencies = [fileTextKey(99)];
 	cachePut(cache, entry);
-	assert tryMarkGreen(cache, fileInput, parseKey, 1);
-	assert cache.hits == 1 && cache.misses == 0;
+	assert !tryMarkGreen(cache, fileInput, parseKey, 1);
 }
 
 test "stores entry as Green" {
@@ -252,12 +237,13 @@ test "stores entry as Green" {
 	const depStack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	pushFrame(depStack, key);
-	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
+	executeQueryWith(cache, fileInput, depStack, key, 3, 2, true);
 	const entry = cacheGet(cache, key);
 	assert entry != null;
 	assert entry.state == TaQueryState.Green;
-	assert entry.computedAt == 1;
-	assert entry.outputHash == 42;
+	assert entry.computedAt == 3;
+	assert entry.verifiedAt == 3;
+	assert entry.changedAt == 2;
 	assert cache.recomputed[TaQueryKind.Parse as int32] == 1;
 	assert cache.recomputed.length == (TaQueryKind.Parse as int32) + 1;
 }
@@ -269,11 +255,11 @@ test "collects dependencies from frame" {
 	const key = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const depKey = createQueryKey(TaQueryKind.Parse, 0);
 	pushFrame(depStack, key);
-	recordDependency(depStack, depKey, 100);
-	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
+	recordDependency(depStack, depKey);
+	executeQueryWith(cache, fileInput, depStack, key, 1, 1, true);
 	const entry = cacheGet(cache, key);
 	assert entry.dependencies.length == 1;
-	assert queryKeysEqual(entry.dependencies[0].depKey, depKey);
+	assert queryKeysEqual(entry.dependencies[0], depKey);
 }
 
 test "not computed is no-op" {
@@ -315,159 +301,101 @@ test "marks transitive dependents red" {
 
 // ===== Early Cutoff Tests =====
 
-test "output hash unchanged keeps dependent green (early cutoff)" {
-	const cache = createCacheStore(100);
-	const fileInput = createFileInputStore();
-
-	// Setup: Parse query depends on FileText, computed at rev 1
+function parseThenCheck(cache: TaCacheStore): TaQueryKey {
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const parseEntry = createCacheEntry(parseKey);
 	parseEntry.state = TaQueryState.Green;
 	parseEntry.computedAt = 1;
 	parseEntry.verifiedAt = 1;
-	parseEntry.outputHash = 42;  // semantic hash of parse output
+	parseEntry.changedAt = 1;
 	cachePut(cache, parseEntry);
 
-	// Setup: TypeCheck depends on Parse, computed at rev 1
-	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const checkEntry = createCacheEntry(checkKey);
-	checkEntry.state = TaQueryState.Red;  // marked RED by invalidation
-	checkEntry.computedAt = 1;
-	checkEntry.verifiedAt = 0;
-	// Dependency: Parse with expected output hash 42
-	const dep: TaDependencyEntry = { depKey: parseKey, expectedHash: 42 };
-	checkEntry.dependencies = [dep];
-	cachePut(cache, checkEntry);
-
-	// Simulate: Parse recomputed at rev 2 but output hash unchanged (comment-only edit)
-	const pe = cacheGet(cache, parseKey);
-	pe.computedAt = 2;
-	pe.verifiedAt = 2;
-	pe.state = TaQueryState.Green;
-	pe.outputHash = 42;  // same hash — comment/whitespace change only
-
-	// Verify: TypeCheck should verify GREEN because Parse output hash is unchanged
-	assert tryMarkGreen(cache, fileInput, checkKey, 2);
-	assert cacheGet(cache, checkKey).state == TaQueryState.Green;
-}
-
-test "output hash changed marks dependent red" {
-	const cache = createCacheStore(100);
-	const fileInput = createFileInputStore();
-
-	// Parse computed at rev 1 with hash 42
-	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
-	const parseEntry = createCacheEntry(parseKey);
-	parseEntry.state = TaQueryState.Green;
-	parseEntry.computedAt = 1;
-	parseEntry.verifiedAt = 1;
-	parseEntry.outputHash = 42;
-	cachePut(cache, parseEntry);
-
-	// TypeCheck depends on Parse with expected hash 42
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const checkEntry = createCacheEntry(checkKey);
 	checkEntry.state = TaQueryState.Red;
 	checkEntry.computedAt = 1;
-	checkEntry.verifiedAt = 0;
-	const dep: TaDependencyEntry = { depKey: parseKey, expectedHash: 42 };
-	checkEntry.dependencies = [dep];
+	checkEntry.verifiedAt = 1;
+	checkEntry.dependencies = [parseKey];
 	cachePut(cache, checkEntry);
+	return checkKey;
+}
 
-	// Parse recomputed at rev 2 with DIFFERENT hash (real code change)
-	const pe = cacheGet(cache, parseKey);
+test "a dependency recomputed to the same output keeps its dependent green (early cutoff)" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const checkKey = parseThenCheck(cache);
+
+	const pe = cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0));
 	pe.computedAt = 2;
 	pe.verifiedAt = 2;
-	pe.state = TaQueryState.Green;
-	pe.outputHash = 99;  // different hash — actual semantic change
 
-	// TypeCheck should NOT verify green
+	assert tryMarkGreen(cache, fileInput, checkKey, 2);
+	assert cacheGet(cache, checkKey).state == TaQueryState.Green;
+}
+
+test "a dependency recomputed to a different output marks its dependent red" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const checkKey = parseThenCheck(cache);
+
+	const pe = cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0));
+	pe.computedAt = 2;
+	pe.verifiedAt = 2;
+	pe.changedAt = 2;
+
 	assert !tryMarkGreen(cache, fileInput, checkKey, 2);
 	assert cacheGet(cache, checkKey).state == TaQueryState.Red;
 }
 
-// ===== HIGH Durability Tests =====
-
-test "high durability dep skips recursive verification" {
+test "a missing dependency marks its dependent red" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
-
-	// Stdlib parse query — HIGH durability, computed at rev 1
-	const stdKey = createQueryKey(TaQueryKind.Parse, 99);
-	const stdEntry = createCacheEntry(stdKey);
-	stdEntry.state = TaQueryState.Green;
-	stdEntry.computedAt = 1;
-	stdEntry.verifiedAt = 1;
-	stdEntry.durability = TaDurability.High;
-	cachePut(cache, stdEntry);
-
-	// User query depends on stdlib query
-	const userKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const userEntry = createCacheEntry(userKey);
-	userEntry.state = TaQueryState.Red;
-	userEntry.computedAt = 1;
-	userEntry.verifiedAt = 0;
-	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 0 };
-	userEntry.dependencies = [dep];
-	cachePut(cache, userEntry);
-
-	// HIGH durability dep not recomputed (computedAt <= entry.computedAt) → skip
-	assert tryMarkGreen(cache, fileInput, userKey, 2);
+	const checkKey = parseThenCheck(cache);
+	cacheRemove(cache, createQueryKey(TaQueryKind.Parse, 0));
+	assert !tryMarkGreen(cache, fileInput, checkKey, 2);
 }
 
-test "high durability dep recomputed with same output stays green" {
-	const cache = createCacheStore(100);
-	const fileInput = createFileInputStore();
+// ===== HIGH Durability Tests =====
 
-	// Stdlib query recomputed at rev 3, output hash unchanged (42)
+function highStdAndUser(cache: TaCacheStore, stdChangedAt: int32): TaQueryKey {
 	const stdKey = createQueryKey(TaQueryKind.Parse, 99);
 	const stdEntry = createCacheEntry(stdKey);
 	stdEntry.state = TaQueryState.Green;
 	stdEntry.computedAt = 3;
 	stdEntry.verifiedAt = 3;
-	stdEntry.outputHash = 42;
+	stdEntry.changedAt = stdChangedAt;
 	stdEntry.durability = TaDurability.High;
 	cachePut(cache, stdEntry);
 
-	// User query was computed at rev 1, expects hash 42
 	const userKey = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const userEntry = createCacheEntry(userKey);
 	userEntry.state = TaQueryState.Red;
 	userEntry.computedAt = 1;
-	userEntry.verifiedAt = 0;
-	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 42 };
-	userEntry.dependencies = [dep];
+	userEntry.verifiedAt = 1;
+	userEntry.dependencies = [stdKey];
 	cachePut(cache, userEntry);
+	return userKey;
+}
 
-	// HIGH durability dep recomputed AFTER us but output unchanged → GREEN (Salsa early cutoff)
+test "high durability dep skips recursive verification" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const userKey = highStdAndUser(cache, 1);
+	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 99)).dependencies = [fileTextKey(99)];
+	assert tryMarkGreen(cache, fileInput, userKey, 4);
+}
+
+test "high durability dep recomputed with its output unchanged stays green" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const userKey = highStdAndUser(cache, 1);
 	assert tryMarkGreen(cache, fileInput, userKey, 4);
 }
 
 test "high durability dep recomputed with changed output marks red" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
-
-	// Stdlib query recomputed at rev 3, output hash changed (99 vs expected 42)
-	const stdKey = createQueryKey(TaQueryKind.Parse, 99);
-	const stdEntry = createCacheEntry(stdKey);
-	stdEntry.state = TaQueryState.Green;
-	stdEntry.computedAt = 3;
-	stdEntry.verifiedAt = 3;
-	stdEntry.outputHash = 99;
-	stdEntry.durability = TaDurability.High;
-	cachePut(cache, stdEntry);
-
-	// User query was computed at rev 1, expects hash 42
-	const userKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const userEntry = createCacheEntry(userKey);
-	userEntry.state = TaQueryState.Red;
-	userEntry.computedAt = 1;
-	userEntry.verifiedAt = 0;
-	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 42 };
-	userEntry.dependencies = [dep];
-	cachePut(cache, userEntry);
-
-	// HIGH durability dep recomputed AFTER us AND output changed → RED
+	const userKey = highStdAndUser(cache, 3);
 	assert !tryMarkGreen(cache, fileInput, userKey, 4);
 }
 
@@ -485,16 +413,14 @@ test "yellow state prevents infinite recursion" {
 	entryA.state = TaQueryState.Red;
 	entryA.computedAt = 1;
 	entryA.verifiedAt = 0;
-	const depA: TaDependencyEntry = { depKey: keyB, expectedHash: 0 };
-	entryA.dependencies = [depA];
+	entryA.dependencies = [keyB];
 	cachePut(cache, entryA);
 
 	const entryB = createCacheEntry(keyB);
 	entryB.state = TaQueryState.Red;
 	entryB.computedAt = 1;
 	entryB.verifiedAt = 0;
-	const depB: TaDependencyEntry = { depKey: keyA, expectedHash: 0 };
-	entryB.dependencies = [depB];
+	entryB.dependencies = [keyA];
 	cachePut(cache, entryB);
 
 	// Should NOT infinite loop — YELLOW breaks the cycle
@@ -506,20 +432,19 @@ test "recomputing a query replaces dependencies when its selected input changes"
 		const cache = createCacheStore(10);
 		const input = createFileInputStore();
 		const stack = createDependencyStack();
-		setFileText(input, "left.ms", "left");
-		setFileText(input, "right.ms", "right");
+		setFileText(input, "left.ms", "left", 0);
+		setFileText(input, "right.ms", "right", 0);
 		const key = createQueryKey(TaQueryKind.TypeCheck, 2);
 		for (let i = 0; i < order.length; i += 1) {
-			const fileId = order[i];
 			pushFrame(stack, key);
-			recordDependency(stack, createQueryKey(TaQueryKind.FileText, fileId), getFileHash(input, fileId)!);
-			executeQueryWith(cache, input, stack, key, i + 1, 42, true);
+			recordDependency(stack, fileTextKey(order[i]));
+			executeQueryWith(cache, input, stack, key, i + 1, i + 1, true);
 		}
 		const oldPath = order[0] == 0 ? "left.ms" : "right.ms";
 		const selectedPath = order[1] == 0 ? "left.ms" : "right.ms";
-		setFileText(input, oldPath, "detached input changed");
+		setFileText(input, oldPath, "detached input changed", 3);
 		assert tryMarkGreen(cache, input, key, 3);
-		setFileText(input, selectedPath, "selected input changed");
+		setFileText(input, selectedPath, "selected input changed", 4);
 		assert !tryMarkGreen(cache, input, key, 4);
 		assert cache.recomputed[TaQueryKind.TypeCheck as int32] == 2;
 	}
@@ -539,26 +464,23 @@ test "yellow entry returns false immediately" {
 }
 
 function durableConsumer(input: TaFileInputStore, cache: TaCacheStore, graph: TaModuleDepGraph, durability: TaDurability): TaQueryKey {
-	setFileText(input, "/durability/dep.ms", "export const value = 1;");
+	setFileText(input, "/durability/dep.ms", "export const value = 1;", 1);
 	setFileDurability(input, 0, durability, 1);
 	const depKey = createQueryKey(TaQueryKind.Parse, 0);
 	const dep = createCacheEntry(depKey);
 	dep.computedAt = 1;
 	dep.verifiedAt = 1;
-	dep.outputHash = 42;
+	dep.changedAt = 1;
 	dep.state = TaQueryState.Green;
 	dep.durability = durability;
-	dep.dependencies = [{
-		depKey: createQueryKey(TaQueryKind.FileText, 0),
-		expectedHash: getFileHash(input, 0)!,
-	}];
+	dep.dependencies = [fileTextKey(0)];
 	cachePut(cache, dep);
 	const userKey = createQueryKey(TaQueryKind.TypeCheck, 1);
 	const user = createCacheEntry(userKey);
 	user.computedAt = 1;
 	user.verifiedAt = 1;
 	user.state = TaQueryState.Green;
-	user.dependencies = [{ depKey, expectedHash: 42 }];
+	user.dependencies = [depKey];
 	cachePut(cache, user);
 	recordModuleImport(graph, 1, 0);
 	return userKey;
@@ -570,8 +492,7 @@ test "a changed high-durability input invalidates its unchecked consumers" {
 		const input = createFileInputStore();
 		const graph = createModuleDepGraph();
 		const userKey = durableConsumer(input, cache, graph, durability);
-		setFileText(input, "/durability/dep.ms", "export const value = 2;");
-		recordInputChange(input, 0, 2);
+		setFileText(input, "/durability/dep.ms", "export const value = 2;", 2);
 		invalidateFile(cache, graph, 0);
 		assert !tryMarkGreen(cache, input, userKey, 2);
 	}
@@ -583,8 +504,7 @@ test "a high-durability input changed after a durability downgrade still invalid
 	const graph = createModuleDepGraph();
 	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
 	setFileDurability(input, 0, TaDurability.Low, 2);
-	setFileText(input, "/durability/dep.ms", "export const value = 3;");
-	recordInputChange(input, 0, 3);
+	setFileText(input, "/durability/dep.ms", "export const value = 3;", 3);
 	invalidateFile(cache, graph, 0);
 	assert !tryMarkGreen(cache, input, userKey, 3);
 }
@@ -594,10 +514,9 @@ test "an unchanged high-durability input still skips its walk" {
 	const input = createFileInputStore();
 	const graph = createModuleDepGraph();
 	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
-	setFileText(input, "/durability/other.ms", "export const other = 1;");
-	recordInputChange(input, 1, 2);
+	setFileText(input, "/durability/other.ms", "export const other = 1;", 2);
 	cacheGet(cache, userKey).state = TaQueryState.Red;
-	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies[0].expectedHash = 0;
+	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies = [fileTextKey(99)];
 	assert tryMarkGreen(cache, input, userKey, 2);
 }
 
@@ -608,7 +527,6 @@ test "a consumer verified after a durability downgrade walks its input on the ne
 	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
 	setFileDurability(input, 0, TaDurability.Low, 2);
 	assert tryMarkGreen(cache, input, userKey, 2);
-	setFileText(input, "/durability/dep.ms", "export const value = 3;");
-	recordInputChange(input, 0, 3);
+	setFileText(input, "/durability/dep.ms", "export const value = 3;", 3);
 	assert !tryMarkGreen(cache, input, userKey, 3);
 }

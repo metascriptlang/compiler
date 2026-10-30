@@ -9,13 +9,6 @@
 import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, queryKeysEqual } from "./revision";
 
 
-// ===== Dependency Entry — "I depended on query X and saw output hash Y" =====
-
-export struct TaDependencyEntry {
-	depKey: TaQueryKey;
-	expectedHash: int64;
-}
-
 // ===== Cache Entry — per-query metadata (NOT the result value) =====
 
 export class TaCacheEntry {
@@ -25,8 +18,8 @@ export class TaCacheEntry {
 	computedAt: int32;      // revision when last computed
 	verifiedAt: int32;      // revision when last verified green
 	durability: TaDurability;
-	dependencies: TaDependencyEntry[];
-	outputHash: int64;       // hash of the output (0 in Phase 1)
+	changedAt: int32;
+	dependencies: TaQueryKey[];
 }
 
 export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
@@ -37,8 +30,8 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 		computedAt: 0,
 		verifiedAt: 0,
 		durability: TaDurability.Low,
+		changedAt: 0,
 		dependencies: [],
-		outputHash: 0,
 	};
 }
 
@@ -46,7 +39,7 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 
 class TaDependencyFrame {
 	queryKey: TaQueryKey;
-	deps: TaDependencyEntry[];
+	deps: TaQueryKey[];
 	minDurability: TaDurability;
 }
 
@@ -77,11 +70,10 @@ export function hasActiveFrame(stack: TaDependencyStack): boolean {
 	return stack.frames.length > 0;
 }
 
-export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey, outputHash: int64): void {
+export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey): void {
 	if (stack.frames.length == 0) return;  // defensive
 	const frame = stack.frames[stack.frames.length - 1];
-	const entry: TaDependencyEntry = { depKey, expectedHash: outputHash };
-	frame.deps.push(entry);
+	frame.deps.push(depKey);
 }
 
 export function recordDurability(stack: TaDependencyStack, dur: TaDurability): void {
@@ -105,7 +97,7 @@ test "create starts Red" {
 	assert entry.state == TaQueryState.Red;
 	assert entry.computedAt == 0;
 	assert entry.verifiedAt == 0;
-	assert entry.outputHash == 0;
+	assert entry.changedAt == 0;
 }
 
 test "dependencies start empty" {
@@ -154,11 +146,10 @@ test "record dependency adds to topmost frame" {
 	const depKey = createQueryKey(TaQueryKind.FileText, 1);
 	pushFrame(stack, k1);
 	pushFrame(stack, k2);
-	recordDependency(stack, depKey, 999);
+	recordDependency(stack, depKey);
 	const f2 = popFrame(stack);
 	assert f2.deps.length == 1;
-	assert queryKeysEqual(f2.deps[0].depKey, depKey);
-	assert f2.deps[0].expectedHash == 999;
+	assert queryKeysEqual(f2.deps[0], depKey);
 	const f1 = popFrame(stack);
 	assert f1.deps.length == 0;
 }
@@ -166,7 +157,7 @@ test "record dependency adds to topmost frame" {
 test "record on empty stack is no-op" {
 	const stack = createDependencyStack();
 	const depKey = createQueryKey(TaQueryKind.FileText, 0);
-	recordDependency(stack, depKey, 0);
+	recordDependency(stack, depKey);
 	assert !hasActiveFrame(stack);
 }
 

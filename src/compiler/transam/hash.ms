@@ -1,13 +1,10 @@
 // Trans-Am Hash Utilities — djb2 string hashing, hash combinators, AST content hashing
 //
-// Phase 1: simple hash for query key identification and file change detection.
-// Phase 2: AST content-addressed hashing (transAmHashNode) for Salsa output-hash early cutoff.
+// The engine decides validity by change revisions, never by these hashes; the build
+// session fingerprints generic instances with them (buildSession.ms).
 //
 // transAmHashNode hashes kind + data fields recursively, skipping positions/comments/types/symbols.
-// This means comment-only or whitespace-only edits produce identical parse hashes,
-// so downstream queries (TypeCheck, Transform, Analyze) stay GREEN.
 
-import { TaQueryKey, TaQueryKind } from "./revision";
 import {
 	Node, NodeKind, NodeFlag,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
@@ -48,24 +45,6 @@ const PRIME: int64 = 2147483647;
 
 function combine(a: int64, b: int64): int64 {
 	return ((a * 31) + b) % PRIME;
-}
-
-function enumToNum(kind: TaQueryKind): int64 {
-	return match (kind) {
-		TaQueryKind.FileText => 0,
-		TaQueryKind.FileHash => 1,
-		TaQueryKind.Parse => 2,
-		TaQueryKind.TypeCheck => 3,
-		TaQueryKind.Transform => 4,
-		TaQueryKind.Analyze => 5,
-		TaQueryKind.ModuleDeps => 6,
-		TaQueryKind.Lower => 8,
-		_ => 0,
-	};
-}
-
-export function taHashKey(key: TaQueryKey): int64 {
-	return combine(enumToNum(key.queryKind) * 1000003, key.fileId as int64);
 }
 
 // ===== AST Content Hash Helpers =====
@@ -129,7 +108,7 @@ function hFloats(h: int64, nums: float64[]): int64 {
 	return h;
 }
 
-// ===== AST Content Hash (Salsa output-hash early cutoff) =====
+// ===== AST Content Hash =====
 // Hashes node kind + data fields recursively. Skips: location, comments, nodeType, resolvedSym, flags.
 // Produces identical hash for structurally identical trees regardless of position.
 //
@@ -138,9 +117,8 @@ function hFloats(h: int64, nums: float64[]): int64 {
 // hover/goto-def. The semantic type information lives in the string-form
 // annotations INSIDE NodeData (declType, fnReturnType, interfaceFieldTypes,
 // etc.) which ARE hashed via the per-variant data walk below. Hashing
-// typeExpr would cause cache misses on trivial position shifts (newlines,
-// comments) even when the semantic AST is identical — defeating the Salsa
-// output-hash early-cutoff optimization. When a new type annotation affecting
+// typeExpr would change the hash on trivial position shifts (newlines,
+// comments) even when the semantic AST is identical. When a new type annotation affecting
 // semantics is added, ensure it lives inside NodeData (not Node.typeExpr) OR
 // extend this function to hash the new channel.
 
@@ -148,7 +126,7 @@ export function transAmHashNode(node: Node): number {
 	return taHashNode(node) as number;
 }
 
-export function taHashNode(node: Node): int64 {
+function taHashNode(node: Node): int64 {
 	if (node == null) return 0;
 	let h: int64 = ((node.kind as int32 as int64) * 2654435761) % PRIME;
 
@@ -549,18 +527,6 @@ test "chained order matters" {
 	const a = combine(combine(0, 1), 2);
 	const b = combine(combine(0, 2), 1);
 	assert a != b;
-}
-
-test "different kinds produce different hashes" {
-	const a: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 1 };
-	const b: TaQueryKey = { queryKind: TaQueryKind.FileHash, fileId: 1 };
-	assert taHashKey(a) != taHashKey(b);
-}
-
-test "different fileIds produce different hashes" {
-	const a: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 1 };
-	const b: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 2 };
-	assert taHashKey(a) != taHashKey(b);
 }
 
 test "null node hashes to zero" {
