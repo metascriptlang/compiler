@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -748,7 +748,7 @@ function preludeHeldSymbol(prelude: CheckerContext, info: ExportedSymInfo): Symb
 	}
 	const ext = info.ext;
 	if (ext == null || prelude.extensionRegistry == null) return null;
-	for (const held of prelude.extensionRegistry.methods) {
+	for (const held of extensionsOf(prelude.extensionRegistry)) {
 		if (held.sym == null || held.methodName != ext.methodName || held.isStatic != ext.isStatic || held.sym.modulePath != home) continue;
 		if (sameDeclaration(held.sym, info.sym)) return held.sym;
 	}
