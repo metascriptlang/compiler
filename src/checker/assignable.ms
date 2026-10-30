@@ -25,6 +25,7 @@ export enum WriteVerdict {
 export enum WriteSite {
 	Assign,
 	RefArg,
+	CPointer,
 	Receiver,
 	View,
 }
@@ -101,7 +102,7 @@ function peelAddressableConv(n: Node | null): Node | null {
 export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	const borrowed = borrowRoot(target);
 	if (borrowed != null) return { verdict: WriteVerdict.BorrowView, root: borrowed };
-	const asRefArg = site == WriteSite.RefArg;
+	const asRefArg = site == WriteSite.RefArg || site == WriteSite.CPointer;
 	let cur: Node = target;
 	let interior = false;
 	let deep = true;
@@ -220,6 +221,7 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 	const text = lvalueText(target);
 	const what = match (site) {
 		WriteSite.RefArg => `pass '${text}' to a 'ref' parameter`,
+		WriteSite.CPointer => `pass '${text}' to a non-const C pointer parameter`,
 		WriteSite.Receiver => `mutate '${text}' with '${method}'`,
 		WriteSite.View => `view '${text}' as a writable Span`,
 		WriteSite.Assign => w.verdict == WriteVerdict.ConstRebind || target.kind == NodeKind.Identifier ? `assign to '${name}'` : `write '${text}'`,

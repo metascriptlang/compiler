@@ -134,6 +134,12 @@ function receivedPointer(p: CType): string {
 	return nullablePointer(p, ms);
 }
 
+function declaredPointer(p: CType): string {
+	const ms = cTypeToMs(p);
+	if (p.kind == CTypeKind.Ptr && p.base != null && p.base.isConst && ms.startsWith("Ptr<") && ms != "Ptr<void>") return `Readonly<${ms}> | null`;
+	return nullablePointer(p, ms);
+}
+
 function emitParams(t: CType, outHandles: boolean, calleeReceives: boolean = false): string {
 	let result = "";
 	for (let i = 0; i < t.params.length; i += 1) {
@@ -141,7 +147,7 @@ function emitParams(t: CType, outHandles: boolean, calleeReceives: boolean = fal
 		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
 		const p = t.params[i];
 		if (outHandles && isOutHandle(p)) result = result + `out ${pName}: ${cTypeToMs(p.base)}`;
-		else result = result + `${pName}: ${calleeReceives ? receivedPointer(p) : nullablePointer(p, cTypeToMs(p))}`;
+		else result = result + `${pName}: ${calleeReceives ? receivedPointer(p) : declaredPointer(p)}`;
 	}
 	return result;
 }
@@ -612,11 +618,11 @@ test "handle written through a pointer param binds as out" {
 	assert ms.indexOf("out h") < 0;
 }
 
-test "struct pointer param is a nullable Ptr, const or not" {
+test "struct pointer param is a nullable Ptr, read-only when its pointee is const" {
 	const ms = translateHeaderModule("typedef struct { int a; } A;\nstruct B { int b; };\nint f(const A* a, A* m, const struct B* b);\nint g(const float* v);").source;
-	assert ms.indexOf("a: Ptr<A> | null") >= 0;
+	assert ms.indexOf("a: Readonly<Ptr<A>> | null") >= 0;
 	assert ms.indexOf("m: Ptr<A> | null") >= 0;
-	assert ms.indexOf("b: Ptr<B> | null") >= 0;
+	assert ms.indexOf("b: Readonly<Ptr<B>> | null") >= 0;
 	assert ms.indexOf("v: Borrow<float32>") >= 0;
 }
 

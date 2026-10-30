@@ -2958,6 +2958,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					}
 				}
 			}
+			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType) && takesAddressAtCArg(argTypes[pi], paramType)
+					&& node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC) && hasAddress(args[pi])
+					&& !isReadonlyView(skipModifier(paramType)) && !isReadonlyView(nonNullMemberOfNullable(skipModifier(paramType)))) {
+				const refusal = writeRefusal(args[pi], WriteSite.CPointer);
+				if (refusal != null) addError(ctx, refusal, args[pi].location.line, args[pi].location.column);
+			}
 			// Reference parity: var/out params require lvalue argument
 			if (!isOutParam(paramType) && pi < args.length && args[pi].kind == NodeKind.OutExpr) {
 				addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": 'out' is written only for an out parameter, and this parameter is not one", node.location.line, node.location.column);
