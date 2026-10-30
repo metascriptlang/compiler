@@ -2843,7 +2843,11 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 	const valueType = unwrapRef(exprType);
 	const exactSlot = unionSlotOf(formal, exprType);
 	const vi = exactSlot >= 0 || formal.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
-	if (vi < 0) return null as unknown as Node;
+	if (vi < 0) {
+		const base = brandBase(exprType);
+		if (base == null) return null as unknown as Node;
+		return widenVariantToUnion(wrapInConv(expr, base), formalSlot, base, ctx);
+	}
 	if (vi != exactSlot) {
 		expr = classUpcast(expr, formal.typeChildren[vi]);
 	} else if (formal.kind == TypeKind.Union && isClassRef(exprType)) {
