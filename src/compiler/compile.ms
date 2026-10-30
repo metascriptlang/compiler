@@ -4504,12 +4504,22 @@ export interface JsTreeResult {
 	testFuncs: string[][];
 }
 
+function underEntryDir(modulePath: string, entryPath: string): boolean {
+	return modulePath.startsWith(`${dirname(entryPath)}/`);
+}
+
+test "only a module under the entry's directory counts as under it" {
+	assert underEntryDir("/w/probe/a.ms", "/w/probe/entry.ms");
+	assert underEntryDir("/w/probe/sub/a.ms", "/w/probe/entry.ms");
+	assert !underEntryDir("/w/probe2/a.ms", "/w/probe/entry.ms");
+	assert !underEntryDir("/w/std/serialize/json/parser.ms", "/w/probe/entry.ms");
+}
+
 function testedModules(loadOrder: string[], entryPath: string, opts: CliOptions): string[] {
-	const entryDir = `${dirname(entryPath)}/`;
 	const tested: string[] = [];
 	let candidates = 0;
 	for (const p of loadOrder) {
-		if (opts.testsInDir && !p.startsWith(entryDir)) continue;
+		if (opts.testsInDir && !underEntryDir(p, entryPath)) continue;
 		if (candidates % opts.testsShards == opts.testsShard) tested.push(p);
 		candidates += 1;
 	}
@@ -4905,6 +4915,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 	let entries = "";
 	for (let i = 0; i < tree.modulePaths.length; i += 1) {
 		if (tree.testFuncs[i].length == 0) continue;
+		if (opts.testsInDir && !underEntryDir(tree.modulePaths[i], filePath)) continue;
 		const spec = relSpecBetween(harnessRel, tree.moduleOutRels[i]);
 		let funcs = "";
 		let names = "";
