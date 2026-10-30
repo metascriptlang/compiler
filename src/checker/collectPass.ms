@@ -322,13 +322,19 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 }
 
 function iteratorHelperMisuse(ctx: CheckerContext, dd: DecoratedDeclData): string {
-	if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) return `@iteratorHelper is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`;
 	const fn = exportedFunctionOf(dd.decoratedNode);
 	if (fn == null) return "@iteratorHelper applies to a module-level generator function";
 	const fd = fn.data as FunctionDeclData;
-	if (routineKindFlag(fd.fnFlags) != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
-	if (fd.params.length == 0) return "@iteratorHelper needs the source iterator as the generator's first parameter";
+	const kind = routineKindFlag(fd.fnFlags);
+	if (kind == "async_generator") return "@iteratorHelper does not apply to an async generator; it applies to a synchronous generator function";
+	if (kind != "generator" || fd.fnBody == null) return "@iteratorHelper applies to a generator function with a body";
+	if (fd.params.length == 0 || !spellsIterator(fd.fnParamTypes[0])) return "@iteratorHelper needs the source iterator (an Iterator<T>) as the first parameter";
+	if (!spellsIterator(fd.fnReturnType)) return "@iteratorHelper must return an Iterator<T>";
 	return "";
+}
+
+function spellsIterator(spelling: string): boolean {
+	return spelling.trim().startsWith("Iterator<");
 }
 
 function stdBuiltinKind(ctx: CheckerContext, kind: string, decl: Node): string {
