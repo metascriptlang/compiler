@@ -2305,6 +2305,17 @@ run_solana_lane() {
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
+# A tier test (`msc test <index> --tests-in-dir`) holds about 3.3 GB at its peak, whatever the lane count: one gate's tests
+# phase started every tier at once and reached 42-56 GB, and two such phases on oci-u (94 GB) made earlyoom kill gates'
+# test processes (10:48Z, 16:21Z, 17:08Z 2026-10-30). So the lane starts another tier only while the RAM available keeps
+# one more of them above a tenth of the host's RAM (earlyoom's kill line, doubled), counting each tier started in the last
+# minute at its full peak too, because a tier reaches its peak only after it has compiled for a while; it always runs one.
+TEST_JOB_KB=$((3500 * 1024))
+test_ram_room() {
+  [ -r /proc/meminfo ] || return 0
+  awk -v j="$TEST_JOB_KB" -v y="$1" '/^MemTotal/ { t = $2 } /^MemAvailable/ { a = $2 } END { exit !(a - j * (1 + y) >= t / 10) }' /proc/meminfo
+}
+
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
@@ -2316,8 +2327,15 @@ run_test_lane() {
       else
         rm -f "$OUT/tier/keep"
       fi
+      local started=() young t
       while read -r f shard; do
         [ -n "$f" ] || continue
+        while [ -n "$(jobs -rp)" ]; do
+          young=0; for t in "${started[@]}"; do [ $((SECONDS - t)) -ge 60 ] || young=$((young + 1)); done
+          ! test_ram_room "$young" || break
+          sleep 2
+        done
+        started+=("$SECONDS")
         if [ "$shard" = - ]; then
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
         else
