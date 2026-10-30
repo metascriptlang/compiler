@@ -282,13 +282,6 @@ static inline int64_t msMemChr(const uint8_t* hay, int64_t hayLen, int64_t from,
 	return hit ? (int64_t)(hit - hay) : -1;
 }
 
-static inline uint64_t msLoadU64(const uint8_t* data, int64_t len, int64_t at) {
-	(void)len;
-	uint64_t word;
-	memcpy(&word, data + at, 8);
-	return word;
-}
-
 static inline bool msMemEqAt(const uint8_t* hay, int64_t hayLen, int64_t at, const uint8_t* needle, int64_t needleLen) {
 	(void)hayLen;
 	return needleLen == 0 || memcmp(hay + at, needle, (size_t)needleLen) == 0;
