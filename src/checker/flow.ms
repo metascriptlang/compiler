@@ -1597,7 +1597,7 @@ function isConstBinding(refNode: Node): boolean {
 
 function capturedFlowAt(reference: Node, closure: Node | null): FlowNode | null {
 	if (closure == null || closure.flowNode == null) return null;
-	if (closure.kind != NodeKind.ArrowFunction && closure.kind != NodeKind.FunctionExpr) return null;
+	if (!isNestedFlowBody(closure)) return null;
 	const top = stripHidden(reference);
 	if (top == null || top.kind != NodeKind.Identifier || top.resolvedSym == null) return null;
 	const sym = top.resolvedSym!;
@@ -1605,6 +1605,10 @@ function capturedFlowAt(reference: Node, closure: Node | null): FlowNode | null 
 	if (isConstantSymbol(sym)) return closure.flowNode;
 	if (isParameterOrMutableLocal(sym) && isPastLastAssignment(sym, closure)) return closure.flowNode;
 	return null;
+}
+
+function isNestedFlowBody(node: Node): boolean {
+	return node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.DeferStmt;
 }
 
 function isConstantSymbol(sym: Symbol): boolean {
@@ -1651,7 +1655,7 @@ function declaringContainerOf(sym: Symbol, closure: Node): [Node | null, Node] {
 		const container = enclosingContainer(inner);
 		if (container == null) break;
 		if (declaresParam(container!, sym) || (sym.declNode != null && assignmentsIn(container!).ordinals.has(sym.declNode))) return [container, inner];
-		if (container!.kind != NodeKind.ArrowFunction && container!.kind != NodeKind.FunctionExpr) break;
+		if (!isNestedFlowBody(container!)) break;
 		inner = container!;
 	}
 	return [null, inner];
@@ -1760,7 +1764,7 @@ function scanAssignments(scan: ContainerAssignments, node: Node, nested: boolean
 	scan.ordinal += 1;
 	const at = scan.ordinal;
 	const k = node.kind;
-	if (!nested && (k == NodeKind.VariableDecl || k == NodeKind.DestructuringDecl || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr)) {
+	if (!nested && (k == NodeKind.VariableDecl || k == NodeKind.DestructuringDecl || isNestedFlowBody(node))) {
 		scan.ordinals.set(node, at);
 	}
 	const written: Node[] = [];

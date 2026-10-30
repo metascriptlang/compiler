@@ -685,7 +685,8 @@ function bindDecoratedDecl(state: BinderState, node: Node): void {
 
 function bindDeferStmt(state: BinderState, node: Node): void {
 	const d = node.data as DeferStmtData;
-	if (d.deferExpr != null) bindExpression(state, d.deferExpr);
+	node.flowNode = state.currentFlow;
+	bindContainer(state, node, d.deferExpr);
 }
 
 function bindAssertStmt(state: BinderState, node: Node): void {
