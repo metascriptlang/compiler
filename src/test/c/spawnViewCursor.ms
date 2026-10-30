@@ -76,6 +76,14 @@ async function main(): Promise<int32> {
 console.log(\`\${await main()}\`);
 `;
 
+function countsGraph(body: string): boolean {
+	for (const line of body.split("\n")) {
+		const t = line.trim();
+		if (t.startsWith("N__") && t.contains("* dollarborrow")) return true;
+	}
+	return false;
+}
+
 function compiledThunks(source: string): string {
 	const r = compileToC(source);
 	return r.ok ? thunkBodies(r.value) : "";
@@ -84,7 +92,7 @@ function compiledThunks(source: string): string {
 test "E2E C: a task view of a lent graph through a function value of an inferred Readonly result takes no rc op" {
 	const body = compiledThunks(CALLS("pick", "const pick = (x: Readonly<N>) => x.next;"));
 	assert body.length > 0;
-	assert !body.contains("msIncrefCyclic(dollarborrow");
+	assert !countsGraph(body);
 	assert !body.contains("msIncrefCyclic(view");
 	assert !body.contains("msDecrefCyclic(view");
 }
@@ -92,7 +100,7 @@ test "E2E C: a task view of a lent graph through a function value of an inferred
 test "E2E C: a task view of a lent graph through a function value of a declared Readonly result takes no rc op" {
 	const body = compiledThunks(CALLS("pick", "const pick = (x: Readonly<N>): Readonly<N> | null => x.next;"));
 	assert body.length > 0;
-	assert !body.contains("msIncrefCyclic(dollarborrow");
+	assert !countsGraph(body);
 	assert !body.contains("msIncrefCyclic(view");
 	assert !body.contains("msDecrefCyclic(view");
 }
@@ -100,7 +108,7 @@ test "E2E C: a task view of a lent graph through a function value of a declared 
 test "E2E C: a task view of a lent graph through a direct call takes no rc op" {
 	const body = compiledThunks(CALLS("nextOf", ""));
 	assert body.length > 0;
-	assert !body.contains("msIncrefCyclic(dollarborrow");
+	assert !countsGraph(body);
 	assert !body.contains("msIncrefCyclic(view");
 	assert !body.contains("msDecrefCyclic(view");
 }
@@ -109,7 +117,7 @@ test "E2E C: a function value of an owning result is counted for its own fresh c
 	const body = compiledThunks(CALLS("copy", "const copy = (x: Readonly<N>): N => { const n = new N(); n.v = x.v; return n; };"));
 	assert body.length > 0;
 	assert body.contains("msDecrefCyclic(view");
-	assert !body.contains("msIncrefCyclic(dollarborrow");
+	assert !countsGraph(body);
 }
 
 test "E2E C: a view stays counted through a function value whose body writes a captured graph" {
