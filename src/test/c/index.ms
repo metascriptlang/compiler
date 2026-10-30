@@ -112,3 +112,4 @@ import "./forOfConstArrayBorrow";
 import "./instanceofNullableUnion";
 import "./nullableDeclaredUnionJoin";
 import "./declaredUnionIntoAnonymousCarrier";
+import "./loopSpanCacheEmit";
