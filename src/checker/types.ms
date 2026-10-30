@@ -2224,11 +2224,23 @@ export function distinctNumericBase(t: Type | null): Type | null {
 	return cur != t && isNumeric(cur) ? cur : null;
 }
 
-export function distinctWidenBody(t: Type | null): Type | null {
+export function distinctWidenBody(t: Type | null): Type | null;
+export function distinctWidenBody(t: Readonly<Type | null>): Readonly<Type | null>;
+export function distinctWidenBody(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
 	if (!isBrandDistinct(wrapper)) return null;
 	return distinctBody(t);
+}
+
+export function brandBase(t: Type | null): Type | null {
+	let base = distinctWidenBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctWidenBody(skipModifier(base));
+		if (inner == null) break;
+		base = inner;
+	}
+	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
 }
 
 export function createGenericParam(name: string): Type {
@@ -3269,6 +3281,8 @@ export function isTagCarriedUnion(t: Readonly<Type | null>): boolean {
 export function typeofTagOf(t: Readonly<Type | null>): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
+	const brandBody = distinctWidenBody(v);
+	if (brandBody != null) return typeofTagOf(brandBody);
 	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
 	if (isNumeric(v) || v.kind == TypeKind.NumberLiteral || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
@@ -3280,6 +3294,8 @@ export function typeofTagOf(t: Readonly<Type | null>): string {
 
 export function primitiveKindName(t: Type | null): string {
 	if (t == null) return "";
+	const brandBody = distinctWidenBody(peelTransparentInstance(t));
+	if (brandBody != null) return primitiveKindName(brandBody);
 	return match (peelTransparentInstance(t).kind) {
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
