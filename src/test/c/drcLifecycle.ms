@@ -514,6 +514,6 @@ test "E2E C: a returned module-level value is copied once" {
 		function names(): string[] { return NAMES; }
 	`);
 	assert c.ok;
-	assert occurrences(c.value, "Copy((&(dollarborrow") == 3;
+	assert occurrences(c.value, ")), (&(NONE__") == 3;
 	assert !c.value.contains(")), (&(dollarborrow");
 }

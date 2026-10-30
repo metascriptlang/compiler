@@ -37,7 +37,7 @@ test "a subset test compares the masked word against zero" {
 test "size counts the bits of the word" {
 	const c = cFor("console.log(s.size());");
 	assert c != "";
-	assert c.contains("msSetCard32(");
+	assert c.contains("msSetCard32__");
 }
 
 test "the complement of a set is rejected" {
@@ -47,6 +47,6 @@ test "the complement of a set is rejected" {
 test "a set hashes by its value, not by its address" {
 	const c = compileToCWithStd(PRELUDE + "console.log(s.hash());");
 	assert c.ok;
-	assert c.value.contains("msSetHashWord(");
+	assert c.value.contains("msSetHashWord__");
 	assert !c.value.contains("msPtrBits");
 }
