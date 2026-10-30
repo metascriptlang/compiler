@@ -1,0 +1,13 @@
+@include("runtime/core/buffer.h");
+
+import { Buffer } from "std/core/buffer";
+
+extern function outputPointer(buf: Buffer): Ptr<uint8> from "msBufferData";
+
+export function newOutputBuffer(length: int64): Buffer {
+	return new Array<uint8>(length);
+}
+
+export function outputBytes(buf: Buffer): Ptr<uint8> {
+	return outputPointer(buf);
+}

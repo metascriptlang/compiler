@@ -11,13 +11,13 @@
 #include "runtime/core/string.h"
 #include <stdint.h>
 
-/* Encrypt with XChaCha20-Poly1305.
- * Auto-generates 24-byte nonce. Key: 32 bytes.
- * Returns: nonce(24) || cipherText || mac(16). */
-msString msChacha20Seal(msString key, msString plainText, msString aad);
+/* Encrypt with XChaCha20-Poly1305 into out, which holds 24 + plainText.len + 16 bytes.
+ * Auto-generates the 24-byte nonce. Key: 32 bytes.
+ * Writes: nonce(24) || cipherText || mac(16). Returns 1, or 0 when the key or nonce is unusable. */
+int64_t msChacha20SealInto(msString key, msString plainText, msString aad, uint8_t *out);
 
-/* Decrypt XChaCha20-Poly1305 sealed blob.
- * Input: nonce(24) || cipherText || mac(16). */
-msString msChacha20Open(msString key, msString sealed, msString aad);
+/* Decrypt an XChaCha20-Poly1305 sealed blob into out, which holds sealed.len - 40 bytes.
+ * Input: nonce(24) || cipherText || mac(16). Returns 1, or 0 when the key, size or mac is wrong. */
+int64_t msChacha20OpenInto(msString key, msString sealed, msString aad, uint8_t *out);
 
 #endif /* MS_CRYPTO_CHACHA20_H */

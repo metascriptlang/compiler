@@ -16,10 +16,10 @@
 /* ===== High-Level AEAD (seal/open) ===== */
 
 /* Seal: AES-GCM encrypt with auto-generated 12-byte nonce.
- * Output: nonce(12) || cipherText || authTag(16)
+ * Writes nonce(12) || cipherText || authTag(16) into out, which holds 12 + plainText.len + 16 bytes.
  * Key: 16 bytes (AES-128) or 32 bytes (AES-256).
- * aad: additional authenticated data (can be empty). */
-msString msCryptoAesSeal(msString key, msString plainText, msString aad);
+ * aad: additional authenticated data (can be empty). Returns 1, or 0 on a bad key. */
+int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out);
 
 /* Open: AES-GCM decrypt from sealed blob.
  * Input: nonce(12) || cipherText || authTag(16)
