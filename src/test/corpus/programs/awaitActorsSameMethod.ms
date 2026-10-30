@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: 3|x|2|2|done
 
 actor A {

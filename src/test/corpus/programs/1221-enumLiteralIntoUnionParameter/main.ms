@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM cannot tell a number from a function inside one union at comptime
 // @stdout: 1 2 0 5 2 1
 // @exit: 0
 // note: a value typed as one enum member meeting a union that holds the whole enum (a signal setter taking a value or an updater) used to reach the call as the bare enum constant, where C wants the address of the tagged union, so clang refused it. A member written in a macro argument comes back from the macro typed as its member, which is how a JSX event handler delivers `setLens(Lens.Compute)`; a local annotated with the member type is the same shape without a macro. Handler, second member, handler in a handler, a number control, an updater and the annotated local.
