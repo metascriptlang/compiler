@@ -7,6 +7,7 @@
 // tinfl_decompress state machine. Exposes one-shot helpers and a streaming
 // handle-based API for large inputs.
 
+@passC("-Iruntime/compress");
 @include("runtime/compress/inflate.h");
 @compile("runtime/compress/inflate.c");
 @compile("vendor/miniz/miniz.c");
