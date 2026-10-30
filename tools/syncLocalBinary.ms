@@ -12,6 +12,7 @@
 // Env: MSC_INSTALL_DIR overrides the destination; MSC_SYNC_BREAK_HOLD=<owner> breaks a hold.
 import { argv, cwd, env, execFileResult, exit, platform } from "std/process";
 import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, readFileBytes, realpath, removeAll, rename, writeFile } from "std/fs";
+import { rawString } from "std/core/buffer/bytes";
 
 const windows = platform == "windows";
 
@@ -242,7 +243,7 @@ function sameFile(a: string, b: string): boolean {
 	if (!exists(b) || fileSize(a) != fileSize(b)) return false;
 	const x = readFileBytes(a);
 	const y = readFileBytes(b);
-	return x.ok && y.ok && Buffer.compare(x.value, y.value) == 0;
+	return x.ok && y.ok && rawString(x.value) == rawString(y.value);
 }
 
 function put(from: string, to: string): void {
