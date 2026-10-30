@@ -350,7 +350,7 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 			}
 		} else {
 			if (base != null) return null;
-			if (!(isNumeric(s) || s.kind == TypeKind.String || s.kind == TypeKind.Boolean || s.kind == TypeKind.Char)) return null;
+			if (!(isNumeric(s) || s.kind == TypeKind.String || s.kind == TypeKind.Boolean || s.kind == TypeKind.Char || s.kind == TypeKind.Array)) return null;
 			base = op;
 		}
 	}
@@ -1110,9 +1110,8 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 
 	// Check for intersection types (split on top-level &) — erasure tier.
 	// Intersection binds tighter than union, so checked BEFORE the union split.
-	// At runtime the type collapses to its left-most operand; downstream
-	// passes (checker / transform / codegen) never see an Intersection Type.
-	// Branded types like `string & { __brand: "X" }` resolve to `string`.
+	// Downstream passes never see an Intersection Type: all-object operands merge
+	// into one struct, a brand becomes a BrandWiden Distinct, anything else is refused.
 	const intersectionParts = splitTopLevel(trimmed, "&");
 	if (intersectionParts.length >= 2) {
 		// Two-tier semantic:
@@ -1120,8 +1119,8 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		//     synthesize a merged struct with all fields combined. Matches
 		//     TypeScript intersection field merging (LANG.md §5.3 example
 		//     `type Extended = IUser & { role: string }`).
-		//   - Any operand is primitive (e.g. `string & { __brand: "X" }`) →
-		//     erasure to first operand (branded primitives, Bug 1 path).
+		//   - A brand (`string & { __brand: "X" }`, `uint8[] & { __brand: "X" }`) →
+		//     a BrandWiden Distinct; any other mix is an error.
 		const operandTypes: Type[] = [];
 		const operandLabels: string[] = [];
 		let allObjectLike = true;
@@ -1149,9 +1148,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
 			if (brand != null) return brand;
+			addError(ctx, "cannot represent the intersection '" + trimmed + "': only object types merge (`A & B`), and a brand is one base (a number, string, boolean, char or array) with an object whose fields are all literals (`T & { __brand: \"X\" }`)", line, col);
+			return errorType();
 		}
-		// Erasure tier (non-brand mix): first operand wins. S2 (TSGAP item 5)
-		// replaces this silent collapse with a hard error.
 		const firstPart = intersectionParts[0].trim();
 		if (firstPart.length > 0) {
 			return resolveAnnotation(firstPart, ctx, line, col);
