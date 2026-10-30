@@ -221,9 +221,10 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			advance(state);
 			state.noArrowReturnType = 1;
 			const consequent = try parseExprWithPrec(state, 0);
-			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
-				advance(state);
+			if (isAtEnd(state) || current(state).kind != TokenKind.Colon) {
+				return Result.err(`Expected ':' in conditional expression at line ${current(state).line}`);
 			}
+			advance(state);
 			state.noArrowReturnType = arrowReturnTypeBan;
 			const alternate = try parseExprWithPrec(state, ternaryPrec);
 			left = finishNode(state, createNode(NodeKind.ConditionalExpr, {
@@ -1057,4 +1058,9 @@ test "compound assertions leave nested conditional ownership intact" {
 	]) {
 		assert exprKind(source) == NodeKind.ConditionalExpr;
 	}
+}
+
+test "a conditional requires its colon" {
+	assert !parseOk("on ? one two");
+	assert !parseOk("on as boolean ? one two");
 }
