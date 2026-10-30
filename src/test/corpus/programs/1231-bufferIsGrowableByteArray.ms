@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser has no Buffer helpers (index.rms holds only the alias); card 2026-10-21-raiser-has-no-std-core-buffer
 // @stdout: 1
 // @stdout: 2 2
 // @stdout: 305419896 6
