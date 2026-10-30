@@ -1,0 +1,121 @@
+@include("errno.h");
+
+import { IoError, ioErrorFromErrno } from "std/io/errors";
+
+extern let errno: int32;
+extern const EINVAL: int32;
+
+when (windows) {
+	@include("windows.h");
+	@include("runtime/fs/header.h");
+
+	import { freeWide, widePath } from "std/fs/widePath";
+
+	extern function CreateDirectoryW(
+		path: Ptr<uint16>, security: Ptr<void> | null,
+	): int32;
+	extern function MoveFileExW(
+		source: Ptr<uint16>, target: Ptr<uint16>, flags: uint32,
+	): int32;
+	extern function GetLastError(): uint32;
+	extern function msFsErrnoFromWin32(code: uint32): int32;
+
+	function createCode(path: string): int32 {
+		const wide = widePath(path);
+		if (wide == null) { return EINVAL; }
+		const made = CreateDirectoryW(wide, null) != 0;
+		const error = made ? 0 : GetLastError();
+		freeWide(wide);
+		return made ? 0 : msFsErrnoFromWin32(error);
+	}
+
+	function renameCode(source: string, target: string): int32 {
+		const from = widePath(source);
+		const to = widePath(target);
+		if (from == null || to == null) {
+			freeWide(from);
+			freeWide(to);
+			return EINVAL;
+		}
+		const moved = MoveFileExW(from, to, 0) != 0;
+		const error = moved ? 0 : GetLastError();
+		freeWide(from);
+		freeWide(to);
+		return moved ? 0 : msFsErrnoFromWin32(error);
+	}
+} else {
+	@include("sys/stat.h");
+
+	extern function cMkdir(path: cstring, mode: uint32): int32 from "mkdir";
+	const PRIVATE_DIRECTORY_MODE: uint32 = 0o700;
+
+	function createCode(path: string): int32 {
+		const result = cMkdir(path as cstring, PRIVATE_DIRECTORY_MODE);
+		const error = errno;
+		return result == 0 ? 0 : error;
+	}
+
+	when (linux) {
+		@include("fcntl.h");
+		@include("stdio.h");
+
+		extern const AT_FDCWD: int32;
+		extern const RENAME_NOREPLACE: uint32;
+		extern function cRenameExclusive(
+			fromDirectory: int32, source: cstring,
+			toDirectory: int32, target: cstring, flags: uint32,
+		): int32 from "renameat2";
+
+		function renameCode(source: string, target: string): int32 {
+			const result = cRenameExclusive(
+				AT_FDCWD, source as cstring, AT_FDCWD, target as cstring,
+				RENAME_NOREPLACE,
+			);
+			const error = errno;
+			return result == 0 ? 0 : error;
+		}
+	} else when (macos) {
+		@include("stdio.h");
+
+		extern const RENAME_EXCL: uint32;
+		extern function cRenameExclusive(
+			source: cstring, target: cstring, flags: uint32,
+		): int32 from "renamex_np";
+
+		function renameCode(source: string, target: string): int32 {
+			const result = cRenameExclusive(
+				source as cstring, target as cstring, RENAME_EXCL,
+			);
+			const error = errno;
+			return result == 0 ? 0 : error;
+		}
+	} else {
+		extern const ENOSYS: int32;
+
+		function renameCode(source: string, target: string): int32 {
+			return ENOSYS;
+		}
+	}
+}
+
+export function createDirectoryExclusive(path: string): Result<void, IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	const error = createCode(path);
+	if (error != 0) { return Result.err(ioErrorFromErrno(error, path)); }
+	return Result.ok(null);
+}
+
+export function renameNoReplace(
+	source: string, target: string,
+): Result<void, IoError> {
+	for (const path of [source, target]) {
+		if (path.indexOf("\0") >= 0) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+	}
+	const error = renameCode(source, target);
+	if (error != 0) { return Result.err(ioErrorFromErrno(error, target)); }
+	return Result.ok(null);
+}
