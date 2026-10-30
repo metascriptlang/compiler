@@ -23,3 +23,9 @@ test "genericDefaultPerInstance: a default that fits the instance, or an argumen
 	assert refused(k + "const u: uint8 = 1;\nk(u, 9 as uint8);", "the default of parameter") == 0;
 	assert refused("function two<A, B>(a: A, b: B, c: B = 300): B { return c; }\nconst u: uint8 = 1;\nconst w: int32 = 1;\ntwo(u, w);", "the default of parameter") == 0;
 }
+
+test "genericDefaultPerInstance: an object literal default is built as each instance of a generic interface" {
+	const opts = "interface Opts<C> { flag?: boolean | null; label?: ((value: C) => string) | null; }\n";
+	assert refused(opts + "function make<C>(value: C, options: Opts<C> = {}): boolean { return options.flag ?? true; }\nmake<int32>(1);\nmake(\"s\");", "not assignable") == 0;
+	assert refused(opts + "struct Box<P> { inner: P; }\nfunction wrap<C>(value: C, options: Opts<Box<C>> = { flag: false }): boolean { return options.flag ?? true; }\nwrap(1);", "not assignable") == 0;
+}
