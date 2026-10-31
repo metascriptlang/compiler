@@ -37,6 +37,7 @@ msString msFsReadFile(msString path);
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
+msString msFsReadDirNames(msString path);
 
 #ifndef _WIN32
 int32_t msFsCloneFile(const char* src, const char* dst);
