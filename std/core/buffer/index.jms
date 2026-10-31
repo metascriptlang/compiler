@@ -53,10 +53,14 @@ function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 
 // ===== Free Functions (constructors / static-like) =====
 
-export extern function alloc(this typeof Buffer, size: number): Buffer from "new Array(#).fill(0)";
+export function alloc(this typeof Buffer, size: number): Buffer {
+	return new Array<uint8>(size as int64) as Buffer;
+}
 
 // js has no unsafe allocation; a zero-filled array is a semantic superset.
-export extern function allocUnsafe(this typeof Buffer, size: number): Buffer from "new Array(#).fill(0)";
+export function allocUnsafe(this typeof Buffer, size: number): Buffer {
+	return new Array<uint8>(size as int64) as Buffer;
+}
 
 export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "Array.from(#, (x) => x & 255)";
 
