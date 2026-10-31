@@ -3588,6 +3588,11 @@ resetLiftedOps();
 		}
 	}
 	for (const p of processed) factInlineDecls(emissionFacts, p.program);
+	if (opts.isHcr) {
+		for (const p of processed) {
+			if (aliveSetHasModule(aliveSet, p.modPath) && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
+		}
+	}
 	setConcurrentTypeQueries(true);
 	try {
 		for (const p of processed) {
@@ -3604,7 +3609,6 @@ resetLiftedOps();
 				emissionFacts.writes = null;
 				if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
 			}
-			if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 		}
 		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc, hcrStorage);
 	} catch (e) {

@@ -10,7 +10,7 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, addIndirectSym, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
+	setLocalSymName, addIndirectSym, factClaimGeneric, genericClaimWins, scopeMangledParam, emitProcLocalsLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -112,9 +112,9 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (hasGenericParams(fnType) || isGenericFn(d.fnFlags)) return;
 	const isGenericInstance = sym != null && sym.instantiatedFrom != null;
 	if (g.preparingDeclarations) {
-		if (isGenericInstance && g.preparationFacts != null
-				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
-			factClaimGeneric(g.preparationFacts, name, g.modulePath);
+		const home = sym != null && sym.modulePath == g.modulePath;
+		if (isGenericInstance && g.preparationFacts != null && genericClaimWins(g.preparationFacts, name, g.modulePath, home)) {
+			factClaimGeneric(g.preparationFacts, name, g.modulePath, home);
 		}
 		return;
 	}
