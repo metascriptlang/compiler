@@ -85,6 +85,13 @@ describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", 
 			assert.ok(existsSync(new URL(file, import.meta.url)));
 		}
 	});
+	test("the package publicly exports the typed reusable core", async () => {
+		const core = await import("vite-plugin-metascript/core");
+		assert.equal(typeof core.buildCompilerGraph, "function");
+		const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+		assert.deepEqual(pkg.exports["./core"], { types: "./compilerCore.d.ts", default: "./compilerCore.js" });
+	});
+
 	test("existing options and sourcemaps use the shared compiler core", t => {
 		const f = fixture(t);
 		const explicit = join(f.root, "custom output");
@@ -208,6 +215,45 @@ describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", 
 		assert.throws(() => f.plugin.generateBundle.call(f.context, {}, {}, false), /rebuild before emitting declarations/);
 		assert.equal(f.calls().length, 1);
 		assert.deepEqual(f.assets, []);
+	});
+
+	test("an invalidated production generation cannot replace an already consumed graph", t => {
+		const f = fixture(t, { declaration: true });
+		f.state.manifest.modules.push({ source: f.typeInput, out: "types.js" });
+		f.state.files["types.js"] = "export const name = 'before';";
+		f.save();
+		f.plugin.buildStart.call(f.context);
+		assert.match(f.plugin.load.call(f.context, f.entry).code, /value = 1/);
+		f.state.files["types.js"] = "export const name = 'after';";
+		f.state.files["main.d.ts"] = "export declare const value: string;";
+		f.save();
+		f.plugin.watchChange.call(f.context, f.typeInput, { event: "update" });
+		assert.throws(() => f.plugin.load.call(f.context, f.typeInput), /invalidated.*buildStart/);
+		assert.throws(() => f.plugin.resolveId.call(f.context, "./types.jms", f.entry), /invalidated.*buildStart/);
+		assert.throws(() => f.plugin.generateBundle.call(f.context), /rebuild before emitting declarations/);
+		assert.equal(f.calls().length, 1);
+		assert.deepEqual(f.assets, []);
+		f.plugin.buildStart.call(f.context);
+		assert.match(f.plugin.load.call(f.context, f.typeInput).code, /after/);
+		f.plugin.generateBundle.call(f.context);
+		assert.equal(f.calls().length, 2);
+		assert.equal(f.assets[0].source, "export declare const value: string;");
+	});
+
+	test("source and instance pairing is validated during resolution and loading", t => {
+		const f = fixture(t);
+		f.state.manifest.modules.push({ source: f.typeInput, out: "types.js" });
+		f.state.manifest.instances.push({ source: f.typeInput, out: "_instances/types_number.js" });
+		f.state.files["types.js"] = "export {};";
+		f.state.files["_instances/types_number.js"] = "export const instance = 1;";
+		f.save();
+		f.plugin.buildStart.call(f.context);
+		const wrong = `${f.entry}?instance=types_number`;
+		assert.throws(() => f.plugin.resolveId.call(f.context, wrong), /source.*instance.*match/);
+		assert.throws(() => f.plugin.load.call(f.context, wrong), /source.*instance.*match/);
+		const correct = `${f.typeInput}?instance=types_number`;
+		assert.equal(f.plugin.resolveId.call(f.context, correct), correct);
+		assert.equal(f.plugin.load.call(f.context, correct).code, "export const instance = 1;");
 	});
 
 	test("watch builds fail on a deleted dependency and recover without publishing stale declarations", t => {

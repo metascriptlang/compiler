@@ -40,6 +40,12 @@ export default function metascript(options = {}) {
 		if (server) server.watcher.add([...watchFiles]);
 	}
 
+	function requireCurrentGeneration() {
+		if (server === null && dirty && emitted !== null) {
+			throw new Error("MetaScript production snapshot invalidated; call buildStart before consuming more modules");
+		}
+	}
+
 	function emit(context) {
 		dirty = true;
 		watchFiles.add(entry);
@@ -151,9 +157,15 @@ export default function metascript(options = {}) {
 		// generated .js unless the map is handed over here. Dev goes through the
 		// same hook, which also spares the browser a second request for it.
 		load(id) {
-			if (dirty && outputOf(emitted, id)) emit(this);
+			if (outputOf(emitted, id)) {
+				requireCurrentGeneration();
+				if (dirty) emit(this);
+			}
 			const output = outputOf(emitted, id);
 			const module = output ? emitted.byOutput.get(output) : null;
+			if (module && module.source !== canon(stripQuery(id))) {
+				throw new Error(`MetaScript source and instance do not match: ${id}`);
+			}
 			if (module) registerWatchFiles(this);
 			return module ? { code: module.code, map: module.map } : null;
 		},
@@ -162,6 +174,7 @@ export default function metascript(options = {}) {
 			const source = canon(stripQuery(id));
 			const output = outputOf(emitted, id);
 			if (!output) return null;
+			requireCurrentGeneration();
 			registerWatchFiles(this);
 			let rewritten = null;
 			for (const specifier of relativeSpecifiers(this.parse(code))) {
@@ -181,9 +194,14 @@ export default function metascript(options = {}) {
 			const file = canon(resolve(base, stripQuery(source)));
 			if (!existsSync(file)) return null;
 			if (entry === null) entry = file;
+			requireCurrentGeneration();
 			if (emitted === null || dirty) emit(this);
 			const instance = instanceOf(source);
 			if (!emitted.bySource.has(file) || (instance && !emitted.byInstance.has(instance))) return null;
+			const module = emitted.byOutput.get(outputOf(emitted, withInstance(file, instance)));
+			if (!module || module.source !== file) {
+				throw new Error(`MetaScript source and instance do not match: ${source}`);
+			}
 			return withInstance(file.replace(/\\/g, "/"), instance);
 		},
 	};
