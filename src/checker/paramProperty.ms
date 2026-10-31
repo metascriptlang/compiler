@@ -1,9 +1,10 @@
 import { Node, NodeKind, NodeFlag, createNodeAt, PropertyDeclData, ConstructorDeclData } from "../ast/node";
 import { cloneNodeForCheck } from "../monomorphize/clone";
+import { isCtorSignature } from "./ctorRoutine";
 
 function constructorOf(body: Node[]): Node | null {
 	for (const m of body) {
-		if (m.kind == NodeKind.ConstructorDecl) return m;
+		if (m.kind == NodeKind.ConstructorDecl && !isCtorSignature(m)) return m;
 	}
 	return null;
 }
