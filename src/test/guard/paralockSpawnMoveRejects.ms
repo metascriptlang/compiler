@@ -109,6 +109,11 @@ function moveParam(c: Counter): int32 {
 	return await f;
 }
 
+function moveSinkParam(sink c: Counter): int32 {
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+	return await f;
+}
+
 // 10 — rebound from a shared value inside a loop that moves again.
 function loopRebind(): int32 {
 	const reg: Reg = { cur: { n: 0 } };
