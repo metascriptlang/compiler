@@ -6,6 +6,7 @@ export interface WasmmixSpec {
 	hasStdout: boolean;
 	foreignStdout: string[];
 	mixedError: string;
+	slots: boolean;
 	unknown: string[];
 }
 
@@ -16,7 +17,7 @@ function directiveValue(line: string, key: string): string {
 }
 
 export function parseSpec(src: string): WasmmixSpec {
-	const spec: WasmmixSpec = { stdout: [], hasStdout: false, foreignStdout: [], mixedError: "", unknown: [] };
+	const spec: WasmmixSpec = { stdout: [], hasStdout: false, foreignStdout: [], mixedError: "", slots: false, unknown: [] };
 	for (const line of src.split("\n")) {
 		const t = line.trim();
 		if (t != "" && t.indexOf("//") != 0) { break; }
@@ -27,6 +28,8 @@ export function parseSpec(src: string): WasmmixSpec {
 			spec.foreignStdout.push(directiveValue(t, "@foreign-stdout"));
 		} else if (t.indexOf("// @mixed-error:") == 0) {
 			spec.mixedError = directiveValue(t, "@mixed-error");
+		} else if (t == "// @slots") {
+			spec.slots = true;
 		} else if (t.indexOf("// @") == 0) {
 			spec.unknown.push(t);
 		}
@@ -78,4 +81,11 @@ test "parseSpec collects @foreign-stdout apart from @stdout" {
 	assert s.foreignStdout.length == 2;
 	assert s.foreignStdout[0] == "a: b";
 	assert s.unknown.length == 0;
+}
+
+test "parseSpec reads @slots" {
+	const s = parseSpec("// @slots\n// @stdout: 1\nx");
+	assert s.slots;
+	assert s.unknown.length == 0;
+	assert !parseSpec("// @stdout: 1\nx").slots;
 }

@@ -50,18 +50,24 @@ function fromWire(kind: BoundaryKind, expr: string): string {
 	return own == wire ? expr : `(${expr} as ${own})`;
 }
 
+function wireNames(i: int32, letter: string): string[] {
+	if (letter == "s" || letter == "p") return [`a${i}p`, `a${i}l`];
+	return [`a${i}`];
+}
+
 function importLines(name: string, letters: string, result: string, withId: boolean): string[] {
 	const cParams: string[] = withId ? ["int32_t id"] : [];
 	const msParams: string[] = withId ? ["id: int32"] : [];
 	for (let i = 0; i < letters.length; i += 1) {
 		const l = letters.slice(i, i + 1);
-		if (l == "s" || l == "p") {
-			cParams.push(`uint32_t a${i}p, int32_t a${i}l`);
-			msParams.push(`a${i}p: uint32, a${i}l: int32`);
+		const names = wireNames(i, l);
+		if (names.length == 2) {
+			cParams.push(`uint32_t ${names[0]}, int32_t ${names[1]}`);
+			msParams.push(`${names[0]}: uint32, ${names[1]}: int32`);
 			continue;
 		}
-		cParams.push(`${wireCType(l)} a${i}`);
-		msParams.push(`a${i}: ${wireMsType(l)}`);
+		cParams.push(`${wireCType(l)} ${names[0]}`);
+		msParams.push(`${names[0]}: ${wireMsType(l)}`);
 	}
 	const attr = `__attribute__((import_module(\\"env\\"), import_name(\\"${name}\\")))`;
 	return [
@@ -73,6 +79,15 @@ function importLines(name: string, letters: string, result: string, withId: bool
 function callbackLines(cb: BoundaryCallback): string[] {
 	if (cb.result == BoundaryKind.String || cb.result == BoundaryKind.Span) unwiredKind(cb.result, "callback result letter");
 	return importLines("msb_cb_" + cb.signature, cb.signature.slice(2), cb.signature.slice(0, 1), true);
+}
+
+function callbackImportJs(signature: string): string {
+	const letters = signature.slice(2);
+	const wire: string[] = [];
+	for (let i = 0; i < letters.length; i += 1) {
+		for (const n of wireNames(i, letters.slice(i, i + 1))) wire.push(n);
+	}
+	return guardedImportJs(`msb_cb_${signature}`, ["id", ...wire], `${REGISTRY}.cb(id)(${wire.join(", ")})`);
 }
 
 function leafLetters(leaves: BoundaryLeaf[]): string {
@@ -298,7 +313,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let jsLibrary = "";
 	if (signatures.length > 0 || resultImports.length > 0) {
 		const entries: string[] = [];
-		for (const s of signatures) entries.push(guardedImportJs(`msb_cb_${s}`, ["id", "...a"], `${REGISTRY}.cb(id, ...a)`));
+		for (const s of signatures) entries.push(callbackImportJs(s));
 		for (const name of resultImports) entries.push(guardedImportJs(name, ["...a"], `${REGISTRY}.takes.pop()(...a)`));
 		const first = signatures.length > 0 ? "msb_cb_" + signatures[0] : resultImports[0];
 		entries.push(`\t${first}__postset: "if (!${REGISTRY}) throw new Error('msb registry missing: pass { msb } to the wasm module factory');",`);

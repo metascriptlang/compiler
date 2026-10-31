@@ -479,21 +479,43 @@ function scratchLines(used: boolean): string[] {
 	];
 }
 
+const SLOT_BITS: int32 = 16;
+const SLOT_CAP: int32 = 1 << SLOT_BITS;
+const SLOT_MASK: int32 = SLOT_CAP - 1;
+const GEN_MASK: int32 = (1 << (31 - SLOT_BITS)) - 1;
+
 function preludeFor(wasmModuleUrl: string, options: JsBindingOptions, scratch: boolean): string {
 	return [
 		"const __msb = (() => {",
-		"\tconst live = new Map();",
-		"\tlet next = 0;",
+		"\tconst vals = [];",
+		"\tconst gens = [];",
+		"\tconst free = [];",
 		"\tlet dead = false;",
 		"\tlet cause;",
 		"\treturn {",
-		"\t\tpush(f) { const id = next; next = (next + 1) | 0; live.set(id, f); return id; },",
-		"\t\tpop(id) { live.delete(id); },",
+		"\t\tpush(f) {",
+		"\t\t\tlet s = free.pop();",
+		"\t\t\tif (s === undefined) {",
+		`\t\t\t\tif (vals.length >= ${SLOT_CAP}) throw new RangeError("boundary table full: ${SLOT_CAP} live entries");`,
+		"\t\t\t\ts = vals.length;",
+		"\t\t\t\tvals.push(undefined);",
+		"\t\t\t\tgens.push(0);",
+		"\t\t\t}",
+		"\t\t\tvals[s] = f;",
+		`\t\t\treturn (gens[s] << ${SLOT_BITS}) | s;`,
+		"\t\t},",
+		"\t\tpop(id) {",
+		`\t\t\tconst s = id & ${SLOT_MASK};`,
+		`\t\t\tif (vals[s] === undefined || gens[s] !== id >>> ${SLOT_BITS}) throw new Error("boundary entry released twice");`,
+		"\t\t\tvals[s] = undefined;",
+		`\t\t\tgens[s] = (gens[s] + 1) & ${GEN_MASK};`,
+		"\t\t\tfree.push(s);",
+		"\t\t},",
 		"\t\ttakes: [],",
-		"\t\tcb(id, ...a) {",
-		"\t\t\tconst f = live.get(id);",
-		"\t\t\tif (f === undefined) throw new Error(\"callback used after its call returned\");",
-		"\t\t\treturn f(...a);",
+		"\t\tcb(id) {",
+		`\t\t\tconst s = id & ${SLOT_MASK};`,
+		`\t\t\tif (vals[s] === undefined || gens[s] !== id >>> ${SLOT_BITS}) throw new Error("callback used after its call returned");`,
+		"\t\t\treturn vals[s];",
 		"\t\t},",
 		"\t\tenter() { if (dead) throw new Error(\"the wasm half cannot run again: a JS exception crossed its frames\", { cause }); },",
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
