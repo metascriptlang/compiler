@@ -44,7 +44,7 @@ import {
 	getCancelVersion, requestCancel, resetCancel
 } from "./cancel";
 
-import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
+import { parseSource } from "../../parser/statements/validation";
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
@@ -61,7 +61,7 @@ import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { ExportRegistry, ExportedSymInfo, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports, buildExportInfo } from "../../checker/context";
-import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
+import { collectTopLevel } from "../../checker/collectPass";
 import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -120,24 +120,6 @@ export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 export function dbEnsurePrelude(db: TransAmDb): void {
 	if (db.preludeCtx == null && db.stdPath.length > 0) {
 		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
-		// Pre-register exports from top-level std modules (e.g., std/build.ms)
-		// so auto-import suggestions work even without explicit imports.
-		preRegisterStdModule(db, db.stdPath + "/build/index.ms", "std/build");
-	}
-}
-
-// Parse a single file and register its exports into the registry.
-function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
-	const read = readStdFile(filePath);
-	if (!read.ok) throw new Error(`internal: std module ${filePath} cannot be read`);
-	const pr = parseSourceLenient(read.value);
-	if (!pr.ok) throw new Error(`internal: std module ${filePath} does not parse`);
-	const tmpCtx = createTempCollectContext(filePath);
-	collectTopLevelLocal(tmpCtx, pr.value);
-	resolveDeclarations(tmpCtx, pr.value);
-	const exports = checkedByPrelude(db, filePath, collectExports(tmpCtx, filePath));
-	if (exports.length > 0) {
-		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
 }
 
@@ -2919,6 +2901,7 @@ test "a module created after an import found none is seen by its importer's next
 	dbSetFileText(db, "/miss/a.ms", 'import { x } from "./b";\nexport const y = x;\n');
 	assert dbTypeCheck(db, "/miss/a.ms").errors.length > 0;
 	dbSetFileText(db, "/miss/b.ms", "export const x = 1;");
+	dbRecordDepImports(db, "/miss/a.ms", dbParse(db, "/miss/a.ms"));
 	const errors = dbTypeCheck(db, "/miss/a.ms").errors;
 	assert errors.length == 0, errors[0].message;
 }
@@ -2927,8 +2910,10 @@ test "a module created at a higher-priority path than the one an import resolved
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/prio/a/index.ms", "export const v: int32 = 1;");
 	dbSetFileText(db, "/prio/use.ms", 'import { v } from "./a";\nexport const w: int32 = v;\n');
+	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
 	assert dbTypeCheck(db, "/prio/use.ms").errors.length == 0;
 	dbSetFileText(db, "/prio/a.ms", 'export const v: string = "s";');
+	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
 	assert dbTypeCheck(db, "/prio/use.ms").errors.length > 0;
 }
 
@@ -3033,16 +3018,13 @@ test "an empty file on disk is a module an import resolves to" {
 	assert resolved == dir + "/empty.ms", resolved;
 }
 
-test "a std module the prelude pre-registers that cannot be read fails loud" {
-	const db = createTransAmDb(100);
-	let message = "";
-	try { preRegisterStdModule(db, "/nowhere/std/build/index.ms", "std/build"); } catch (e) { message = (e as Error).message; }
-	assert message == "internal: std module /nowhere/std/build/index.ms cannot be read", message;
-}
-
-test "the prelude pre-registers the exports of std/build" {
+test "building the prelude registers no module exports" {
 	const db = createTransAmDb(100);
 	dbSetStdPath(db, resolveRuntimeDir() + "/std");
 	dbEnsurePrelude(db);
-	assert findModuleExports(db.exportRegistry, db.stdPath + "/build/index.ms") != null;
+	const prelude = db.preludeCtx;
+	assert prelude != null;
+	assert db.exportRegistry.entries.length == 0;
+	dbEnsurePrelude(db);
+	assert db.preludeCtx == prelude;
 }
