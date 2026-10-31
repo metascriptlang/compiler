@@ -312,6 +312,14 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
 }
 
+// The env of a Sendable closure is counted by the binding that holds it, so a copy sent to an actor would be counted on two
+// threads with plain rc: the crossing is the binding's last use, as a move is.
+function consumeSentClosure(ctx: CheckerContext, ident: Node): void {
+	const sym = ident.resolvedSym;
+	if (sym == null || (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter)) return;
+	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
@@ -319,6 +327,7 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	if (t == null) return false;
 	const sent = peelView(argNode);
 	if (sent.kind == NodeKind.MoveExpr) recordActorMove(ctx, sent);
+	else if (sent.kind == NodeKind.Identifier && isSendableFunction(t)) consumeSentClosure(ctx, sent);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& sent.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
@@ -1451,14 +1460,48 @@ export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	}
 	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr) {
 		checkClosureCaptures(ctx, source, "a Sendable function");
+		markSendableReach(ctx, source);
 		return ctx.errors.length == mark;
 	}
 	const sym = source.kind == NodeKind.Identifier ? source.resolvedSym : null;
-	if (sym != null && judgedAtDeclaration(ctx, sym)) return ctx.errors.length == mark;
+	if (sym != null && judgedAtDeclaration(ctx, sym)) {
+		markSendableBinding(ctx, sym);
+		return ctx.errors.length == mark;
+	}
 	const name = describeExpr(source);
 	addError(ctx, `'${name}' is a plain function value that may capture mutable state, so it does not convert to Sendable<F> — pass a function declaration or a closure, or declare '${name}' as Sendable<F>`,
 		expr.location.line, expr.location.column);
 	return false;
+}
+
+function localClosureOf(ctx: CheckerContext, bindingSym: Symbol): Node | null {
+	const sym = aliasTarget(bindingSym);
+	if (sym == null || isModuleScoped(ctx, sym)) return null;
+	const bound = constBindingInitializer(sym);
+	const declared = sym.symbolKind == SymbolKind.Function ? sym.declNode : bound != null ? peelHidden(bound) : null;
+	if (declared != null && (declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr)) return declared;
+	return null;
+}
+
+// A closure converted to Sendable<F> owns an env that holds copies of its captures, and so does every local closure
+// its body reaches, because a shared env counted on two threads with plain rc is a data race.
+function markSendableReach(ctx: CheckerContext, closure: Node): void {
+	if (closure.flags.has(NodeFlag.SendableClosure)) return;
+	closure.flags = closure.flags.incl(NodeFlag.SendableClosure);
+	markReachedClosures(ctx, closure);
+}
+
+function markReachedClosures(ctx: CheckerContext, node: Node): void {
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
+		const reached = localClosureOf(ctx, node.resolvedSym);
+		if (reached != null) markSendableReach(ctx, reached);
+	}
+	forEachChild(node, (child: Node): void => { markReachedClosures(ctx, child); });
+}
+
+function markSendableBinding(ctx: CheckerContext, bindingSym: Symbol): void {
+	const declared = localClosureOf(ctx, bindingSym);
+	if (declared != null) markSendableReach(ctx, declared);
 }
 
 function judgedAtDeclaration(ctx: CheckerContext, bindingSym: Symbol, by: string = "a Sendable function", via: Node[] = []): boolean {

@@ -351,6 +351,7 @@ export enum NodeFlag {
 	TemplateStep,  // parser: this `+` is one step of a template literal; its right operand converts to text with the string hint
 	DefaultAwaitsInstance, // checker: a filled default whose formal is still generic; the instantiation fits it to the instance's type
 	ParamProperty, // checker: this class field was declared by a constructor parameter written with `public`, `private`, `protected` or `readonly`
+	SendableClosure, // checker: this closure is converted to Sendable<F>, so lambda lifting gives it an env of its own that holds copies of its captures
 }
 
 // ===== Node Kind Enum =====

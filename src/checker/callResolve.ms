@@ -2903,7 +2903,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const sendableArg = fitSendable(ctx, args[pi], paramType, argTypes[pi]);
+			const sendableArg = fitSendable(ctx, args[pi], peelSink(paramType), argTypes[pi]);
 			if (sendableArg != null) argTypes[pi] = sendableArg;
 			if (!hasGenericParams(paramType)) {
 				const ownedArg = fitOwnership(ctx, args[pi], peelSink(paramType), argTypes[pi]);
