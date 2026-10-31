@@ -767,18 +767,24 @@ export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	return breaksPatternProperties(d) ? docGroupBreak(parts) : docGroup(parts);
 }
 
+function sameStart(a: Node, b: Node): boolean {
+	return a.location != null && b.location != null && a.location.line == b.location.line && a.location.column == b.location.column;
+}
+
 export function printObjectPatternProp(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectPatternPropData;
-	// Shorthand `{ x }` when alias is an identifier with the same name.
-	if (d.propAlias != null && d.propAlias.kind == NodeKind.Identifier) {
+	const written = node.location != null ? rawObjectKeyAt(options.source, node.location.line, node.location.column, options.singleQuote) : "";
+	const key = written != "" ? written : d.propKey;
+	// Shorthand `{ x }` only where the source wrote it: the alias is the key's own token.
+	if (written == "" && d.propAlias != null && d.propAlias.kind == NodeKind.Identifier && sameStart(d.propAlias, node)) {
 		const aliasName = (d.propAlias.data as IdentifierData).name;
 		if (aliasName == d.propKey) {
 			if (d.propDefault != null) return docGroup([docText(d.propKey + " = "), callPrintNode(d.propDefault, options)]);
 			return docText(d.propKey);
 		}
 	}
-	if (d.propDefault != null) return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options), docText(" = "), callPrintNode(d.propDefault, options)]);
-	return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options)]);
+	if (d.propDefault != null) return docGroup([docText(key + ": "), callPrintNode(d.propAlias, options), docText(" = "), callPrintNode(d.propDefault, options)]);
+	return docGroup([docText(key + ": "), callPrintNode(d.propAlias, options)]);
 }
 
 export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
