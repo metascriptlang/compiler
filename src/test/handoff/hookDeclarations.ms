@@ -1,9 +1,10 @@
 import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, compileToC, compileToJS, MapEntry } from "../helpers";
 import { checkSource } from "./helpers";
 import { Severity } from "../../checker/context";
-import { lookupInstanceHook, declaresUserHook } from "../../checker/instantiate";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
-import { AttachedOp } from "../../ast/node";
+import { hasAsgnFlag } from "../../checker/types";
+import { AttachedOp, Type } from "../../ast/node";
 
 const hooks = ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace", "onClone"];
 
@@ -289,6 +290,10 @@ test "hook declarations: an instance hook declared before the generic one is the
 	assert generic != null && generic.instantiatedFrom != null && generic.instantiatedFrom!.location.line == 3, "Box<string> does not take the generic hook";
 }
 
+function managedAsClassified(t: Type): boolean {
+	return hasAsgnFlag(t) || (t.typeReturn != null && hasAsgnFlag(t.typeReturn!));
+}
+
 test "hook declarations: a generic hook declared after an instance is seen still reaches that instance" {
 	const ctx = checkSource("struct Box<T> { v: T; }\n"
 		+ "struct Holder { b: Box<int32>; }\n"
@@ -300,7 +305,7 @@ test "hook declarations: a generic hook declared after an instance is seen still
 	assert ctx != null && ctx.errors.length == 0;
 	const early = lookupSymbol(ctx.table, "use")!.symbolType.typeChildren[0];
 	assert lookupInstanceHook(early, AttachedOp.AttachedDestructor) != null, "Box<int32> seen before the hook never takes it";
-	assert declaresUserHook(early), "Box<int32> seen before the hook is not managed";
+	assert managedAsClassified(early), "Box<int32> seen before the hook is not managed";
 	const bag = lookupSymbol(ctx.table, "keep")!.symbolType.typeChildren[0];
 	assert lookupInstanceHook(bag, AttachedOp.AttachedDestructor) != null, "Bag<int32> seen before the hook never takes it";
 }
