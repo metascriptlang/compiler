@@ -3291,6 +3291,17 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
 
+const constBlobMinElements = 64;
+
+function isNumericLiteralList(node: Readonly<Node>, d: Readonly<ArrayLiteralData>): boolean {
+	const t = node.nodeType;
+	if (t == null || !isNumeric(t.typeReturn)) return false;
+	for (const e of d.elements) {
+		if (e.kind != NodeKind.NumberLiteral) return false;
+	}
+	return true;
+}
+
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const d = node.data as ArrayLiteralData;
 
@@ -3335,6 +3346,12 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
 	}
 	const slots = isSizedArray ? `${tmpName}.data` : `${tmpName}.p->data`;
+	if (d.elements.length >= constBlobMinElements && isNumericLiteralList(node, d)) {
+		const items: string[] = [];
+		for (const e of d.elements) items.push(genExpr(g, p, e));
+		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${items.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
+		return tmpName;
+	}
 	let i = 0;
 	while (i < d.elements.length) {
 		emitStmtsLine(p, `${slots}[${i}] = ${genExpr(g, p, d.elements[i])};`);
