@@ -1,0 +1,174 @@
+@include("errno.h");
+
+import { dirname, realpath, resolve } from "std/fs";
+import { cwd } from "std/process";
+import { IoError, IoErrorKind, ioError, ioErrorFromErrno } from "std/io/errors";
+
+extern const EINVAL: int32;
+
+when (windows) {
+	@include("windows.h");
+	@include("runtime/fs/header.h");
+	import { freeWide, widePath } from "std/fs/widePath";
+
+	extern const FILE_SHARE_READ: uint32;
+	extern const FILE_SHARE_WRITE: uint32;
+	extern const FILE_SHARE_DELETE: uint32;
+	extern const OPEN_EXISTING: uint32;
+	extern const FILE_FLAG_BACKUP_SEMANTICS: uint32;
+	extern const INVALID_HANDLE_VALUE: Ptr<void>;
+	extern function GetLastError(): uint32;
+	extern function CloseHandle(handle: Ptr<void>): int32;
+	extern function msFsErrnoFromWin32(code: uint32): int32;
+	extern function CreateFileW(
+		path: Ptr<uint16>, access: uint32, share: uint32,
+		security: Ptr<void> | null, disposition: uint32, flags: uint32,
+		template: Ptr<void> | null,
+	): Ptr<void>;
+	extern struct FileInformation from "BY_HANDLE_FILE_INFORMATION" {
+		dwVolumeSerialNumber: uint32;
+		nFileIndexHigh: uint32;
+		nFileIndexLow: uint32;
+	}
+	extern function GetFileInformationByHandle(
+		handle: Ptr<void>, ref info: FileInformation,
+	): int32;
+
+	function openMetadata(path: Ptr<uint16>): Ptr<void> {
+		return CreateFileW(path, 0,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+	}
+
+	function sameKernel(left: string, right: string): Result<boolean, IoError> {
+		const wideLeft = widePath(left);
+		const wideRight = widePath(right);
+		if (wideLeft == null || wideRight == null) {
+			freeWide(wideLeft);
+			freeWide(wideRight);
+			return Result.err(ioErrorFromErrno(EINVAL, left));
+		}
+		const a = openMetadata(wideLeft);
+		const leftError = a == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+		if (a == INVALID_HANDLE_VALUE) {
+			freeWide(wideLeft);
+			freeWide(wideRight);
+			return Result.err(ioErrorFromErrno(
+				msFsErrnoFromWin32(leftError), left));
+		}
+		const b = openMetadata(wideRight);
+		const rightError = b == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+		freeWide(wideLeft);
+		freeWide(wideRight);
+		if (b == INVALID_HANDLE_VALUE) {
+			CloseHandle(a);
+			return Result.err(ioErrorFromErrno(
+				msFsErrnoFromWin32(rightError), right));
+		}
+		let first: FileInformation = {};
+		let second: FileInformation = {};
+		let failed = false;
+		let code: uint32 = 0;
+		let path = left;
+		if (GetFileInformationByHandle(a, first) == 0) {
+			code = GetLastError();
+			failed = true;
+		} else if (GetFileInformationByHandle(b, second) == 0) {
+			code = GetLastError();
+			path = right;
+			failed = true;
+		}
+		CloseHandle(b);
+		CloseHandle(a);
+		if (failed) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(code), path));
+		}
+		const sameVolume = first.dwVolumeSerialNumber ==
+			second.dwVolumeSerialNumber;
+		return Result.ok(sameVolume &&
+			first.nFileIndexHigh == second.nFileIndexHigh &&
+			first.nFileIndexLow == second.nFileIndexLow);
+	}
+} else {
+	@include("sys/stat.h");
+	extern let errno: int32;
+	when (macos) {
+		extern struct NativeStat from "struct stat" {
+			st_dev: int32;
+			st_ino: uint64;
+		}
+	} else {
+		extern struct NativeStat from "struct stat" {
+			st_dev: uint64;
+			st_ino: uint64;
+		}
+	}
+	extern function cStat(
+		path: cstring, ref value: NativeStat,
+	): int32 from "stat";
+
+	function sameKernel(left: string, right: string): Result<boolean, IoError> {
+		let first: NativeStat = {};
+		let second: NativeStat = {};
+		if (cStat(left as cstring, first) != 0) {
+			const code = errno;
+			return Result.err(ioErrorFromErrno(code, left));
+		}
+		if (cStat(right as cstring, second) != 0) {
+			const code = errno;
+			return Result.err(ioErrorFromErrno(code, right));
+		}
+		return Result.ok(first.st_dev == second.st_dev &&
+			first.st_ino == second.st_ino);
+	}
+}
+
+export function samePhysicalFile(
+	left: string, right: string,
+): Result<boolean, IoError> {
+	if (left.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, left));
+	}
+	if (right.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, right));
+	}
+	return sameKernel(left, right);
+}
+
+function absent(error: IoError): boolean {
+	return error.kind == IoErrorKind.NotFound ||
+		error.kind == IoErrorKind.NotDirectory;
+}
+
+export function containsExistingRoot(
+	root: string, child: string,
+): Result<boolean, IoError> {
+	const valid = samePhysicalFile(root, root);
+	if (!valid.ok) { return Result.err(valid.error); }
+	if (child.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, child));
+	}
+	let at = resolve(child, cwd());
+	while (true) {
+		const present = samePhysicalFile(at, at);
+		if (present.ok) { break; }
+		if (!absent(present.error)) { return Result.err(present.error); }
+		const parent = dirname(at);
+		if (parent == at) { return Result.err(present.error); }
+		at = parent;
+	}
+	const physical = realpath(at);
+	if (physical == "") {
+		return Result.err(ioError(IoErrorKind.Unknown, at,
+			"cannot resolve physical path: " + at));
+	}
+	at = physical;
+	while (true) {
+		const found = samePhysicalFile(root, at);
+		if (!found.ok) { return Result.err(found.error); }
+		if (found.value) { return Result.ok(true); }
+		const parent = dirname(at);
+		if (parent == at) { return Result.ok(false); }
+		at = parent;
+	}
+}
