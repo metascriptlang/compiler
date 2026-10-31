@@ -155,7 +155,20 @@ return neg ? -v : v;`);
 	unreachable;
 }
 
+function nativeParseInt(s: string): number {
+	@emit(`var n = Number.parseInt(${s});
+	return n !== n ? 0 : n;`);
+	unreachable;
+}
+
+function safeIntegerToBigInt(n: number): int64 {
+	@emit(`return BigInt(${n});`);
+	unreachable;
+}
+
 export function parseInt(this s: string): int64 {
+	const n = nativeParseInt(s);
+	if (n >= -9007199254740991.0 && n <= 9007199254740991.0) return safeIntegerToBigInt(n);
 	const text = intPrefix(s);
 	if (text == "") return 0;
 	const v = intPrefixValue(text);
