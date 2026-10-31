@@ -4,7 +4,7 @@
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
-import { isAssignable, sameNominal } from "./compat";
+import { isAssignable, sameNominal, sameType } from "./compat";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -687,6 +687,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
 	if (dropEnumMembersOfPresentEnums(seen) && seen.length == 1) return seen[0];
+	if (dropBrandsOfPresentBases(seen) && seen.length == 1) return seen[0];
 	if (onlyViewsAndNull(seen)) return createReadonlyView(buildUnion(seen.map((m: Type): Type => withoutReadonlyView(m)), canonical));
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
@@ -801,6 +802,29 @@ function dropEnumMembersOfPresentEnums(members: Type[]): boolean {
 	const dropped = kept < members.length;
 	members.shrink(kept);
 	return dropped;
+}
+
+// A brand is the same value as its base (no run-time test tells them apart), so `Buffer | uint8[]` holds one
+// kind of value and is `uint8[]`; keeping both would give two slots of one representation.
+function dropBrandsOfPresentBases(members: Type[]): boolean {
+	let kept = 0;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		const base = brandBase(m);
+		if (base != null && holdsType(members, base)) continue;
+		members[kept] = m;
+		kept += 1;
+	}
+	const dropped = kept < members.length;
+	members.shrink(kept);
+	return dropped;
+}
+
+function holdsType(members: Type[], t: Type): boolean {
+	for (const m of members) {
+		if (sameType(m, t)) return true;
+	}
+	return false;
 }
 
 function extendsDeclaredSum(types: Type[]): boolean {
