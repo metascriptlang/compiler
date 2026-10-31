@@ -12,6 +12,10 @@
 // @stdout: rfc7914 55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783
 // @stdout: hkdf algorithm: unsupported algorithm "sha999"
 // @stdout: hkdf length 0: length must be at least 1
+// @stdout: hkdf sha256 8160: ok
+// @stdout: hkdf sha256 8161: length must be at most 8160 for sha256
+// @stdout: hkdf sha512 16320: ok
+// @stdout: hkdf sha512 16321: length must be at most 16320 for sha512
 // @stdout: hkdf rfc5869 1 3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865
 // @stdout: hkdf rfc5869 3 8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8
 // @exit: 0
@@ -45,5 +49,9 @@ hex("rfc7914", pbkdf2("passwd", "salt", 1, 64, "sha256"));
 const ikm = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
 show("hkdf algorithm", hkdf("sha999", ikm, "", "", 42));
 show("hkdf length 0", hkdf("sha256", ikm, "", "", 0));
+show("hkdf sha256 8160", hkdf("sha256", ikm, "", "", 8160));
+show("hkdf sha256 8161", hkdf("sha256", ikm, "", "", 8161));
+show("hkdf sha512 16320", hkdf("sha512", ikm, "", "", 16320));
+show("hkdf sha512 16321", hkdf("sha512", ikm, "", "", 16321));
 hex("hkdf rfc5869 1", hkdf("sha256", ikm, fromHex("000102030405060708090a0b0c"), fromHex("f0f1f2f3f4f5f6f7f8f9"), 42));
 hex("hkdf rfc5869 3", hkdf("sha256", ikm, "", "", 42));

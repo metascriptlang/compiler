@@ -1,16 +1,17 @@
 // randomInt(min, max) draws an integer in [min, max): a result of -1 is a value, not a failure, every value of the
-// range turns up, and a bad bound is an error that names it (non-integer, NaN, infinite, empty range, range over 2^48).
+// range turns up, and a bad bound is an error that names it (non-integer, NaN, infinite, empty range, range of 2^48 or more).
 //
 // @stdout: minus one 200 all true
 // @stdout: -3..3 errors 0 seen 6 inRange true
-// @stdout: 2^48 span ok true
+// @stdout: 2^48-1 span ok true
 // @stdout: bad 0.5: min must be a safe integer
 // @stdout: bad NaN: min must be a safe integer
 // @stdout: bad inf: max must be a safe integer
 // @stdout: bad 2^53: max must be a safe integer
 // @stdout: bad equal: max must be greater than min
 // @stdout: bad reversed: max must be greater than min
-// @stdout: bad 2^48+1: max - min must be at most 2^48
+// @stdout: bad 2^48: max - min must be less than 2^48
+// @stdout: bad 2^48+1: max - min must be less than 2^48
 // @exit: 0
 // @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
@@ -38,8 +39,8 @@ for (let i = 0; i < 2000; i++) {
 }
 console.log(`-3..3 errors ${errors} seen ${seen.size} inRange ${inRange}`);
 
-const wide = randomInt(0, 281474976710656);
-console.log(`2^48 span ok ${wide.ok && wide.value >= 0 && wide.value < 281474976710656}`);
+const wide = randomInt(0, 281474976710655);
+console.log(`2^48-1 span ok ${wide.ok && wide.value >= 0 && wide.value < 281474976710655}`);
 
 function bad(label: string, min: number, max: number): void {
 	const r = randomInt(min, max);
@@ -52,4 +53,5 @@ bad("inf", 0, Infinity);
 bad("2^53", 0, 9007199254740992);
 bad("equal", 5, 5);
 bad("reversed", 5, 2);
+bad("2^48", 0, 281474976710656);
 bad("2^48+1", 0, 281474976710657);
