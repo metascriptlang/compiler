@@ -30,7 +30,7 @@ import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, look
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
+import { locBefore, checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -4252,6 +4252,7 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 	if (!stmts.some((s: Node): boolean => declaresSignature(unwrapDecl(s)))) return;
 	const keys: string[] = [];
 	const groups = new HashMap<string, Symbol[]>();
+	const written = new HashMap<string, Node[]>();
 	for (const stmt of stmts) {
 		const decl = unwrapDecl(stmt)!;
 		const key = overloadGroupKey(decl);
@@ -4259,8 +4260,10 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 		if (!groups.has(key)) {
 			keys.push(key);
 			groups.set(key, []);
+			written.set(key, []);
 		}
 		groups.get(key)!.push(decl.resolvedSym);
+		written.get(key)!.push(stmt);
 	}
 	for (const key of keys) {
 		const members = groups.get(key)!;
@@ -4268,6 +4271,7 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 		const impls = members.filter((m: Symbol): boolean => !hasFlag(m, SymbolFlag.OverloadSig));
 		if (refuseDisagreeingOverload(ctx, members, impls.length == 1 ? impls[0] : members[0])) continue;
 		const isCtor = key == "constructor";
+		if (refuseScatteredDeclaration(ctx, members, written.get(key)!, stmts, isCtor, impls.length > 0)) continue;
 		if (impls.length == 0 && !isCtor) refuseMissingImplementation(ctx, members, null);
 		if (impls.length > 1 && !isCtor) refuseSecondImplementation(ctx, members, impls[1]);
 		if (impls.length != 1) continue;
@@ -4291,6 +4295,37 @@ function refuseDisagreeingOverload(ctx: CheckerContext, members: Symbol[], canon
 		return true;
 	}
 	return false;
+}
+
+// The declarations of a set are written one after another, with the implementation last,
+// because a reader takes the body that follows the signatures as theirs.
+function refuseScatteredDeclaration(ctx: CheckerContext, members: Symbol[], written: Node[], stmts: Node[], isCtor: boolean, implemented: boolean): boolean {
+	let bodySeen = false;
+	for (let i = 0; i < members.length; i += 1) {
+		const body = !hasFlag(members[i], SymbolFlag.OverloadSig);
+		if (i > 0 && !(body && bodySeen) && writtenBetween(stmts, written[i - 1], written[i])) {
+			refuseUnfollowedDeclaration(ctx, members, members[i - 1], isCtor);
+			return true;
+		}
+		if (body) bodySeen = true;
+	}
+	const last = members[members.length - 1];
+	if (!implemented || !hasFlag(last, SymbolFlag.OverloadSig) || last.declNode.flags.has(NodeFlag.Abstract)) return false;
+	refuseUnfollowedDeclaration(ctx, members, last, isCtor);
+	return true;
+}
+
+function writtenBetween(stmts: Node[], before: Node, after: Node): boolean {
+	return stmts.some((s: Node): boolean => locBefore(before.location, s.location) && locBefore(s.location, after.location));
+}
+
+function refuseUnfollowedDeclaration(ctx: CheckerContext, members: Symbol[], declared: Symbol, isCtor: boolean): void {
+	rejectOverloadSet(members);
+	const at = declaredAt(declared);
+	const message = declared.declNode.flags.has(NodeFlag.Abstract) ? `All declarations of the abstract method '${writtenName(declared)}' must be consecutive`
+		: isCtor ? "Constructor implementation is missing or not immediately following the declaration"
+		: `Function implementation of '${writtenName(declared)}' is missing or not immediately following the declaration`;
+	addError(ctx, message, at.line, at.column);
 }
 
 function methodIsStatic(sym: Symbol): boolean {

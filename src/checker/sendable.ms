@@ -1795,7 +1795,7 @@ function rootName(n: Node): string {
 	return "";
 }
 
-function locBefore(a: SourceLocation, b: SourceLocation): boolean {
+export function locBefore(a: SourceLocation, b: SourceLocation): boolean {
 	return a.line < b.line || (a.line == b.line && a.column < b.column);
 }
 
