@@ -511,16 +511,16 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 	size_t okm_offset = 0;
 	uint8_t counter = 1;
 	int ret = 0;
+	size_t input_cap = hash_size + info_len + 1;
+	uint8_t stack_input[256];
+	uint8_t* input = input_cap <= sizeof(stack_input) ? stack_input : (uint8_t*)msMemAlloc(input_cap);
 	while (okm_offset < length) {
 		size_t input_len = T_len + info_len + 1;
-		uint8_t* input = (uint8_t*)msMemAlloc(input_len);
 		size_t pos = 0;
 		if (T_len > 0) { memcpy(input + pos, T, T_len); pos += T_len; }
 		if (info_len > 0) { memcpy(input + pos, info, info_len); pos += info_len; }
 		input[pos] = counter;
 		ret = mbedtls_md_hmac(md_info, prk, prk_len, input, input_len, T);
-		mbedtls_platform_zeroize(input, input_len);
-		free(input);
 		if (ret != 0) break;
 		T_len = hash_size;
 		size_t copy_len = length - okm_offset;
@@ -529,6 +529,8 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 		okm_offset += copy_len;
 		counter++;
 	}
+	mbedtls_platform_zeroize(input, input_cap);
+	if (input != stack_input) free(input);
 	msString result = ret == 0 ? msStringNew((const char*)okm, (int64_t)length) : MS_EMPTY_STRING;
 	mbedtls_platform_zeroize(T, sizeof(T));
 	mbedtls_platform_zeroize(okm, length);
