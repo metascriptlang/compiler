@@ -3301,7 +3301,7 @@ resetLiftedOps();
 		if (created == null) continue;
 		for (const instNode of created) {
 			routeOrder.push(instNode);
-			homes.set(instNode, modPath);
+			if (!opts.isHcr || reloadable.includes(modPath)) homes.set(instNode, modPath);
 		}
 	}
 	retainCheckedInstances(checkedModCtxs(checkedMods));
