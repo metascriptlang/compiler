@@ -4232,6 +4232,12 @@ function refuseMissingImplementation(ctx: CheckerContext, members: Symbol[], cal
 	addError(ctx, `Overloaded function '${writtenName(last)}' has no implementation — at least one definition must have a body`, at.line, at.column);
 }
 
+function refuseSecondImplementation(ctx: CheckerContext, members: Symbol[], second: Symbol): void {
+	rejectOverloadSet(members);
+	const at = declaredAt(second);
+	addError(ctx, `Overloaded function '${writtenName(second)}' has more than one implementation: only one definition may have a body`, at.line, at.column);
+}
+
 // Checks each signature set of a module or class body at its declarations, so a set no call
 // reaches is checked too.
 export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
@@ -4254,6 +4260,7 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 		const impls = members.filter((m: Symbol): boolean => !hasFlag(m, SymbolFlag.OverloadSig));
 		const isCtor = key == "constructor";
 		if (impls.length == 0 && !isCtor) refuseMissingImplementation(ctx, members, null);
+		if (impls.length > 1 && !isCtor) refuseSecondImplementation(ctx, members, impls[1]);
 		if (impls.length != 1) continue;
 		const instanceMethod = impls[0].declNode.kind == NodeKind.MethodDecl && !(impls[0].declNode.data as MethodDeclData).methodIsStatic;
 		validateOverloadSigs(ctx, members, impls[0], isCtor || instanceMethod ? 1 : 0);
