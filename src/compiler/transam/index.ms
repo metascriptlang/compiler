@@ -1296,8 +1296,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 
 	// Fresh parse for transform — checker already mutated its own copy
 	// (enum MemberExpr → Identifier), and transforms also mutate the AST.
-	const analyzeSrc = getFileText(db.fileInput, fileId);
-	const analyzeParse = parseSource(analyzeSrc);
+	const analyzeParse = parseSource(dbPreprocess(db, filePath));
 	const program = analyzeParse.ok ? analyzeParse.value : null as unknown as Node;
 	if (program == null) return null as unknown as Node;
 
@@ -1329,8 +1328,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	if (checkerCtx == null) return null as unknown as Node;
 
 	// Fresh parse — checker mutates AST, transforms also mutate
-	const txSrc = getFileText(db.fileInput, fileId);
-	const txParse = parseSource(txSrc);
+	const txParse = parseSource(dbPreprocess(db, filePath));
 	const program = txParse.ok ? txParse.value : null as unknown as Node;
 	if (program == null) return null as unknown as Node;
 
@@ -3008,4 +3006,20 @@ test "a transform requested after a cancelled one is made from a complete check"
 	assert dbTransform(db, path) != null;
 	assert dbTypeCheck(db, path).errors.length == 0;
 	assert dbCheckIsCurrent(db, path);
+}
+
+test "a transform and an analysis parse the preprocessed text of a header the check read" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/hp/api.h", HEADER_API);
+	assert dbTransform(db, "/hp/api.h") != null;
+	assert dbAnalyze(db, "/hp/api.h") != null;
+}
+
+test "a transform and an analysis of a graph-bound header parse the text the loader translated" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	assert dbTransform(db, "/g/api.h") != null;
+	assert dbAnalyze(db, "/g/api.h") != null;
+	assert dbAnalyze(db, "/g/main.ms") != null;
 }
