@@ -25,6 +25,12 @@
 #define MS_COMPRESS_FORMAT_ZLIB    1
 #define MS_COMPRESS_FORMAT_DEFLATE 2
 
+#define MS_INFLATE_ERR_INVALID   (-1)
+#define MS_INFLATE_ERR_TRUNCATED (-2)
+#define MS_INFLATE_ERR_CHECKSUM  (-3)
+#define MS_INFLATE_ERR_LENGTH    (-4)
+#define MS_INFLATE_ERR_TRAILING  (-5)
+
 /* ===== Streaming API ===== */
 
 /* Opaque handle; internally points to a heap-allocated context holding the
@@ -40,7 +46,7 @@ int64_t msInflateNew(int32_t format);
  * Returns:
  *    0 = input chunk fully consumed, call drain then feed next chunk
  *    1 = stream successfully ended (saw final block + trailer)
- *  < 0 = error (corrupted input, adler/crc mismatch, etc.)
+ *  < 0 = error, one of the MS_INFLATE_ERR_* codes
  *
  * `isLast` should be 1 on the final chunk of the stream, 0 otherwise.
  */
