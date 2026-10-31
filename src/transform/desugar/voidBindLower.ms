@@ -182,6 +182,13 @@ function rewriteStmt(stmt: Node, ctx: TransformContext): Node[] {
 		const e = ed.expr;
 		if (e != null && e.kind == NodeKind.BinaryExpr) {
 			const bd = e.data as BinaryExprData;
+			if (bd.operator == "=" && bd.left.kind == NodeKind.MemberExpr && isVoidTyped(bd.left)) {
+				const effects: Node[] = [];
+				const target = (bd.left.data as MemberExprData).object;
+				if (!isEffectFree(target)) effects.push(makeExprStmt(target, target.location));
+				if (!isEffectFree(bd.right)) effects.push(makeExprStmt(bd.right, bd.right.location));
+				return effects;
+			}
 			if (bd.operator == "=" && isVoidTyped(bd.right)) {
 				const rhs = bd.right;
 				bd.right = makeNull(stmt.location);
