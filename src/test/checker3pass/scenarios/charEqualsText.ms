@@ -12,6 +12,20 @@ const b = c != "a";
 const d = c === "ab";
 `;
 
+const SRC_STORED_TEXT = `
+const c = 97 as char;
+const s: string = "a" + "b";
+const a = c == s;
+const b = s != c;
+const d = c === s;
+`;
+
+const SRC_BYTE = `
+const b: uint8 = 97;
+const a = b == "a";
+const d = "a" != b;
+`;
+
 const SRC_SWITCH = `
 const c = 97 as char;
 switch (c) {
@@ -39,6 +53,17 @@ test "a char compared with a one-character string is refused as no overlap" {
 test "a char compared with a string is refused on either side and for a longer literal" {
 	const text = checkOnly(SRC_SIDES).errors.join("\n");
 	assert text.split("This comparison appears to be unintentional").length == 4, "three comparisons must fail: " + text;
+}
+
+test "a char compared with a string that is not a literal is refused on either side" {
+	const text = checkOnly(SRC_STORED_TEXT).errors.join("\n");
+	assert text.split("This comparison appears to be unintentional").length == 4, "three comparisons must fail: " + text;
+	assert text.contains("compare with its code"), "the error must name the fix: " + text;
+}
+
+test "a uint8 compared with a string is refused" {
+	const text = checkOnly(SRC_BYTE).errors.join("\n");
+	assert text.split("cannot be applied to types").length == 3, "both comparisons must fail: " + text;
 }
 
 test "a char switch with a string case is refused" {
