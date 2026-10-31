@@ -30,9 +30,9 @@ import {
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance, isReadonlyView, unionVariantHasProperty, peelToStruct, hasNullMember,
+	classAncestorInstance, isReadonlyView, peelToStruct, hasNullMember,
 } from "./types";
-import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
+import { typeRelation, TypeRelation, sameType, findVariantByEnumMember, declaresProperty } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
 import { declaredNames } from "./bindNames";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -1198,7 +1198,7 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 				else if (typeRelation(v, predicateTarget) != TypeRelation.None) appendIfUnique(kept, predicateTarget);
 			}
 			if (kept.length == 0) return t;
-			return kept.length == 1 ? kept[0] : createUnion(kept);
+			return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 		}
 		return predicateTarget;
 	}
@@ -1213,31 +1213,31 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 		}
 		if (remaining.length == 0) return t;
 		if (remaining.length == 1) return remaining[0];
-		return createUnion(remaining);
+		return unionPreservingDiscriminant(t, remaining);
 	}
 	return t;
 }
 
 // Narrow a union by `"name" in x`: a member that declares `name` as a required
-// field survives the true branch only, a member without it the false branch only,
-// and a member with it optional both. A name no member declares, or a member that is
-// not a struct, leaves the type as it is.
+// field, a method or an accessor survives the true branch only, a member without it
+// the false branch only, and a member with it as an optional field both. A name no
+// member declares, or a member that is not a struct, leaves the type as it is.
 function narrowTypeByInKeyword(t: Type | null, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type | null {
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return t;
 	if (!isMatchingReference(right, refNode)) return t;
 	const name = stringLiteralValueOf(left);
-	if (name == null || !unionVariantHasProperty(t, name)) return t;
+	if (name == null || !t.typeChildren.some((m: Type): boolean => declaresProperty(m, name))) return t;
 	const kept: Type[] = [];
 	for (const m of t.typeChildren) {
 		const peeled = peelToStruct(m);
 		if (peeled == null || peeled.kind != TypeKind.Struct) { kept.push(m); continue; }
 		const field = findFieldInVariant(m, name);
-		const possible = field == null ? !assumeTrue : assumeTrue || hasNullMember(field) || isMaybeType(field);
+		const possible = !declaresProperty(m, name) ? !assumeTrue : assumeTrue || (field != null && (hasNullMember(field) || isMaybeType(field)));
 		if (possible) kept.push(m);
 	}
 	if (kept.length == 0) return neverType();
 	if (kept.length == t.typeChildren.length) return t;
-	return kept.length == 1 ? kept[0] : createUnion(kept);
+	return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 }
 
 // ===== instanceof narrowing =====

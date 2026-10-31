@@ -1304,6 +1304,11 @@ function answersTo(source: Type, fields: string[], name: string): boolean {
 	return false;
 }
 
+export function declaresProperty(member: Type, name: string): boolean {
+	const shape = peelToStruct(member);
+	return answersTo(member, shape != null && shape.typeNames != null ? shape.typeNames : [], name);
+}
+
 // A class instance answers to its methods and accessors as well as its fields:
 // the first routine of the target class the source has no member for, or empty.
 // An instantiated class body has no class of its own; its instance relates it.
