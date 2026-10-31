@@ -143,9 +143,15 @@ msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
 
 /*
  * OS-level CSPRNG — no mbedTLS dependency.
- * macOS/Linux: /dev/urandom
- * Fallback: arc4random_buf (macOS always has it)
+ * Windows: BCryptGenRandom with the system-preferred RNG
+ * macOS/BSD: arc4random_buf
+ * Linux: /dev/urandom
  */
+
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+#endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <stdlib.h> /* arc4random_buf */
@@ -155,7 +161,15 @@ msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
 #endif
 
 static int fill_random(uint8_t* buf, size_t len) {
-#if HAS_ARC4RANDOM
+#ifdef _WIN32
+	while (len > 0) {
+		ULONG chunk = len > 0x40000000u ? 0x40000000u : (ULONG)len;
+		if (BCryptGenRandom(NULL, buf, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return -1;
+		buf += chunk;
+		len -= chunk;
+	}
+	return 0;
+#elif HAS_ARC4RANDOM
 	arc4random_buf(buf, len);
 	return 0;
 #else
