@@ -56,6 +56,7 @@ import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from ".
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { tdzBindingOf, moduleBindingRead } from "./moduleTdz";
 import { cstringSource } from "../native/cstringConvLower";
+import { calleeFormals } from "./jsVarParamLower";
 
 // ===== Hoist (top-down) =====
 
@@ -353,6 +354,7 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		return child;
 	}
 	if (isCallee) return child;
+	if (bindsRefFormal(parent, index - 1)) return hoistAssignTargetEffects(child, pre, ctx, writes);
 	const isLocation = index == 0 && (parent.kind == NodeKind.MemberExpr || parent.kind == NodeKind.ArrayAccess
 		|| parent.kind == NodeKind.HiddenDeref || parent.kind == NodeKind.HiddenAddr
 		|| (parent.kind == NodeKind.BinaryExpr && isAssignOperator((parent.data as BinaryExprData).operator)));
@@ -368,6 +370,12 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
 	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
 	return bindOperand(child, pre, ctx);
+}
+
+function bindsRefFormal(parent: Node, arg: int32): boolean {
+	if (parent.kind != NodeKind.CallExpr || arg < 0) return false;
+	const formals = calleeFormals(parent.data as CallExprData);
+	return formals != null && arg < formals.length && formals[arg] != null && formals[arg].kind == TypeKind.Var;
 }
 
 function bindOperand(child: Node, pre: Node[], ctx: TransformContext): Node {
