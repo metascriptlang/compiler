@@ -19,7 +19,7 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion, peelTransparentInstance } from "../../checker/types";
-import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUnionTag } from "../../checker/fit";
+import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUnionTag, tagUnionMemberSlot, heldInTarget, convertUnionToUnion, nullableUnionPayloads, isSlotUnion, convertsBetweenUnions } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBinary } from "../util";
@@ -95,6 +95,10 @@ function declaredMaybeOf(node: Node): Type | null {
 }
 
 function unwrapIfMaterialized(n: Node): Node {
+	if (n != null && n.kind == NodeKind.HiddenSubConv && n.variantSlot == 0) {
+		const inner = (n.data as HiddenStdConvData).convExpr;
+		if (inner != null && inner.nodeType != null && isMaybeType(inner.nodeType) && isMaybeType(n.nodeType)) return inner;
+	}
 	if (n != null && n.kind == NodeKind.HiddenSubConv && n.variantSlot > 0) {
 		n = (n.data as HiddenStdConvData).convExpr;
 		if (n != null && n.nodeType != null && isMaybeType(n.nodeType)) return n;
@@ -117,10 +121,12 @@ function narrowAssertedCarrier(node: Node): Node {
 	if (!isTagCarriedUnion(payload)) return node;
 	const checked = node.flags.has(NodeFlag.ConvCheck);
 	if (!isMaybeType(target) && unwrapRefNullUnion(target) == null) {
-		if (!checked) return node;
+		const member = tagUnionMemberSlot(payload, target) >= 0;
+		if (member ? !checked : !heldInTarget(payload, target)) return node;
 		const val = makeMember(inner, "value", node.location);
 		val.nodeType = payload;
-		const projected = checkedProjection(val, payload, target);
+		if (!member && unwrapRefusesNull(target)) val.flags = val.flags.incl(NodeFlag.ConvCheck);
+		const projected = member ? checkedProjection(val, payload, target) : convertUnionToUnion(val, payload, target);
 		if (projected == null as unknown as Node) return node;
 		(node.data as TypeAssertionData).asExpr = projected;
 		return node;
@@ -176,6 +182,7 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 		node.nodeType = declared;
 		const narrowed = narrowMaybePayload(node, declared, nt);
 		if (narrowed != null as unknown as Node) return narrowed;
+		if (nullableUnionPayloads(declared, nt) != null) return convertUnionToUnion(node, declared, nt);
 		node.nodeType = ntRaw;
 		return node;
 	}
@@ -193,6 +200,7 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	if (project && nt != payload && isTagCarriedUnion(payload)) {
 		const projected = projectTagUnionMember(val, payload, nt);
 		if (projected != null as unknown as Node) return projected;
+		if (isSlotUnion(nt) && convertsBetweenUnions(payload, nt)) return convertUnionToUnion(val, payload, nt);
 	}
 	return val;
 }
