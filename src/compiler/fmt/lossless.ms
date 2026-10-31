@@ -198,7 +198,23 @@ function isParen(kind: TokenKind): boolean {
 	return kind == TokenKind.LParen || kind == TokenKind.RParen;
 }
 
-let shapeText: string[] = [];
+// One node's fields in written order: an entry is a child node when shapeBatchNode holds one, else its text.
+let shapeBatchText: string[] = [];
+let shapeBatchNode: (Node | null)[] = [];
+
+function shapePut(text: string): void {
+	shapeBatchText.push(text);
+	shapeBatchNode.push(null);
+}
+
+function shapePutNode(n: Node | null): void {
+	if (n == null) {
+		shapePut("null");
+		return;
+	}
+	shapeBatchText.push("");
+	shapeBatchNode.push(n);
+}
 
 function writtenTypeSeparatorsFree(text: string): string {
 	let out = "";
@@ -219,26 +235,26 @@ function textField(name: string, s: string): string {
 }
 
 const shapeSink: FieldSink = {
-	node: (name: string, n: Node | null): void => { shapeNode(n); },
+	node: (name: string, n: Node | null): void => { shapePutNode(n); },
 	nodes: (name: string, a: Node[] | null): void => { shapeNodes(a); },
 	nodesNested: (name: string, a: Node[][] | null): void => {
-		if (a != null) for (const row of a) { shapeText.push("["); shapeNodes(row); shapeText.push("]"); }
+		if (a != null) for (const row of a) { shapePut("["); shapeNodes(row); shapePut("]"); }
 	},
 	typ: (name: string, t: Type | null): void => {},
-	str: (name: string, s: string): void => { if (name != "assertSource") shapeText.push(textField(name, s)); },
-	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapeText.push(textField(name, v)); },
-	integer: (name: string, v: int64): void => { shapeText.push(name + "=" + v.toString()); },
-	float: (name: string, v: float64): void => { shapeText.push(name + "=" + v.toString()); },
-	bool: (name: string, b: boolean): void => { shapeText.push(name + (b ? "+" : "-")); },
+	str: (name: string, s: string): void => { if (name != "assertSource") shapePut(textField(name, s)); },
+	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapePut(textField(name, v)); },
+	integer: (name: string, v: int64): void => { shapePut(name + "=" + v.toString()); },
+	float: (name: string, v: float64): void => { shapePut(name + "=" + v.toString()); },
+	bool: (name: string, b: boolean): void => { shapePut(name + (b ? "+" : "-")); },
 	loc: (name: string, l: SourceLocation | null): void => {},
 	locs: (name: string, l: SourceLocation[] | null): void => {},
-	floats: (name: string, a: number[] | null): void => { if (a != null) for (const v of a) shapeText.push(v.toString()); },
+	floats: (name: string, a: number[] | null): void => { if (a != null) for (const v of a) shapePut(v.toString()); },
 };
 
 function shapeNodes(a: Node[] | null): void {
-	shapeText.push("(");
-	if (a != null) for (const n of a) shapeNode(n);
-	shapeText.push(")");
+	shapePut("(");
+	if (a != null) for (const n of a) shapePutNode(n);
+	shapePut(")");
 }
 
 function groupsOptionalChain(n: Node): boolean {
@@ -255,26 +271,47 @@ function groupsOptionalChain(n: Node): boolean {
 	}
 }
 
-function shapeNode(n: Node | null): void {
-	if (n == null) {
-		shapeText.push("null");
-		return;
-	}
+function shapeOpening(n: Node): string {
 	let flags = n.flags as uint32;
 	if (n.flags.has(NodeFlag.CommaWritten)) flags -= 1 << (NodeFlag.CommaWritten as uint32);
+	let text = "";
 	if (n.flags.has(NodeFlag.Parenthesized)) {
 		flags -= 1 << (NodeFlag.Parenthesized as uint32);
-		if (groupsOptionalChain(n)) shapeText.push("(optional chain)");
+		if (groupsOptionalChain(n)) text = "(optional chain)";
 	}
-	shapeText.push("k" + (n.kind as int32).toString() + "f" + flags.toString() + textField("typeArg", n.typeArg) + "{");
-	nodeFields(n, shapeSink);
-	shapeText.push("}");
+	return text + "k" + (n.kind as int32).toString() + "f" + flags.toString() + textField("typeArg", n.typeArg) + "{";
 }
 
+// Walks with an explicit stack: a recursive walk costs one `nodeFields` frame per tree level, and that frame
+// is large enough in an unoptimised build to overflow the main stack on a long else-if chain.
 function treeShape(root: Node): string {
-	shapeText = [];
-	shapeNode(root);
-	return shapeText.join("");
+	const out: string[] = [];
+	const pendingText: string[] = [];
+	const pendingNode: (Node | null)[] = [];
+	pendingText.push("");
+	pendingNode.push(root);
+	while (pendingText.length > 0) {
+		const top = pendingText.length - 1;
+		const text = pendingText[top];
+		const node = pendingNode[top];
+		pendingText.pop();
+		pendingNode.pop();
+		if (node == null) {
+			out.push(text);
+			continue;
+		}
+		out.push(shapeOpening(node));
+		shapeBatchText = [];
+		shapeBatchNode = [];
+		nodeFields(node, shapeSink);
+		pendingText.push("}");
+		pendingNode.push(null);
+		for (let k = shapeBatchText.length - 1; k >= 0; k -= 1) {
+			pendingText.push(shapeBatchText[k]);
+			pendingNode.push(shapeBatchNode[k]);
+		}
+	}
+	return out.join("");
 }
 
 function sameTrees(source: string, formatted: string, first: string): Result<void, string> {
@@ -540,4 +577,18 @@ test "lossless: a dropped semicolon is caught when the trees differ or the outpu
 test "lossless: parentheses added around an arrow body stay refused when they cut the body short" {
 	assert !checkLossless("const f = x => a ? b\n: c;", "const f = (x) => (a ? b)\n: c;\n").ok;
 	assert !checkLossless("f(x => a ? b\n: c);", "f((x) => (a ? b)\n: c);\n").ok;
+}
+
+test "lossless: a rewrite is compared on a tree too deep to walk with one stack frame per level" {
+	let chain = "function g(a: int32): int32 {\n\tif (a == 0) return 0;\n";
+	let ternary = "const t = a == 0 ? 0";
+	for (let k = 1; k < 150; k += 1) {
+		chain += "\telse if (a == " + k.toString() + ") return " + k.toString() + ";\n";
+		ternary += " : a == " + k.toString() + " ? " + k.toString();
+	}
+	chain += "}\n";
+	ternary += " : -1;\n";
+	assert checkLossless(chain + "const f = x => x;\n", chain + "const f = (x) => x;\n").ok;
+	assert checkLossless(ternary + "const f = x => x;\n", ternary + "const f = (x) => x;\n").ok;
+	assert !checkLossless(chain + "const f = x => x;\n", chain + "const f = (y) => x;\n").ok;
 }
