@@ -1603,6 +1603,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	}
 	refuseUnassignedFields(ctx, d.classBody, ctorExits);
 	checkOverloadSets(ctx, d.classBody);
+	refuseAbstractMisuse(ctx, node, sym);
 	for (const written of d.classImplements) {
 		refuseUnimplemented(ctx, node, sym.symbolType, written);
 	}
@@ -1613,6 +1614,53 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+// An abstract method lives only in an abstract class and has no body, and a concrete class
+// answers every abstract method it inherits, so a call through the base always finds a body.
+function refuseAbstractMisuse(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	const d = node.data as ClassDeclData;
+	const abstractClass = node.flags.has(NodeFlag.Abstract);
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (!member.flags.has(NodeFlag.Abstract) || member.kind != NodeKind.MethodDecl) continue;
+		const md = member.data as MethodDeclData;
+		const at = md.nameLocation;
+		if (!abstractClass) addError(ctx, `Abstract methods can only appear within an abstract class: '${md.methodName}' is in the class '${d.className}'`, at.line, at.column);
+		else if (md.methodIsStatic) addError(ctx, `'static' modifier cannot be used with 'abstract' modifier: '${md.methodName}'`, at.line, at.column);
+		else if (md.methodBody.kind == NodeKind.BlockStmt && (md.methodBody.data as BlockStmtData).statements.length > 0) {
+			addError(ctx, `Method '${md.methodName}' cannot have an implementation because it is marked abstract`, at.line, at.column);
+		}
+	}
+	if (abstractClass) return;
+	const answered = new HashSet<string>();
+	addConcreteMethodNames(d.classBody, answered);
+	let parent = parentClassSymOf(sym);
+	while (parent != null) {
+		const pd = classDeclNodeOf(parent);
+		if (pd == null || pd.kind != NodeKind.ClassDecl) return;
+		const parentData = pd.data as ClassDeclData;
+		for (const raw of parentData.classBody) {
+			const member = classMemberDecl(raw);
+			if (!member.flags.has(NodeFlag.Abstract) || member.kind != NodeKind.MethodDecl) continue;
+			const name = (member.data as MethodDeclData).methodName;
+			if (answered.has(name)) continue;
+			answered.add(name);
+			addError(ctx, `Non-abstract class '${d.className}' does not implement inherited abstract member '${name}' from class '${parentData.className}'`,
+				d.nameLocation.line, d.nameLocation.column);
+		}
+		addConcreteMethodNames(parentData.classBody, answered);
+		parent = parentClassSymOf(parent);
+	}
+}
+
+function addConcreteMethodNames(body: Node[], names: HashSet<string>): void {
+	for (const raw of body) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.MethodDecl || member.flags.has(NodeFlag.Abstract)) continue;
+		const md = member.data as MethodDeclData;
+		if (!md.methodIsStatic) names.add(md.methodName);
+	}
 }
 
 function refuseUnimplemented(ctx: CheckerContext, node: Node, classType: Type, written: string): void {
