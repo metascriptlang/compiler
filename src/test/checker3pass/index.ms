@@ -87,6 +87,7 @@ import "./scenarios/readonlyArrayForms";
 import "./scenarios/literalLocalKeepsType";
 import "./scenarios/overrideModifier";
 import "./scenarios/constructorOverloads";
+import "./scenarios/abstractMembers";
 import "./scenarios/utilityFunctionTypes";
 import "./scenarios/genericRestInference";
 import "./scenarios/inKeywordNarrows";
