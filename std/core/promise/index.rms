@@ -139,6 +139,8 @@ export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync"
 
 @builtin("SleepTask")
 extern function sleepTask(ms: number, task: () => void): void from "msSleepTask";
+@builtin("SleepCancel")
+extern function sleepCancel(task: () => void): void from "msSleepCancel";
 
 export function asyncCheck(fut: Promise<void>): void {
 }
@@ -188,10 +190,10 @@ class ActorCell {
 
 when (mscBuildsPreludeTables) {
 	function newActorCells(): Map<int64, ActorCell> { return new Map<int64, ActorCell>(); }
-	function newTimersLive(): Map<int64, boolean> { return new Map<int64, boolean>(); }
+	function newTimersLive(): Map<int64, () => void> { return new Map<int64, () => void>(); }
 } else {
 	function newActorCells(): Map<int64, ActorCell> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser actor table"); }
-	function newTimersLive(): Map<int64, boolean> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser timer table"); }
+	function newTimersLive(): Map<int64, () => void> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser timer table"); }
 }
 
 let actorCellsTable: Map<int64, ActorCell> | null = null;
@@ -313,9 +315,9 @@ export function msActorStopLive(): boolean {
 	return live.length > 0;
 }
 
-let timersLiveTable: Map<int64, boolean> | null = null;
+let timersLiveTable: Map<int64, () => void> | null = null;
 
-function timersLive(): Map<int64, boolean> {
+function timersLive(): Map<int64, () => void> {
 	const table = timersLiveTable;
 	if (table != null) return table;
 	const fresh = newTimersLive();
@@ -325,18 +327,19 @@ function timersLive(): Map<int64, boolean> {
 let timerNext: int64 = 1;
 
 function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void {
-	sleepTask(ms, (): void => {
+	const task = (): void => {
 		if (!timersLive().has(id)) return;
 		if (repeat) timerTick(id, fn, ms, true);
 		else timersLive().delete(id);
 		fn();
-	});
+	};
+	timersLive().set(id, task);
+	sleepTask(ms, task);
 }
 
 function timerStart(fn: () => void, ms: number, repeat: boolean): number {
 	const id = timerNext;
 	timerNext = timerNext + 1;
-	timersLive().set(id, true);
 	timerTick(id, fn, ms, repeat);
 	return id as number;
 }
@@ -353,5 +356,8 @@ export function msTimerSetInterval(fn: () => void, ms: number): number {
 
 @compilerFunc
 export function msTimerClear(id: number): void {
+	const task = timersLive().get(id as int64);
+	if (task == null) return;
+	sleepCancel(task);
 	timersLive().delete(id as int64);
 }
