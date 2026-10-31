@@ -3341,6 +3341,12 @@ export function jsMemberKind(t: Type): string {
 	return typeofTagOf(t);
 }
 
+export function jsValueKind(t: Type): string {
+	const v = peelTransparentInstance(t);
+	if (v.kind == TypeKind.Int64 || v.kind == TypeKind.Uint64) return "bigint";
+	return jsMemberKind(t);
+}
+
 export function unionHasMemberOfKind(t: Type | null, kind: TypeKind): boolean {
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	for (const m of t.typeChildren) {
