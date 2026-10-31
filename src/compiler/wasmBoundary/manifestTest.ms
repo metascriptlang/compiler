@@ -110,3 +110,19 @@ export function words(ws: Vec<string>): int32 { return 0; }
 	assert m.errors[1].includes("'loose'") && m.errors[1].includes("field 'n'");
 	assert m.errors[2].includes("'words'") && m.errors[2].includes("Vec");
 }
+
+test "manifest: a Span parameter is borrowed when read-only and shared when writable, and a Span result is refused" {
+	const src = `
+export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
+export function fill(xs: Span<int32>): void {}
+export function names(xs: Span<string>): void {}
+export function view(xs: Readonly<Span<int32>>): Readonly<Span<int32>> { return xs; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["total", "fill", "names", "view"]), ["total", "fill", "names", "view"]);
+	assert m.functions.length == 2;
+	assert m.functions[0].params[0].kind == BoundaryKind.Span && m.functions[0].params[0].mode == BoundaryMode.Borrowed && m.functions[0].params[0].element == BoundaryKind.F32;
+	assert m.functions[1].params[0].mode == BoundaryMode.Shared && m.functions[1].params[0].element == BoundaryKind.I32;
+	assert m.errors.length == 2, m.errors.join("; ");
+	assert m.errors[0].includes("'names'") && m.errors[0].includes("Span");
+	assert m.errors[1].includes("'view'") && m.errors[1].includes("the result") && m.errors[1].includes("return a Vec");
+}

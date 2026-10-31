@@ -9,6 +9,8 @@ struct Point { x: float64; y: float64; }
 struct Label { at: Point; text: string; count: int32; }
 export function tag(l: Label): Label { return l; }
 export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
+export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
+export function fill(xs: Span<boolean>, at: int32): void {}
 export function add64(a: int64, b: int64): int64 { return a + b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
 export function isEven(x: uint8): boolean { return x % 2 == 0; }
@@ -97,5 +99,15 @@ test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is h
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
 	assert e.jsLibrary.includes("\tmsb_rv: (...a) => globalThis.__msb.takes.pop()(...a),");
 	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+}
+
+test "wasm entry: a Span parameter is a view over the copied ptr and len, with no Vec rebuilt" {
+	const e = entryFor(["total", "fill"]);
+	const s = e.source;
+	assert s.includes("export function msb_calc_total(xsPtr: uint32, xsLen: int32): float32 {\n\treturn msbm0_total((xsPtr as uint64 as Ptr<float32>)[0..xsLen]);");
+	assert s.includes("export function msb_calc_fill(xsPtr: uint32, xsLen: int32, at: int32): void {\n\tmsbm0_fill((xsPtr as uint64 as Ptr<boolean>)[0..xsLen], at);");
+	assert !s.includes("msbVecFrom_");
+	assert e.exportedFunctions.join(",") == "_msb_calc_total,_msb_calc_fill,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 }
