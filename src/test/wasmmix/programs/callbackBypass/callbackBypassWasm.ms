@@ -37,3 +37,8 @@ export function probeByte(callback: (x: uint8) => boolean): int32 {
 export function probeU32(callback: (x: uint32) => uint32): uint32 {
 	return callback(4294967295);
 }
+
+@wasm
+export function probeU64(callback: (x: uint64) => uint64): uint64 {
+	return callback(18446744073709551615);
+}

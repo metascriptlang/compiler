@@ -28,6 +28,8 @@ export function bytes(s: string): int32 { return s.length; }
 export function ramp(n: int32): Vec<int32> { const out: Vec<int32> = []; return out; }
 export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
+export function probeU32(cb: (x: uint32) => uint32): uint32 { return cb(4294967295); }
+export function probeU64(cb: (x: uint64) => uint64): uint64 { return cb(18446744073709551615); }
 `;
 
 const NULLABLE = `
@@ -70,6 +72,14 @@ function entryFor(names: string[]) {
 
 function nullableEntryFor(names: string[]) {
 	return wasmEntrySource(manifestFrom(NULLABLE, names).functions, (p: string) => "./calc");
+}
+
+test "wasm entry: an unsigned callback value crosses its signed wire by its bits, so a value past the signed range does not trap" {
+	const s = entryFor(["probeU32", "probeU64"]).source;
+	assert s.includes("msbm0_probeU32((a0: uint32): uint32 => msbUnwireU32(msb_cb_i_i(cb, msbWireU32(a0))))");
+	assert s.includes("msbm0_probeU64((a0: uint64): uint64 => msbUnwireU64(msb_cb_j_j(cb, msbWireU64(a0))))");
+	assert s.includes("function msbWireU32(x: uint32): int32 { return x > 2147483647 ? -((~x) as int32) - 1 : x as int32; }");
+	assert s.includes("function msbUnwireU64(w: int64): uint64 { return w < 0 ? ~((-(w + 1)) as uint64) : w as uint64; }");
 }
 
 test "wasm entry: one exportName wrapper per function and one import per callback signature" {
