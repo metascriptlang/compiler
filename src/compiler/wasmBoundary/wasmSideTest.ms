@@ -1,7 +1,8 @@
 import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { manifestFor } from "./manifest";
+import { Manifest, manifestFor } from "./manifest";
+import { jsBindings } from "./jsSide";
 import { wasmEntrySource } from "./wasmSide";
 
 const SOURCE = `
@@ -21,9 +22,13 @@ export function banner(): string { return "banner"; }
 export function report(cb: (s: string) => int32): int32 { return cb("x"); }
 export function sumBy(cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<int32>, at: int32) => void): void {}
+export function label(n: int32): string { return ""; }
+export function make(n: int32): Label { return { at: { x: 0, y: 0 }, text: "", count: n }; }
+export function bytes(s: string): int32 { return s.length; }
+export function ramp(n: int32): Vec<int32> { const out: Vec<int32> = []; return out; }
 `;
 
-function entryFor(names: string[]) {
+function manifestOf(names: string[]): Manifest {
 	const ctx = checkSource(SOURCE);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
@@ -34,7 +39,11 @@ function entryFor(names: string[]) {
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
 	if (m.errors.length > 0) throw new Error("internal: " + m.errors.join("; "));
-	return wasmEntrySource(m.functions, (p: string) => "./calc");
+	return m;
+}
+
+function entryFor(names: string[]) {
+	return wasmEntrySource(manifestOf(names).functions, (p: string) => "./calc");
 }
 
 test "wasm entry: one exportName wrapper per function and one import per callback signature" {
@@ -71,7 +80,7 @@ test "wasm entry: a string parameter arrives as ptr and len and is adopted witho
 	assert s.includes("msbRet") == false && s.includes("msb_ret_len") == false;
 	assert e.jsLibrary.includes("\tmsb_rs_s: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_malloc,_free,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
 	const plain = entryFor(["add64"]);
 	assert plain.source.includes("msStringNew") == false;
 	assert plain.source.includes("msStringAdoptMalloced") == false;
@@ -94,7 +103,8 @@ test "wasm entry: a callback string parameter passes ptr and len of a value aliv
 	assert s.includes('extern function msb_cb_i_s(id: int32, a0p: uint32, a0l: int32): int32 from "msb_cb_i_s";');
 	assert s.includes("int32_t msb_cb_i_s(int32_t id, uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false;
-	assert e.exportedFunctions.join(",") == "_msb_calc_report,_malloc,_free,_MsMain";
+	assert e.exportedFunctions.join(",") == "_msb_calc_report,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
 
 test "wasm entry: a callback Span parameter passes ptr and len of the view, 0 for an empty one" {
@@ -104,7 +114,7 @@ test "wasm entry: a callback Span parameter passes ptr and len of the view, 0 fo
 	assert s.includes("msbm0_edit((a0: Span<int32>, a1: int32): void => { msb_cb_v_pi(cb, (a0.length == 0 ? 0 : a0 as Ptr<int32> as uint64 as uint32), a0.length as int32, a1); })");
 	assert s.includes('extern function msb_cb_v_pi(id: int32, a0p: uint32, a0l: int32, a1: int32): void from "msb_cb_v_pi";');
 	assert e.exportedFunctions.join(",") == "_msb_calc_sumBy,_msb_calc_edit,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
 
 test "wasm entry: a struct crosses as leaf parameters and returns through one result import" {
@@ -127,7 +137,7 @@ test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is h
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
 	assert e.jsLibrary.includes("\tmsb_rv: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
 
 test "wasm entry: a Span parameter is a view over the copied ptr and len, with no Vec rebuilt" {
@@ -137,7 +147,43 @@ test "wasm entry: a Span parameter is a view over the copied ptr and len, with n
 	assert s.includes("export function msb_calc_fill(xsPtr: uint32, xsLen: int32, at: int32): void {\n\tmsbm0_fill((xsPtr as uint64 as Ptr<boolean>)[0..xsLen], at);");
 	assert !s.includes("msbVecFrom_");
 	assert e.exportedFunctions.join(",") == "_msb_calc_total,_msb_calc_fill,_malloc,_free,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
+}
+
+test "wasm entry: data that only flows out of wasm needs the heap view and no allocator" {
+	const text = entryFor(["label"]);
+	assert text.exportedFunctions.join(",") == "_msb_calc_label,_MsMain";
+	assert text.runtimeMethods.join(",") == "HEAPU8";
+	const record = entryFor(["make"]);
+	assert record.exportedFunctions.join(",") == "_msb_calc_make,_MsMain";
+	assert record.runtimeMethods.join(",") == "HEAPU8";
+	const vec = entryFor(["ramp"]);
+	assert vec.exportedFunctions.join(",") == "_msb_calc_ramp,_MsMain";
+	assert vec.runtimeMethods.join(",") == "HEAPU8";
+}
+
+test "wasm entry: a string parameter alone needs the allocator" {
+	const e = entryFor(["bytes"]);
+	assert e.exportedFunctions.join(",") == "_msb_calc_bytes,_malloc,_free,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8";
+}
+
+const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "isEven", "visit", "twice", "report", "sumBy", "edit", "label", "make", "bytes", "ramp"];
+
+test "wasm entry: each runtime export is used by the js glue of that function and each use is exported" {
+	for (const name of EVERY_FUNCTION) {
+		const m = manifestOf([name]);
+		const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
+		const e = wasmEntrySource(m.functions, (p: string) => "./calc");
+		const allocates = code.includes("__msbEncOwned(") || code.includes("__msbCopyIn(");
+		const readsHeap = allocates || code.includes("__msbDec(") || code.includes("__msbVecOut(");
+		let want = "_" + m.functions[0].exportSymbol;
+		if (allocates) want += ",_malloc,_free";
+		want += ",_MsMain";
+		assert e.exportedFunctions.join(",") == want;
+		assert e.runtimeMethods.join(",") == (readsHeap ? "HEAPU8" : "");
+		assert (code.includes("_free(") || code.includes("__msbFree(")) == allocates;
+	}
 }
 
 test "wasm entry: every callback and result import hands an exception to the registry before it leaves the import" {
