@@ -158,3 +158,83 @@ msString msFsReadDirEntries(msString path) {
 	free(buf);
 	return result;
 }
+
+msString msFsReadDirNames(msString path) {
+	_msFsLastErrno = 0;
+	const char* cpath = msStringToCString(path);
+	if (memchr(cpath, '\0', (size_t)path.len) != NULL) {
+		_msFsLastErrno = EINVAL;
+		return MS_EMPTY_STRING;
+	}
+	wchar_t* pattern = msFsWidePath(path, 2);
+	if (!pattern) return MS_EMPTY_STRING;
+	DWORD attributes = GetFileAttributesW(pattern);
+	if (attributes == INVALID_FILE_ATTRIBUTES ||
+		(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+		_msFsLastErrno = attributes == INVALID_FILE_ATTRIBUTES ?
+			msFsErrnoFromWin32(GetLastError()) : ENOTDIR;
+		free(pattern);
+		return MS_EMPTY_STRING;
+	}
+	size_t end = wcslen(pattern);
+	if (end > 0 && pattern[end - 1] != L'\\' && pattern[end - 1] != L'/') {
+		pattern[end++] = L'\\';
+	}
+	pattern[end] = L'*';
+	pattern[end + 1] = L'\0';
+	WIN32_FIND_DATAW data;
+	HANDLE directory = FindFirstFileW(pattern, &data);
+	DWORD firstError = directory == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+	if (directory == INVALID_HANDLE_VALUE && firstError == ERROR_FILE_NOT_FOUND) {
+		pattern[end] = L'\0';
+		attributes = GetFileAttributesW(pattern);
+		if (attributes != INVALID_FILE_ATTRIBUTES &&
+			(attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) firstError = 0;
+	}
+	free(pattern);
+	if (directory == INVALID_HANDLE_VALUE) {
+		_msFsLastErrno = firstError == 0 ? 0 : msFsErrnoFromWin32(firstError);
+		return MS_EMPTY_STRING;
+	}
+	size_t capacity = 4096;
+	size_t length = 0;
+	char* names = (char*)malloc(capacity);
+	int error = names ? 0 : ENOMEM;
+	while (error == 0) {
+		const wchar_t* name = data.cFileName;
+		if (wcscmp(name, L".") != 0 && wcscmp(name, L"..") != 0) {
+			int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+				name, -1, NULL, 0, NULL, NULL);
+			if (needed <= 0) { error = EINVAL; break; }
+			if ((size_t)needed > (size_t)MS_LEN_MAX - length) {
+				error = EFBIG;
+				break;
+			}
+			if ((size_t)needed > capacity - length) {
+				size_t grown = capacity * 2;
+				if (grown < length + needed) grown = length + needed;
+				char* next = (char*)realloc(names, grown);
+				if (!next) { error = ENOMEM; break; }
+				names = next;
+				capacity = grown;
+			}
+			int wrote = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+				name, -1, names + length, needed, NULL, NULL);
+			if (wrote != needed) { error = EINVAL; break; }
+			length += (size_t)needed;
+		}
+		if (!FindNextFileW(directory, &data)) {
+			DWORD code = GetLastError();
+			if (code != ERROR_NO_MORE_FILES) error = msFsErrnoFromWin32(code);
+			break;
+		}
+	}
+	if (!FindClose(directory) && error == 0) {
+		error = msFsErrnoFromWin32(GetLastError());
+	}
+	_msFsLastErrno = error;
+	msString result = error == 0 && length > 0 ?
+		msStringNew(names, (int64_t)length) : MS_EMPTY_STRING;
+	free(names);
+	return result;
+}

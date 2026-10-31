@@ -37,6 +37,7 @@ msString msFsReadFile(msString path);
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
+msString msFsReadDirNames(msString path);
 
 #ifdef _WIN32
 /* Win32 error code as the errno POSIX reports for the same failure. */

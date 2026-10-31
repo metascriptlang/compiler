@@ -145,4 +145,50 @@ msString msFsReadDirEntries(msString path) {
 	return result;
 }
 
+msString msFsReadDirNames(msString path) {
+	_msFsLastErrno = 0;
+	const char* cpath = msStringToCString(path);
+	if (memchr(cpath, '\0', (size_t)path.len) != NULL) {
+		_msFsLastErrno = EINVAL;
+		return MS_EMPTY_STRING;
+	}
+	DIR* directory = opendir(cpath);
+	if (!directory) {
+		_msFsLastErrno = errno;
+		return MS_EMPTY_STRING;
+	}
+	size_t capacity = 4096;
+	size_t length = 0;
+	char* names = (char*)malloc(capacity);
+	int error = names ? 0 : ENOMEM;
+	while (error == 0) {
+		errno = 0;
+		struct dirent* entry = readdir(directory);
+		if (!entry) { error = errno; break; }
+		const char* name = entry->d_name;
+		if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+		size_t needed = strlen(name) + 1;
+		if (needed > (size_t)MS_LEN_MAX - length) {
+			error = EFBIG;
+			break;
+		}
+		if (needed > capacity - length) {
+			size_t grown = capacity * 2;
+			if (grown < length + needed) grown = length + needed;
+			char* next = (char*)realloc(names, grown);
+			if (!next) { error = ENOMEM; break; }
+			names = next;
+			capacity = grown;
+		}
+		memcpy(names + length, name, needed);
+		length += needed;
+	}
+	if (closedir(directory) != 0 && error == 0) error = errno;
+	_msFsLastErrno = error;
+	msString result = error == 0 && length > 0 ?
+		msStringNew(names, (int64_t)length) : MS_EMPTY_STRING;
+	free(names);
+	return result;
+}
+
 /* end of posix.c */

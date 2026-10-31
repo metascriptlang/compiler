@@ -2,7 +2,11 @@
 
 @include("runtime/fs/header.h");
 
-import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import {
+	IoError, IoErrorKind, ioError, ioErrorFromErrno, writeFailed,
+} from "../io/errors";
+import { wellFormedString } from "../core/string/bytes";
+import { wellFormedPrefix } from "../core/string/utf8Repair";
 import { utf8Text } from "../core/string/bytes";
 import { utf8Text } from "../core/string/bytes";
 
@@ -11,6 +15,7 @@ extern function msFsReadFile(path: string): string;
 // Parked: readdir returns NULL at the end, and `Ptr<Dirent> | null` does not build yet
 // (inbox 2026-10-22-nullable-ptr-to-extern-tag-struct-emits-a-field-copy-hook.md).
 extern function msFsReadDirEntries(path: string): string;
+extern function msFsReadDirNames(path: string): string;
 
 const FAILED_WITHOUT_ERRNO: int32 = -1;
 
@@ -674,6 +679,28 @@ export function changeStamp(path: string): string { return changeStampKernel(pat
 // check `exists(path) && isDir(path)` first.
 export function readDir(path: string): string[] {
 	return entriesOf(utf8Text(msFsReadDirEntries(path), false));
+}
+
+export function readDirNames(path: string): Result<string[], IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	const raw = msFsReadDirNames(path);
+	const error = msFsLastErrno();
+	if (error != 0) { return Result.err(ioErrorFromErrno(error, path)); }
+	const data = raw.asBytes();
+	if (wellFormedPrefix(data, 0, false) != data.length) {
+		return Result.err(ioError(IoErrorKind.ReadFailed, path,
+			"directory name is not UTF-8: " + path));
+	}
+	if (raw == "") { return Result.ok([]); }
+	if (!raw.endsWith("\0")) {
+		return Result.err(ioError(IoErrorKind.ReadFailed, path,
+			"directory name list is not terminated: " + path));
+	}
+	const names = wellFormedString(data).split("\0");
+	names.pop();
+	return Result.ok(names);
 }
 
 function entriesOf(listing: string): string[] {
