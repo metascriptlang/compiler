@@ -117,6 +117,9 @@ export function executeQueryWith(
 	wasComputed: boolean
 ): void {
 	if (!wasComputed) return;
+	if (!hasActiveFrame(depStack)) throw new Error(`internal: query ${key.queryKind} of file ${key.fileId} is stored with no query frame active`);
+	const running = depStack.frames[depStack.frames.length - 1].queryKey;
+	if (!queryKeysEqual(running, key)) throw new Error(`internal: query ${key.queryKind} of file ${key.fileId} is stored while query ${running.queryKind} of file ${running.fileId} is running`);
 
 	// Store or update cache entry
 	let entry = cacheGet(cache, key);
@@ -132,12 +135,9 @@ export function executeQueryWith(
 	entry.verifiedAt = currentRevision;
 	entry.changedAt = changedAt;
 
-	// Collect dependencies from the frame if active
-	if (hasActiveFrame(depStack)) {
-		const frame = popFrame(depStack);
-		entry.dependencies = frame.deps;
-		entry.durability = frame.minDurability;
-	}
+	const frame = popFrame(depStack);
+	entry.dependencies = frame.deps;
+	entry.durability = frame.minDurability;
 }
 
 // ===== Test Helpers =====
@@ -528,4 +528,28 @@ test "a consumer verified after a durability downgrade walks its input on the ne
 	assert tryMarkGreen(cache, input, userKey, 2);
 	setFileText(input, "/durability/dep.ms", "export const value = 3;", 3);
 	assert !tryMarkGreen(cache, input, userKey, 3);
+}
+
+test "storing a computed query with no frame active fails loud and leaves the cache alone" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const depStack = createDependencyStack();
+	const key = createQueryKey(TaQueryKind.Parse, 0);
+	let message = "";
+	try { executeQueryWith(cache, fileInput, depStack, key, 1, 1, true); } catch (e) { message = (e as Error).message; }
+	assert message.indexOf("internal:") == 0 && message.indexOf("no query frame active") >= 0, message;
+	assert !cacheContains(cache, key);
+}
+
+test "storing a query beside the frame of another fails loud" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const depStack = createDependencyStack();
+	pushFrame(depStack, createQueryKey(TaQueryKind.TypeCheck, 1));
+	const key = createQueryKey(TaQueryKind.Parse, 0);
+	let message = "";
+	try { executeQueryWith(cache, fileInput, depStack, key, 1, 1, true); } catch (e) { message = (e as Error).message; }
+	assert message.indexOf("internal:") == 0 && message.indexOf("is running") >= 0, message;
+	assert !cacheContains(cache, key);
+	assert depStack.frames.length == 1;
 }
