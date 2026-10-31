@@ -162,10 +162,10 @@ static void __uringSubmitSqe(void) {
 	r->pending++;
 }
 
-/* Per-fd recv buffers — kernel writes directly here, MetaScript reads via msUringRecvData.
- * Heap-allocated on first use (4KB per fd, 1024 fds max = 4MB per thread). */
-#define URING_MAX_FDS 1024
-static _Thread_local char (*_uringRecvBufs)[4096] = NULL;
+/* Per-fd state, indexed by fd. The tables grow to the highest fd seen; a recv buffer is
+ * allocated once per fd and never moves, because the kernel writes into it while its recv is in flight. */
+#define URING_RECV_BUF 4096
+static _Thread_local char** _uringRecvBufs = NULL;
 
 /* Per-fd response buffers — reused across requests (zero malloc after warmup).
  * msBuildResponseReuse writes header+body into these msStrings. */
@@ -173,6 +173,8 @@ static _Thread_local msString* _uringRespBufs = NULL;
 
 typedef struct { const char* p; int32_t len; int32_t off; } msUringSendState;
 static _Thread_local msUringSendState* _uringSends = NULL;
+
+static _Thread_local int _uringFdCap = 0;
 
 /* Recv and send ops in flight: the kernel reads or writes the buffers above until they complete. */
 static _Thread_local int _uringBufOps = 0;
@@ -187,33 +189,48 @@ static void __uringThreadRelease(void) {
 		munmap(_uringEvt.cqRing, _uringEvt.cqRingSz);
 		_uringEvtInit = 0;
 	}
+	for (int i = 0; i < _uringFdCap; i++) {
+		free(_uringRecvBufs[i]);
+		if (_uringRespBufs[i].p) msStringDecref(_uringRespBufs[i]);
+	}
 	free(_uringRecvBufs);
 	_uringRecvBufs = NULL;
-	if (_uringRespBufs != NULL) {
-		for (int i = 0; i < URING_MAX_FDS; i++) {
-			if (_uringRespBufs[i].p) msStringDecref(_uringRespBufs[i]);
-		}
-		free(_uringRespBufs);
-		_uringRespBufs = NULL;
-	}
+	free(_uringRespBufs);
+	_uringRespBufs = NULL;
 	free(_uringSends);
 	_uringSends = NULL;
+	_uringFdCap = 0;
 	_uringReleaseRegistered = 0;
 }
 
-static inline void __ensureRecvBufs(void) {
-	if (_uringRecvBufs == NULL) {
-		_uringRecvBufs = (char(*)[4096])msMemAllocN0((size_t)URING_MAX_FDS, 4096);
-		__uringRegisterRelease();
-	}
-	if (_uringRespBufs == NULL) {
-		_uringRespBufs = (msString*)msMemAllocN0(URING_MAX_FDS, sizeof(msString));
-		__uringRegisterRelease();
-	}
-	if (_uringSends == NULL) {
-		_uringSends = (msUringSendState*)msMemAllocN0(URING_MAX_FDS, sizeof(msUringSendState));
-		__uringRegisterRelease();
-	}
+static void __uringGrowFds(int fd) {
+	int cap = _uringFdCap > 0 ? _uringFdCap : 1024;
+	while (cap <= fd) cap *= 2;
+	char** recv = (char**)realloc(_uringRecvBufs, (size_t)cap * sizeof(char*));
+	if (recv == NULL) msRaiseOutOfMemory();
+	_uringRecvBufs = recv;
+	msString* resp = (msString*)realloc(_uringRespBufs, (size_t)cap * sizeof(msString));
+	if (resp == NULL) msRaiseOutOfMemory();
+	_uringRespBufs = resp;
+	msUringSendState* sends = (msUringSendState*)realloc(_uringSends, (size_t)cap * sizeof(msUringSendState));
+	if (sends == NULL) msRaiseOutOfMemory();
+	_uringSends = sends;
+	size_t added = (size_t)(cap - _uringFdCap);
+	memset(_uringRecvBufs + _uringFdCap, 0, added * sizeof(char*));
+	memset(_uringRespBufs + _uringFdCap, 0, added * sizeof(msString));
+	memset(_uringSends + _uringFdCap, 0, added * sizeof(msUringSendState));
+	_uringFdCap = cap;
+	__uringRegisterRelease();
+}
+
+static inline void __ensureFd(int fd) {
+	if (fd >= _uringFdCap) __uringGrowFds(fd);
+}
+
+static inline char* __uringRecvBuf(int fd) {
+	__ensureFd(fd);
+	if (_uringRecvBufs[fd] == NULL) _uringRecvBufs[fd] = (char*)msMemAllocN0(1, URING_RECV_BUF + 1);
+	return _uringRecvBufs[fd];
 }
 
 /* Submit accept */
@@ -230,14 +247,13 @@ static inline void msUringSubmitAccept(int32_t listenFd) {
  * After CQE, call msUringRecvData(fd, res) to get the data as msString. */
 static inline void msUringSubmitRecv(int32_t fd, msString str, int32_t len) {
 	(void)str;
-	__ensureRecvBufs();
+	char* buf = __uringRecvBuf(fd);
 	struct io_uring_sqe* sqe = __uringGetSqe();
 	if (!sqe) return;
-	int slot = fd < URING_MAX_FDS ? fd : 0;
 	sqe->opcode = IORING_OP_RECV;
 	sqe->fd = fd;
-	sqe->addr = (uint64_t)(uintptr_t)_uringRecvBufs[slot];
-	sqe->len = (uint32_t)(len > 4096 ? 4096 : len);
+	sqe->addr = (uint64_t)(uintptr_t)buf;
+	sqe->len = (uint32_t)(len > URING_RECV_BUF ? URING_RECV_BUF : len);
 	sqe->user_data = URING_TAG(fd, URING_OP_RECV);
 	__uringSubmitSqe();
 	_uringBufOps++;
@@ -245,10 +261,10 @@ static inline void msUringSubmitRecv(int32_t fd, msString str, int32_t len) {
 
 /* Submit send — uses msString's internal data pointer */
 static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
-	__ensureRecvBufs();
+	__ensureFd(fd);
 	struct io_uring_sqe* sqe = __uringGetSqe();
 	if (!sqe) return;
-	msUringSendState* st = &_uringSends[fd < URING_MAX_FDS ? fd : 0];
+	msUringSendState* st = &_uringSends[fd];
 	st->p = data.p ? data.p->data : NULL;
 	st->len = len;
 	st->off = 0;
@@ -311,7 +327,7 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 		_uringEvtBuf[count].op = URING_TAG_OP(cqe->user_data);
 		int32_t res = (int32_t)cqe->res;
 		if (op == URING_OP_SEND && res >= 0) {
-			msUringSendState* st = &_uringSends[_uringEvtBuf[count].fd < URING_MAX_FDS ? _uringEvtBuf[count].fd : 0];
+			msUringSendState* st = &_uringSends[_uringEvtBuf[count].fd];
 			if (st->off + res < st->len) {
 				struct io_uring_sqe* sqe = __uringGetSqe();
 				if (sqe) {
@@ -347,20 +363,18 @@ static inline int32_t msUringEventRes(int32_t idx) { return _uringEvtBuf[idx].re
 
 /* Get recv data as msString (call after msUringWait for RECV events) */
 static inline msString msUringRecvData(int32_t fd, int32_t bytesRecv) {
-	if (bytesRecv <= 0 || _uringRecvBufs == NULL) return MS_EMPTY_STRING;
-	int slot = fd < URING_MAX_FDS ? fd : 0;
-	_uringRecvBufs[slot][bytesRecv] = '\0';
-	return msStringNew(_uringRecvBufs[slot], (int64_t)bytesRecv);
+	if (bytesRecv <= 0 || fd >= _uringFdCap || _uringRecvBufs[fd] == NULL) return MS_EMPTY_STRING;
+	_uringRecvBufs[fd][bytesRecv] = '\0';
+	return msStringNew(_uringRecvBufs[fd], (int64_t)bytesRecv);
 }
 
 /* Build response into per-fd reusable buffer — zero malloc after warmup.
  * Returns the msString (owned by per-fd pool, DO NOT free — stays alive until next request on this fd). */
 static inline msString msUringBuildResponse(int32_t fd, int32_t status, msString statusText,
                                              msString contentType, msString body) {
-	__ensureRecvBufs();
-	int slot = fd < URING_MAX_FDS ? fd : 0;
-	msBuildResponseReuse(&_uringRespBufs[slot], status, statusText, contentType, body);
-	return _uringRespBufs[slot];
+	__ensureFd(fd);
+	msBuildResponseReuse(&_uringRespBufs[fd], status, statusText, contentType, body);
+	return _uringRespBufs[fd];
 }
 
 /* Find CRLFCRLF header terminator anywhere in recv buffer. Returns position
@@ -368,9 +382,8 @@ static inline msString msUringBuildResponse(int32_t fd, int32_t status, msString
  * complete. Scanning the whole buffer is required: POST/PUT with body in the
  * first recv ends with body bytes, not \r\n\r\n. */
 static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t bytesRecv) {
-	if (bytesRecv < 4 || _uringRecvBufs == NULL) return -1;
-	int slot = fd < URING_MAX_FDS ? fd : 0;
-	const char* d = _uringRecvBufs[slot];
+	if (bytesRecv < 4 || fd >= _uringFdCap || _uringRecvBufs[fd] == NULL) return -1;
+	const char* d = _uringRecvBufs[fd];
 	for (int32_t i = 0; i <= bytesRecv - 4; i++) {
 		if (d[i]=='\r' && d[i+1]=='\n' && d[i+2]=='\r' && d[i+3]=='\n')
 			return i + 4;

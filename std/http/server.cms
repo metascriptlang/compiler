@@ -729,7 +729,7 @@ function buildErrorResponse(status: int32): string {
 // msActorPollHook drain queued actor work.
 
 const DRIVER_POLL_MS: int32 = 10;
-const MAX_CLIENT_FDS: int32 = 1024;
+const INITIAL_CLIENT_FDS: int32 = 1024;
 const SWEEP_INTERVAL_TICKS: int32 = 100;
 
 function loopOwns(c: ClientState): boolean {
@@ -745,7 +745,7 @@ function idleSweep(clients: ClientState[], cfg: Readonly<LoopConfig>): void {
 	const now = msMonoTimeMs();
 	const threshold = now - (cfg.keepAliveTimeout as int64);
 	let i: int32 = 0;
-	while (i < MAX_CLIENT_FDS) {
+	while (i < clients.length) {
 		const c = clients[i];
 		if (loopOwns(c) && c.lastActivityMs < threshold) {
 			msIoEngineCancelFd_ms(i);
@@ -801,7 +801,7 @@ function driveWithSweep(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 function closeWaitingCountOpen(clients: ClientState[]): int32 {
 	let open: int32 = 0;
 	let i: int32 = 0;
-	while (i < MAX_CLIENT_FDS) {
+	while (i < clients.length) {
 		const c = clients[i];
 		if (loopOwns(c)) {
 			if (c.data.length == 0) msIoEngineCancelFd_ms(i);
@@ -813,13 +813,17 @@ function closeWaitingCountOpen(clients: ClientState[]): int32 {
 }
 
 function allocClients(cfg: Readonly<LoopConfig>): ClientState[] {
-	const clients: ClientState[] = new Array(MAX_CLIENT_FDS);
+	const clients: ClientState[] = new Array(INITIAL_CLIENT_FDS);
 	let ci: int32 = 0;
-	while (ci < MAX_CLIENT_FDS) {
+	while (ci < INITIAL_CLIENT_FDS) {
 		clients[ci] = initClient(ci, cfg.keepAliveTimeout / 1000);
 		ci = ci + 1;
 	}
 	return clients;
+}
+
+function growClients(clients: ClientState[], cfg: Readonly<LoopConfig>, fd: int32): void {
+	while (clients.length <= fd) clients.push(initClient(clients.length, cfg.keepAliveTimeout / 1000));
 }
 
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
@@ -871,14 +875,13 @@ function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, fd: int32
 async function listenAsyncLoop(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: RequestHandler, clients: ClientState[], loop: AcceptLoop): Promise<void> {
 	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
-		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
+		if (cfd >= 0) {
+			growClients(clients, cfg, cfd);
 			msNetSetTcpNoDelay(cfd);
 			msNetSetNoSigpipe(cfd);
 			msNetSetNonBlocking(cfd);
 			resetClient(clients[cfd], cfd);
 			handleConnSync(cfg, run, clients[cfd], cfd, handler);
-		} else if (cfd >= MAX_CLIENT_FDS) {
-			msNetClose(cfd);
 		}
 		// cfd < 0: accept error, drop silently
 	}
@@ -1190,16 +1193,15 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 		return;
 	}
 
-	const maxFds = 1024;
 	// Lazy ClientState — each slot allocates on first ACCEPT for that fd
 	// and is reused for all subsequent connections that reuse the fd. This
 	// keeps RSS proportional to ACTIVE connections, matching Rust hyper /
 	// C libmicrohttpd; pre-allocating 1024 × ~250 byte structs eagerly
 	// would inflate baseline by ~2 MB per worker thread for no gain.
-	const clients: ClientState[] = new Array(maxFds);
+	const clients: ClientState[] = new Array(INITIAL_CLIENT_FDS);
 
-	const conns: int32[] = new Array(maxFds);
-	for (let k = 0; k < maxFds; k += 1) conns[k] = CONN_CLOSED;
+	const conns: int32[] = new Array(INITIAL_CLIENT_FDS);
+	for (let k = 0; k < INITIAL_CLIENT_FDS; k += 1) conns[k] = CONN_CLOSED;
 	let stopping = false;
 	let accepting = true;
 
@@ -1219,7 +1221,8 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 
 			if (op == 0) {
 				// ACCEPT — set socket opts, start recv
-				if (res >= 0 && res < maxFds && !stopping) {
+				if (res >= 0 && !stopping) {
+					growUringFds(conns, clients, res);
 					msNetSetTcpNoDelay(res);
 					msNetSetNoSigpipe(res);
 					msNetSetNonBlocking(res);
@@ -1244,8 +1247,8 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 				// (Content-Length / chunked), and submitting the next uring op.
 				if (res <= 0) {
 					msNetClose(evFd);
-					if (evFd >= 0 && evFd < maxFds) conns[evFd] = CONN_CLOSED;
-				} else if (evFd >= 0 && evFd < maxFds) {
+					if (evFd >= 0 && evFd < conns.length) conns[evFd] = CONN_CLOSED;
+				} else if (evFd >= 0 && evFd < conns.length) {
 					const client = clients[evFd];
 					if (client != null as unknown as ClientState) {
 						client.data += msUringRecvData(evFd, res);
@@ -1257,7 +1260,7 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 				// took over the fd via res.detach() (protocol switch). In the
 				// upgrade case the fd is now owned by the caller's recv loop;
 				// don't resubmit a recv that would steal frames from it.
-				if (evFd >= 0 && evFd < maxFds) {
+				if (evFd >= 0 && evFd < conns.length) {
 					clients[evFd].sendQueue = "";
 					if (clients[evFd].response._upgraded) {
 						conns[evFd] = CONN_CLOSED;
@@ -1273,6 +1276,13 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 			i = i + 1;
 		}
 		msIoRunOnce(0);
+	}
+}
+
+function growUringFds(conns: int32[], clients: ClientState[], fd: int32): void {
+	while (conns.length <= fd) {
+		conns.push(CONN_CLOSED);
+		clients.push(null as unknown as ClientState);
 	}
 }
 
@@ -1310,14 +1320,13 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 async function listenAsyncLoopA(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[], loop: AcceptLoop): Promise<void> {
 	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
-		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
+		if (cfd >= 0) {
+			growClients(clients, cfg, cfd);
 			msNetSetTcpNoDelay(cfd);
 			msNetSetNoSigpipe(cfd);
 			msNetSetNonBlocking(cfd);
 			resetClient(clients[cfd], cfd);
 			handleConnAsync(cfg, run, clients[cfd], cfd, handler);
-		} else if (cfd >= MAX_CLIENT_FDS) {
-			msNetClose(cfd);
 		}
 	}
 	loop.ended = true;
