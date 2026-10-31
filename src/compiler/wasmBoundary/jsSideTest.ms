@@ -28,6 +28,10 @@ export function mixed(s: string, xs: Vec<float32>): int32 { return s.length; }
 export function both(a: string, n: int32, b: string): int32 { return a.length + n + b.length; }
 export function sumBy(n: int32, cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<boolean>, at: int32) => void): void {}
+export function drain(cb: (x: int64, y: float32) => int64): int64 { return cb(1, 2); }
+export function noArg(cb: () => void): void { cb(); }
+export function onByte(cb: (x: uint8, y: int32) => void): void { cb(1, 2); }
+export function judge(cb: (x: int32) => boolean): void { cb(1); }
 export function patch(cb: (xs: Span<int32>) => int32): int32 { return 0; }
 export function stamp(s: string, xs: Span<int32>): int32 { return 0; }
 export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; return out; }
@@ -63,9 +67,23 @@ test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
 
 test "js side: a callback is pushed before the call, adapted per kind and popped in finally" {
 	const code = bindingsFor(["evaluate", "visit", "pick"]).modules[0].code;
-	assert code.includes("function bundled_evaluate(a0, a1) {\n\t__msb.enter();\n\tconst id1 = __msb.push((x0) => a1(x0));\n\ttry {\n\t\treturn __msbMod._msb_calc_evaluate(a0, id1);\n\t} finally {\n\t\t__msb.pop(id1);\n\t}\n}");
-	assert code.includes("const id1 = __msb.push((x0, x1) => { a1(x0, x1); });");
+	assert code.includes("function bundled_evaluate(a0, a1) {\n\t__msb.enter();\n\tconst id1 = __msb.push(a1);\n\ttry {\n\t\treturn __msbMod._msb_calc_evaluate(a0, id1);\n\t} finally {\n\t\t__msb.pop(id1);\n\t}\n}");
+	assert code.includes("const id1 = __msb.push(a1);\n\ttry {\n\t\t__msbMod._msb_calc_visit(a0, id1);");
 	assert code.includes("const id0 = __msb.push((x0, x1) => (a0(x0 !== 0, x1 >>> 0) ? 1 : 0));");
+}
+
+test "js side: a callback whose adapter would only forward its arguments is pushed as the user function" {
+	assert bindingsFor(["drain"]).modules[0].code.includes("const id0 = __msb.push(a0);");
+	assert bindingsFor(["noArg"]).modules[0].code.includes("const id0 = __msb.push(a0);");
+	assert !bindingsFor(["evaluate"]).modules[0].code.includes("=> a1(x0)");
+}
+
+test "js side: a callback that converts a parameter or a result keeps its adapter" {
+	assert bindingsFor(["onByte"]).modules[0].code.includes("const id0 = __msb.push((x0, x1) => { a0(x0 & 255, x1); });");
+	assert bindingsFor(["judge"]).modules[0].code.includes("const id0 = __msb.push((x0) => (a0(x0) ? 1 : 0));");
+	for (const n of ["onByte", "judge", "pick", "sumBy", "edit"]) {
+		assert !bindingsFor([n]).modules[0].code.includes("__msb.push(a");
+	}
 }
 
 test "js side: one prelude awaits the wasm module once, hands it its own registry, and a stale callback id throws" {
@@ -467,7 +485,7 @@ test "js side: a checked callback is tested before it is pushed and its result i
 	assert code.indexOf(guard) < code.indexOf("const id1 = __msb.push((x0) =>");
 	assert code.includes("const id1 = __msb.push((x0) => __msbInt(a1(x0), \"number\", -2147483648, 2147483647, \"int32\", \"evaluate\", \"result of callback 'cb'\"));");
 	assert !bindingsFor(["evaluate"], true).modules[0].code.includes("__msb.push(a");
-	assert code.includes("const id1 = __msb.push((x0, x1) => { a1(x0, x1); });");
+	assert code.includes("const id1 = __msb.push(a1);");
 	assert code.includes("const id0 = __msb.push((x0, x1) => (__msbType(a0(x0 !== 0, x1 >>> 0), \"boolean\", \"boolean\", \"pick\", \"result of callback 'f'\") ? 1 : 0));");
 	assert code.includes("return __msbType(a1(s0), \"number\", \"float32\", \"sumBy\", \"result of callback 'cb'\"); }");
 }
