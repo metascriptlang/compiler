@@ -30,6 +30,8 @@ function toWire(kind: BoundaryKind, expr: string): string {
 function adapterOf(cb: BoundaryCallback, target: string): string {
 	let names = "";
 	let args = "";
+	let views = "";
+	let writesBack = "";
 	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
 		if (i > 0) args += ", ";
@@ -38,6 +40,13 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 			names += `x${w}, x${w + 1}`;
 			args += `__msbDec(x${w}, x${w + 1})`;
 			w += 2;
+		} else if (cb.params[i] == BoundaryKind.Span) {
+			const t = typedArrayOf(cb.elements[i]);
+			names += `x${w}, x${w + 1}`;
+			views += `const s${i} = { base: __msbVecOut(x${w} >>> 0, x${w + 1}, ${t}, ${cb.elements[i] == BoundaryKind.Bool}), off: 0, len: x${w + 1} }; `;
+			if (cb.modes[i] == BoundaryMode.Shared) writesBack += `__msbCopyTo(x${w} >>> 0, s${i}.base, 0, x${w + 1}, ${t}); `;
+			args += `s${i}`;
+			w += 2;
 		} else {
 			names += `x${w}`;
 			args += fromWire(cb.params[i], `x${w}`);
@@ -45,6 +54,10 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 		}
 	}
 	const call = `${target}(${args})`;
+	if (views != "") {
+		if (cb.result == BoundaryKind.Void) return `(${names}) => { ${views}${call}; ${writesBack}}`;
+		return `(${names}) => { ${views}const r = ${call}; ${writesBack}return ${toWire(cb.result, "r")}; }`;
+	}
 	if (cb.result == BoundaryKind.Void) return `(${names}) => { ${call}; }`;
 	return `(${names}) => ${toWire(cb.result, call)}`;
 }
@@ -168,9 +181,12 @@ const GLUE = [
 	"}",
 	"function __msbCopyIn(a, off, n, T) {",
 	"\tconst p = __msbAlloc(n * T.BYTES_PER_ELEMENT || 1);",
+	"\t__msbCopyTo(p, a, off, n, T);",
+	"\treturn [p, n];",
+	"}",
+	"function __msbCopyTo(p, a, off, n, T) {",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
 	"\tfor (let i = 0; i < n; i++) v[i] = a[off + i];",
-	"\treturn [p, n];",
 	"}",
 	"function __msbCopyBack(p, a, off, n, T, bool) {",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",

@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryParam, leafLiteral, signatureLetter } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, signatureLetter } from "./manifest";
 
 export interface WasmEntry {
 	source: string;
@@ -65,7 +65,7 @@ function importLines(name: string, letters: string, result: string, withId: bool
 	const msParams: string[] = withId ? ["id: int32"] : [];
 	for (let i = 0; i < letters.length; i += 1) {
 		const l = letters.slice(i, i + 1);
-		if (l == "s") {
+		if (l == "s" || l == "p") {
 			cParams.push(`uint32_t a${i}p, int32_t a${i}l`);
 			msParams.push(`a${i}p: uint32, a${i}l: int32`);
 			continue;
@@ -110,6 +110,13 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 		if (params[i] == BoundaryKind.String) {
 			sig += `a${i}: string`;
 			args += `, msbStrPtr(a${i}), a${i}.asBytes().length`;
+			continue;
+		}
+		if (params[i] == BoundaryKind.Span) {
+			const t = msTypeOf(cb.elements[i]);
+			const ptr = cb.modes[i] == BoundaryMode.Shared ? `Ptr<${t}>` : `Readonly<Ptr<${t}>>`;
+			sig += `a${i}: ${cb.modes[i] == BoundaryMode.Shared ? `Span<${t}>` : `Readonly<Span<${t}>>`}`;
+			args += `, (a${i}.length == 0 ? 0 : a${i} as ${ptr} as uint64 as uint32), a${i}.length as int32`;
 			continue;
 		}
 		sig += `a${i}: ${msTypeOf(params[i])}`;
@@ -256,6 +263,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		for (const p of f.params) {
 			if (p.kind == BoundaryKind.String) hasStringParam = true;
 			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.String)) hasStringParam = true;
+			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.Span)) readsHeap = true;
 			if (p.kind == BoundaryKind.Struct && leafLetters(p.leaves).includes("s")) hasStringParam = true;
 			if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) {
 				readsHeap = true;
