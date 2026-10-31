@@ -1,5 +1,4 @@
 // @stdout: late -2 | awaited late | forwarded boom
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a throw inside a finally handler rejects the promise finally makes, in place of the value
 // or the rejection it would forward: a catch after it receives the handler's Error, and so does
 // an await of it.
