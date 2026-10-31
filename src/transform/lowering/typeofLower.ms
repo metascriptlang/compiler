@@ -298,7 +298,15 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 		if (isWideInteger(m)) wide = true;
 		if (peelTransparentInstance(m).kind == TypeKind.BigInt) big = true;
 	}
-	if (!wide || (big && nullableUnion)) return node;
+	if (!wide) return node;
+	if (big && nullableUnion) {
+		const held: Type = peeled.typeReturn;
+		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => {
+			const absent = makeBinary(makeTypedIdentResolved(x, source, loc), "===", makeNull(loc), loc);
+			const member = routineCall("msTypeofTag_", makeTypedIdentResolved(x, held, loc), ctx, loc, (m: Symbol): Node[] => memberCases(held, m, typeofTagOf, ctx, loc));
+			return [makeIf(absent, makeBlock([makeReturn(makeString(typeofTagOf(nullType()), loc), loc)], loc), null, loc), makeReturn(member, loc)];
+		});
+	}
 	if (big) {
 		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => memberCases(source, x, typeofTagOf, ctx, loc));
 	}
