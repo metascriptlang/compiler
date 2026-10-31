@@ -855,6 +855,8 @@ test "replay: a didChange with several content changes takes the last text" {
 	assert runMemoryScenario("a didChange with several content changes takes the last text") == "";
 }
 
+test "replay: signature help counts the commas before the cursor, and none after the closing parenthesis" {
+	assert runMemoryScenario("signature help counts the commas before the cursor, and none after the closing parenthesis") == "";
 }
 
 // ===== Exports a top-level macro statement splices =====

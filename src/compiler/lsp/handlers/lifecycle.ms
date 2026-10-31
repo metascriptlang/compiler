@@ -875,7 +875,7 @@ test "signature help picks matching enum-literal overload" {
 		+ "function f(k: K): string { return \"\"; }\n"
 		+ "const x = f(K.B);\n";
 	const db = testDb("file:///ovlsig.ms", src);
-	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":16}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":15}}";
 	const r = handleSignatureHelp("40", params, db);
 	assert lspGetNumberField(r, "id") == 40;
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;

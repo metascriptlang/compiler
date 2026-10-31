@@ -2086,6 +2086,39 @@ function lastContentChangeWins(): LspScenario {
 	};
 }
 
+const COMMAS_SOURCE = CALLS_SOURCE + "const a = clamp(5, 12, 9);\nconst b = clamp(5, /* x, y */ 12, 9);\n";
+
+function signatureHelpCountsCommas(): LspScenario {
+	const uri = "file:///lspwire/commas.ms";
+	return {
+		name: "signature help counts the commas before the cursor, and none after the closing parenthesis",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, COMMAS_SOURCE))]),
+			frames([
+				request("10", "textDocument/signatureHelp", positionParams(uri, 5, 17)),
+				request("11", "textDocument/signatureHelp", positionParams(uri, 5, 21)),
+				request("12", "textDocument/signatureHelp", positionParams(uri, 5, 24)),
+				request("13", "textDocument/signatureHelp", positionParams(uri, 5, 25)),
+				request("14", "textDocument/signatureHelp", positionParams(uri, 6, 32)),
+				request("15", "textDocument/signatureHelp", positionParams(uri, 4, 30)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("5| is the 1st argument", clampSignature(0), signatureSummary(r, "n:10")),
+			sameText("12| is the 2nd argument", clampSignature(1), signatureSummary(r, "n:11")),
+			sameText("9| is the 3rd argument", clampSignature(2), signatureSummary(r, "n:12")),
+			sameText("after the closing parenthesis", "null", answerField(r, "n:13", "result")),
+			sameText("a comma in a comment is not a separator", clampSignature(1), signatureSummary(r, "n:14")),
+			sameText("after a nested call closing parenthesis, before the outer comma", clampSignature(0), signatureSummary(r, "n:15")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -2147,6 +2180,7 @@ export function lspScenarios(): LspScenario[] {
 		requestsBeforeInitializeAreRefused(),
 		closedDocumentIsNotRepublished(),
 		lastContentChangeWins(),
+		signatureHelpCountsCommas(),
 	];
 }
 

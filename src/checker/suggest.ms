@@ -1235,11 +1235,19 @@ function sgSubtreeTouchesLine(node: Node, targetLine: int32): boolean {
 
 // ===== AST-Based Signature Help (CallExpr callee + child count for active param) =====
 
-// The innermost call whose argument list still holds the cursor; past every `)`, the innermost call.
-function findSignatureCall(root: Node, line: int32, col: int32): Node | null {
+// The innermost call whose argument list still holds the cursor; none past its own `)`. A call the
+// parser closed without a `)` (an unfinished call) still holds a cursor after its last token.
+function findSignatureCall(root: Node, source: string, line: int32, col: int32): Node | null {
 	const innermost = findEnclosingCallExpr(root, line, col, false);
 	if (innermost == null || !sgClosedBefore(innermost, line, col)) return innermost;
-	return findEnclosingCallExpr(root, line, col, true) ?? innermost;
+	const open = findEnclosingCallExpr(root, line, col, true);
+	if (open != null) return open;
+	return sgEndsWithCloseParen(innermost, source) ? null : innermost;
+}
+
+function sgEndsWithCloseParen(call: Node, source: string): boolean {
+	const end = call.location;
+	return end.endLine > 0 && end.endColumn > 1 && source.byteAt(sgGetLineOffset(source, end.endLine) + end.endColumn - 2) == ")".code;
 }
 
 // Find the innermost CallExpr enclosing the cursor position.
@@ -1302,22 +1310,40 @@ function sgGetReceiverFromNode(callNode: Node): string {
 	return "";
 }
 
-// Determine active parameter index from cursor position within CallExpr arguments.
-// Reference: count CallExpr arguments before cursor position.
-function sgGetActiveParamFromNode(callNode: Node, line: int32, col: int32): number {
+// The active parameter is the number of argument separators between the `(` and the cursor, as a
+// token list counts its commas: the cursor inside or at the end of an argument is still on it.
+function sgGetActiveParamFromNode(callNode: Node, source: string, line: int32, col: int32): number {
 	const d = callNode.data as CallExprData;
-	if (d.arguments.length == 0) return 0;
-	// Count arguments whose start location is before cursor
+	const cursor = sgGetLineOffset(source, line) + col;
 	let activeParam = 0;
-	for (let i = 0; i < d.arguments.length; i = i + 1) {
-		const arg = d.arguments[i];
-		if (arg.location.line < line) {
-			activeParam = i + 1;
-		} else if (arg.location.line == line && arg.location.column < col) {
-			activeParam = i + 1;
-		}
+	for (const arg of d.arguments) {
+		const end = arg.location;
+		if (end.endLine == 0) break;
+		const from = sgGetLineOffset(source, end.endLine) + end.endColumn - 1;
+		if (!sgCommaBetween(source, from, cursor)) break;
+		activeParam = activeParam + 1;
 	}
 	return activeParam;
+}
+
+function sgCommaBetween(source: string, from: int32, to: int32): boolean {
+	let at = from;
+	while (at < to) {
+		const ch = source.byteAt(at);
+		if (ch == ",".code) return true;
+		if (ch == "/".code && at + 1 < to && source.byteAt(at + 1) == "*".code) {
+			const close = source.indexOf("*/", at + 2);
+			if (close < 0) return false;
+			at = close + 2;
+		} else if (ch == "/".code && at + 1 < to && source.byteAt(at + 1) == "/".code) {
+			const newline = source.indexOf("\n", at);
+			if (newline < 0) return false;
+			at = newline + 1;
+		} else {
+			at = at + 1;
+		}
+	}
+	return false;
 }
 
 // Unified signature context: AST-based with text-based fallback.
@@ -1332,12 +1358,12 @@ export interface SgSignatureContext {
 
 export function sgGetSignatureContext(program: Node, source: string, line: int32, col: int32): SgSignatureContext {
 	// Primary: AST-based
-	const callNode = findSignatureCall(program, line, col);
+	const callNode = findSignatureCall(program, source, line, col);
 	if (callNode != null) {
 		return {
 			calleeName: sgGetCalleeFromNode(callNode),
 			receiverName: sgGetReceiverFromNode(callNode),
-			activeParam: sgGetActiveParamFromNode(callNode, line, col),
+			activeParam: sgGetActiveParamFromNode(callNode, source, line, col),
 			callNode,
 		};
 	}
