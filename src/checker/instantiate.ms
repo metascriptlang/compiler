@@ -179,10 +179,12 @@ export function resetInstantiationState(): void {
 	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[]>();
+	_hookInstanceTypes = new HashMap<Symbol, Type[]>();
 }
 
 export function forgetInstanceHooks(owner: Symbol): void {
 	_hookScannedInstances.delete(owner);
+	_hookInstanceTypes.delete(owner);
 	const hooks = _instanceHooks.get(owner);
 	if (hooks == null) return;
 	const kept: InstanceHook[] = [];
@@ -201,6 +203,7 @@ interface InstanceHook {
 
 let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
 let _hookScannedInstances: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
+let _hookInstanceTypes: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
 
 export function instanceArgsOf(sym: Symbol): Type[] {
 	if (sym.instanceArgs == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
@@ -331,8 +334,8 @@ function bindGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Typ
 	if (seen == null) return;
 	for (const instType of seen) {
 		if (instanceHook(genericSym, instType.typeChildren, op) == null) instantiateBoundHook(genericSym, instType, op, hookSym, ctx, at);
-		markInstanceHookType(instType, genericSym);
 	}
+	for (const instType of _hookInstanceTypes.get(genericSym)!) markInstanceHookType(instType, genericSym);
 }
 
 function markInstanceHookType(t: Type, owner: Symbol): void {
@@ -365,7 +368,9 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	if (scanned == null) {
 		scanned = [];
 		_hookScannedInstances.set(owner, scanned);
+		_hookInstanceTypes.set(owner, []);
 	}
+	_hookInstanceTypes.get(owner)!.push(t);
 	for (const seen of scanned) {
 		if (sameInstanceArgs(seen.typeChildren, t.typeChildren)) {
 			markInstanceHookType(t, owner);
