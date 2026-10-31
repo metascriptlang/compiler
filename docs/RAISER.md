@@ -51,10 +51,10 @@ scope or surviving storage growth.
 | Tier | What | Admission |
 |---|---|---|
 | 0 | VM opcode | not expressible in MS: string identity / length / index, array index / length / push / set-length, arithmetic. A std operation becomes an opcode for representation, never for speed; how an instruction codegen already emits is encoded (an immediate operand, a field slot index, a compare fused with its branch) is chosen for speed |
-| 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`, 105 `registerHostFn` entries) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
+| 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`, 174 `registerHostFn` entries) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
 | 2 | Portable MS (`std/core/string/shared.ms`, `std/core/array/index.rms`) | everything derivable; shared with the C and JS backends |
 
-The bridge table is compiler-side, so Tier 1 exists only where a host compiler does: roles 1 and 2. Roles 3 and 4 get whatever minimal surface the embedder supplies, so their stdlib has to come from Tier 2. Answering "Raiser needs X" with "add a bridge" is a role-1-only answer.
+The bridge table is compiler-side, so Tier 1 exists only where a host compiler does: roles 1 and 2. Roles 3 and 4 get whatever minimal surface the embedder supplies, so their stdlib has to come from Tier 2. Answering "Raiser needs X" with "add a bridge" is a role-1-only answer. Comptime runs a std routine of a `.cms` module through that module's `.rms` tier when one declares it, and a tier that lacks the routine is an internal error, not a fall back to the C body (`raiserTierOf`, `src/codegen/raiser/eval.ms`).
 
 A call to an extern with no bridge compiles with `raiser warning: no host bridge for '<name>'` at the call site and fails at runtime with `Unknown host function: <name>`. It is a warning, not an error, because std bodies the program never calls may contain unbridged externs.
 
