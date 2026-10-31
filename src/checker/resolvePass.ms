@@ -2963,7 +2963,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)
-		&& (resolved.kind == TypeKind.Struct || resolved.kind == TypeKind.Enum)) {
+		&& (resolved.kind == TypeKind.Struct || resolved.kind == TypeKind.Enum || resolved.kind == TypeKind.Distinct)) {
 		const wrap = emptyType();
 		wrap.kind = TypeKind.Alias;
 		wrap.typeName = d.aliasName;
