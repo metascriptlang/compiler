@@ -22,7 +22,7 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
@@ -216,7 +216,7 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 		fnExpr.typeExprs = node.typeExprs;
 		node.typeExpr = null;
 		node.typeExprs = null;
-		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx, node.location) : null;
+		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx) : null;
 		if (annotation != null) {
 			const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
 			operand.nodeType = annotation;
@@ -698,7 +698,7 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 
 // ===== Statement Helpers =====
 
-function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Type | null {
+function signatureTypeOf(fn: Node, ctx: CheckerContext): Type | null {
 	let paramNames: string[] = [];
 	let paramTypeStrs: string[] = [];
 	let returnTypeStr = "";
@@ -718,10 +718,10 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
 		if (paramTypeStrs[i] == "") return null;
-		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
+		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, 0, 0));
 	}
-	const predicate = predicateReturnOf(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr);
-	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	const predicate = predicateReturnOf(returnTypeStr, ctx, 0, 0, fn.typeExpr);
+	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : annotatedType(returnTypeStr, fn.typeExpr, ctx, 0, 0));
 	if (predicate != null) closure.typeExtra = predicate.sentinel;
 	return closure;
 }
@@ -778,7 +778,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr)) {
-		const selfRefType = declType != null ? declType : signatureTypeOf(d.initializer, ctx, d.nameLocation);
+		const selfRefType = declType != null ? declType : signatureTypeOf(d.initializer, ctx);
 		const hoisted = lookupLocal(ctx.table, d.declName);
 		if (selfRefType != null && hoisted == null) {
 			preRegisteredSelfRefSym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, selfRefType, d.declKind != DeclKind.Const);
