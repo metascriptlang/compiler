@@ -35,3 +35,26 @@ const r = run((xs: number[]): Span<number> => xs);
 `;
 	assert errorsAt(source, "cannot return Span<number>") == "3:31,4:31";
 }
+
+test "a nested function declaration reports an unknown parameter type once, at the type" {
+	const source = `
+function outer(): number {
+	function inner(e: Missing): number { return 1; }
+	function bare(e: Missing) { return 1; }
+	return inner(2) + bare(3);
+}
+`;
+	assert errorsAt(source, "Unresolved type 'Missing'") == "3:20,4:19";
+}
+
+test "nested function declarations still see themselves and each other before their bodies" {
+	const errors = checkOnly(`
+function outer(): int32 {
+	function fact(n: int32): int32 { return n <= 1 ? 1 : n * fact(n - 1); }
+	function isEven(n: int32): boolean { return n == 0 ? true : isOdd(n - 1); }
+	function isOdd(n: int32): boolean { return n == 0 ? false : isEven(n - 1); }
+	return isEven(4) ? fact(5) : 0;
+}
+`).errors;
+	assert errors.length == 0, errors.join("\n");
+}
