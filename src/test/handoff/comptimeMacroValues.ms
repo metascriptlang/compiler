@@ -390,3 +390,28 @@ function main(): void {
 `);
 	assert result.ok, result.ok ? "" : result.error;
 }
+
+test "comptime macro values: a map whose values are closures keeps its entries through set, delete and get" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+
+export macro entries(node: Node): Node {
+	const actions = new Map<int64, () => void>();
+	actions.set(1, (): void => {});
+	actions.set(2, (): void => {});
+	actions.delete(1);
+	const scale = new Map<string, (x: int32) => int32>();
+	scale.set("double", (x: int32): int32 => x * 2);
+	scale.set("triple", (x: int32): int32 => x * 3);
+	scale.delete("double");
+	const text = actions.size.toString() + ":" + scale.get("triple")!(7).toString();
+	if (text != "1:21") { error("closure map read " + text, node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: text };
+}
+
+function main(): void {
+	const x = entries(0);
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
