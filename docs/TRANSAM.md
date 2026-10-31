@@ -112,6 +112,12 @@ A type check of a module whose dependency declares a macro runs a full check of 
 
 An import a db only binds, outside a loaded graph (`db.bound`), is reused while its import closure lists the same files in the same order and every `Parse` and `TypeCheck` entry in it has the `changedAt` it had at bind. A bound-only module has no `TypeCheck` entry, so an entry absent at bind must still be absent.
 
+An import resolves by resolver priority every time (`dbResolveImport`), whichever candidate the db already holds. A candidate path with no file is an input of its own (`getInputId`, absent until a write): the check that resolved an import, and the `Preprocess` that probed a header's companion `.c`, depend on each such path, so creating a file at a higher-priority path changes what they read. An empty file is a file.
+
+A changed `globalImports` list takes a revision, drops the bound units and the registered exports of every non-std module, and forgets their checks, because the layer they were checked under is gone.
+
+A cancelled check returns its partial context to `dbTypeCheck`'s caller but caches nothing, and `dbTransform`, `dbAnalyze` and `dbLower` return null for it instead of lowering it; the two tree queries parse the `Preprocess` output the check read. Recording a dependency or storing a query with no matching frame is an internal error.
+
 A check that is cancelled or throws stores nothing: its frames are popped, its in-progress mark, `_checkingDb` and the body-read sink are restored, its bound unit is discarded and the checks of its transitive readers are dropped, because they may hold that unit's Symbols. A throw then propagates; the LSP publishes it as an internal-error diagnostic on the file instead of an empty list.
 
 ### Bound to a loaded graph
@@ -155,7 +161,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Durability levels LOW / MEDIUM / HIGH | `types.zig` | Std files skip verification |
 | BFS transitive invalidation | `module_graph.zig` | Correct propagation, cycle-safe |
 | Dependency stack with push / pop frames | `types.zig` | Automatic dependency tracking |
-| Version-based cancellation | `cancellation.zig` | Responsive LSP without boolean-flag races |
+| Version-based cancellation | `cancellation.zig` | Responsive LSP: a query that began before a keystroke sees the version change |
 
 ### Changed from the reference
 
