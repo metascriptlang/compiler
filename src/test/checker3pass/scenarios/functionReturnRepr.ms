@@ -46,6 +46,14 @@ take((): number | null => 2);
 take(() => 2);
 `;
 
+const SRC_CSTRING_RESULT = `
+extern function niX(name: cstring, arg: cstring): cstring from "niX";
+type Cmd = (name: string, arg: string) => string;
+function owned(native: Cmd): Cmd { return native; }
+const c: Cmd = owned(niX);
+const d: Cmd = (name: string, arg: string): cstring => niX(name, arg);
+`;
+
 function errorsOf(source: string): string {
 	return checkOnly(source).errors.join("\n");
 }
@@ -83,4 +91,14 @@ test "a function passed under an explicit type argument gets both fixes" {
 test "the wrapping lambda and a return type declared as the union check" {
 	const result = checkOnly(SRC_WRAPPED);
 	assert result.errors.length == 0, "the lambdas must check: " + result.errors.join("\n");
+}
+
+test "a function returning cstring into a string-returning slot names the copying lambda" {
+	const text = errorsOf(SRC_CSTRING_RESULT);
+	assert text.contains("a function returning 'cstring' cannot fill a slot returning 'string': the C buffer has to be copied where the call returns. Pass a lambda ((a0, a1) => niX(a0, a1) as string)"), "owned(niX) must name the copying lambda: " + text;
+}
+
+test "a lambda returning cstring into a string-returning slot is told to write as string" {
+	const text = errorsOf(SRC_CSTRING_RESULT);
+	assert text.contains("the C buffer has to be copied where the call returns. Write 'as string' on the lambda's result"), "the cstring lambda must be told to copy: " + text;
 }
