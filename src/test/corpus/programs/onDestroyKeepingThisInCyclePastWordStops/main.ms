@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: linked 2
 // @stdout: Error: onDestroy kept a reference to the Leaf it destroys
-// @xfail(san): the program stops inside the collection, so the cycle's other Leaf is never destroyed (ledger Leaf alloc=2 destroy=1)
 // @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
 // @skip-js: onDestroy does not run on JS; `extern function` binds a C symbol
 // note: the collector's free path compares the count before and after the hook at full width too:
