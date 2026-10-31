@@ -77,3 +77,23 @@ const j = new J("x");
 `, 1);
 	assert required.contains("Overload signature for 'constructor' has 1 parameter(s) but implementation requires 2"), required;
 }
+
+test "a derived class without a constructor answers to the base's constructor signatures" {
+	const BASE = `class B {
+	v: string = "";
+	constructor(a: string) {}
+	constructor(a: string | number) { this.v = "x"; }
+}
+class K extends B {}
+class L extends K {}
+`;
+	assert checkWith(BASE + `const k = new K("x");
+const l = new L("y");
+`, 1) == "";
+	const child = checkWith(BASE + `const k = new K(7);
+`, 1);
+	assert child.contains("No matching overload for the constructor of 'K'"), child;
+	const grand = checkWith(BASE + `const l = new L(7);
+`, 1);
+	assert grand.contains("No matching overload for the constructor of 'L'"), grand;
+}
