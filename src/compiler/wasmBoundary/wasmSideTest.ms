@@ -59,11 +59,13 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	assert entryFor(["add64"]).jsLibrary == "";
 }
 
-test "wasm entry: a string parameter arrives as ptr and len, a result is handed over by msb_rs_s while it is alive" {
+test "wasm entry: a string parameter arrives as ptr and len and is adopted without a copy, a result is handed over by msb_rs_s while it is alive" {
 	const e = entryFor(["twice"]);
 	const s = e.source;
 	assert s.includes("function msbStrFrom(ptr: uint32, len: int32): string {\n\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);\n}");
-	assert s.includes('@exportName("msb_calc_twice")\nexport function msb_calc_twice(sPtr: uint32, sLen: int32): void {\n\tconst r = msbm0_twice(msbStrFrom(sPtr, sLen));\n\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n}');
+	assert s.includes("extern function msStringAdoptMalloced(block: uint64, length: int64): string;");
+	assert s.includes("function msbStrAdopt(ptr: uint32, len: int32): string {\n\treturn msStringAdoptMalloced(ptr as uint64, len as int64);\n}");
+	assert s.includes('@exportName("msb_calc_twice")\nexport function msb_calc_twice(sPtr: uint32, sLen: int32): void {\n\tconst r = msbm0_twice(msbStrAdopt(sPtr, sLen));\n\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n}');
 	assert s.includes('extern function msb_rs_s(a0p: uint32, a0l: int32): void from "msb_rs_s";');
 	assert s.includes("void msb_rs_s(uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false && s.includes("msb_ret_len") == false;
@@ -72,6 +74,7 @@ test "wasm entry: a string parameter arrives as ptr and len, a result is handed 
 	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 	const plain = entryFor(["add64"]);
 	assert plain.source.includes("msStringNew") == false;
+	assert plain.source.includes("msStringAdoptMalloced") == false;
 	assert plain.runtimeMethods.length == 0;
 }
 
@@ -108,7 +111,7 @@ test "wasm entry: a struct crosses as leaf parameters and returns through one re
 	const e = entryFor(["tag"]);
 	const s = e.source;
 	assert s.includes("export function msb_calc_tag(l_0: float64, l_1: float64, l_2Ptr: uint32, l_2Len: int32, l_3: int32): void {");
-	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrFrom(l_2Ptr, l_2Len), count: l_3 });");
+	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrAdopt(l_2Ptr, l_2Len), count: l_3 });");
 	assert s.includes("\tmsb_rs_ddsi(r.at.x, r.at.y, msbStrPtr(r.text), r.text.asBytes().length, r.count);");
 	assert s.split("extern function msb_rs_ddsi").length == 2;
 	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");

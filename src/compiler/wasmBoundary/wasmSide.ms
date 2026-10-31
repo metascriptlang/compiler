@@ -136,8 +136,12 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 function stringHelperLines(): string[] {
 	return [
 		"extern function msStringNew(data: cstring, length: int64): string;",
+		"extern function msStringAdoptMalloced(block: uint64, length: int64): string;",
 		"function msbStrFrom(ptr: uint32, len: int32): string {",
 		"\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);",
+		"}",
+		"function msbStrAdopt(ptr: uint32, len: int32): string {",
+		"\treturn msStringAdoptMalloced(ptr as uint64, len as int64);",
 		"}",
 		"function msbStrPtr(s: string): uint32 {",
 		"\treturn (s as cstring) as Ptr<uint8> as uint64 as uint32;",
@@ -152,7 +156,7 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 		const p: BoundaryParam = f.params[i];
 		if (p.kind == BoundaryKind.String) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
-			argList.push(`msbStrFrom(${p.name}Ptr, ${p.name}Len)`);
+			argList.push(`msbStrAdopt(${p.name}Ptr, ${p.name}Len)`);
 		} else if (p.kind == BoundaryKind.Callback) {
 			sigs.push(`${p.name}: int32`);
 			argList.push(closureOf(p.callback!, p.name));
@@ -162,7 +166,7 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 				const leaf = `${p.name}_${j}`;
 				if (p.leaves[j].kind == BoundaryKind.String) {
 					sigs.push(`${leaf}Ptr: uint32, ${leaf}Len: int32`);
-					values.push(`msbStrFrom(${leaf}Ptr, ${leaf}Len)`);
+					values.push(`msbStrAdopt(${leaf}Ptr, ${leaf}Len)`);
 				} else {
 					sigs.push(`${leaf}: ${valueTypeOf(p.leaves[j].kind)}`);
 					values.push(leaf);
