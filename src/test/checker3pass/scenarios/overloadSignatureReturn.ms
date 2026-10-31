@@ -61,3 +61,26 @@ const c = bad("x");
 `).errors;
 	assert errors.length == 1 && errors[0].contains("Overload signature for 'bad' has return type 'boolean' incompatible with implementation return type 'number'"), errors.join("\n");
 }
+
+test "a signature may omit the implementation's defaulted parameters, never a required one, and never adds one" {
+	const errors = checkOnly(`
+function f(a: string): number;
+function f(a: string, n: int32 = 1): number { return a.length + n; }
+class K {
+	m(a: string): number;
+	m(a: string, n: int32 = 2): number { return a.length + n; }
+}
+const x = f("ab");
+const y = new K().m("ab");
+function short(a: string): number;
+function short(a: string, n: int32): number { return n; }
+function long(a: string, n: int32, z: int32): number;
+function long(a: string, n: int32 = 1): number { return n; }
+const s = short("a");
+const l = long("a", 1, 2);
+`).errors;
+	const text = errors.join("\n");
+	assert text.contains("Overload signature for 'short' has 1 parameter(s) but implementation requires 2"), text;
+	assert text.contains("Overload signature for 'long' has 3 parameter(s) but implementation has 2"), text;
+	assert !text.contains("'f'") && !text.contains("'m'"), text;
+}

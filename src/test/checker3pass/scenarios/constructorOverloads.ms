@@ -57,3 +57,23 @@ test "an explicit abstract constructor is refused and a constructor of an abstra
 	const abstractClass = checkWith(`abstract class I {\n	v: string = "";\n	constructor(a: string) {}\n	constructor(a: number) {}\n	constructor(a: string | number) { this.v = "x"; }\n}\nclass J extends I {}\n`, 2);
 	assert !abstractClass.contains("abstract' modifier"), abstractClass;
 }
+
+test "a constructor signature may omit the implementation's defaulted parameters, never a required one" {
+	const ok = checkWith(`class H {
+	v: number = 0;
+	constructor(a: string) {}
+	constructor(a: string, n: int32) {}
+	constructor(a: string, n: int32 = 1) { this.v = a.length + n; }
+}
+const h = new H("x");
+const i = new H("x", 2);
+`, 2);
+	assert ok == "", ok;
+	const required = checkWith(`class J {
+	constructor(a: string) {}
+	constructor(a: string, n: int32) {}
+}
+const j = new J("x");
+`, 1);
+	assert required.contains("Overload signature for 'constructor' has 1 parameter(s) but implementation requires 2"), required;
+}
