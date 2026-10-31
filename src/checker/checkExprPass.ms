@@ -3,7 +3,7 @@
 
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
-import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
+import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -27,7 +27,7 @@ import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, reviveConsumedName, symbolConsumeKey, MOVED_PREFIX } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
-import { calledRoutineType } from "./effects";
+import { calledRoutineType, routineBody } from "./effects";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
@@ -1318,12 +1318,106 @@ function elementSlotType(access: Node): Type | null {
 	return held.typeReturn;
 }
 
-function refuseEmptiedSlot(ctx: CheckerContext, place: Node): void {
+function refuseEmptiedSlot(ctx: CheckerContext, place: Node, move: Node): void {
 	const isField = place.kind == NodeKind.MemberExpr;
 	const slot = (isField ? declaredTypeOfLocation(place) : elementSlotType(place)) ?? place.nodeType;
 	if (!requiresInit(ctx, slot)) return;
+	const root = ownedPathRoot(ctx, place);
+	const body = root != null ? routineBodyOf(ctx.currentFunction) : null;
+	const reuse = body != null ? laterUse((root!.data as IdentifierData).name, root!.resolvedSym!, body, move) : "";
+	if (body != null && reuse == "") return;
 	const what = isField ? "field" : "element";
-	addError(ctx, `cannot move '${lvalueText(place)}': ${noDefaultReason(ctx, slot)}, so the move would leave the ${what} without a value — read it without 'move' (a class reference is shared, not copied), declare the ${what} nullable ('${typeDisplayName(slot)} | null'), or exchange it with swap(a, b)`, place.location.line, place.location.column);
+	const why = `${noDefaultReason(ctx, slot)}, so the move would leave the ${what} without a value` + (body != null ? ` and ${reuse}` : "");
+	addError(ctx, `cannot move '${lvalueText(place)}': ${why} — read it without 'move' (a class reference is shared, not copied), declare the ${what} nullable ('${typeDisplayName(slot)} | null'), or exchange it with swap(a, b)`, place.location.line, place.location.column);
+}
+
+function ownedPathRoot(ctx: CheckerContext, place: Node): Node | null {
+	let n = place;
+	while (n.kind == NodeKind.MemberExpr || n.kind == NodeKind.ArrayAccess) {
+		let holder = n.kind == NodeKind.MemberExpr ? (n.data as MemberExprData).object : (n.data as ArrayAccessData).array;
+		while (holder.kind == NodeKind.HiddenDeref || holder.kind == NodeKind.HiddenSubConv || holder.kind == NodeKind.HiddenStdConv) {
+			holder = holder.kind == NodeKind.HiddenDeref ? (holder.data as HiddenDerefData).expr : (holder.data as HiddenStdConvData).convExpr;
+		}
+		if (!heldByValue(storageType(holder))) return null;
+		n = holder;
+	}
+	const sym = n.resolvedSym;
+	if (n.kind != NodeKind.Identifier || sym == null) return null;
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) return null;
+	return hasFlag(sym, SymbolFlag.Global) || ctx.capturedSyms.has(sym) ? null : n;
+}
+
+function storageType(holder: Node): Type | null {
+	if (holder.kind == NodeKind.Identifier && holder.resolvedSym != null) return holder.resolvedSym.symbolType;
+	if (holder.kind == NodeKind.MemberExpr) return declaredTypeOfLocation(holder) ?? holder.nodeType;
+	return holder.nodeType;
+}
+
+function heldByValue(t: Type | null): boolean {
+	let held = skipModifier(t);
+	while (held != null && !isResult(held) && (held.kind == TypeKind.Alias || held.kind == TypeKind.GenericInstance) && held.typeReturn != null) held = held.typeReturn;
+	if (held == null || unwrapRefNullUnion(held) != null) return false;
+	if (isResult(held)) return true;
+	return match (held.kind) {
+		TypeKind.Struct => isStructType(held),
+		TypeKind.Union => held.typeChildren.every((m: Type): boolean => m.kind == TypeKind.Null || isPrimitiveKind(m.kind) || heldByValue(m)),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple => true,
+		_ => false,
+	};
+}
+
+function routineBodyOf(fn: Symbol | null): Node | null {
+	const decl = fn != null ? fn.declNode : null;
+	if (decl != null && decl.kind == NodeKind.TestDecl) return (decl.data as TestDeclData).testBody;
+	return routineBody(decl);
+}
+
+function laterUse(name: string, sym: Symbol, body: Node, move: Node): string {
+	const at = move.location;
+	let found = "";
+	let onPath: Node[] = [];
+	const visit = (n: Node, path: Node[]): void => {
+		if (n == move) { onPath = path.slice(); return; }
+		if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == name && found == ""
+			&& (n.location.line > at.line || (n.location.line == at.line && n.location.column > at.column))) found = `'${name}' is used again at line ${n.location.line}`;
+		const looping = isLoopNode(n);
+		if (looping) path.push(n);
+		forEachChild(n, (child: Node): void => { visit(child, path); });
+		if (looping) path.pop();
+	};
+	visit(body, []);
+	if (found != "") return found;
+	for (const loop of onPath) {
+		if (!declaresInside(loop, name, sym)) return `the loop at line ${loop.location.line} runs the move again on the same '${name}'`;
+	}
+	return "";
+}
+
+function isLoopNode(n: Node): boolean {
+	return n.kind == NodeKind.WhileStmt || n.kind == NodeKind.DoWhileStmt || n.kind == NodeKind.ForStmt
+		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
+}
+
+function loopBody(loop: Node): Node {
+	if (loop.kind == NodeKind.WhileStmt) return (loop.data as WhileStmtData).whileBody;
+	if (loop.kind == NodeKind.DoWhileStmt) return (loop.data as DoWhileStmtData).doBody;
+	if (loop.kind == NodeKind.ForStmt) return (loop.data as ForStmtData).forBody;
+	if (loop.kind == NodeKind.ForOfStmt) return (loop.data as ForOfStmtData).forOfBody;
+	if (loop.kind == NodeKind.ForInStmt) return (loop.data as ForInStmtData).forInBody;
+	throw new Error(`internal: loopBody on a ${loop.kind} node`);
+}
+
+function declaresInside(loop: Node, name: string, sym: Symbol): boolean {
+	const body = loopBody(loop);
+	if (loop.kind == NodeKind.ForOfStmt && (loop.data as ForOfStmtData).forOfBinding == name) return true;
+	if (loop.kind == NodeKind.ForInStmt && (loop.data as ForInStmtData).forInBinding == name) return true;
+	let declared = false;
+	const visit = (n: Node): void => {
+		if (n.kind != NodeKind.Identifier && n.resolvedSym == sym) declared = true;
+		if (!declared) forEachChild(n, visit);
+	};
+	visit(body);
+	return declared;
 }
 
 function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -1343,7 +1437,7 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
 		if (refusal != null) addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
-		refuseEmptiedSlot(ctx, d.moveArg);
+		refuseEmptiedSlot(ctx, d.moveArg, node);
 	}
 	if (d.moveArg.kind == NodeKind.Identifier && d.moveArg.resolvedSym != null && isFrameValue(d.moveArg.resolvedSym)) {
 		if (ctx.capturedSyms.has(d.moveArg.resolvedSym)) refuseCapturedMove(ctx, node);

@@ -202,6 +202,34 @@ test "bindingOwnership: an explicit move out of a field or element whose type ha
 	}
 }
 
+test "bindingOwnership: an explicit move out of a path a dead local owns by value is kept, and refused when the local is used again or the path crosses a reference" {
+	const shapes = "class Leaf { v: int32 = 7; }\nstruct Wrap { leaf: Leaf; }\nstruct Outer { wrap: Wrap; n: int32; }\nclass Room { wrap: Wrap = { leaf: new Leaf() }; }\nstruct Shelf { room: Room; }\nfunction made(): Result<Leaf, string> { return Result.ok(new Leaf()); }\nlet g: Wrap = { leaf: new Leaf() };\n";
+	const kept = [
+		{ name: "a field", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; return t.v; }" },
+		{ name: "an element", body: "export function run(): int32 { let xs: Vec<Leaf> = [new Leaf()]; const t = move xs[0]; return t.v; }" },
+		{ name: "a nested struct field", body: "export function run(): int32 { let o: Outer = { wrap: { leaf: new Leaf() }, n: 1 }; const t = move o.wrap.leaf; return t.v + 0; }" },
+		{ name: "a Result payload", body: "export function run(): int32 { let r = made(); if (!r.ok) return 0; const t = move r.value; return t.v; }" },
+		{ name: "a local declared inside the loop", body: "export function run(): int32 { let s = 0; for (let i = 0; i < 2; i++) { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; s += t.v; } return s; }" },
+	];
+	for (const item of kept) {
+		const result = compileToC(shapes + item.body);
+		assert result.ok, item.name + (result.ok ? "" : ": " + result.error);
+	}
+	const refused = [
+		{ name: "the local is read after the move", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; return t.v + w.leaf.v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value and 'w' is used again at line 8" },
+		{ name: "a loop runs the move again", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; let s = 0; for (let i = 0; i < 2; i++) { const t = move w.leaf; s += t.v; } return s; }", refusal: "and the loop at line 8 runs the move again on the same 'w'" },
+		{ name: "a class hop on the path", body: "export function run(): int32 { let s: Shelf = { room: new Room() }; const t = move s.room.wrap.leaf; return t.v; }", refusal: "cannot move 's.room.wrap.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+		{ name: "a ref parameter root", body: "function take(ref w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return take(w).v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+		{ name: "a this root", body: "function take(this w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return w.take().v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+		{ name: "a captured local", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const f = (): int32 => w.leaf.v; const t = move w.leaf; return t.v + f(); }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+		{ name: "a global root", body: "export function run(): int32 { const t = move g.leaf; return t.v; }", refusal: "cannot move 'g.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+	];
+	for (const item of refused) {
+		const result = compileToC(shapes + item.body);
+		assert !result.ok && result.error.contains(item.refusal), item.name + (result.ok ? " compiled" : ": " + result.error);
+	}
+}
+
 test "bindingOwnership: an explicit move of a variable a closure captures is refused, naming the variable" {
 	const shapes = "class Box { n: string = \"\"; }\n";
 	const refused = [
