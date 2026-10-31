@@ -3187,6 +3187,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	let i = 0;
 	for (const param of params) {
 		let paramType = inferredType();
+		let sinkParam = false;
 		if (sym != null && sym.symbolType.kind == TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
 			// Rest param: inside the body the symbol is the packed array, not the
@@ -3197,6 +3198,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			}
 			if (paramType != null && paramType.kind == TypeKind.Sink && paramType.typeReturn != null) {
 				paramType = paramType.typeReturn;
+				sinkParam = true;
 			}
 		}
 		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
@@ -3206,6 +3208,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		paramTypes.push(paramType);
 		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults, i, paramType);
 		const paramSym = paramSymbol(ctx, body, i, param, SymbolKind.Parameter, paramType);
+		if (sinkParam) setFlag(paramSym, SymbolFlag.Sink);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
 			paramSym.location = paramLocs[i];

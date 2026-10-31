@@ -1989,7 +1989,8 @@ function isActorRef(t: Type | null): boolean {
 
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
 	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
-	if (sym.symbolKind == SymbolKind.Parameter) {
+	const ownedParam = sym.symbolKind == SymbolKind.Parameter && hasFlag(sym, SymbolFlag.Sink);
+	if (sym.symbolKind == SymbolKind.Parameter && !ownedParam) {
 		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
@@ -1998,7 +1999,7 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 		return;
 	}
 	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
-	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: false, reported: false };
+	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: ownedParam, reported: false };
 	if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {
 		addError(ctx, "cannot move '" + sym.name + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);
