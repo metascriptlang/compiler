@@ -163,3 +163,4 @@ import "./cases/destructuringAnnotation";
 import "./cases/quotedObjectBindings";
 import "./cases/quotedMemberNames";
 import "./cases/constructorOverloadSignatures";
+import "./cases/danglingBraceComments";

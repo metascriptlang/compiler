@@ -10,8 +10,8 @@ import {
 	IdentifierData, NewExprData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
-import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
+import { SourceComment, CommentKind } from "../comments";
+import { withComments, danglingOf, danglingBlock, boxed, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
 import { FormatOptions } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
@@ -408,7 +408,10 @@ function needsQuote(key: string): boolean {
 
 export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectLiteralData;
-	if (d.keys.length == 0) return docText("{}");
+	if (d.keys.length == 0) {
+		const orphans = danglingOf(node);
+		return orphans.length == 0 ? docText("{}") : boxed("{", [danglingBlock(orphans)], "}");
+	}
 
 	let forceBreak = d.keyLocations.length > 0 && d.keyLocations[0].line > node.location.line;
 	for (const prop of d.properties) {
@@ -760,7 +763,14 @@ export function objectPatternContent(node: Node, options: FormatOptions): Doc[] 
 
 export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectPatternData;
-	if (d.patternProps.length == 0) return docText("{}");
+	if (d.patternProps.length == 0) {
+		const orphans = danglingOf(node);
+		if (orphans.length == 0) return docText("{}");
+		for (const c of orphans) {
+			if (c.kind == CommentKind.Line) return boxed("{", [danglingBlock(orphans)], "}");
+		}
+		return docGroup([docText("{"), docIndent([docSoftLine(), danglingBlock(orphans)]), docSoftLine(), docText("}")]);
+	}
 	const parts = objectPatternContent(node, options);
 	return breaksPatternProperties(d) ? docGroupBreak(parts) : docGroup(parts);
 }
