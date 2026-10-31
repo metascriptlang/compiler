@@ -492,6 +492,7 @@ function storeCellRef(vm: RaiserVM, cell: int64, idx: int32, handle: int64): voi
 	releaseShell(vm, old);
 }
 
+@inline
 function storeSlotRef(vm: RaiserVM, obj: Cursor<RaiserObjectData>, idx: int32, handle: int64): void {
 	const old = obj.slots[idx];
 	if (old == handle) return;
