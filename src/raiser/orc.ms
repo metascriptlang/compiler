@@ -11,7 +11,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapSeqHandles, heapAllocArray, heapAllocObject,
 	heapObjectSetField, heapArrayPush, rcIncref, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt,
-	handleHeapKind, raiserNil, rcDecrefHandle, rcForgetRoot, ORC_COLOR_MASK, ORC_ROOT_SHIFT, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
+	handleHeapKind, raiserNil, rcDecrefHandle, rcDecIsLast, rcForgetRoot, ORC_COLOR_MASK, ORC_ROOT_SHIFT, heapAllocArrayOf, ORC_DEFAULT_THRESHOLD, RaiserClassType, createClassType, layOutObject,
 	isSeqHandle, isObjectCell, objectCellHandle, objectCellClass, objectCellFieldValue, objectCellStoreField, seqCellOf, heapArrayRc, heapArraySetRc, heapArrayCyclic, arrayHeldStore, heapArraySetFlags, handleValue
 } from "./value";
 import { cellRootIdx, setCellRootIdx, liveCellBlocks } from "./memory";
@@ -392,6 +392,23 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	orcRegisterCandidate(arr, obj, items);
 	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 3;
 	assert heapSeqHandles(arr).length == 0 && obj.freeList.length == 1;
+}
+
+test "a last release takes an object root and an array root out of the cycle roots before their destroy runs" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const o = allocNode(obj);
+	rcIncref(arr, obj, raiserObject(o));
+	const items = heapAllocArray(arr);
+	heapArraySetRc(arr, items, 1);
+	orcRegisterCandidate(arr, obj, o);
+	orcRegisterCandidate(arr, obj, items);
+	assert arr.orcRoots.length == 2;
+	assert rcDecIsLast(arr, obj, o);
+	assert arr.orcRoots.length == 1 && arr.orcRoots[0] == items;
+	assert rcDecIsLast(arr, obj, items);
+	assert arr.orcRoots.length == 0;
+	assert orcCollect(arr, obj, freeByCount(arr, obj)) == 0;
 }
 
 test "orcRegisterCandidate asks for a collection at 128 plus the threshold and the threshold follows the runtime rule" {
