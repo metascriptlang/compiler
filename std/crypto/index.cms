@@ -75,6 +75,7 @@ extern function msCryptoHmacFreeHandle(ctx: int64): void;
 
 // Utility
 extern function msCryptoIsHashSupported(algorithm: string): boolean;
+extern function msCryptoHashSize(algorithm: string): number;
 
 // Key Derivation
 extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
@@ -155,15 +156,21 @@ export function randomBytes(size: number): Result<Buffer, CryptoError> {
 	return Result.ok(rawBuffer(result));
 }
 
+const RANDOM_INT_BAD_MIN = 1;
+const RANDOM_INT_BAD_MAX = 2;
+const RANDOM_INT_EMPTY_RANGE = 3;
+const RANDOM_INT_RANGE_TOO_WIDE = 4;
+const RANDOM_INT_SOURCE_FAILED = 5;
+
 export function randomInt(min: number, max: number): Result<number, CryptoError> {
 	let drawn: int64[1] = [0];
 	const status = msCryptoRandomIntInto(min, max, drawn);
 	if (status == 0) return Result.ok(drawn[0] as number);
-	if (status == 1) return Result.err(invalidInput("random", "min must be a safe integer"));
-	if (status == 2) return Result.err(invalidInput("random", "max must be a safe integer"));
-	if (status == 3) return Result.err(invalidInput("random", "max must be greater than min"));
-	if (status == 4) return Result.err(invalidInput("random", "max - min must be at most 2^48"));
-	if (status == 5) return Result.err(randomFailed("Random integer generation failed"));
+	if (status == RANDOM_INT_BAD_MIN) return Result.err(invalidInput("random", "min must be a safe integer"));
+	if (status == RANDOM_INT_BAD_MAX) return Result.err(invalidInput("random", "max must be a safe integer"));
+	if (status == RANDOM_INT_EMPTY_RANGE) return Result.err(invalidInput("random", "max must be greater than min"));
+	if (status == RANDOM_INT_RANGE_TOO_WIDE) return Result.err(invalidInput("random", "max - min must be less than 2^48"));
+	if (status == RANDOM_INT_SOURCE_FAILED) return Result.err(randomFailed("Random integer generation failed"));
 	throw new Error(`randomInt: unhandled status ${status}`);
 }
 
@@ -330,6 +337,8 @@ export function hkdf(algorithm: string, ikm: Bytes, salt: Bytes, info: Bytes, le
 	if (algorithm == "") algorithm = "sha256";
 	if (!msCryptoIsHashSupported(algorithm)) return Result.err(invalidInput("hkdf", `unsupported algorithm "${algorithm}"`));
 	if (length < 1) return Result.err(invalidInput("hkdf", "length must be at least 1"));
+	const maxLength = 255 * msCryptoHashSize(algorithm);
+	if (length > maxLength) return Result.err(invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`));
 	const result = msCryptoHkdf(algorithm, rawString(ikm), rawString(salt), rawString(info), length);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(rawBuffer(result));

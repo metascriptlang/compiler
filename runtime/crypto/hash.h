@@ -145,6 +145,9 @@ static inline void msCryptoHmacFreeHandle(int64_t ctx) {
 /* Check if a hash algorithm is supported. Returns 1/0. */
 double msCryptoIsHashSupported(msString algorithm);
 
+/* Digest size in bytes of a supported algorithm, 0 when unsupported. */
+double msCryptoHashSize(msString algorithm);
+
 /* ===== Encoding ===== */
 
 msString msCryptoToBase64(msString data);

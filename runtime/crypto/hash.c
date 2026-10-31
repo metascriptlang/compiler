@@ -163,7 +163,7 @@ msString msCryptoRandomBytes(int64_t size) {
 }
 
 #define MS_RANDOM_INT_MAX_SAFE 9007199254740991.0
-#define MS_RANDOM_INT_MAX_RANGE 281474976710656.0 /* 2^48 */
+#define MS_RANDOM_INT_RANGE_LIMIT 281474976710656.0 /* 2^48, exclusive */
 
 static int is_safe_integer(double v) {
 	return v == v && v >= -MS_RANDOM_INT_MAX_SAFE && v <= MS_RANDOM_INT_MAX_SAFE && v == (double)(int64_t)v;
@@ -173,7 +173,7 @@ int32_t msCryptoRandomIntInto(double min, double max, int64_t* out) {
 	if (!is_safe_integer(min)) return MS_RANDOM_INT_BAD_MIN;
 	if (!is_safe_integer(max)) return MS_RANDOM_INT_BAD_MAX;
 	if (max <= min) return MS_RANDOM_INT_EMPTY_RANGE;
-	if (max - min > MS_RANDOM_INT_MAX_RANGE) return MS_RANDOM_INT_RANGE_TOO_WIDE;
+	if (max - min >= MS_RANDOM_INT_RANGE_LIMIT) return MS_RANDOM_INT_RANGE_TOO_WIDE;
 
 	int64_t lo = (int64_t)min;
 	uint64_t range = (uint64_t)((int64_t)max - lo);
@@ -362,6 +362,11 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
 double msCryptoIsHashSupported(msString algorithm) {
 	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	return info ? 1.0 : 0.0;
+}
+
+double msCryptoHashSize(msString algorithm) {
+	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	return info ? (double)mbedtls_md_get_size(info) : 0.0;
 }
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */
