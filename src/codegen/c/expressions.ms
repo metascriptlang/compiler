@@ -1503,11 +1503,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			const parentProtoKey = "proto:" + parentInitName;
 			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
-				let parentProtoParams = `${parentName}* this`;
-				for (let ppi = 1; ppi < parentType.typeChildren.length; ppi += 1) {
-					parentProtoParams = parentProtoParams + ", " + getTypeDesc(g, parentType.typeChildren[ppi]);
-				}
-				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
+				addLine(sec(g, CSection.ProcHeaders), procHeader(g, parentInitName, parentType, null, parentCtor.mutatedParams, false) + ";");
 			}
 			if (p.params.length == 0) {
 				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
@@ -1516,7 +1512,8 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			let argList = `(${parentName}*)${paramCName(p.params[0], 0)}`;
 			let ai = 0;
 			while (ai < cd.arguments.length) {
-				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
+				const argSnippet = genExpr(g, p, cd.arguments[ai]);
+				argList = argList + ", " + (ai + 1 < parentType.typeChildren.length ? shimCallArg(g, p, argSnippet, parentType.typeChildren[ai + 1], cd.arguments[ai], parentCtor.mutatedParams, ai + 1) : argSnippet);
 				ai += 1;
 			}
 			ctx.results.push(`${parentInitName}(${argList})`);
