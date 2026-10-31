@@ -643,6 +643,8 @@ export function declaredTypeSym(t: Type): Symbol | null {
 	if (nominal != null) return nominal;
 	const s = addressed(t);
 	if ((s.kind == TypeKind.Union || s.kind == TypeKind.Distinct) && s.sym != null && s.sym.symbolKind == SymbolKind.TypeAlias) return s.sym;
+	const base = s.kind == TypeKind.GenericInstance ? s.typeExtra : null;
+	if (base != null && base.kind == TypeKind.Distinct && base.sym != null && base.sym.symbolKind == SymbolKind.TypeAlias) return base.sym;
 	return null;
 }
 
