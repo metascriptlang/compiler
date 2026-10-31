@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName } from "./types";
 import { recordBodyRead } from "./bodyReads";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
@@ -1778,7 +1778,7 @@ function escapesOwner(n: Node | null, w: OwnerWalk): boolean {
 		return false;
 	}
 	if (!rootedAtOwner(p, w)) return false;
-	return p.nodeType == null || typeCarriesRef(p.nodeType);
+	return p.nodeType == null || !isValueOnlyType(p.nodeType);
 }
 
 function isMovedName(name: string, w: OwnerWalk): boolean {

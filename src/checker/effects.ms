@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
-import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
+import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
@@ -519,12 +519,13 @@ export function isFreshValue(n: Node | null, s: FreshScope): boolean {
 			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp && sym.symbolKind != SymbolKind.Parameter) return true;
 			return !typeCarriesRef(sym.symbolType);
 		},
-		NodeKind.ObjectLiteral => allFresh((p.data as ObjectLiteralData).properties, s),
-		NodeKind.ArrayLiteral => allFresh((p.data as ArrayLiteralData).elements, s),
+		NodeKind.ObjectLiteral => allStoredFresh((p.data as ObjectLiteralData).properties, s),
+		NodeKind.ArrayLiteral => allStoredFresh((p.data as ArrayLiteralData).elements, s),
 		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, s),
 		NodeKind.NewExpr => allFresh((p.data as NewExprData).newArguments, s) && s.buildsAlone(p),
 		NodeKind.CallExpr => {
 			const d = p.data as CallExprData;
+			if (isValueOnlyType(p.nodeType)) return true;
 			const callee = d.callee != null ? peelView(d.callee) : null;
 			if (callee != null && callee.kind == NodeKind.MemberExpr && !isFreshValue((callee.data as MemberExprData).object, s)) return false;
 			return allFresh(d.arguments, s) && s.buildsAlone(p);
@@ -546,6 +547,21 @@ export function isFreshValue(n: Node | null, s: FreshScope): boolean {
 		},
 		_ => false,
 	};
+}
+
+function storedFresh(n: Node, s: FreshScope): boolean {
+	if (isFreshValue(n, s)) return true;
+	const p = peelView(n);
+	if (p.kind != NodeKind.SpreadExpr) return n.nodeType != null && isValueOnlyType(n.nodeType);
+	const t = (p.data as SpreadExprData).spreadArg.nodeType;
+	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.Span || t.kind == TypeKind.SizedArray) && isValueOnlyType(t.typeReturn);
+}
+
+function allStoredFresh(nodes: Node[], s: FreshScope): boolean {
+	for (const n of nodes) {
+		if (!storedFresh(n, s)) return false;
+	}
+	return true;
 }
 
 function allFresh(nodes: Node[], s: FreshScope): boolean {

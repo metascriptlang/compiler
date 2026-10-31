@@ -1867,6 +1867,28 @@ export function typeCarriesRef(t: Readonly<Type | null>): boolean {
 	return !isPodFieldType(t, 0);
 }
 
+// Array and struct storage is copied on every store, so a value built only of numbers, strings,
+// enums and such arrays and structs has no alias to hand out: reading it yields an independent copy.
+export function isValueOnlyType(t: Readonly<Type | null>): boolean {
+	return isValueOnlyAt(t, 0);
+}
+
+function isValueOnlyAt(t: Readonly<Type | null>, depth: int32): boolean {
+	if (t == null || isPodFieldType(t, 0)) return true;
+	if (depth > 8 || isReadonlyView(t)) return false;
+	return match (t.kind) {
+		TypeKind.Array => isValueOnlyAt(t.typeReturn, depth + 1),
+		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct => isValueOnlyAt(t.typeReturn, depth + 1),
+		TypeKind.Struct => {
+			for (const ft of t.typeChildren) {
+				if (!isValueOnlyAt(ft, depth + 1)) return false;
+			}
+			return true;
+		},
+		_ => false,
+	};
+}
+
 export function isNodeGraphType(t: Type | null): boolean {
 	if (t == null) return false;
 	let base = t;
