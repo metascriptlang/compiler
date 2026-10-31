@@ -171,6 +171,9 @@ static _Thread_local char (*_uringRecvBufs)[4096] = NULL;
  * msBuildResponseReuse writes header+body into these msStrings. */
 static _Thread_local msString* _uringRespBufs = NULL;
 
+typedef struct { const char* p; int32_t len; int32_t off; } msUringSendState;
+static _Thread_local msUringSendState* _uringSends = NULL;
+
 /* Recv and send ops in flight: the kernel reads or writes the buffers above until they complete. */
 static _Thread_local int _uringBufOps = 0;
 
@@ -193,6 +196,8 @@ static void __uringThreadRelease(void) {
 		free(_uringRespBufs);
 		_uringRespBufs = NULL;
 	}
+	free(_uringSends);
+	_uringSends = NULL;
 	_uringReleaseRegistered = 0;
 }
 
@@ -203,6 +208,10 @@ static inline void __ensureRecvBufs(void) {
 	}
 	if (_uringRespBufs == NULL) {
 		_uringRespBufs = (msString*)msMemAllocN0(URING_MAX_FDS, sizeof(msString));
+		__uringRegisterRelease();
+	}
+	if (_uringSends == NULL) {
+		_uringSends = (msUringSendState*)msMemAllocN0(URING_MAX_FDS, sizeof(msUringSendState));
 		__uringRegisterRelease();
 	}
 }
@@ -236,11 +245,16 @@ static inline void msUringSubmitRecv(int32_t fd, msString str, int32_t len) {
 
 /* Submit send — uses msString's internal data pointer */
 static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
+	__ensureRecvBufs();
 	struct io_uring_sqe* sqe = __uringGetSqe();
 	if (!sqe) return;
+	msUringSendState* st = &_uringSends[fd < URING_MAX_FDS ? fd : 0];
+	st->p = data.p ? data.p->data : NULL;
+	st->len = len;
+	st->off = 0;
 	sqe->opcode = IORING_OP_SEND;
 	sqe->fd = fd;
-	sqe->addr = data.p ? (uint64_t)(uintptr_t)data.p->data : 0;
+	sqe->addr = (uint64_t)(uintptr_t)st->p;
 	sqe->len = (uint32_t)len;
 	sqe->user_data = URING_TAG(fd, URING_OP_SEND);
 	__uringSubmitSqe();
@@ -295,7 +309,28 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 		if (op == URING_OP_TIMEOUT || op == URING_OP_CANCEL) { cqHead++; continue; }
 		_uringEvtBuf[count].fd = URING_TAG_FD(cqe->user_data);
 		_uringEvtBuf[count].op = URING_TAG_OP(cqe->user_data);
-		_uringEvtBuf[count].res = (int32_t)cqe->res;
+		int32_t res = (int32_t)cqe->res;
+		if (op == URING_OP_SEND && res >= 0) {
+			msUringSendState* st = &_uringSends[_uringEvtBuf[count].fd < URING_MAX_FDS ? _uringEvtBuf[count].fd : 0];
+			if (st->off + res < st->len) {
+				struct io_uring_sqe* sqe = __uringGetSqe();
+				if (sqe) {
+					st->off += res;
+					sqe->opcode = IORING_OP_SEND;
+					sqe->fd = _uringEvtBuf[count].fd;
+					sqe->addr = (uint64_t)(uintptr_t)(st->p + st->off);
+					sqe->len = (uint32_t)(st->len - st->off);
+					sqe->user_data = cqe->user_data;
+					__uringSubmitSqe();
+					cqHead++;
+					continue;
+				}
+				res = -1;
+			} else {
+				res = st->len;
+			}
+		}
+		_uringEvtBuf[count].res = res;
 		if (_uringEvtBuf[count].op == URING_OP_RECV || _uringEvtBuf[count].op == URING_OP_SEND) _uringBufOps--;
 		count++;
 		cqHead++;
