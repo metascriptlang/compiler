@@ -17,6 +17,7 @@
 #define MINIZ_NO_STDIO
 #define MINIZ_NO_TIME
 #include "vendor/miniz/miniz.h"
+#include "runtime/compress/crc32.h"
 
 /* ===== Internal Constants ===== */
 
@@ -162,7 +163,7 @@ static size_t gzConsumeHeader(struct msInflateCtx* c, const uint8_t* in, size_t 
     size_t i = 0;
     while (i < inLen && c->gzState == GZ_STATE_HEADER) {
         uint8_t b = in[i++];
-        if (c->gzStage != GZ_STAGE_HCRC) c->gzHdrCrc = (uint32_t)mz_crc32(c->gzHdrCrc, &b, 1);
+        if (c->gzStage != GZ_STAGE_HCRC) c->gzHdrCrc = msCrc32Update(c->gzHdrCrc, &b, 1);
 
         switch (c->gzStage) {
             case GZ_STAGE_FIXED:
@@ -243,7 +244,7 @@ static int32_t inflateBody(struct msInflateCtx* c, const uint8_t* in, size_t inL
         *inPos += inBytes;
         if (outBytes > 0) {
             if (c->format == MS_COMPRESS_FORMAT_GZIP) {
-                c->gzCrc = (uint32_t)mz_crc32(c->gzCrc, c->outBuf + c->outNext, outBytes);
+                c->gzCrc = msCrc32Update(c->gzCrc, c->outBuf + c->outNext, outBytes);
                 c->gzOutSize += outBytes;
             }
             if (queuePush(c, c->outBuf + c->outNext, outBytes) < 0) {
