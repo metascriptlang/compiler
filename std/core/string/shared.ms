@@ -8,6 +8,7 @@
 // binds the number[] overload on C — §2 push-dispatch facet).
 
 import { asBytes, byteSlice, wellFormedString } from "./bytes";
+import { unicodeLower, unicodeUpper } from "./unicodeCase";
 
 export function clampIndex(i: int32, len: int32): int32 {
 	return i < 0 ? 0 : i > len ? len : i;
@@ -40,19 +41,11 @@ export function trimEnd(this s: string): string {
 }
 
 export function toLowerCase(this s: string): string {
-	const sb = s.asBytes();
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < sb.length) { result.push(asciiLower(sb[i] as int32) as uint8); i = i + 1; }
-	return wellFormedString(result);
+	return unicodeLower(s);
 }
 
 export function toUpperCase(this s: string): string {
-	const sb = s.asBytes();
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < sb.length) { result.push(asciiUpper(sb[i] as int32) as uint8); i = i + 1; }
-	return wellFormedString(result);
+	return unicodeUpper(s);
 }
 
 export function repeat(this s: string, count: int32): string {

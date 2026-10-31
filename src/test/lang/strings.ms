@@ -172,3 +172,39 @@ test "a lone byte of 0x80 or more converts to U+FFFD" {
 	assert "[" + hi + "]" == "[\u{FFFD}]";
 	assert `${hi}`.byteLength == 3;
 }
+
+test "lowercase maps Vietnamese scalars" {
+	assert "ĐỆ HÉLLO".toLowerCase() == "đệ héllo";
+}
+
+test "uppercase expands sharp s and ligatures" {
+	assert "straße ﬁ".toUpperCase() == "STRASSE FI";
+}
+
+test "lowercase expands dotted I without a locale" {
+	assert "İ".toLowerCase() == "i\u0307";
+}
+
+test "final sigma skips case-ignorable marks when looking forward" {
+	assert "ΑΣ\u0345Α".toLowerCase() == "ασ\u0345α";
+}
+
+test "final sigma follows a cased ordinal indicator" {
+	assert "ªΣ".toLowerCase() == "ªς";
+}
+
+test "case context uses Unicode17 character properties" {
+	assert "ʕΣ \u1c89Σ".toLowerCase() == "ʕσ \u1c8aς";
+}
+
+test "case expansion preserves lone surrogate halves" {
+	assert "\uD800ß\uDC00".toUpperCase() == "\uD800SS\uDC00";
+}
+
+test "case conversion maps supplementary letters" {
+	assert "𐐀".toLowerCase() == "𐐨";
+}
+
+test "case conversion preserves embedded NUL" {
+	assert "á\0ß".toUpperCase() == "Á\0SS";
+}
