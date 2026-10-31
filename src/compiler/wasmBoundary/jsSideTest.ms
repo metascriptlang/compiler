@@ -22,6 +22,7 @@ export function wide(x: uint32): uint32 { return x; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
 export function pick(f: (a: boolean, b: uint32) => boolean): void { f(true, 1); }
 export function twice(s: string): string { return s + s; }
+export function banner(): string { return "banner"; }
 export function both(a: string, n: int32, b: string): int32 { return a.length + n + b.length; }
 export function sumBy(n: int32, cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<boolean>, at: int32) => void): void {}
@@ -76,9 +77,16 @@ test "js side: a string parameter is encoded, passed as pointer and length, and 
 	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e2) __msbMod._free(e2[0]);\n\t}\n}");
 }
 
-test "js side: a string result is decoded with the length read right after the call" {
-	const code = bindingsFor(["twice"]).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t}\n}");
+test "js side: a string result is built by a taker pushed for the call, so a nested call keeps its own" {
+	const b = bindingsFor(["twice"]);
+	assert b.modules[0].code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\t__msbMod._msb_calc_twice(e0[0], e0[1]);\n\t\treturn r;\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\t__msb.takes.length = d;\n\t}\n}");
+	assert !b.modules[0].code.includes("msb_ret_len");
+	assert !b.prelude.includes("msb_ret_len");
+}
+
+test "js side: a string result with no parameter still pushes its taker and pops it in finally" {
+	const code = bindingsFor(["banner"]).modules[0].code;
+	assert code.includes("function bundled_banner() {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\ttry {\n\t\t__msbMod._msb_calc_banner();\n\t\treturn r;\n\t} finally {\n\t\t__msb.takes.length = d;\n\t}\n}");
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
@@ -325,6 +333,8 @@ test "js side: a checked scalar parameter is tested for its JS type and range be
 test "js side: a checked string parameter is tested before anything is allocated" {
 	const code = bindingsFor(["twice"], true).modules[0].code;
 	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();
+	let r;
+	const d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;
 	let e0;
 	try {");
 }

@@ -16,6 +16,7 @@ export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return 
 export function isEven(x: uint8): boolean { return x % 2 == 0; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
 export function twice(s: string): string { return s + s; }
+export function banner(): string { return "banner"; }
 export function report(cb: (s: string) => int32): int32 { return cb("x"); }
 export function sumBy(cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<int32>, at: int32) => void): void {}
@@ -57,18 +58,29 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	assert entryFor(["add64"]).jsLibrary == "";
 }
 
-test "wasm entry: a string parameter arrives as ptr and len, a result is kept in the slot and read by length" {
+test "wasm entry: a string parameter arrives as ptr and len, a result is handed over by msb_rs_s while it is alive" {
 	const e = entryFor(["twice"]);
 	const s = e.source;
 	assert s.includes("function msbStrFrom(ptr: uint32, len: int32): string {\n\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);\n}");
-	assert s.includes('let msbRet: string = "";');
-	assert s.includes('@exportName("msb_ret_len")');
-	assert s.includes('@exportName("msb_calc_twice")\nexport function msb_calc_twice(sPtr: uint32, sLen: int32): uint32 {\n\tmsbRet = msbm0_twice(msbStrFrom(sPtr, sLen));\n\treturn msbStrPtr(msbRet);\n}');
-	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_msb_ret_len,_malloc,_free,_MsMain";
+	assert s.includes('@exportName("msb_calc_twice")\nexport function msb_calc_twice(sPtr: uint32, sLen: int32): void {\n\tconst r = msbm0_twice(msbStrFrom(sPtr, sLen));\n\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n}');
+	assert s.includes('extern function msb_rs_s(a0p: uint32, a0l: int32): void from "msb_rs_s";');
+	assert s.includes("void msb_rs_s(uint32_t a0p, int32_t a0l);");
+	assert s.includes("msbRet") == false && s.includes("msb_ret_len") == false;
+	assert e.jsLibrary.includes("\tmsb_rs_s: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 	const plain = entryFor(["add64"]);
 	assert plain.source.includes("msStringNew") == false;
 	assert plain.runtimeMethods.length == 0;
+}
+
+test "wasm entry: string results, with or without a parameter, and a struct string leaf each get one result import" {
+	const e = entryFor(["twice", "banner", "tag"]);
+	assert e.source.includes('@exportName("msb_calc_banner")\nexport function msb_calc_banner(): void {\n\tconst r = msbm0_banner();\n\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n}');
+	assert e.source.split("extern function msb_rs_s(").length == 2;
+	assert e.source.split("extern function msb_rs_ddsi(").length == 2;
+	assert e.jsLibrary.split("\n\tmsb_rs_s: ").length == 2 && e.jsLibrary.split("\n\tmsb_rs_ddsi: ").length == 2;
+	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_msb_calc_banner,_msb_calc_tag,_malloc,_free,_MsMain";
 }
 
 test "wasm entry: a callback string parameter passes ptr and len of a value alive for the call" {
