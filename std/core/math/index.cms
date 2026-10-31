@@ -54,13 +54,9 @@ export function sign(this typeof Math, x: float64): float64 {
 }
 
 export function min<T>(this typeof Math, a: T, b: T): T {
-	return a < b || a != a ? a : b;
-}
-
-export function min(this typeof Math, a: float64, b: float64): float64 {
 	if (a != a) return a;
 	if (b != b) return b;
-	if (a == 0.0 && b == 0.0) return 1.0 / a < 0.0 ? a : b;
+	if (a == b) return 1.0 / (a as float64) < 0.0 ? a : b;
 	return a < b ? a : b;
 }
 
@@ -73,13 +69,9 @@ export function min(this typeof Math, ...values: float64[]): float64 {
 }
 
 export function max<T>(this typeof Math, a: T, b: T): T {
-	return a > b || a != a ? a : b;
-}
-
-export function max(this typeof Math, a: float64, b: float64): float64 {
 	if (a != a) return a;
 	if (b != b) return b;
-	if (a == 0.0 && b == 0.0) return 1.0 / a > 0.0 ? a : b;
+	if (a == b) return 1.0 / (a as float64) > 0.0 ? a : b;
 	return a > b ? a : b;
 }
 
