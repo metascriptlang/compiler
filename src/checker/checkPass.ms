@@ -3148,7 +3148,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, defaults: Node[], at: int
 	const source = cloneNodeForCheck(def);
 	checkExpr(ctx, def, paramType);
 	const checked = def.nodeType != null ? fitNode(ctx, def, paramType, def.nodeType) : def;
-	if (ctx.pendingHoisted.length > hoistMark) noteDefaultSource(checked, source);
+	noteDefaultSource(checked, source);
 	ctx.pendingHoisted.shrink(hoistMark);
 	noteDefaultCheckedAtDeclaration(def);
 	noteDefaultCheckedAtDeclaration(checked);
