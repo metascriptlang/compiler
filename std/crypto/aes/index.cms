@@ -6,6 +6,7 @@
 
 @include("runtime/crypto/ciphers/aes.h");
 @compile("runtime/crypto/ciphers/aes.c");
+@compile("runtime/crypto/ciphers/aesGcmHw.c");
 
 // mbedTLS AES source + platform_util (needed if aes imported without base crypto)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");

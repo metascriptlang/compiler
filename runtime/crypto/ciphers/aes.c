@@ -3,6 +3,7 @@
  */
 
 #include "runtime/crypto/ciphers/aes.h"
+#include "runtime/crypto/ciphers/aesGcmHw.h"
 #include "runtime/core/system.h"
 #include "runtime/crypto/randomFill.h"
 #include <stdlib.h>
@@ -10,6 +11,8 @@
 
 #include "mbedtls/private/aes.h"
 #include "mbedtls/private/gcm.h"
+#include "mbedtls/constant_time.h"
+#include "mbedtls/platform_util.h"
 
 #define GCM_NONCE_SIZE 12
 #define GCM_TAG_SIZE   16
@@ -32,12 +35,40 @@ static int64_t removePkcs7Padding(const uint8_t* data, size_t dataLen) {
 
 /* ===== AES-GCM ===== */
 
+/* Hardware path: 1 done, 0 refused (open: tag mismatch, out zeroed), -1 unavailable, use the generic gcm. */
+static int sealHw(msString key, const uint8_t* iv, msString aad, msString plainText, uint8_t* out) {
+	mbedtls_aes_context aes;
+	mbedtls_aes_init(&aes);
+	uint8_t tag[16];
+	int done = mbedtls_aes_setkey_enc(&aes, (const uint8_t*)msStringToCString(key), (unsigned int)key.len * 8) == 0
+		&& msAesGcmHw(&aes, iv, (const uint8_t*)msStringToCString(aad), (size_t)aad.len,
+			(const uint8_t*)msStringToCString(plainText), (size_t)plainText.len, out + GCM_NONCE_SIZE, tag, 0);
+	mbedtls_aes_free(&aes);
+	if (done) memcpy(out + GCM_NONCE_SIZE + plainText.len, tag, GCM_TAG_SIZE);
+	return done ? 1 : -1;
+}
+
+static int openHw(msString key, msString aad, const uint8_t* data, size_t ctLen, uint8_t* out) {
+	mbedtls_aes_context aes;
+	mbedtls_aes_init(&aes);
+	uint8_t tag[16];
+	int done = mbedtls_aes_setkey_enc(&aes, (const uint8_t*)msStringToCString(key), (unsigned int)key.len * 8) == 0
+		&& msAesGcmHw(&aes, data, (const uint8_t*)msStringToCString(aad), (size_t)aad.len,
+			data + GCM_NONCE_SIZE, ctLen, out, tag, 1);
+	mbedtls_aes_free(&aes);
+	if (!done) return -1;
+	if (mbedtls_ct_memcmp(tag, data + GCM_NONCE_SIZE + ctLen, GCM_TAG_SIZE) == 0) return 1;
+	mbedtls_platform_zeroize(out, ctLen);
+	return 0;
+}
+
 int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out) {
 	if (!validKeyBits(key)) return 0;
 	size_t ptLen = (size_t)plainText.len;
 
 	/* Layout: nonce(12) || cipherText || tag(16) */
 	if (ms_random_fill(out, GCM_NONCE_SIZE) != 0) return -1;
+	if (sealHw(key, out, aad, plainText, out) == 1) return 1;
 
 	mbedtls_gcm_context gcm;
 	mbedtls_gcm_init(&gcm);
@@ -57,6 +88,9 @@ int64_t msCryptoAesOpenInto(msString key, msString sealed, msString aad, uint8_t
 	const uint8_t* data = (const uint8_t*)msStringToCString(sealed);
 	size_t ctLen = (size_t)sealed.len - GCM_NONCE_SIZE - GCM_TAG_SIZE;
 	uint8_t none = 0;
+	if (out == NULL) out = &none;
+	int hw = openHw(key, aad, data, ctLen, out);
+	if (hw >= 0) return hw;
 
 	mbedtls_gcm_context gcm;
 	mbedtls_gcm_init(&gcm);
@@ -64,7 +98,7 @@ int64_t msCryptoAesOpenInto(msString key, msString sealed, msString aad, uint8_t
 		&& mbedtls_gcm_auth_decrypt(&gcm, ctLen, data, GCM_NONCE_SIZE,
 			(const uint8_t*)msStringToCString(aad), (size_t)aad.len,
 			data + GCM_NONCE_SIZE + ctLen, GCM_TAG_SIZE,
-			data + GCM_NONCE_SIZE, out != NULL ? out : &none) == 0;
+			data + GCM_NONCE_SIZE, out) == 0;
 	mbedtls_gcm_free(&gcm);
 	return ok ? 1 : 0;
 }
