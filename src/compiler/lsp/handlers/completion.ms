@@ -33,7 +33,7 @@ import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/res
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
 	cacheResolveEdit, lookupResolveEdit, resolveKey, lspHasBuiltinDoc,
-	CompletionCache, createCompletionCache, LspCursorParams
+	CompletionCache, createCompletionCache, LspCursorParams, storeCompletion, completionCacheServes
 } from "./shared";
 
 
@@ -345,10 +345,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 					const innerCands = sgCompleteObjectFields(ctx, prefix, innerSg.symType, emptyPath, innerKeys);
 					if (innerCands.length > 0) {
 						const innerItems = formatCompletionItemsArray(innerCands, db, path);
-						cache.uri = pos.uri;
-						cache.line = pos.line;
-						cache.prefix = prefix;
-						cache.items = innerItems;
+						storeCompletion(cache, pos, kind as int32, prefix, innerItems);
 						return lspResponse(id, joinJsonItems(innerItems));
 					}
 				}
@@ -363,10 +360,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			if (rootType != null) {
 				const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
 				const objItems = formatCompletionItemsArray(objCandidates, db, path);
-				cache.uri = pos.uri;
-				cache.line = pos.line;
-				cache.prefix = prefix;
-				cache.items = objItems;
+				storeCompletion(cache, pos, kind as int32, prefix, objItems);
 				return lspResponse(id, joinJsonItems(objItems));
 			}
 		}
@@ -380,18 +374,14 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
 	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
 		const limited = lspLocalsBefore(db, path, program, pos, prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems);
-		cache.uri = pos.uri;
-		cache.line = pos.line;
-		cache.prefix = "";
-		cache.items = limited;
+		storeCompletion(cache, pos, kind as int32, "", limited);
 		return lspResponse(id, joinJsonItems(limited));
 	}
 
 	// Cache hit: same file, same line, prefix extends previous — filter instantly
-	if (cache.uri == pos.uri && cache.line == pos.line && prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix)) {
+	if (completionCacheServes(cache, pos, kind as int32, prefix)) {
 		const filtered = filterCompletionItems(cache.items, prefix);
-		cache.prefix = prefix;
-		cache.items = filtered;
+		storeCompletion(cache, pos, kind as int32, prefix, filtered);
 		return lspResponse(id, joinJsonItems(filtered));
 	}
 
@@ -484,10 +474,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		}
 	}
 
-	cache.uri = pos.uri;
-	cache.line = pos.line;
-	cache.prefix = prefix;
-	cache.items = cachedItems;
+	storeCompletion(cache, pos, kind as int32, prefix, cachedItems);
 
 	return lspResponse(id, joinJsonItems(cachedItems));
 }

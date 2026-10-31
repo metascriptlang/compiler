@@ -800,6 +800,10 @@ test "replay: member completion after non-ASCII text on the same line reads the 
 	assert runMemoryScenario("member completion after non-ASCII text on the same line reads the UTF-16 column") == "";
 }
 
+test "replay: a cached identifier completion does not answer a member completion on the same line, nor the reverse" {
+	assert runMemoryScenario("a cached identifier completion does not answer a member completion on the same line, nor the reverse") == "";
+}
+
 }
 
 // ===== Exports a top-level macro statement splices =====

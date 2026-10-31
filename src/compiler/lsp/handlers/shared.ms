@@ -22,6 +22,8 @@ export { lspCharacter } from "../position";
 export class CompletionCache {
 	uri: string;           // file URI of last completion
 	line: number;          // line of last completion (1-indexed, internal)
+	anchor: number;        // 0-based byte column where the typed prefix starts
+	kind: number;          // SgCompletionKind of last completion
 	prefix: string;        // prefix used for last completion
 	items: string[];       // cached per-item JSON strings
 }
@@ -46,7 +48,22 @@ export function lookupResolveEdit(key: string): string {
 }
 
 export function createCompletionCache(): CompletionCache {
-	return { uri: "", line: -1, prefix: "", items: [] };
+	return { uri: "", line: -1, anchor: -1, kind: -1, prefix: "", items: [] };
+}
+
+export function storeCompletion(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string, items: string[]): void {
+	cache.uri = pos.uri;
+	cache.line = pos.line;
+	cache.anchor = pos.col - prefix.length;
+	cache.kind = kind;
+	cache.prefix = prefix;
+	cache.items = items;
+}
+
+export function completionCacheServes(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string): boolean {
+	return cache.uri == pos.uri && cache.line == pos.line && cache.kind == kind
+		&& cache.anchor == pos.col - prefix.length
+		&& prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix);
 }
 
 // Deferred diagnostics: didChange marks files as changed. Post-drain publishes diagnostics.

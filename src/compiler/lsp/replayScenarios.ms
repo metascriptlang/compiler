@@ -1926,6 +1926,49 @@ function completionAfterWideText(): LspScenario {
 	};
 }
 
+const CACHE_SOURCE = "const abc = 1;\nconst o = { abx: 1 };\nconst q = a; const w = o.a;\n";
+
+function completionLabels(r: LspReplay, key: string): string {
+	const labels: string[] = [];
+	for (const row of completionRows(r, key)) labels.push(row.split("|")[0]);
+	return "[" + labels.join(", ") + "]";
+}
+
+function completionCacheKeepsItsKind(): LspScenario {
+	const identifierFirst = "file:///lspwire/cacheA.ms";
+	const memberFirst = "file:///lspwire/cacheB.ms";
+	return {
+		name: "a cached identifier completion does not answer a member completion on the same line, nor the reverse",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(identifierFirst, CACHE_SOURCE)),
+				notification("textDocument/didOpen", openParams(memberFirst, CACHE_SOURCE)),
+			]),
+			frames([
+				request("10", "textDocument/completion", positionParams(identifierFirst, 2, 11)),
+				request("11", "textDocument/completion", positionParams(identifierFirst, 2, 26)),
+				request("12", "textDocument/completion", positionParams(memberFirst, 2, 26)),
+				request("13", "textDocument/completion", positionParams(memberFirst, 2, 11)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			containsText("= a| lists identifiers", "abc", completionLabels(r, "n:10")),
+			lacksText("= a| lists no member", "abx", completionLabels(r, "n:10")),
+			containsText("o.a| after = a| lists the member", "abx", completionLabels(r, "n:11")),
+			lacksText("o.a| after = a| lists no identifier", "abc", completionLabels(r, "n:11")),
+			containsText("o.a| first lists the member", "abx", completionLabels(r, "n:12")),
+			lacksText("o.a| first lists no identifier", "abc", completionLabels(r, "n:12")),
+			containsText("= a| after o.a| lists identifiers", "abc", completionLabels(r, "n:13")),
+			lacksText("= a| after o.a| lists no member", "abx", completionLabels(r, "n:13")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -1982,6 +2025,7 @@ export function lspScenarios(): LspScenario[] {
 		closingAnOverlayRestoresDisk(),
 		unicodeLinePositions(),
 		completionAfterWideText(),
+		completionCacheKeepsItsKind(),
 	];
 }
 
