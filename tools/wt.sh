@@ -627,7 +627,8 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   elif [ "$gate" -eq 1 ]; then
     mac_gate_allowed "$w" "$old" "$new" "$name"
     rm -f "$verdict"
-    (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
+    # the local gate is the Mac's (macOS-only lines); niced, so the edit loops and land checks it shares the Mac with keep their cores
+    (cd "$w" && nice -n 10 tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
     for cmd in "${also[@]+"${also[@]}"}"; do
       say "gate: $cmd"
       (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
