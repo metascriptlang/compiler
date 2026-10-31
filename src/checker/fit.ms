@@ -3744,10 +3744,9 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
 		return expr;
 	}
-	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
-		|| ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
-			&& formal.kind == TypeKind.CString)) {
-		if (formal.kind == TypeKind.CString) refuseDanglingCString(ctx, expr, false);
+	if ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
+		&& formal.kind == TypeKind.CString) {
+		refuseDanglingCString(ctx, expr, false);
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
@@ -3856,7 +3855,12 @@ function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, fo
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to " + pointer, expr.location.line, expr.location.column);
 		return;
 	}
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal) + cstringIntoStringHint(exprType, formal), expr.location.line, expr.location.column);
+}
+
+export function cstringIntoStringHint(exprType: Type | null, formal: Type | null): string {
+	if (exprType == null || formal == null || exprType.kind != TypeKind.CString || formal.kind != TypeKind.String) return "";
+	return " — a cstring is a pointer the C side may overwrite or free, so it becomes a string only where you copy it: write 'as string'";
 }
 
 export function wrappedFnText(fn: Node): string {
