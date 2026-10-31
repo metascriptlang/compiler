@@ -21,7 +21,7 @@ import {
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
 	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, generatedRef,
 } from "../util";
-import { overloadWinner } from "../../checker/symbol";
+import { overloadRoutine } from "../../checker/symbol";
 
 // `final`: run after conditionalExprLower. The first run splits only sources it
 // could make pure — one under a ternary arm or `&&` keeps its conversion node.
@@ -269,7 +269,7 @@ function spanDataPtr(elem: Type | null): Type {
 function calleeFnType(node: Node): Type {
 	const cd = node.data as CallExprData;
 	if (node.resolvedSym != null) {
-		const t = overloadWinner(node.resolvedSym, cd.resolvedOverloadIdx).symbolType;
+		const t = overloadRoutine(node.resolvedSym, cd.resolvedOverloadIdx).symbolType;
 		if (t != null && t.kind == TypeKind.Function) return t;
 	}
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {

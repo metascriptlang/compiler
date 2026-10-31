@@ -18,7 +18,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, overloadRoutine } from "../../checker/symbol";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { peelTransparentInstance, functionSlotOf } from "../../checker/types";
 
@@ -95,7 +95,7 @@ function lowerRest(node: Node): Node {
 	while (named.kind == NodeKind.TypeAssertion && (named.data as TypeAssertionData).asType == "!") named = (named.data as TypeAssertionData).asExpr;
 	let sym = node.flags.has(NodeFlag.ExtCall) && node.resolvedSym != null ? node.resolvedSym : named.resolvedSym;
 	if (sym == null) return node;
-	sym = overloadWinner(sym, d.resolvedOverloadIdx);
+	sym = overloadRoutine(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
 	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return node;
 	const fnType = functionSlotOf(sym.symbolType);
