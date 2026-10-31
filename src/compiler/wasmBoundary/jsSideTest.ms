@@ -3,6 +3,8 @@ import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
 import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
+import { ensureDir, writeFile } from "std/fs";
+import { execFileResult } from "std/process";
 
 const SOURCE = `
 struct Point { x: float64; y: float64; }
@@ -117,6 +119,78 @@ test "js side: a failed wasm allocation throws instead of writing at address 0" 
 	const p = bindingsFor(["twice"]).prelude;
 	assert p.includes("if (p === 0) throw new RangeError(");
 	assert !p.includes("const p = __msbMod._malloc(n || 1);") && !p.includes("const p = __msbMod._malloc(n * 3);");
+}
+
+const GLUE_STUB = `const calls = [];
+const heap = new Uint8Array(1 << 22);
+let top = 16;
+const __msbMod = {
+	HEAPU8: heap,
+	_malloc(n) {
+		calls.push(n);
+		if (n > heap.length - top) return 0;
+		const p = top;
+		top += n;
+		return p;
+	},
+};
+`;
+
+const GLUE_CHECKS = `
+const ok = (c, m) => { if (!c) throw new Error(m); };
+const u = (...c) => String.fromCharCode(...c);
+const wtf8 = (s) => {
+	let t = 0;
+	for (const ch of s) { const c = ch.codePointAt(0); t += c < 128 ? 1 : c < 2048 ? 2 : c < 65536 ? 3 : 4; }
+	return t;
+};
+const A = u(233), B = u(20013), C = u(0xd83d, 0xde00), HI = u(0xd83d), LO = u(0xde00);
+const base = "a".repeat(5000);
+const long = [A.repeat(5000), B.repeat(5000), C.repeat(5000), base + A, base + HI, base + C, base + LO + HI, (A + B + C + HI + "x" + LO).repeat(1000)];
+for (const s of long) {
+	const want = wtf8(s);
+	calls.length = 0;
+	const r = __msbEnc(s);
+	ok(calls.length === 1, "one allocation expected, got " + calls.length);
+	ok(calls[0] === want, "allocated " + calls[0] + " bytes for " + want + " bytes of " + s.length + " units");
+	ok(r[1] === want, "length " + r[1] + " expected " + want);
+	ok(__msbDec(r[0], r[1]) === s, "round trip of " + s.length + " units");
+}
+const short = [A.repeat(10), C.repeat(10), HI, LO + HI, u(97, 0xd83d, 98)];
+for (const s of short) {
+	calls.length = 0;
+	const r = __msbEnc(s);
+	ok(calls[0] <= 3 * s.length, "short string allocated " + calls[0] + " bytes for " + s.length + " units");
+	ok(r[1] === wtf8(s), "short length " + r[1] + " expected " + wtf8(s));
+	ok(__msbDec(r[0], r[1]) === s, "short round trip");
+}
+calls.length = 0;
+ok(__msbEnc("abc")[1] === 3 && calls[0] === 3, "ascii allocates its length");
+ok(__msbEnc("")[1] === 0 && calls[1] === 1, "empty ascii allocates one byte");
+calls.length = 0;
+for (const n of [4294967296, 4294967298]) {
+	let e = null;
+	try { __msbAlloc(n); } catch (x) { e = x; }
+	ok(e instanceof RangeError, "a size of " + n + " must throw a RangeError");
+}
+ok(calls.length === 0, "_malloc was called with a size past 32 bits: " + calls);
+ok(__msbAlloc(8) > 0, "a small allocation returns an address");
+console.log("ok");
+`;
+
+test "js side: the string glue allocates the exact UTF-8 length of a long string and refuses a size past 32 bits" {
+	const prelude = bindingsFor(["twice"]).prelude;
+	const start = prelude.indexOf("const __msbTe");
+	const end = prelude.indexOf("const __msbMod = await");
+	assert start >= 0 && end > start;
+	const dir = "out/jsSideGlue/";
+	assert ensureDir(dir).ok;
+	const file = dir + "glueAlloc.cjs";
+	assert writeFile(file, GLUE_STUB + prelude.slice(start, end) + GLUE_CHECKS).ok;
+	const r = execFileResult("node", [file]);
+	if (!r.started) throw new Error("could not start node");
+	if (r.exitCode != 0 || r.signal != 0) throw new Error("glue check failed: " + r.errorOutput + r.output);
+	assert r.output.trim() == "ok";
 }
 
 test "js side: a struct is passed leaf by leaf and its result is built by a taker pushed for the call" {
