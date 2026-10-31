@@ -3966,9 +3966,9 @@ function numericMembersReached(exprType: Type, candidates: Type[]): Type[] {
 export function numericConstantForCarrier(expr: Node, exprType: Type | null, formal: Type | null): Node {
 	const none = null as unknown as Node;
 	if (formal == null || exprType == null || !isNumeric(exprType) || !slotRefuses(exprType, formal)) return none;
-	if (isMaybeType(formal) && formal.typeReturn != null) return numericConstantForMember(expr, exprType, formal.typeReturn);
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return none;
-	for (const member of formal.typeChildren) {
+	const carrier = isMaybeType(formal) && formal.typeReturn != null ? formal.typeReturn : formal;
+	if (carrier.kind != TypeKind.Union || carrier.typeChildren == null) return carrier == formal ? none : numericConstantForMember(expr, exprType, carrier);
+	for (const member of carrier.typeChildren) {
 		const fitted = numericConstantForMember(expr, exprType, member);
 		if (fitted != null) return fitted;
 	}
