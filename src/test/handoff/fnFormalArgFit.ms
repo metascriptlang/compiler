@@ -147,3 +147,10 @@ test "a callback mismatch names the parameter or the return that differs" {
 	const returned = "function takeR(f: (x: number) => number): number { return f(1); }\ntakeR((x: number): string => \"s\");";
 	assert hasError(returned, "the function returns 'string', but the expected function returns 'number'");
 }
+
+test "a callback whose parameter differs from the expected one only in representation names the parameter" {
+	const widened = "parameter 'v' takes number, but the expected function passes it int32, and a function value's parameters are never converted; declare the parameter int32 or leave it unannotated";
+	assert hasError("const k = [1, 2].map((v: number) => v * 2);", widened);
+	assert hasError("function each(f: (v: int32) => void): void { f(1); }\neach((v: number): void => {});", widened);
+	assert strictErrorCount("const k = [1, 2].map((v) => v * 2);") == 0;
+}
