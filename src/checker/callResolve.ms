@@ -2190,14 +2190,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					// Actor: flag for Sendable checking + Promise<T> wrapping for non-void returns
 					// Check both direct Actor symbols (e.g. Worker.staticMethod) and
 					// variables holding actor instances (e.g. w.method where w: Ref<Worker>)
-					const receiverSym = extReceiverSym(winner);
-					const isActorReceiver = !isStaticAccess && (
-						(me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Actor)
-						|| (objType != null && objType.kind == TypeKind.Ref && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
-						|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
-						|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor)
-					);
-					const freeFunctionExtension = winner.sym != null && winner.sym.declNode != null && winner.sym.declNode.kind == NodeKind.FunctionDecl;
+					const isActorReceiver = !isStaticAccess && isActorReceiverOf(me, objType, extReceiverSym(winner));
+					const freeFunctionExtension = isFreeFunctionExtension(winner.sym);
 					const ownActorCall = isActorReceiver && !freeFunctionExtension && callsOwnActorMethod(ctx, me.object, winner.sym);
 					if (ownActorCall) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
 					if (isActorReceiver && !ownActorCall && !freeFunctionExtension) {
@@ -2216,6 +2210,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					// Multi-overload: defer to post-arg scoring (needs argTypes)
 					extMultiFiltered = filtered;
 					extMultiObjType = objType;
+					const multiOwner = filtered[0].sym;
+					if (!isStaticAccess && !isFreeFunctionExtension(multiOwner) && isActorReceiverOf(me, objType, extReceiverSym(filtered[0]))) {
+						if (multiOwner != null && callsOwnActorMethod(ctx, me.object, multiOwner)) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
+						else isActorMethodCall = true;
+					}
 					extMultiMethodName = me.property;
 				}
 			}
@@ -2512,7 +2511,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
-		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node, expectedType);
+		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node, expectedType, isActorMethodCall);
 	}
 	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
 	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
@@ -4123,7 +4122,19 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 }
 
 function returnHeldBy(from: Type, to: Type): boolean {
+	if (isAwaitable(from) && isAwaitable(to) && !isAssignable(from, to)) return returnHeldBy(awaitedType(from)!, awaitedType(to)!);
 	return isAssignable(from, to) || convertsUnionImplicitly(from, to);
+}
+
+function isFreeFunctionExtension(sym: Symbol | null): boolean {
+	return sym != null && sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl;
+}
+
+function isActorReceiverOf(me: MemberExprData, objType: Type | null, receiverSym: Symbol | null): boolean {
+	return (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Actor)
+		|| (objType != null && objType.kind == TypeKind.Ref && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
+		|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
+		|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor);
 }
 
 function writtenName(sym: Symbol): string {
@@ -4775,45 +4786,56 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
 	}
-	return narrowToSignatureReturn(callNode, impl, winnerSymFinal, inferGenericReturn(ctx, winnerType, argTypes, null, callNode));
+	return narrowToSignatureReturn(ctx, callNode, impl, winnerSymFinal, inferGenericReturn(ctx, winnerType, argTypes, null, callNode), false);
 }
 
 // The call has the chosen signature's return type, while the routine it runs returns the
-// implementation's union: the call reads that member out of the union, checked.
-function narrowToSignatureReturn(callNode: Node, impl: Symbol | null, picked: Symbol, ret: Type): Type {
-	if (impl == null || !hasFlag(picked, SymbolFlag.OverloadSig) || impl.symbolType == null) return ret;
-	const implRet = impl.symbolType.typeReturn;
-	if (implRet == null || hasGenericParams(ret) || hasGenericParams(implRet) || sameType(implRet, ret) || ret.kind == TypeKind.Void) return ret;
-	if (isSlotUnion(ret) && returnHeldBy(implRet, ret)) return widenToSignatureReturn(callNode, implRet, ret);
-	if (!isSlotUnion(implRet) || tagUnionMemberSlot(implRet, ret) < 0) return ret;
-	const inner = createNodeAt(NodeKind.CallExpr, callNode.data, callNode.location);
-	inner.nodeType = implRet;
-	inner.flags = callNode.flags;
-	inner.variantSlot = callNode.variantSlot;
-	inner.resolvedSym = callNode.resolvedSym;
-	const projected = checkedProjection(inner, implRet, ret);
-	callNode.kind = projected.kind;
-	callNode.data = projected.data;
-	callNode.flags = projected.flags;
-	callNode.variantSlot = projected.variantSlot;
-	callNode.nodeType = ret;
-	return ret;
+// implementation's union: the call reads that member out of the union, checked. When the
+// call's value is a future (an actor call, an async routine), the future keeps the
+// implementation's payload and the await that reads it projects (`awaitedPayload`).
+function narrowToSignatureReturn(ctx: CheckerContext, callNode: Node, impl: Symbol | null, picked: Symbol, ret: Type, actorCall: boolean): Type {
+	const callType = actorCall && ret.kind != TypeKind.Void ? createPromise(ret) : ret;
+	if (impl == null || !hasFlag(picked, SymbolFlag.OverloadSig) || impl.symbolType == null) return callType;
+	let implRet = impl.symbolType.typeReturn;
+	if (implRet == null) return callType;
+	let sigRet = ret;
+	const future = actorCall || (isAwaitable(implRet) && isAwaitable(ret));
+	if (!actorCall && future) {
+		implRet = awaitedType(implRet)!;
+		sigRet = awaitedType(ret)!;
+	}
+	if (hasGenericParams(sigRet) || hasGenericParams(implRet) || sameType(implRet, sigRet) || sigRet.kind == TypeKind.Void) return callType;
+	if (!projectsSignatureReturn(implRet, sigRet)) return callType;
+	if (!future) {
+		readSignatureReturn(callNode, implRet, sigRet);
+		return ret;
+	}
+	if (ctx.awaitedCall === callNode) ctx.awaitedPayload = sigRet;
+	return createPromise(implRet);
 }
 
-function widenToSignatureReturn(callNode: Node, implRet: Type, ret: Type): Type {
-	const inner = createNodeAt(NodeKind.CallExpr, callNode.data, callNode.location);
+function projectsSignatureReturn(implRet: Type, sigRet: Type): boolean {
+	if (isSlotUnion(sigRet) && returnHeldBy(implRet, sigRet)) return true;
+	return isSlotUnion(implRet) && tagUnionMemberSlot(implRet, sigRet) >= 0;
+}
+
+// Rewrites `target` (a call, or the await that reads a future's payload) in place to the
+// signature's return read from the implementation's `implRet`.
+export function readSignatureReturn(target: Node, implRet: Type, sigRet: Type): void {
+	const inner = createNodeAt(target.kind, target.data, target.location);
 	inner.nodeType = implRet;
-	inner.flags = callNode.flags;
-	inner.variantSlot = callNode.variantSlot;
-	inner.resolvedSym = callNode.resolvedSym;
-	const widened = isSlotUnion(implRet) ? convertUnionToUnion(inner, implRet, ret) : widenVariantToUnion(inner, ret, implRet);
-	if (widened == null as unknown as Node) return ret;
-	callNode.kind = widened.kind;
-	callNode.data = widened.data;
-	callNode.flags = widened.flags;
-	callNode.variantSlot = widened.variantSlot;
-	callNode.nodeType = ret;
-	return ret;
+	inner.flags = target.flags;
+	inner.variantSlot = target.variantSlot;
+	inner.resolvedSym = target.resolvedSym;
+	const widens = isSlotUnion(sigRet) && returnHeldBy(implRet, sigRet);
+	const read = !widens ? checkedProjection(inner, implRet, sigRet)
+		: isSlotUnion(implRet) ? convertUnionToUnion(inner, implRet, sigRet) : widenVariantToUnion(inner, sigRet, implRet);
+	if (read == null as unknown as Node) return;
+	target.kind = read.kind;
+	target.data = read.data;
+	target.flags = read.flags;
+	target.variantSlot = read.variantSlot;
+	target.nodeType = sigRet;
 }
 
 export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at: SourceLocation): void {
@@ -5051,7 +5073,7 @@ function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], ca
 }
 
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
-	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null): Type {
+	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null, actorCall: boolean): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
 	// and `this unknown` would otherwise tie into ambiguity. A catch-all
 	// `this unknown` receiver only participates when no concrete-receiver
@@ -5260,7 +5282,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	const callee = (callNode.data as CallExprData).callee;
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
-	return narrowToSignatureReturn(callNode, callNode.resolvedSym, extWinnerSym ?? callNode.resolvedSym!, inferGenericReturn(ctx, winnerType, argTypes, null, callNode));
+	return narrowToSignatureReturn(ctx, callNode, callNode.resolvedSym, extWinnerSym ?? callNode.resolvedSym!, inferGenericReturn(ctx, winnerType, argTypes, null, callNode), actorCall);
 }
 
 function upcastReceiver(callNode: Node, instType: Type | null): void {

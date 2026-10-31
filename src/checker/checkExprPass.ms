@@ -1261,8 +1261,11 @@ function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	const d = node.data as AwaitExprData;
 	const savedAwaited = ctx.awaitedCall;
 	ctx.awaitedCall = d.awaitArg;
+	ctx.awaitedPayload = null;
 	checkExpr(ctx, d.awaitArg, null);
 	ctx.awaitedCall = savedAwaited;
+	const signaturePayload = ctx.awaitedPayload;
+	ctx.awaitedPayload = null;
 	refuseMixedTimedGroup(ctx, d.awaitArg);
 	adoptAwaitedThenable(ctx, d);
 	adoptAwaitedValue(ctx, d);
@@ -1270,6 +1273,7 @@ function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	if (argType != null && isAwaitable(argType)) {
 		const promiseInner = awaitedType(argType);
 		node.nodeType = promiseInner != null ? promiseInner : inferredType();
+		if (signaturePayload != null && promiseInner != null) readSignatureReturn(node, promiseInner, signaturePayload);
 		// PARALOCK Phase 1: consuming an affine-awaitable identifier records on
 		// TWO channels:
 		//   1. Branch-aware tracker (markConsumedName) — drives reuse detection
@@ -4528,7 +4532,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook } from "./instantiate";
-import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
+import { readSignatureReturn, iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

@@ -1467,6 +1467,7 @@ export class CheckerContext {
 	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	awaitedCall: Node | null;  // the call an await expression is checking as its operand
+	awaitedPayload: Type | null; // the payload type the awaited overload call's signature returns, set by the call for the await to read
 	typeTestDepth: int32;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
@@ -1571,6 +1572,7 @@ export function createContext(): CheckerContext {
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		awaitedCall: null,
+		awaitedPayload: null,
 		typeTestDepth: 0,
 		inLoop: false,
 		inSwitch: false,
