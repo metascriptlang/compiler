@@ -301,4 +301,29 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { repeat, reverse, equalsIgnoreCase } from "./shared";
+
+export function trim(this s: string): string {
+	@emit(`return ${s}.trim();`);
+	unreachable;
+}
+
+export function trimStart(this s: string): string {
+	@emit(`return ${s}.trimStart();`);
+	unreachable;
+}
+
+export function trimEnd(this s: string): string {
+	@emit(`return ${s}.trimEnd();`);
+	unreachable;
+}
+
+export function toLowerCase(this s: string): string {
+	@emit(`return ${s}.toLowerCase();`);
+	unreachable;
+}
+
+export function toUpperCase(this s: string): string {
+	@emit(`return ${s}.toUpperCase();`);
+	unreachable;
+}

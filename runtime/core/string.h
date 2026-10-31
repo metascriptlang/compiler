@@ -410,6 +410,13 @@ int64_t msStringCapacity(msString s);
 /* In-place substring via memmove */
 void msStringSetSlice(msString* s, int64_t start, int64_t end);
 
+/* Trim and case conversion with the ECMAScript result (runtime/core/stringCase.c) */
+msString msStringTrim(msString s);
+msString msStringTrimStart(msString s);
+msString msStringTrimEnd(msString s);
+msString msStringToUpperCase(msString s);
+msString msStringToLowerCase(msString s);
+
 /* In-place strip whitespace */
 void msStringStripInPlace(msString* s);
 
