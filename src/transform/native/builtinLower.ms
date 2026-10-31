@@ -95,6 +95,7 @@ export function lowerArrayLengthAssign(program: Node, ctx: TransformContext): No
 		method.flags = method.flags.incl(NodeFlag.BoundSym);
 		const call = makeCall(method, [d.right], node.location);
 		call.resolvedSym = ext.sym;
+		call.flags = call.flags.incl(NodeFlag.ExtCall);
 		call.nodeType = node.nodeType;
 		return call;
 	});
