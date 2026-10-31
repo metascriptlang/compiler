@@ -1565,6 +1565,14 @@ export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): void {
 	demandFunctionBody(ctx, decl, sym);
 }
 
+function settleInheritedFields(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	const own = unwrapRef(sym.symbolType);
+	for (let i = 0; i < own.typeNames.length; i += 1) {
+		const name = own.typeNames[i];
+		if (isUnresolvedFieldType(own.typeChildren[i]) && inferredFieldDecl(node, name, false) == null) demandFieldType(ctx, sym, name, false, node);
+	}
+}
+
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = node.resolvedSym;
@@ -1577,6 +1585,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	if (sym.state == SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
 	instantiateParentClass(classParentOf(sym.symbolType), ctx);
+	settleInheritedFields(ctx, node, sym);
 
 	openScope(ctx.table, ScopeKind.Class);
 	ctx.table.current.privateAccess = sym;
