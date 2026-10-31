@@ -6,6 +6,7 @@
 
 #include "runtime/crypto/ciphers/aesGcmHw.h"
 #include <string.h>
+#include "mbedtls/platform_util.h"
 
 #if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
 #define MS_GCM_HW_ARM 1
@@ -168,7 +169,9 @@ static V twist(V v) {
 	if (carry) high ^= 0xc200000000000000ull;
 	w[0] = low;
 	w[1] = high;
-	return load((const uint8_t*)w);
+	V out = load((const uint8_t*)w);
+	mbedtls_platform_zeroize(w, sizeof(w));
+	return out;
 }
 
 typedef struct {
@@ -211,26 +214,36 @@ static inline void ghash8(Ghash* g, const V* c) {
 	g->acc = reduceProduct(lo, mid, hi);
 }
 
-int msAesGcmHw(const mbedtls_aes_context* aes, const uint8_t iv[12], const uint8_t* aad, size_t aadLen,
+/* Every value derived from the key (round keys, H and its powers, the tag mask, keystream) lives
+ * here so that one wipe covers the success and the refusal return. */
+typedef struct {
+	V rk[15];
+	V tagMask;
+	Ghash g;
+	V ks[8], ct[8];
+	uint8_t block[16], ksBytes[16];
+} Secrets;
+
+static void gcmRun(Secrets* s, const mbedtls_aes_context* aes, const uint8_t iv[12], const uint8_t* aad, size_t aadLen,
 		const uint8_t* in, size_t len, uint8_t* out, uint8_t tag[16], int decrypt) {
-	if (!hwAvailable() || len > ((uint64_t)1 << 36) - 64) return 0;
 	const int nr = aes->MBEDTLS_PRIVATE(nr);
 	const uint8_t* rkBytes = (const uint8_t*)(aes->MBEDTLS_PRIVATE(buf) + aes->MBEDTLS_PRIVATE(rk_offset));
-	V rk[15];
+	V* rk = s->rk;
+	Ghash* g = &s->g;
+	V* ks = s->ks;
+	V* ct = s->ct;
 	for (int i = 0; i <= nr; i++) rk[i] = load(rkBytes + 16 * i);
 
 	uint8_t ivBlock[16] = {0};
 	memcpy(ivBlock, iv, 12);
 	const V base = load(ivBlock);
-	const V tagMask = aesRounds(counterBlock(base, 1), rk, nr);
-	Ghash g;
-	ghashInit(&g, aesRounds(xorV(base, base), rk, nr));
-	ghashBytes(&g, aad, aadLen);
+	s->tagMask = aesRounds(counterBlock(base, 1), rk, nr);
+	ghashInit(g, aesRounds(xorV(base, base), rk, nr));
+	ghashBytes(g, aad, aadLen);
 
 	uint32_t counter = 2;
 	size_t done = 0;
 	for (; len - done >= 128; done += 128) {
-		V ks[8], ct[8];
 		for (int i = 0; i < 8; i++) ks[i] = counterBlock(base, counter + i);
 		counter += 8;
 		aesRounds8(ks, rk, nr);
@@ -240,22 +253,23 @@ int msAesGcmHw(const mbedtls_aes_context* aes, const uint8_t iv[12], const uint8
 			store(out + done + 16 * i, dst);
 			ct[i] = decrypt ? src : dst;
 		}
-		ghash8(&g, ct);
+		ghash8(g, ct);
 	}
 	for (; len - done >= 16; done += 16) {
 		V src = load(in + done);
 		V dst = xorV(src, aesRounds(counterBlock(base, counter++), rk, nr));
 		store(out + done, dst);
-		ghashBlock(&g, decrypt ? src : dst);
+		ghashBlock(g, decrypt ? src : dst);
 	}
 	if (done < len) {
 		size_t rest = len - done;
-		uint8_t block[16] = {0}, ksBytes[16];
+		uint8_t* block = s->block;
+		memset(block, 0, 16);
 		memcpy(block, in + done, rest);
-		store(ksBytes, aesRounds(counterBlock(base, counter), rk, nr));
-		for (size_t i = 0; i < rest; i++) out[done + i] = block[i] ^ ksBytes[i];
+		store(s->ksBytes, aesRounds(counterBlock(base, counter), rk, nr));
+		for (size_t i = 0; i < rest; i++) out[done + i] = block[i] ^ s->ksBytes[i];
 		if (!decrypt) memcpy(block, out + done, rest);
-		ghashBlock(&g, load(block));
+		ghashBlock(g, load(block));
 	}
 
 	uint8_t lengths[16];
@@ -264,8 +278,17 @@ int msAesGcmHw(const mbedtls_aes_context* aes, const uint8_t iv[12], const uint8
 		lengths[i] = (uint8_t)(aadBits >> (56 - 8 * i));
 		lengths[8 + i] = (uint8_t)(bodyBits >> (56 - 8 * i));
 	}
-	ghashBlock(&g, load(lengths));
-	store(tag, xorV(tagMask, bswapV(g.acc)));
+	ghashBlock(g, load(lengths));
+	store(tag, xorV(s->tagMask, bswapV(g->acc)));
+}
+
+/* The caller has already refused lengths past the SP 800-38D limits (msAesGcmLengthsOk). */
+int msAesGcmHw(const mbedtls_aes_context* aes, const uint8_t iv[12], const uint8_t* aad, size_t aadLen,
+		const uint8_t* in, size_t len, uint8_t* out, uint8_t tag[16], int decrypt) {
+	if (!hwAvailable()) return 0;
+	Secrets s;
+	gcmRun(&s, aes, iv, aad, aadLen, in, len, out, tag, decrypt);
+	mbedtls_platform_zeroize(&s, sizeof(s));
 	return 1;
 }
 
