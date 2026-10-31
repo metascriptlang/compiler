@@ -1,11 +1,3 @@
-// Trans-Am Red-Green Engine — core verification and query execution
-//
-// tryMarkGreen: recursively verify a cached query is still valid
-// executeQuery: cache-or-compute with auto dependency recording
-// invalidateFile: mark queries RED for a changed file + BFS dependents
-//
-// Uses callback registration for query executor (avoids closure codegen issues).
-
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	createQueryKey, queryKeysEqual
@@ -19,12 +11,12 @@ import {
 } from "./query";
 import {
 	TaCacheStore, createCacheStore,
-	cacheGet, cachePut, cacheContains, cacheRemove,
-	markQueriesRedForFile
+	cacheGet, cachePut, cacheContains, cacheRemove
 } from "./cache";
 import { TaFileInputStore, createFileInputStore, setFileText, getFileChangedAt, getLastChange, setFileDurability, getFileDurability } from "./fileInput";
-import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
+
+export type TaRefresh = (key: TaQueryKey) => boolean;
 
 function lowerDurability(a: TaDurability, b: TaDurability): TaDurability {
 	return (a as int32) <= (b as int32) ? a : b;
@@ -36,9 +28,10 @@ export function tryMarkGreen(
 	cache: TaCacheStore,
 	fileInput: TaFileInputStore,
 	key: TaQueryKey,
-	currentRevision: int32
+	currentRevision: int32,
+	refresh: TaRefresh | null = null
 ): boolean {
-	const green = markGreen(cache, fileInput, key, currentRevision);
+	const green = markGreen(cache, fileInput, key, currentRevision, refresh);
 	if (green) {
 		cache.hits += 1;
 	} else {
@@ -51,7 +44,8 @@ function markGreen(
 	cache: TaCacheStore,
 	fileInput: TaFileInputStore,
 	key: TaQueryKey,
-	currentRevision: int32
+	currentRevision: int32,
+	refresh: TaRefresh | null
 ): boolean {
 	const entry = cacheGet(cache, key);
 	if (entry == null) return false;
@@ -85,16 +79,17 @@ function markGreen(
 		}
 
 		const skipWalk = depEntry.durability == TaDurability.High && getLastChange(fileInput, TaDurability.High) <= entry.verifiedAt;
-		if (!skipWalk && !markGreen(cache, fileInput, dep, currentRevision)) {
+		if (!skipWalk && !markGreen(cache, fileInput, dep, currentRevision, refresh) && !refreshed(cache, dep, currentRevision, refresh)) {
 			entry.state = TaQueryState.Red;
 			return false;
 		}
 
-		if (depEntry.changedAt > entry.verifiedAt) {
+		const verified = cacheGet(cache, dep);
+		if (verified == null || verified.changedAt > entry.verifiedAt) {
 			entry.state = TaQueryState.Red;
 			return false;
 		}
-		durability = lowerDurability(durability, depEntry.durability);
+		durability = lowerDurability(durability, verified.durability);
 	}
 
 	// All deps verified
@@ -102,6 +97,12 @@ function markGreen(
 	entry.verifiedAt = currentRevision;
 	entry.state = TaQueryState.Green;
 	return true;
+}
+
+function refreshed(cache: TaCacheStore, dep: TaQueryKey, currentRevision: int32, refresh: TaRefresh | null): boolean {
+	if (refresh == null || !refresh(dep)) return false;
+	const entry = cacheGet(cache, dep);
+	return entry != null && entry.verifiedAt == currentRevision && entry.state == TaQueryState.Green;
 }
 
 // ===== executeQueryWith — cache-or-compute =====
@@ -136,21 +137,6 @@ export function executeQueryWith(
 		const frame = popFrame(depStack);
 		entry.dependencies = frame.deps;
 		entry.durability = frame.minDurability;
-	}
-}
-
-// ===== invalidateFile — mark changed file's queries RED =====
-
-export function invalidateFile(
-	cache: TaCacheStore,
-	moduleDeps: TaModuleDepGraph,
-	fileId: int32
-): void {
-	markQueriesRedForFile(cache, fileId);
-
-	const dependents = getTransitiveDependents(moduleDeps, fileId);
-	for (let i = 0; i < dependents.length; i = i + 1) {
-		markQueriesRedForFile(cache, dependents[i]);
 	}
 }
 
@@ -271,34 +257,6 @@ test "not computed is no-op" {
 	assert !cacheContains(cache, key);
 }
 
-test "marks file queries red" {
-	const cache = createCacheStore(100);
-	const moduleDeps = createModuleDepGraph();
-	const key = createQueryKey(TaQueryKind.Parse, 0);
-	const entry = createCacheEntry(key);
-	entry.state = TaQueryState.Green;
-	cachePut(cache, entry);
-	invalidateFile(cache, moduleDeps, 0);
-	assert cacheGet(cache, key).state == TaQueryState.Red;
-}
-
-test "marks transitive dependents red" {
-	const cache = createCacheStore(100);
-	const moduleDeps = createModuleDepGraph();
-	recordModuleImport(moduleDeps, 0, 1);  // 0 imports 1
-	const k0 = createQueryKey(TaQueryKind.Parse, 0);
-	const k1 = createQueryKey(TaQueryKind.Parse, 1);
-	const e0 = createCacheEntry(k0);
-	const e1 = createCacheEntry(k1);
-	e0.state = TaQueryState.Green;
-	e1.state = TaQueryState.Green;
-	cachePut(cache, e0);
-	cachePut(cache, e1);
-	invalidateFile(cache, moduleDeps, 1);
-	assert cacheGet(cache, k1).state == TaQueryState.Red;
-	assert cacheGet(cache, k0).state == TaQueryState.Red;
-}
-
 // ===== Early Cutoff Tests =====
 
 function parseThenCheck(cache: TaCacheStore): TaQueryKey {
@@ -353,6 +311,54 @@ test "a missing dependency marks its dependent red" {
 	const checkKey = parseThenCheck(cache);
 	cacheRemove(cache, createQueryKey(TaQueryKind.Parse, 0));
 	assert !tryMarkGreen(cache, fileInput, checkKey, 2);
+}
+
+function staleParseThenCheck(cache: TaCacheStore, fileInput: TaFileInputStore): TaQueryKey {
+	setFileText(fileInput, "/refresh/a.ms", "a", 1);
+	const checkKey = parseThenCheck(cache);
+	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies = [fileTextKey(0)];
+	setFileText(fileInput, "/refresh/a.ms", "b", 2);
+	return checkKey;
+}
+
+function refreshParseTo(cache: TaCacheStore, changedAt: int32, refreshes: int32[]): TaRefresh {
+	return (key: TaQueryKey): boolean => {
+		refreshes[0] += 1;
+		if (key.queryKind != TaQueryKind.Parse) return false;
+		const entry = cacheGet(cache, key);
+		entry.dependencies = [];
+		entry.verifiedAt = 2;
+		entry.changedAt = changedAt;
+		entry.state = TaQueryState.Green;
+		return true;
+	};
+}
+
+test "a stale dependency refreshed to the same output keeps its dependent green" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const checkKey = staleParseThenCheck(cache, fileInput);
+	const refreshes: int32[] = [0];
+	assert tryMarkGreen(cache, fileInput, checkKey, 2, refreshParseTo(cache, 1, refreshes));
+	assert refreshes[0] == 1;
+}
+
+test "a stale dependency refreshed to a different output marks its dependent red" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const checkKey = staleParseThenCheck(cache, fileInput);
+	const refreshes: int32[] = [0];
+	assert !tryMarkGreen(cache, fileInput, checkKey, 2, refreshParseTo(cache, 2, refreshes));
+	assert refreshes[0] == 1;
+}
+
+test "a stale dependency nothing refreshes marks its dependent red" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+	const checkKey = staleParseThenCheck(cache, fileInput);
+	assert !tryMarkGreen(cache, fileInput, checkKey, 2);
+	const refuse: TaRefresh = (key: TaQueryKey): boolean => false;
+	assert !tryMarkGreen(cache, fileInput, checkKey, 3, refuse);
 }
 
 // ===== HIGH Durability Tests =====
@@ -463,7 +469,7 @@ test "yellow entry returns false immediately" {
 	assert !tryMarkGreen(cache, fileInput, key, 1);
 }
 
-function durableConsumer(input: TaFileInputStore, cache: TaCacheStore, graph: TaModuleDepGraph, durability: TaDurability): TaQueryKey {
+function durableConsumer(input: TaFileInputStore, cache: TaCacheStore, durability: TaDurability): TaQueryKey {
 	setFileText(input, "/durability/dep.ms", "export const value = 1;", 1);
 	setFileDurability(input, 0, durability, 1);
 	const depKey = createQueryKey(TaQueryKind.Parse, 0);
@@ -482,7 +488,6 @@ function durableConsumer(input: TaFileInputStore, cache: TaCacheStore, graph: Ta
 	user.state = TaQueryState.Green;
 	user.dependencies = [depKey];
 	cachePut(cache, user);
-	recordModuleImport(graph, 1, 0);
 	return userKey;
 }
 
@@ -490,10 +495,8 @@ test "a changed high-durability input invalidates its unchecked consumers" {
 	for (const durability of [TaDurability.Low, TaDurability.High]) {
 		const cache = createCacheStore(10);
 		const input = createFileInputStore();
-		const graph = createModuleDepGraph();
-		const userKey = durableConsumer(input, cache, graph, durability);
+		const userKey = durableConsumer(input, cache, durability);
 		setFileText(input, "/durability/dep.ms", "export const value = 2;", 2);
-		invalidateFile(cache, graph, 0);
 		assert !tryMarkGreen(cache, input, userKey, 2);
 	}
 }
@@ -501,19 +504,16 @@ test "a changed high-durability input invalidates its unchecked consumers" {
 test "a high-durability input changed after a durability downgrade still invalidates" {
 	const cache = createCacheStore(10);
 	const input = createFileInputStore();
-	const graph = createModuleDepGraph();
-	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	const userKey = durableConsumer(input, cache, TaDurability.High);
 	setFileDurability(input, 0, TaDurability.Low, 2);
 	setFileText(input, "/durability/dep.ms", "export const value = 3;", 3);
-	invalidateFile(cache, graph, 0);
 	assert !tryMarkGreen(cache, input, userKey, 3);
 }
 
 test "an unchanged high-durability input still skips its walk" {
 	const cache = createCacheStore(10);
 	const input = createFileInputStore();
-	const graph = createModuleDepGraph();
-	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	const userKey = durableConsumer(input, cache, TaDurability.High);
 	setFileText(input, "/durability/other.ms", "export const other = 1;", 2);
 	cacheGet(cache, userKey).state = TaQueryState.Red;
 	cacheGet(cache, createQueryKey(TaQueryKind.Parse, 0)).dependencies = [fileTextKey(99)];
@@ -523,8 +523,7 @@ test "an unchanged high-durability input still skips its walk" {
 test "a consumer verified after a durability downgrade walks its input on the next write" {
 	const cache = createCacheStore(10);
 	const input = createFileInputStore();
-	const graph = createModuleDepGraph();
-	const userKey = durableConsumer(input, cache, graph, TaDurability.High);
+	const userKey = durableConsumer(input, cache, TaDurability.High);
 	setFileDurability(input, 0, TaDurability.Low, 2);
 	assert tryMarkGreen(cache, input, userKey, 2);
 	setFileText(input, "/durability/dep.ms", "export const value = 3;", 3);

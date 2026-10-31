@@ -38,7 +38,7 @@ import {
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	getRegisteredAt, setRegisteredAt, resetRegisteredAt
 } from "./moduleDeps";
-import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
+import { tryMarkGreen, executeQueryWith } from "./redGreen";
 import {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
@@ -269,8 +269,6 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 	if (isStdPathFor(db, filePath)) {
 		setFileDurability(db.fileInput, fileId, TaDurability.High, revision);
 	}
-	invalidateFile(db.cache, db.moduleDeps, fileId);
-	// Invalidate ExportRegistry for this file + transitive dependents
 	dbInvalidateExports(db, fileId);
 	return true;
 }
@@ -485,7 +483,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	if (fileId < 0) return "";
 	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return db.preprocessCache.get(fileId) ?? "";
 	}
 
@@ -513,6 +511,22 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	return out;
 }
 
+function dbMarkGreen(db: TransAmDb, key: TaQueryKey): boolean {
+	return tryMarkGreen(db.cache, db.fileInput, key, db.revision.value, (dep: TaQueryKey): boolean => refreshInput(db, dep));
+}
+
+function refreshInput(db: TransAmDb, key: TaQueryKey): boolean {
+	const path = getFilePath(db.fileInput, key.fileId);
+	if (path == "") return false;
+	if (key.queryKind == TaQueryKind.Preprocess) {
+		dbPreprocess(db, path);
+		return true;
+	}
+	if (key.queryKind != TaQueryKind.Parse || (db.handedToCheck != null && db.handedToCheck.has(key.fileId))) return false;
+	dbParse(db, path);
+	return true;
+}
+
 // Execute parse query for a file. Returns the parsed Node.
 export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -521,7 +535,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Parse, fileId);
 
 	// Try cache
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, parseNodeKey(fileId));
 	}
 
@@ -682,7 +696,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): boolean {
 	const ctx = db.contexts.get(checkCtxKey(depId));
 	if (ctx == null || checkedElsewhere(db, depPath)) return false;
-	if (!tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, depId), db.revision.value)) return false;
+	if (!dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, depId))) return false;
 	updateModuleExports(db.exportRegistry, depPath, collectExports(ctx, depPath));
 	setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 	return true;
@@ -988,10 +1002,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordGlobalImportEdges(db, filePath, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
-	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (recheckImports(db, key) && dbMarkGreen(db, key)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
 	const unchecked: string[] = [];
@@ -1155,7 +1169,7 @@ export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return false;
-	return tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, fileId), db.revision.value);
+	return dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, fileId));
 }
 
 function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> {
@@ -1168,10 +1182,10 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
+	if (dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const ctx = dbTypeCheck(db, filePath);
 	if (ctx == null) return null as unknown as Node;
-	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
+	if (recheckImports(db, key) && dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
 	pushFrame(db.depStack, key);
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -1227,7 +1241,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Analyze, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, analyzeNodeKey(fileId));
 	}
 
@@ -1261,7 +1275,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Transform, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, transformNodeKey(fileId));
 	}
 
@@ -1310,7 +1324,7 @@ export function dbStats(db: TransAmDb): string {
 		if (count > 0) recomputed += ` ${(kind as TaQueryKind).toString()}=${count}`;
 	}
 	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
-		+ ` marked=${cache.marked} evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
+		+ ` evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
 		+ ` macros=${macroCompileCount()}`
 		+ ` recomputed:${recomputed}`;
 }
@@ -1337,7 +1351,7 @@ export {
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	getDirectImports, detectCycle
 } from "./moduleDeps";
-export { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
+export { tryMarkGreen, executeQueryWith } from "./redGreen";
 export {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
@@ -1392,13 +1406,8 @@ test "file change invalidates parse" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const a = 1;");
 	dbParse(db, "test.ms");
-	// Change file
 	dbSetFileText(db, "test.ms", "const b = 2;");
-	// Cache entry should be RED
-	const key = createQueryKey(TaQueryKind.Parse, 0);
-	const entry = cacheGet(db.cache, key);
-	assert entry != null;
-	assert entry.state == TaQueryState.Red;
+	assert !tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.Parse, 0), db.revision.value);
 }
 
 test "preprocess query passes through non-header files" {
@@ -1428,10 +1437,8 @@ test "preprocess query invalidates on file change" {
 	dbPreprocess(db, "plain.ms");
 	dbSetFileText(db, "plain.ms", "const b = 2;");
 	const fileId = getFileId(db.fileInput, "plain.ms");
-	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
-	const entry = cacheGet(db.cache, key);
-	assert entry != null;
-	assert entry.state == TaQueryState.Red;
+	assert !tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.Preprocess, fileId), db.revision.value);
+	assert dbPreprocess(db, "plain.ms") == "const b = 2;";
 }
 
 test "full pipeline produces analyzed AST" {
@@ -1600,7 +1607,7 @@ test "a preprocess and its parse change at the revision their text last changed,
 	}
 }
 
-test "text restored before any query keeps the change revisions of its preprocess and parse" {
+test "text restored before any query keeps the change revisions of its preprocess and parse, and its parse is not rerun" {
 	const db = createTransAmDb(100);
 	const path = "/restore/value.ms";
 	const first = "export const value: int32 = 1;";
@@ -1611,7 +1618,8 @@ test "text restored before any query keeps the change revisions of its preproces
 	dbParse(db, path);
 	assert changedAtOf(db, TaQueryKind.Preprocess, path) == 1;
 	assert changedAtOf(db, TaQueryKind.Parse, path) == 1;
-	assert cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, path))).computedAt == 3;
+	const parse = cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, path)));
+	assert parse.computedAt == 1 && parse.verifiedAt == 3, `${parse.computedAt} ${parse.verifiedAt}`;
 	assert dbTypeCheck(db, path) == ctx;
 }
 
@@ -2755,4 +2763,38 @@ test "a cancelled first check of a bound-only importing module keeps the class i
 	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
 	const messages = importerErrorsAfterEdit(db, root);
 	assert messages.length == 0, messages.join("; ");
+}
+
+function headerChain(root: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/api.h`, HEADER_API);
+	dbSetFileText(db, `${root}/main.ms`, HEADER_MAIN);
+	dbSetFileText(db, `${root}/top.ms`, 'import { twice } from "./main";\nexport const four = twice();\n');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/main.ms`), getFileId(db.fileInput, `${root}/api.h`));
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/top.ms`), getFileId(db.fileInput, `${root}/main.ms`));
+	dbTypeCheck(db, `${root}/main.ms`);
+	dbTypeCheck(db, `${root}/top.ms`);
+	return db;
+}
+
+function checksAfterHeaderEdit(db: TransAmDb, root: string, header: string): int32 {
+	const before = db.cache.recomputed[TaQueryKind.TypeCheck as int32];
+	dbSetFileText(db, `${root}/api.h`, header);
+	dbTypeCheck(db, `${root}/main.ms`);
+	dbTypeCheck(db, `${root}/top.ms`);
+	return db.cache.recomputed[TaQueryKind.TypeCheck as int32] - before;
+}
+
+test "a header comment edit that leaves its module text equal rechecks none of its importers" {
+	const root = "/headerComment";
+	const db = headerChain(root);
+	const apiText = dbPreprocess(db, `${root}/api.h`);
+	assert checksAfterHeaderEdit(db, root, "// a comment\n" + HEADER_API) == 0;
+	assert dbPreprocess(db, `${root}/api.h`) == apiText;
+}
+
+test "a header signature edit rechecks its importer and the module above it" {
+	const root = "/headerSignature";
+	const db = headerChain(root);
+	assert checksAfterHeaderEdit(db, root, "int apiValue(int x, int y);") == 2;
 }

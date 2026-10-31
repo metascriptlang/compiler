@@ -3,7 +3,7 @@
 
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
-	dbForgetAllTypeChecks, getFileId, getFilePath, invalidateFile, recordModuleImport,
+	dbForgetAllTypeChecks, getFileId, getFilePath, recordModuleImport,
 	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents,
 } from "../../transam/index";
 import { lookupLocal } from "../../../checker/symbol";
@@ -94,8 +94,6 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 			writeStderr(`[LSP-CHANGE] ${path} check=${t1 - t0}ms cache=${t2 - t1}ms`
 				+ ` diag=${t3 - t2}ms dependents=${t4 - t3}ms total=${t4 - t0}ms\n`);
 		} catch (e) {
-			const fileId = getFileId(db.fileInput, path);
-			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
 			const failedParams = recordPublishedDiagnostics(path, checkFailureDiagnostics(uri, e.message));
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", failedParams));
@@ -1803,9 +1801,7 @@ test "re-checking an importer after a dependency body edit reuses the importer's
 	dbParse(db, dep);
 	assert checkedType(db, user, "n") == "int32";
 	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
-	const marked = db.cache.marked;
 	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
-	assert db.cache.marked - marked == 6;
 	const revision = db.revision.value;
 	const before = recomputeCount(db);
 	dbParse(db, dep);
