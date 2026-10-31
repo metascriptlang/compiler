@@ -36,8 +36,8 @@ function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
 	return count as int64;
 }
 
-@exportName("msStringLength")
-function msStringLength(s: string): int64 {
+@exportName("msStringLengthSlow")
+function stringLength(s: string): int64 {
 	return byteIsAscii(s) ? s.asBytes().length : utf16UnitsOf(s.asBytes());
 }
 
@@ -115,7 +115,7 @@ export function stringCharAtSlow(s: string, idx: int64): string {
 	return "";
 }
 
-@exportName("msStringCharCodeAt")
+@exportName("msStringCharCodeAtSlow")
 export function stringCharCodeAt(s: string, idx: int64): int64 {
 	const sb = s.asBytes();
 	const n = sb.length;
@@ -151,7 +151,7 @@ export function stringSlice(s: string, start: int64, end: int64): string {
 	const n = sb.length;
 	if (n == 0) return "";
 	const ascii = byteIsAscii(s);
-	const units = ascii ? n as int64 : msStringLength(s);
+	const units = ascii ? n as int64 : stringLength(s);
 	let from = start < 0 ? units + start : start;
 	let to = end < 0 ? units + end : end;
 	if (from < 0) from = 0;

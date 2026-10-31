@@ -62,6 +62,31 @@ typedef struct {
 /* ===== ASCII Fast Path ===== */
 #define MS_ASCII_BITS (MS_ASCII_CHECKED | MS_ASCII_FLAG)
 
+/* True when no byte of p[0, len) has the high bit set: 32-byte blocks, then words, then bytes. */
+static inline bool msBytesAscii(const unsigned char* p, int64_t len) {
+	const uint64_t high = 0x8080808080808080ull;
+	int64_t i = 0;
+	while (i + 32 <= len) {
+		uint64_t a, b, c, d;
+		memcpy(&a, p + i, 8);
+		memcpy(&b, p + i + 8, 8);
+		memcpy(&c, p + i + 16, 8);
+		memcpy(&d, p + i + 24, 8);
+		if (((a | b | c | d) & high) != 0) return false;
+		i += 32;
+	}
+	while (i + 8 <= len) {
+		uint64_t a;
+		memcpy(&a, p + i, 8);
+		if ((a & high) != 0) return false;
+		i += 8;
+	}
+	for (; i < len; i++) {
+		if (p[i] >= 0x80) return false;
+	}
+	return true;
+}
+
 /* Check and cache whether a string is pure ASCII. O(n) first call, O(1) after. */
 static inline bool msStringIsAscii(msString s) {
 	if (s.p == NULL || s.len == 0) return true;
@@ -70,11 +95,7 @@ static inline bool msStringIsAscii(msString s) {
 		return (cap & MS_ASCII_FLAG) != 0;
 	}
 	/* Scan once, cache result */
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	bool ascii = true;
-	for (int64_t i = 0; i < s.len; i++) {
-		if (p[i] >= 0x80) { ascii = false; break; }
-	}
+	const bool ascii = msBytesAscii((const unsigned char*)s.p->data, s.len);
 	__atomic_store_n(&s.p->cap, cap | MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
 	return ascii;
 }
@@ -364,7 +385,15 @@ static inline msString msStringCharAt(msString s, int64_t idx) {
 }
 
 /* Character code at index (UTF-16 code unit, TypeScript parity). Returns -1 if out of range. */
-int64_t msStringCharCodeAt(msString s, int64_t idx);
+int64_t msStringCharCodeAtSlow(msString s, int64_t idx);
+
+static inline int64_t msStringCharCodeAt(msString s, int64_t idx) {
+	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len &&
+	    (msStrCapLoad(s.p) & MS_ASCII_BITS) == MS_ASCII_BITS) {
+		return (unsigned char)s.p->data[idx];
+	}
+	return msStringCharCodeAtSlow(s, idx);
+}
 
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
@@ -386,7 +415,13 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
 /* Count UTF-16 code units (TypeScript .length parity) */
 /* BMP chars (1-3 UTF-8 bytes) = 1 unit, supplementary (4 bytes) = 2 units */
-int64_t msStringLength(msString s);
+int64_t msStringLengthSlow(msString s);
+
+static inline int64_t msStringLength(msString s) {
+	if (s.p == NULL) return 0;
+	if ((msStrCapLoad(s.p) & MS_ASCII_BITS) == MS_ASCII_BITS) return s.len;
+	return msStringLengthSlow(s);
+}
 
 /* Count Unicode scalar values (codepoints) */
 int64_t msStringUnicodeLength(msString s);
