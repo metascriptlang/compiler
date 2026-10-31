@@ -31,7 +31,7 @@ export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; r
 export function swap(a: Span<int32>, b: Span<int32>): void {}
 `;
 
-function bindingsFor(names: string[]) {
+function bindingsFor(names: string[], checked: boolean = false) {
 	const ctx = checkSource(SOURCE);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
@@ -42,7 +42,7 @@ function bindingsFor(names: string[]) {
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
 	if (m.errors.length > 0) throw new Error("internal: " + m.errors.join("; "));
-	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name);
+	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: checked });
 }
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
@@ -91,7 +91,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 		}],
 		errors: [],
 	};
-	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
 }
 
@@ -277,4 +277,82 @@ test "js side: every wrapper enters before it pushes, encodes or allocates anyth
 	assert code.includes("function bundled_tag(a0) {\n\t__msb.enter();\n\tlet r;\n");
 	assert code.includes("function bundled_scale(a0, a1) {\n\t__msb.enter();\n\tlet r;\n");
 	assert code.includes("function bundled_total(a0) {\n\t__msb.enter();\n\tlet e0;\n");
+}
+
+function checkGlueBody(prelude: string, name: string): string {
+	const from = prelude.indexOf("function " + name + "(");
+	if (from < 0) throw new Error("internal: prelude lacks " + name);
+	const to = prelude.indexOf("\n}\n", from);
+	if (to < 0) throw new Error("internal: " + name + " has no closing brace at column zero");
+	return prelude.slice(from, to);
+}
+
+test "js side: a build without argument checks emits no check and no check glue" {
+	const b = bindingsFor(["add64", "tag", "scale", "total", "evaluate"]);
+	for (const name of ["__msbInt", "__msbType", "__msbList", "__msbSpan", "__msbElems", "__msbBad"]) {
+		assert !b.modules[0].code.includes(name + "(");
+		assert !b.prelude.includes("function " + name + "(");
+	}
+}
+
+test "js side: a checked build carries the check glue once" {
+	const p = bindingsFor(["add64"], true).prelude;
+	for (const name of ["__msbBad", "__msbType", "__msbInt", "__msbList", "__msbSpan", "__msbElems"]) {
+		assert p.includes("function " + name + "(");
+		assert p.indexOf("function " + name + "(") == p.lastIndexOf("function " + name + "(");
+	}
+}
+
+test "js side: a checked scalar parameter is tested for its JS type and range before the call" {
+	const code = bindingsFor(["add64", "isEven", "flip", "wide"], true).modules[0].code;
+	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbInt(a0, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbInt(a1, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();
+	return __msbMod._msb_calc_add64(a0, a1);\n}");
+	assert code.includes("\t__msbInt(a0, \"number\", 0, 255, \"uint8\", \"isEven\", \"parameter 'x'\");\n");
+	assert code.includes("\t__msbType(a0, \"boolean\", \"boolean\", \"flip\", \"parameter 'b'\");\n\t__msb.enter();
+	return __msbMod._msb_calc_flip((a0 ? 1 : 0)) !== 0;");
+	assert code.includes("\t__msbInt(a0, \"number\", 0, 4294967295, \"uint32\", \"wide\", \"parameter 'x'\");\n");
+}
+
+test "js side: a checked string parameter is tested before anything is allocated" {
+	const code = bindingsFor(["twice"], true).modules[0].code;
+	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();
+	let e0;
+	try {");
+}
+
+test "js side: a checked struct is tested object by object, then field by field, in leaf order, before its taker is pushed" {
+	const code = bindingsFor(["tag"], true).modules[0].code;
+	assert code.includes("\t__msbType(a0, \"object\", \"object\", \"tag\", \"parameter 'l'\");\n\t__msbType(a0.at, \"object\", \"object\", \"tag\", \"parameter 'l' field 'at'\");\n");
+	assert code.includes("\t__msbType(a0.at.x, \"number\", \"float64\", \"tag\", \"parameter 'l' field 'at.x'\");\n\t__msbType(a0.at.y, \"number\", \"float64\", \"tag\", \"parameter 'l' field 'at.y'\");\n\t__msbType(a0.text, \"string\", \"string\", \"tag\", \"parameter 'l' field 'text'\");\n\t__msbInt(a0.count, \"number\", -2147483648, 2147483647, \"int32\", \"tag\", \"parameter 'l' field 'count'\");\n");
+	assert code.indexOf("__msbType(a0.at, ") == code.lastIndexOf("__msbType(a0.at, ");
+	assert code.indexOf("__msbInt(a0.count") < code.indexOf("__msb.takes.push(");
+	assert code.indexOf("__msbInt(a0.count") < code.indexOf("try {");
+}
+
+test "js side: a checked Vec or Span is tested as a list, then element by element over the window the call copies" {
+	const vec = bindingsFor(["scale"], true).modules[0].code;
+	assert vec.includes("\t__msbElems(__msbList(a0, \"Vec<float32>\", \"scale\", \"parameter 'xs'\"), 0, a0.length, \"number\", null, null, \"float32\", \"scale\", \"parameter 'xs'\");\n\t__msbType(a1, \"number\", \"float32\", \"scale\", \"parameter 'k'\");\n");
+	const span = bindingsFor(["total", "fill"], true).modules[0].code;
+	assert span.includes("\t__msbElems(__msbSpan(a0, \"Span<float32>\", \"total\", \"parameter 'xs'\").base, a0.off, a0.len, \"number\", null, null, \"float32\", \"total\", \"parameter 'xs'\");\n");
+	assert span.includes("\t__msbElems(__msbSpan(a0, \"Span<boolean>\", \"fill\", \"parameter 'xs'\").base, a0.off, a0.len, \"boolean\", null, null, \"boolean\", \"fill\", \"parameter 'xs'\");\n");
+}
+
+test "js side: a checked Span is tested for its shape only, so an empty one past the end of its array passes and the range stays with the copy" {
+	const p = bindingsFor(["total"], true).prelude;
+	const span = checkGlueBody(p, "__msbSpan");
+	assert span.includes("!Number.isInteger(v.off) || !Number.isInteger(v.len)");
+	assert !span.includes("base.length");
+	assert checkGlueBody(p, "__msbElems").startsWith("function __msbElems(v, off, n, k, lo, hi, t, f, p) {\n\tconst end = Math.min(off + n, v.length);\n\tfor (let i = Math.max(off, 0); i < end; i++) {\n");
+}
+
+test "js side: a checked callback is tested before it is pushed and its result is tested on its way into wasm" {
+	const code = bindingsFor(["evaluate", "visit", "pick", "sumBy"], true).modules[0].code;
+	const guard = "\t__msbType(a1, \"function\", \"function\", \"evaluate\", \"parameter 'cb'\");\n";
+	assert code.includes(guard);
+	assert code.indexOf(guard) < code.indexOf("const id1 = __msb.push((x0) =>");
+	assert code.includes("const id1 = __msb.push((x0) => __msbInt(a1(x0), \"number\", -2147483648, 2147483647, \"int32\", \"evaluate\", \"result of callback 'cb'\"));");
+	assert !bindingsFor(["evaluate"], true).modules[0].code.includes("__msb.push(a");
+	assert code.includes("const id1 = __msb.push((x0, x1) => { a1(x0, x1); });");
+	assert code.includes("const id0 = __msb.push((x0, x1) => (__msbType(a0(x0 !== 0, x1 >>> 0), \"boolean\", \"boolean\", \"pick\", \"result of callback 'f'\") ? 1 : 0));");
+	assert code.includes("return __msbType(a1(s0), \"number\", \"float32\", \"sumBy\", \"result of callback 'cb'\"); }");
 }

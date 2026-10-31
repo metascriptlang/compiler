@@ -111,7 +111,7 @@ function functionOfCallback(cb: BoundaryCallback): BoundaryFunction {
 function emitted(fn: BoundaryFunction, jsSide: boolean): string {
 	const m: Manifest = { functions: [fn], errors: [] };
 	try {
-		if (jsSide) jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name);
+		if (jsSide) jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
 		else wasmEntrySource(m.functions, (p: string) => "./calc");
 	} catch (e) {
 		return e.message;
@@ -147,7 +147,7 @@ const WASM_CALL = "__msbMod._msb_calc_f()";
 
 function resultCode(kind: BoundaryKind): string {
 	const m: Manifest = { functions: [functionOf([], kind, [], BoundaryKind.Void)], errors: [] };
-	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 }
 
 test "js side: every scalar result is converted from the wasm side as listed" {
@@ -174,7 +174,7 @@ test "js side: every scalar parameter is passed to the wasm side as listed" {
 	const params: BoundaryParam[] = [];
 	for (let i = 0; i < SCALARS.length; i += 1) params.push(paramOf(`p${i}`, SCALARS[i], [], BoundaryKind.Void));
 	const m: Manifest = { functions: [functionOf(params, BoundaryKind.Void, [], BoundaryKind.Void)], errors: [] };
-	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert code.includes("__msbMod._msb_calc_f((a0 ? 1 : 0), a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);"), code;
 }
 
@@ -185,10 +185,10 @@ test "js side: every scalar callback parameter arrives converted and every scala
 		elements.push(BoundaryKind.Void);
 		modes.push(BoundaryMode.Copied);
 	}
-	const viaParams = jsBindings({ functions: [functionOfCallback(callbackOf(SCALARS, elements, modes, BoundaryKind.Void))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	const viaParams = jsBindings({ functions: [functionOfCallback(callbackOf(SCALARS, elements, modes, BoundaryKind.Void))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert viaParams.includes("__msb.push((x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) => { a0(x0 !== 0, (x1 << 24) >> 24, (x2 << 16) >> 16, x3, x4 & 255, x5 & 65535, x6 >>> 0, x7, BigInt.asUintN(64, x8), x9, x10); });"), viaParams;
-	const viaBool = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.Bool))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	const viaBool = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.Bool))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert viaBool.includes("__msb.push(() => (a0() ? 1 : 0));"), viaBool;
-	const viaU64 = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.U64))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
+	const viaU64 = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.U64))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert viaU64.includes("__msb.push(() => a0());"), viaU64;
 }

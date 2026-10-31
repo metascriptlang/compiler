@@ -106,7 +106,11 @@ function runProgram(name: string): boolean {
 	cols.push(runProcess("c", MSC, ["run", entry]));
 	cols.push(buildAndRun("js", entry, dir + "js/", ["--wasm-placement=off"], false));
 	const problems: string[] = [];
+	const driver = PROG_DIR + name + "/foreign.mjs";
+	const wantsForeign = spec.foreignStdout.length > 0;
+	if (wantsForeign != exists(driver)) { problems.push(`@foreign-stdout lines and ${driver} must come together`); }
 	if (spec.mixedError != "") {
+		if (wantsForeign) { problems.push("@foreign-stdout needs a mixed build and @mixed-error expects it to fail"); }
 		ensureDir(dir + "mixed/");
 		const b = execFileResult(MSC, ["build", entry, "--target=js", "--output=" + dir + "mixed/app.js"]);
 		const text = b.output + b.errorOutput;
@@ -115,6 +119,15 @@ function runProgram(name: string): boolean {
 	} else {
 		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
 		cols.push(mixed);
+		if (mixed.ok && wantsForeign && exists(driver)) {
+			const foreign = runProcess("foreign", "node", [driver, dir + "mixed/app.js"]);
+			if (!foreign.ok) {
+				problems.push(`[foreign] ${foreign.detail}`);
+			} else {
+				const d = describeDiff(spec.stdout.concat(spec.foreignStdout).join("\n") + "\n", foreign.out);
+				if (d != "") { problems.push(`[foreign] differs from @stdout then @foreign-stdout: ${d}`); }
+			}
+		}
 		if (BROWSER && mixed.ok) { cols.push(runProcess("browser", "node", [RUN_PAGE, dir + "mixed/", "app.js"])); }
 	}
 	for (const p of judge(spec, cols)) { problems.push(p); }

@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral, unwiredKind } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral, msTypeOf, unwiredKind } from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -8,6 +8,10 @@ export interface JsModuleBindings {
 export interface JsBindings {
 	prelude: string;
 	modules: JsModuleBindings[];
+}
+
+export interface JsBindingOptions {
+	checked: boolean;
 }
 
 function fromWire(kind: BoundaryKind, expr: string): string {
@@ -51,7 +55,100 @@ function toWire(kind: BoundaryKind, expr: string): string {
 	};
 }
 
-function adapterOf(cb: BoundaryCallback, target: string): string {
+function jsTypeOf(kind: BoundaryKind): string {
+	return match (kind) {
+		BoundaryKind.Bool => "boolean",
+		BoundaryKind.I64 | BoundaryKind.U64 => "bigint",
+		BoundaryKind.I8
+			| BoundaryKind.I16
+			| BoundaryKind.I32
+			| BoundaryKind.U8
+			| BoundaryKind.U16
+			| BoundaryKind.U32
+			| BoundaryKind.F32
+			| BoundaryKind.F64 => "number",
+		BoundaryKind.Void
+			| BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "JS type check"); },
+	};
+}
+
+function boundsOf(kind: BoundaryKind): string[] {
+	return match (kind) {
+		BoundaryKind.I8 => ["-128", "127"],
+		BoundaryKind.I16 => ["-32768", "32767"],
+		BoundaryKind.I32 => ["-2147483648", "2147483647"],
+		BoundaryKind.U8 => ["0", "255"],
+		BoundaryKind.U16 => ["0", "65535"],
+		BoundaryKind.U32 => ["0", "4294967295"],
+		BoundaryKind.I64 => ["-9223372036854775808n", "9223372036854775807n"],
+		BoundaryKind.U64 => ["0n", "18446744073709551615n"],
+		BoundaryKind.Bool | BoundaryKind.F32 | BoundaryKind.F64 => [],
+		BoundaryKind.Void
+			| BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "value range"); },
+	};
+}
+
+function elementArgs(kind: BoundaryKind): string {
+	const b = boundsOf(kind);
+	return `${quoted(jsTypeOf(kind))}, ${b.length == 0 ? "null, null" : b[0] + ", " + b[1]}, ${quoted(msTypeOf(kind))}`;
+}
+
+function valueCheck(kind: BoundaryKind, expr: string, at: string): string {
+	const b = boundsOf(kind);
+	if (b.length == 0) return `__msbType(${expr}, ${quoted(jsTypeOf(kind))}, ${quoted(msTypeOf(kind))}, ${at})`;
+	return `__msbInt(${expr}, ${quoted(jsTypeOf(kind))}, ${b[0]}, ${b[1]}, ${quoted(msTypeOf(kind))}, ${at})`;
+}
+
+function objectCheck(expr: string, at: string): string {
+	return `__msbType(${expr}, "object", "object", ${at});`;
+}
+
+function paramChecks(f: BoundaryFunction): string[] {
+	const out: string[] = [];
+	for (let i = 0; i < f.params.length; i += 1) {
+		const p: BoundaryParam = f.params[i];
+		const label = `parameter '${p.name}'`;
+		const at = (what: string): string => `${quoted(f.name)}, ${quoted(what)}`;
+		const x = `a${i}`;
+		if (p.kind == BoundaryKind.String) {
+			out.push(`__msbType(${x}, "string", "string", ${at(label)});`);
+		} else if (p.kind == BoundaryKind.Callback) {
+			out.push(`__msbType(${x}, "function", "function", ${at(label)});`);
+		} else if (p.kind == BoundaryKind.Struct) {
+			out.push(objectCheck(x, at(label)));
+			const seen: string[] = [];
+			for (const leaf of p.leaves) {
+				for (let d = 1; d < leaf.path.length; d += 1) {
+					const prefix = leaf.path.slice(0, d).join(".");
+					if (seen.includes(prefix)) continue;
+					seen.push(prefix);
+					out.push(objectCheck(`${x}.${prefix}`, at(`${label} field '${prefix}'`)));
+				}
+				const path = leaf.path.join(".");
+				const where = at(`${label} field '${path}'`);
+				if (leaf.kind == BoundaryKind.String) out.push(`__msbType(${x}.${path}, "string", "string", ${where});`);
+				else out.push(valueCheck(leaf.kind, `${x}.${path}`, where) + ";");
+			}
+		} else if (p.kind == BoundaryKind.Vec) {
+			out.push(`__msbElems(__msbList(${x}, ${quoted(`Vec<${msTypeOf(p.element)}>`)}, ${at(label)}), 0, ${x}.length, ${elementArgs(p.element)}, ${at(label)});`);
+		} else if (p.kind == BoundaryKind.Span) {
+			out.push(`__msbElems(__msbSpan(${x}, ${quoted(`Span<${msTypeOf(p.element)}>`)}, ${at(label)}).base, ${x}.off, ${x}.len, ${elementArgs(p.element)}, ${at(label)});`);
+		} else {
+			out.push(valueCheck(p.kind, x, at(label)) + ";");
+		}
+	}
+	return out;
+}
+
+function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null): string {
 	let names = "";
 	let args = "";
 	let views = "";
@@ -77,8 +174,9 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 			w += 1;
 		}
 	}
-	const call = `${target}(${args})`;
-	const body = cb.result == BoundaryKind.Void ? `${call};` : `return ${toWire(cb.result, call)};`;
+	let call = `${target}(${args})`;
+	if (resultAt != null && cb.result != BoundaryKind.Void) call = valueCheck(cb.result, call, resultAt);
+	const body =cb.result == BoundaryKind.Void ? `${call};` : `return ${toWire(cb.result, call)};`;
 	if (writesBack != "") return `(${names}) => { ${views}try { ${body} } finally { ${writesBack}} }`;
 	if (views != "") return `(${names}) => { ${views}${body} }`;
 	if (cb.result == BoundaryKind.Void) return `(${names}) => { ${call}; }`;
@@ -140,7 +238,7 @@ function afterCall(body: string[], afters: string[]): string[] {
 	return out;
 }
 
-function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
+function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindingOptions): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
 	const lines: string[] = [];
@@ -160,7 +258,9 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 		if (p.kind == BoundaryKind.String) {
 			encode(`e${i}`, `a${i}`, "__msbEnc");
 		} else if (p.kind == BoundaryKind.Callback) {
-			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`)});`);
+			let resultAt: string | null = null;
+			if (options.checked) resultAt = `${quoted(f.name)}, ${quoted(`result of callback '${p.name}'`)}`;
+			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`, resultAt)});`);
 			cleanup.push(`__msb.pop(id${i});`);
 			argList.push(`id${i}`);
 		} else if (p.kind == BoundaryKind.Struct) {
@@ -194,7 +294,11 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	} else {
 		body = [`return ${fromWire(f.result, call)};`];
 	}
-	const out = [`function ${bundleName}(${sig}) {`, "	__msb.enter();"];
+	const out = [`function ${bundleName}(${sig}) {`];
+	if (options.checked) {
+		for (const c of paramChecks(f)) out.push(`	${c}`);
+	}
+	out.push("	__msb.enter();");
 	if (cleanup.length == 0) {
 		for (const l of body) out.push(`	${l}`);
 	} else {
@@ -307,7 +411,42 @@ const GLUE = [
 	"}",
 ];
 
-function preludeFor(wasmModuleUrl: string): string {
+const CHECK_GLUE = [
+	"function __msbBad(f, p, t, v) {",
+	"\treturn new TypeError(f + \": \" + p + \" expected \" + t + \", found \" + (v === null ? \"null\" : Array.isArray(v) ? \"array\" : typeof v));",
+	"}",
+	"function __msbType(v, k, t, f, p) {",
+	"\tif (typeof v !== k || v === null) throw __msbBad(f, p, t, v);",
+	"\treturn v;",
+	"}",
+	"function __msbInt(v, k, lo, hi, t, f, p) {",
+	"\tif (typeof v !== k) throw __msbBad(f, p, t, v);",
+	"\tif (v < lo || v > hi || (k === \"number\" && !Number.isInteger(v))) throw new RangeError(f + \": \" + p + \" expected \" + t + \", got \" + v);",
+	"\treturn v;",
+	"}",
+	"function __msbList(v, t, f, p) {",
+	"\tif (typeof v !== \"object\" || v === null || !Number.isInteger(v.length) || v.length < 0) throw __msbBad(f, p, t, v);",
+	"\treturn v;",
+	"}",
+	"function __msbSpan(v, t, f, p) {",
+	"\t__msbType(v, \"object\", t, f, p);",
+	"\t__msbList(v.base, \"array\", f, p + \" base\");",
+	"\tif (!Number.isInteger(v.off) || !Number.isInteger(v.len)) throw new TypeError(f + \": \" + p + \" expected \" + t + \" with integer off and len, got off \" + v.off + \" len \" + v.len);",
+	"\treturn v;",
+	"}",
+	"function __msbElems(v, off, n, k, lo, hi, t, f, p) {",
+	"\tconst end = Math.min(off + n, v.length);",
+	"\tfor (let i = Math.max(off, 0); i < end; i++) {",
+	"\t\tconst x = v[i];",
+	"\t\tif (typeof x === k && (lo === null || (x >= lo && x <= hi && (k !== \"number\" || Number.isInteger(x))))) continue;",
+	"\t\tif (lo === null) __msbType(x, k, t, f, p + \" element \" + (i - off));",
+	"\t\t__msbInt(x, k, lo, hi, t, f, p + \" element \" + (i - off));",
+	"\t}",
+	"\treturn v;",
+	"}",
+];
+
+function preludeFor(wasmModuleUrl: string, options: JsBindingOptions): string {
 	return [
 		"const __msb = (() => {",
 		"\tconst live = new Map();",
@@ -327,14 +466,14 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t};",
 		"})();",
-		GLUE.join("\n"),
+		(options.checked ? GLUE.concat(CHECK_GLUE) : GLUE).join("\n"),
 		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default({ msb: __msb });`,
 		"__msbMod._MsMain();",
 		"",
 	].join("\n");
 }
 
-export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f: BoundaryFunction) => string): JsBindings {
+export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f: BoundaryFunction) => string, options: JsBindingOptions): JsBindings {
 	const modules: JsModuleBindings[] = [];
 	const lines: string[][] = [];
 	for (const f of m.functions) {
@@ -347,8 +486,8 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 			lines.push([]);
 			at = modules.length - 1;
 		}
-		for (const l of wrapperLines(f, bundleNameOf(f))) lines[at].push(l);
+		for (const l of wrapperLines(f, bundleNameOf(f), options)) lines[at].push(l);
 	}
 	for (let i = 0; i < modules.length; i += 1) modules[i].code = lines[i].join("\n") + "\n";
-	return { prelude: preludeFor(wasmModuleUrl), modules };
+	return { prelude: preludeFor(wasmModuleUrl, options), modules };
 }

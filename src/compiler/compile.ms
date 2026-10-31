@@ -1642,7 +1642,7 @@ function placeWasmModules(placed: string[], placedNames: string[][], graph: Modu
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => jsBundleReferenceName(symOf(f), f.name));
+	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => jsBundleReferenceName(symOf(f), f.name), { checked: opts.mode != MODE_DANGER });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
