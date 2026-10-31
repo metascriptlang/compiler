@@ -163,7 +163,7 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 		cleanup.push("__msb.takes.length = d;");
 		body = [`${call};`, "return r;"];
 	}
-	const out = [`function ${bundleName}(${sig}) {`];
+	const out = [`function ${bundleName}(${sig}) {`, "	__msb.enter();"];
 	if (cleanup.length == 0) {
 		for (const l of body) out.push(`	${l}`);
 	} else {
@@ -269,6 +269,8 @@ function preludeFor(wasmModuleUrl: string): string {
 		"const __msb = (() => {",
 		"\tconst live = new Map();",
 		"\tlet next = 0;",
+		"\tlet dead = false;",
+		"\tlet cause;",
 		"\treturn {",
 		"\t\tpush(f) { const id = next; next = (next + 1) | 0; live.set(id, f); return id; },",
 		"\t\tpop(id) { live.delete(id); },",
@@ -278,6 +280,8 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\t\t\tif (f === undefined) throw new Error(\"callback used after its call returned\");",
 		"\t\t\treturn f(...a);",
 		"\t\t},",
+		"\t\tenter() { if (dead) throw new Error(\"the wasm half cannot run again: a JS exception crossed its frames\", { cause }); },",
+		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t};",
 		"})();",
 		"globalThis.__msb = __msb;",

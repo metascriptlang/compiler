@@ -224,6 +224,10 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 	];
 }
 
+function guardedImportJs(name: string, params: string[], call: string): string {
+	return `\t${name}: (${params.join(", ")}) => { try { return ${call}; } catch (e) { throw globalThis.__msb.die(e); } },`;
+}
+
 export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePath: string) => string): WasmEntry {
 	const lines: string[] = [];
 	const modules: string[] = [];
@@ -305,8 +309,8 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let jsLibrary = "";
 	if (signatures.length > 0 || resultImports.length > 0) {
 		const entries: string[] = [];
-		for (const s of signatures) entries.push(`\tmsb_cb_${s}: (id, ...a) => globalThis.__msb.cb(id, ...a),`);
-		for (const name of resultImports) entries.push(`\t${name}: (...a) => globalThis.__msb.takes.pop()(...a),`);
+		for (const s of signatures) entries.push(guardedImportJs(`msb_cb_${s}`, ["id", "...a"], "globalThis.__msb.cb(id, ...a)"));
+		for (const name of resultImports) entries.push(guardedImportJs(name, ["...a"], "globalThis.__msb.takes.pop()(...a)"));
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
 	const runtimeMethods = hasString || readsHeap ? ["HEAPU8", "wasmMemory"] : [];
