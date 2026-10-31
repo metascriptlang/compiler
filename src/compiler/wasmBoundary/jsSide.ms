@@ -532,6 +532,7 @@ const CHECK_GLUE = [
 	"\treturn v;",
 	"}",
 	"function __msbElems(v, off, n, k, lo, hi, t, f, p) {",
+	"\tif (k === \"boolean\" && ArrayBuffer.isView(v)) return v;",
 	"\tconst end = Math.min(off + n, v.length);",
 	"\tfor (let i = Math.max(off, 0); i < end; i++) {",
 	"\t\tconst x = v[i];",
