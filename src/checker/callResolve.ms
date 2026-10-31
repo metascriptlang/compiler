@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
 import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
@@ -11,7 +11,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
 import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
 import { checkImportCall } from "./importCall";
@@ -1626,7 +1626,7 @@ function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[
 // A `new` ranks the constructor signatures and runs the implementation. The implementation is
 // never a candidate itself, as in a call to an overloaded function.
 function pickCtorSignature(ctx: CheckerContext, node: Node, args: Node[], className: string, impl: Symbol, sigs: Symbol[], expected: Type | null): Symbol | null {
-	if (!validateOverloadSigs(ctx, impl, impl, node, 1)) return null;
+	if (!validateOverloadSigs(ctx, overloadMembers(impl), impl, 1)) return null;
 	if (hasSpreadArg(args)) {
 		addError(ctx, "a spread argument cannot call an overloaded constructor", node.location.line, node.location.column);
 		return null;
@@ -4113,13 +4113,12 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node, na
 	}
 	const impl = set != null ? findOverloadImpl(set) : null;
 	if (set == null || impl == null) {
-		addError(ctx, `Overloaded function '${winner.name}' has no implementation — at least one definition must have a body`,
-			callNode.location.line, callNode.location.column);
+		refuseMissingImplementation(ctx, set != null ? overloadMembers(set) : [winner], callNode);
 		return winner;
 	}
 	const declared = named.find((e: ExtensionMethod): boolean => e.sym == set);
 	const hiddenThis = declared != null && !declared.isStatic && set.declNode != null && set.declNode.kind == NodeKind.MethodDecl;
-	return validateOverloadSigs(ctx, set, impl, callNode, hiddenThis ? 1 : 0) ? impl : winner;
+	return validateOverloadSigs(ctx, overloadMembers(set), impl, hiddenThis ? 1 : 0) ? impl : winner;
 }
 
 function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symbol, takesReceiver: boolean): void {
@@ -4140,36 +4139,45 @@ function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symb
 	}
 }
 
-// Validate every overload sig against the implementation. Runs once per
-// overload set (flagged by `SymbolFlag.OverloadValidated` on the impl).
+// Validate every overload sig against the implementation, once per set, whether the
+// declaration check or a call reaches it first; the verdict stays on the impl
+// (`OverloadValidated`, `OverloadRejected`) and the error sits on the signature.
+// A set declared in another module is left to that module's check.
 // Rules:
 //   1. sig arity lies between the impl's required count and its arity
 //   2. each sig param type must be assignable to the impl's corresponding param
 //   3. sig return type must be assignable to impl return type
 // Emits errors and returns false if any rule is violated.
-function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, callNode: Node, receiver: int32): boolean {
-	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return true;
+function validateOverloadSigs(ctx: CheckerContext, members: Symbol[], impl: Symbol, receiver: int32): boolean {
+	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return !hasFlag(impl, SymbolFlag.OverloadRejected);
+	if (impl.modulePath != ctx.modulePath) return true;
 	setFlag(impl, SymbolFlag.OverloadValidated);
+	if (overloadSigsHold(ctx, members, impl, receiver)) return true;
+	setFlag(impl, SymbolFlag.OverloadRejected);
+	return false;
+}
+
+function overloadSigsHold(ctx: CheckerContext, members: Symbol[], impl: Symbol, receiver: int32): boolean {
 	const implFnType = impl.symbolType;
 	if (implFnType == null || implFnType.kind != TypeKind.Function) return true;
 	const implRet = implFnType.typeReturn;
 	const implParams = implFnType.typeChildren;
-	const allSyms: Symbol[] = [sym];
-	for (const o of sym.overloads) allSyms.push(o);
-	for (const s of allSyms) {
+	const sym = members[0];
+	for (const s of members) {
 		if (s == impl) continue;
 		if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
 		const sigType = s.symbolType;
 		if (sigType == null || sigType.kind != TypeKind.Function) continue;
+		const at = declaredAt(s);
 		if (sigType.typeChildren.length > implParams.length) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation has ${implParams.length - receiver}`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const implRequired = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], impl.defaultParams) + receiver : getMinArity(implFnType);
 		if (sigType.typeChildren.length < implRequired) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation requires ${implRequired - receiver}`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		let paramMismatch = -1;
@@ -4181,23 +4189,96 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 		}
 		if (paramMismatch >= 0) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' param ${paramMismatch + 1 - receiver} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const sRet = sigType.typeReturn;
 		if (sRet != null && implRet != null && sRet.kind != TypeKind.Void && !returnHeldBy(sRet, implRet) && !returnHeldBy(implRet, sRet)) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const viewParam = sRet != null && implRet != null && dropsReadonlyView(implRet, sRet) ? firstViewParam(sigType.typeChildren) : -1;
 		if (viewParam >= 0) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 	}
 	return true;
+}
+
+function overloadMembers(set: Symbol): Symbol[] {
+	const members: Symbol[] = [set];
+	for (const o of set.overloads) members.push(o);
+	return members;
+}
+
+function rejectOverloadSet(members: Symbol[]): void {
+	for (const m of members) {
+		setFlag(m, SymbolFlag.OverloadValidated);
+		setFlag(m, SymbolFlag.OverloadRejected);
+	}
+}
+
+// A set declared in another module and not yet refused there is refused at the call instead.
+function refuseMissingImplementation(ctx: CheckerContext, members: Symbol[], call: Node | null): void {
+	const last = members[members.length - 1];
+	if (hasFlag(last, SymbolFlag.OverloadRejected)) return;
+	const elsewhere = last.modulePath != ctx.modulePath;
+	if (elsewhere && call == null) return;
+	if (!elsewhere) rejectOverloadSet(members);
+	const at = elsewhere ? call!.location : declaredAt(last);
+	addError(ctx, `Overloaded function '${writtenName(last)}' has no implementation — at least one definition must have a body`, at.line, at.column);
+}
+
+// Checks each signature set of a module or class body at its declarations, so a set no call
+// reaches is checked too.
+export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
+	if (!stmts.some((s: Node): boolean => declaresSignature(unwrapDecl(s)))) return;
+	const keys: string[] = [];
+	const groups = new HashMap<string, Symbol[]>();
+	for (const stmt of stmts) {
+		const decl = unwrapDecl(stmt)!;
+		const key = overloadGroupKey(decl);
+		if (key == "" || decl.resolvedSym == null || hasFlag(decl.resolvedSym, SymbolFlag.ImportC)) continue;
+		if (!groups.has(key)) {
+			keys.push(key);
+			groups.set(key, []);
+		}
+		groups.get(key)!.push(decl.resolvedSym);
+	}
+	for (const key of keys) {
+		const members = groups.get(key)!;
+		if (!members.some((m: Symbol): boolean => hasFlag(m, SymbolFlag.OverloadSig))) continue;
+		const impls = members.filter((m: Symbol): boolean => !hasFlag(m, SymbolFlag.OverloadSig));
+		const isCtor = key == "constructor";
+		if (impls.length == 0 && !isCtor) refuseMissingImplementation(ctx, members, null);
+		if (impls.length != 1) continue;
+		const instanceMethod = impls[0].declNode.kind == NodeKind.MethodDecl && !(impls[0].declNode.data as MethodDeclData).methodIsStatic;
+		validateOverloadSigs(ctx, members, impls[0], isCtor || instanceMethod ? 1 : 0);
+	}
+}
+
+function declaresSignature(decl: Node | null): boolean {
+	return decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.OverloadSig);
+}
+
+function overloadGroupKey(decl: Node): string {
+	if (decl.kind == NodeKind.FunctionDecl) {
+		const d = decl.data as FunctionDeclData;
+		return isStaticExtensionFlag(d.fnFlags) ? `${getExtTypeName(d.fnFlags)}.${d.fnName}` : d.fnName;
+	}
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodName;
+	if (decl.kind == NodeKind.ConstructorDecl) return "constructor";
+	return "";
+}
+
+function declaredAt(sym: Symbol): SourceLocation {
+	const decl = sym.declNode;
+	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).nameLocation;
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).nameLocation;
+	return decl.location;
 }
 
 function returnHeldBy(from: Type, to: Type): boolean {
@@ -4589,11 +4670,10 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let sym = primary;
 	let impl = findOverloadImpl(sym);
 	if (impl == null) {
-		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
-			callNode.location.line, callNode.location.column);
+		refuseMissingImplementation(ctx, overloadMembers(sym), callNode);
 		return getReturnType(sym.symbolType);
 	}
-	if (!validateOverloadSigs(ctx, sym, impl, callNode, 0)) {
+	if (!validateOverloadSigs(ctx, overloadMembers(sym), impl, 0)) {
 		return getReturnType(sym.symbolType);
 	}
 

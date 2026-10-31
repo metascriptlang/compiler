@@ -4,7 +4,7 @@ import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtRe
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
-function unwrapDecl(node: Node | null): Node | null {
+export function unwrapDecl(node: Node | null): Node | null {
 	let n = node;
 	while (n != null) {
 		if (n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;

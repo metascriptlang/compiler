@@ -218,6 +218,7 @@ export enum SymbolFlag {
 	Consumed, // PARALOCK Phase 1: affine-Promise binding (spawn-origin) has been awaited (affine consumption)
 	OverloadSig, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
 	OverloadValidated, // Tier 1: overload set already validated (return-type compatibility check)
+	OverloadRejected, // that validation failed: the error is already on the signature
 	SinkTemp, // DRC sink-arg temp synthesized by passCopyToSink — always single-use by construction, always last-read
 	ComptimeNodeAlias, // `const x = <jsx>` — x binds a compile-time Node, folded into the consuming macro; emits no runtime decl
 	StaticLocal, // `static` decl inside a body: carries Global (module storage) but is named per-site, since a body can hold several and a module may hold several bodies
