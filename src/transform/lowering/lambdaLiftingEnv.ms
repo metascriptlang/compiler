@@ -326,6 +326,7 @@ export function makeEnvStruct(state: LiftState, envName: string, fieldSyms: Symb
 	envSym.declNode = envDecl;
 	envSym.location = loc;
 	setFlag(envSym, SymbolFlag.ClosureEnv);
+	if (fieldSyms.every((s: Symbol): boolean => s == null || (s.symbolKind == SymbolKind.Variable && !hasFlag(s, SymbolFlag.Mutable)))) setFlag(envSym, SymbolFlag.ImmutableEnv);
 	envDecl.nodeType!.sym = envSym;
 	state.envFieldSyms.set(envDecl.nodeType!, fieldSyms);
 	return envDecl;

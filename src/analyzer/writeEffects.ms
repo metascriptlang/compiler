@@ -1453,11 +1453,16 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
 		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
-		if (!keep && slots[i].length > 0) keep = partsMayWrite(w, writes, reads);
+		if (!keep && slots[i].length > 0 && !slots[i].every((slot: string): boolean => isImmutableEnvSlot(w, slot))) keep = partsMayWrite(w, writes, reads);
 		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
 		flags[i] = keep;
 	}
 	return flags;
+}
+
+function isImmutableEnvSlot(w: WriteEffects, slot: string): boolean {
+	const holder = slotHolder(w, slot);
+	return slot.startsWith("F:") && holder != null && holder.sym != null && hasFlag(holder.sym, SymbolFlag.ImmutableEnv);
 }
 
 function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
