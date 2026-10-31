@@ -558,6 +558,7 @@ function enterRefs(vm: RaiserVM, base: int64, caller: RaiserFunction, site: int3
 	}
 }
 
+@inline
 function zeroOwnRefs(slots: Ptr<int64>, base: int64, callee: RaiserFunction): void {
 	const own = callee.ownRefs;
 	for (let i = 0; i < own.length; i += 1) slots[base + own[i]] = 0;
@@ -583,6 +584,11 @@ function leaveBelow(vm: RaiserVM, callerAt: int32, base: int64, callee: RaiserFu
 	const callerEnd = (frame.base as int64) + (caller.frameSize as int64);
 	const end = base + (callee.frameSize as int64);
 	if (end > callerEnd) overlayBelow(vm, callerAt, callerEnd, end, false);
+}
+
+@inline
+function overlayHeldBelow(vm: RaiserVM, callerAt: int32, from: int64, end: int64, release: boolean): void {
+	if (callerAt > 0 && (vm.callStack.items[callerAt - 1].refTop as int64) > from) overlayBelow(vm, callerAt, from, end, release);
 }
 
 function overlayBelow(vm: RaiserVM, callerAt: int32, from: int64, end: int64, release: boolean): void {
@@ -2677,7 +2683,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
-						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+						overlayHeldBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
 					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = ib;
@@ -2713,7 +2719,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
-						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+						overlayHeldBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
 					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = target as int32;
@@ -2758,7 +2764,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					if (fb + callee.frameSize > vm.regs.cap) ensureSlots(vm.regs, fb + callee.frameSize);
 					if (func.ownRefs.length + callee.ownRefs.length != 0) enterRefs(vm, fb as int64, func, ic, callee);
 					if (fb + callee.frameSize > frame.base + func.frameSize) {
-						overlayBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
+						overlayHeldBelow(vm, depth, (frame.base + func.frameSize) as int64, (fb + callee.frameSize) as int64, true);
 					}
 					zeroOwnRefs(slots, fb as int64, callee);
 					funcIdx = target as int32;
@@ -2797,7 +2803,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 						const caller: Cursor<RaiserFunction> = mod.functions[frame.funcIdx];
 						if (func.ownRefs.length + caller.ownRefs.length != 0 || frame.conformed) leaveFrame(vm, fb, func, frame);
 						if (fb + func.frameSize > frame.base + caller.frameSize) {
-							overlayBelow(vm, depth - 1, (frame.base + caller.frameSize) as int64, (fb + func.frameSize) as int64, false);
+							overlayHeldBelow(vm, depth - 1, (frame.base + caller.frameSize) as int64, (fb + func.frameSize) as int64, false);
 						}
 						vm.callStack.depth = depth - 1;
 						fb = frame.base;
