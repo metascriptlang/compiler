@@ -1,6 +1,6 @@
 import {
 	EncodingIndex, emptyEncoding, newEncodingOutput, newDecodingOutput,
-	encodingOutputBytes, freshEncodingOutputBytes,
+	freshEncodingOutputBytes,
 } from "./output";
 
 when (c) {
@@ -188,9 +188,7 @@ test "encoding index preserves wide positions" {
 
 test "encoding output owns its writable bytes" {
 	let output = newEncodingOutput(2);
-	const originalLength = output.length;
-	assert originalLength == 2;
-	const bytes = encodingOutputBytes(output);
+	const bytes = freshEncodingOutputBytes(output);
 	bytes[0] = 195 as uint8;
 	bytes[1] = 169 as uint8;
 	when (c) {
@@ -223,15 +221,6 @@ when (c) {
 			}
 			assert rejected;
 		}
-	}
-
-	test "encoding output prepares literal storage before writes" {
-		const original = "ab";
-		let output = original;
-		const bytes = encodingOutputBytes(output);
-		bytes[0] = 99 as uint8;
-		assert output == "cb";
-		assert original == "ab";
 	}
 }
 

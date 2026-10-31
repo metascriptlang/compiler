@@ -234,9 +234,6 @@ static inline void msStringDestroyForce(msString s) {
 	if (s.p != NULL) free(s.p);
 }
 
-/* COW: copy literal before mutation */
-void msStringPrepareMutation(msString* s);
-
 /* Grow buffer for appending */
 void msStringPrepareAdd(msString* s, int64_t addLen);
 
@@ -493,20 +490,8 @@ msString msStringJoin(msStringArray* arr, msString sep);
 
 double msStringParseFloat(msString s);
 
-/* ===== Set Length ===== */
-
-/* Resize string, zero-filling on growth */
-void msStringSetLength(msString* s, int64_t newLen);
-
-/* ===== Capacity ===== */
-
-/* Return allocated capacity, stripping literal flag */
-int64_t msStringCapacity(msString s);
-
-/* ===== In-Place Operations (Standard reference patterns) ===== */
-
-/* In-place substring via memmove */
-void msStringSetSlice(msString* s, int64_t start, int64_t end);
+/* Empty a string but keep its buffer, for a reused response or request buffer */
+void msStringClear(msString* s);
 
 /* Trim and case conversion with the ECMAScript result (runtime/core/stringCase.c) */
 msString msStringTrim(msString s);
@@ -514,9 +499,6 @@ msString msStringTrimStart(msString s);
 msString msStringTrimEnd(msString s);
 msString msStringToUpperCase(msString s);
 msString msStringToLowerCase(msString s);
-
-/* In-place strip whitespace */
-void msStringStripInPlace(msString* s);
 
 /* ===== Single-Char Interning Table ===== */
 /* 128 precomputed ASCII single-char strings, const payloads (.rodata),

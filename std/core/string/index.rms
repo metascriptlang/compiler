@@ -1,6 +1,6 @@
 // MetaScript String Prelude — Raiser Backend
 // Shape-mirrors std/core/string/index.cms minus the C-only surface
-// (@include/@compile, in-place mutation, capacity). Kernels only where the
+// (@include/@compile). Kernels only where the
 // Raiser side has a real fast path: charAt/slice are opcode-intercepted,
 // charCodeAt/asBytes/asString, the byte tier, split and replace go through host bridges,
 // everything else is the shared Tier-2 byte-loop source.

@@ -4,9 +4,7 @@
 //   contract"): `string` is observably immutable at the language surface on
 //   every backend. The checker rejects index-assign (`s[i] = c`, compound
 //   forms too) and length-assign; the byte-mutation story is the uint8[]
-//   buffer tier (asBytes/asString). The C engine keeps its INTERNAL mutation
-//   tier (msStringSetLength/SetSlice) — this guard pins the surface,
-//   not the engine.
+//   buffer tier (asBytes/asString).
 //
 // WHAT IT CATCHES: a checker refactor dropping the surface rejection. The
 //   pre-contract state let `s[i] = "x"` through the checker and died at

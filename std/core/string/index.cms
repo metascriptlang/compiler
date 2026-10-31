@@ -108,44 +108,6 @@ export function parseInt(this s: string): int64 {
 	return parseIntPrefix(s);
 }
 
-// ===== Capacity & Length =====
-
-/** Returns the allocated capacity of the string buffer. */
-export extern function capacity(this s: string): int32 from "msStringCapacity";
-
-/** Sets the length of the string, truncating or extending as needed. */
-export extern function setLength(this s: string, newLen: int32): void from "&msStringSetLength";
-
-// ===== In-Place Append =====
-
-/** Appends another string to the end of this string in place. */
-export extern function append(this s: string, other: string): void from "&msStringAppend";
-
-// ===== In-Place Operations =====
-
-/** Replaces a section of the string in place. */
-export extern function setSlice(this s: string, start: number, end: number): void from "&msStringSetSlice";
-
-/** Strips whitespace from both ends of the string in place. */
-export extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
-
-extern function setSliceOf(ref s: string, start: int64, end: int64): void from "msStringSetSlice";
-
-function isCSpace(byte: uint8): boolean {
-	return byte == 32 || (byte >= 9 && byte <= 13);
-}
-
-@exportName("msStringStripInPlace")
-function stripInPlaceOf(ref s: string): void {
-	const b = s.asBytes();
-	let first: int64 = 0;
-	let last = (b.length as int64) - 1;
-	if (last < 0) return;
-	while (first <= last && isCSpace(b[first])) first += 1;
-	while (last >= first && isCSpace(b[last])) last -= 1;
-	setSliceOf(s, first, last + 1);
-}
-
 // ===== Character Construction =====
 
 /** Returns a string created from the specified Unicode code point. */
