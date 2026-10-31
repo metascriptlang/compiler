@@ -164,6 +164,44 @@ test "bindingOwnership: an explicit move out of a path needs a location the move
 	}
 }
 
+test "bindingOwnership: an explicit move out of a field or element whose type has no default value is refused, naming what to write instead" {
+	const shapes = "class Leaf { v: int32 = 7; }\nstruct Wrap { leaf: Leaf; }\nclass Holder { leaf: Leaf = new Leaf(); wrap: Wrap = { leaf: new Leaf() }; maybe: Leaf | null = new Leaf(); n: int32 = 1; s: string = \"s\"; kids: Vec<int32> = [1]; }\nclass Box<T> { item: T; constructor(item: T) { this.item = item; } }\nfunction take<T>(b: Box<T>): T { return move b.item; }\n";
+	const refused = [
+		{ name: "a field of class type", body: "export function run(): int32 { const h = new Holder(); const t = move h.leaf; return t.v; }", refusal: "cannot move 'h.leaf': type 'Leaf' has no default value, so the move would leave the field without a value" },
+		{ name: "an element of a class array", body: "export function run(): int32 { const xs: Leaf[] = [new Leaf()]; const t = move xs[0]; return t.v; }", refusal: "cannot move 'xs[…]': type 'Leaf' has no default value, so the move would leave the element without a value" },
+		{ name: "a field of a struct type that holds a class", body: "export function run(): int32 { const h = new Holder(); const w = move h.wrap; return w.leaf.v; }", refusal: "cannot move 'h.wrap': type 'Wrap' has no default value" },
+		{ name: "a field of a generic instance holding a class", body: "export function run(): int32 { return take(new Box<Leaf>(new Leaf())).v; }", refusal: "cannot move 'b.item': type 'Leaf' has no default value" },
+	];
+	for (const item of refused) {
+		const result = compileToC(shapes + item.body);
+		assert !result.ok && result.error.contains(item.refusal) && result.error.contains("swap(a, b)"), item.name + (result.ok ? " compiled" : ": " + result.error);
+	}
+	const kept = [
+		{ name: "a nullable field", body: "export function run(): int32 { const h = new Holder(); const t = move h.maybe; return t == null ? 0 : t.v; }" },
+		{ name: "a number field", body: "export function run(): int32 { const h = new Holder(); return move h.n; }" },
+		{ name: "a string field", body: "export function run(): int32 { const h = new Holder(); const t = move h.s; return t.length; }" },
+		{ name: "a Vec field", body: "export function run(): int32 { const h = new Holder(); const t = move h.kids; return t.length; }" },
+		{ name: "an identifier", body: "export function run(): int32 { const l = new Leaf(); const t = move l; return t.v; }" },
+		{ name: "a generic instance holding a number", body: "export function run(): int32 { return take(new Box<int32>(3)); }" },
+	];
+	for (const item of kept) {
+		const result = compileToC(shapes + item.body);
+		assert result.ok, item.name + (result.ok ? "" : ": " + result.error);
+	}
+	const lib = "export class Box<T> { item: T; constructor(item: T) { this.item = item; } }\nexport function take<T>(b: Box<T>): T { return move b.item; }";
+	const uses = [
+		{ use: "class Leaf { v: int32 = 7; }\nconsole.log(take(new Box<Leaf>(new Leaf())).v);", refusals: 1 },
+		{ use: "console.log(take(new Box<int32>(3)));", refusals: 0 },
+	];
+	for (const item of uses) {
+		let hits = 0;
+		for (const m of checkProjectDiagnostics([{ entryPath: "src/lib.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: "import { Box, take } from \"./lib\";\n" + item.use }], "src/main.ms")) {
+			if (m.indexOf("in instantiation of 'take") >= 0 && m.indexOf("cannot move 'b.item': type 'Leaf' has no default value") >= 0) hits += 1;
+		}
+		assert hits == item.refusals, item.use + ": " + String(hits) + " refusals";
+	}
+}
+
 test "bindingOwnership: an explicit move of a variable a closure captures is refused, naming the variable" {
 	const shapes = "class Box { n: string = \"\"; }\n";
 	const refused = [

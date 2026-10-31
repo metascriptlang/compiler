@@ -66,7 +66,7 @@ export function lex(source: string): Result<Token[], string> {
 
 	if (s.lexError != "") return Result.err(s.lexError);
 	addToken(s, TokenKind.Eof, "", s.line, s.column);
-	return Result.ok(move s.tokens);
+	return Result.ok(s.tokens);
 }
 
 // ===== Test Helpers =====

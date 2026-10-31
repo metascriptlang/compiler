@@ -1310,6 +1310,22 @@ function recordCapture(ctx: CheckerContext, sym: Symbol): void {
 	ctx.identifierMoves = pending;
 }
 
+function elementSlotType(access: Node): Type | null {
+	let held = skipModifier((access.data as ArrayAccessData).array.nodeType);
+	if (held != null && held.kind == TypeKind.Ref) held = held.typeReturn;
+	held = held != null ? peelTransparentInstance(held) : null;
+	if (held == null || (held.kind != TypeKind.Array && held.kind != TypeKind.SizedArray && held.kind != TypeKind.Span)) return null;
+	return held.typeReturn;
+}
+
+function refuseEmptiedSlot(ctx: CheckerContext, place: Node): void {
+	const isField = place.kind == NodeKind.MemberExpr;
+	const slot = (isField ? declaredTypeOfLocation(place) : elementSlotType(place)) ?? place.nodeType;
+	if (!requiresInit(ctx, slot)) return;
+	const what = isField ? "field" : "element";
+	addError(ctx, `cannot move '${lvalueText(place)}': ${noDefaultReason(ctx, slot)}, so the move would leave the ${what} without a value — read it without 'move' (a class reference is shared, not copied), declare the ${what} nullable ('${typeDisplayName(slot)} | null'), or exchange it with swap(a, b)`, place.location.line, place.location.column);
+}
+
 function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as MoveExprData;
 	// Validate operand: only identifiers, member access, array access, and calls allowed
@@ -1327,6 +1343,7 @@ function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
 		if (refusal != null) addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
+		refuseEmptiedSlot(ctx, d.moveArg);
 	}
 	if (d.moveArg.kind == NodeKind.Identifier && d.moveArg.resolvedSym != null && isFrameValue(d.moveArg.resolvedSym)) {
 		if (ctx.capturedSyms.has(d.moveArg.resolvedSym)) refuseCapturedMove(ctx, node);
