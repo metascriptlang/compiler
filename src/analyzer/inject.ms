@@ -34,7 +34,7 @@ import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, i
 import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, calleeToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -507,6 +507,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
+	if (calleeToCopy(dctx.writes, node, dctx.callerDefs)) cd.callee = keepArgumentAlive(cd.callee, dctx);
 	const sym = node.resolvedSym;
 
 	const sinkParams = calledRoutineType(node)?.typeChildren ?? null;

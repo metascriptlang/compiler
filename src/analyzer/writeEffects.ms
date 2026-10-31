@@ -1465,6 +1465,18 @@ function isImmutableEnvSlot(w: WriteEffects, slot: string): boolean {
 	return slot.startsWith("F:") && holder != null && holder.sym != null && hasFlag(holder.sym, SymbolFlag.ImmutableEnv);
 }
 
+export function calleeToCopy(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
+	if (call.kind != NodeKind.CallExpr || isRoutineSym(call.resolvedSym)) return false;
+	const callee = (call.data as CallExprData).callee;
+	if (callee == null || !w.rcOf(callee.nodeType).needsCleanup) return false;
+	const slots: string[] = [];
+	pathSlots(w, callee, slots);
+	if (slots.length == 0) return false;
+	if (!slots.every((slot: string): boolean => isImmutableEnvSlot(w, slot)) && partsMayWrite(w, callWriteParts(w, call, defs), slots)) return true;
+	if (runsCallbacks(w, call)) noteHeldAcrossCallbacks(w, slots);
+	return false;
+}
+
 function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
 	const kind = w.rcOf((call.data as CallExprData).arguments[i].nodeType).rcKind;
 	if (kind != RcKind.Ref && kind != RcKind.String) return false;

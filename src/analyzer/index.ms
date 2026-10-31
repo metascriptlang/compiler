@@ -16,7 +16,7 @@ import { injectProgram, isGeneratorBody } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { inferCursors } from "./cursors";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { WriteEffects, WriteSummaries, borrowedArgsToCopy, callbackParams, callerDefsOf, createRoutineDecls, createWriteSummaries, forwardedTo, lendCallbacks, leaveRoutineLending, noteRoutineDecls, openContract, settleContract } from "./writeEffects";
+import { WriteEffects, WriteSummaries, borrowedArgsToCopy, calleeToCopy, callbackParams, callerDefsOf, createRoutineDecls, createWriteSummaries, forwardedTo, lendCallbacks, leaveRoutineLending, noteRoutineDecls, openContract, settleContract } from "./writeEffects";
 import { classifyType, RcKind, noRcInfo } from "./classify";
 
 import { parseSource } from "../parser/statements/validation";
@@ -137,6 +137,7 @@ function heldAcrossCallbacks(w: WriteEffects, decl: Node, params: int32[], held:
 			if (isRoutineNode(n)) return;
 			if (n.kind == NodeKind.CallExpr) {
 				borrowedArgsToCopy(w, n, defs);
+				calleeToCopy(w, n, defs);
 				const target = forwardedTo(w, n);
 				if (target != null && !forwards.includes(target!)) forwards.push(target!);
 			}
