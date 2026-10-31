@@ -54,10 +54,9 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 		}
 	}
 	const call = `${target}(${args})`;
-	if (views != "") {
-		if (cb.result == BoundaryKind.Void) return `(${names}) => { ${views}${call}; ${writesBack}}`;
-		return `(${names}) => { ${views}const r = ${call}; ${writesBack}return ${toWire(cb.result, "r")}; }`;
-	}
+	const body = cb.result == BoundaryKind.Void ? `${call};` : `return ${toWire(cb.result, call)};`;
+	if (writesBack != "") return `(${names}) => { ${views}try { ${body} } finally { ${writesBack}} }`;
+	if (views != "") return `(${names}) => { ${views}${body} }`;
 	if (cb.result == BoundaryKind.Void) return `(${names}) => { ${call}; }`;
 	return `(${names}) => ${toWire(cb.result, call)}`;
 }
@@ -101,8 +100,22 @@ function takerOf(f: BoundaryFunction): string {
 	return `(${names.join(", ")}) => { r = ${leafLiteral(f.resultLeaves, values, 0)}; }`;
 }
 
+function afterCall(body: string[], afters: string[]): string[] {
+	const n = afters.length;
+	const out: string[] = [];
+	for (let k = 0; k < n; k += 1) out.push("\t".repeat(k) + "try {");
+	for (const l of body) out.push("\t".repeat(n) + l);
+	for (let k = n - 1; k >= 0; k -= 1) {
+		out.push("\t".repeat(k) + "} finally {");
+		out.push("\t".repeat(k + 1) + afters[k]);
+		out.push("\t".repeat(k) + "}");
+	}
+	return out;
+}
+
 function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	const cleanup: string[] = [];
+	const copyBacks: string[] = [];
 	const lines: string[] = [];
 	const encoded: string[] = [];
 	const encodes: string[] = [];
@@ -133,7 +146,7 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 			encode(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, "__msbCopyIn");
 		} else if (p.kind == BoundaryKind.Span) {
 			const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
-			if (p.mode == BoundaryMode.Shared) cleanup.push(`if (e${i}) __msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
+			if (p.mode == BoundaryMode.Shared) copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
 			encode(`e${i}`, view, "__msbCopyIn");
 		} else {
 			argList.push(toWire(p.kind, `a${i}`));
@@ -141,24 +154,24 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
-	let ret = `return ${fromWire(f.result, call)};`;
-	if (f.result == BoundaryKind.Void) ret = `${call};`;
-	if (f.result == BoundaryKind.String) ret = `return __msbDec(${call}, __msbMod._msb_ret_len());`;
+	let body = [`return ${fromWire(f.result, call)};`];
+	if (f.result == BoundaryKind.Void) body = [`${call};`];
+	if (f.result == BoundaryKind.String) body = [`return __msbDec(${call}, __msbMod._msb_ret_len());`];
 	if (f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
 		lines.push("	let r;");
 		lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 		cleanup.push("__msb.takes.length = d;");
-		ret = `${call};\n\t\treturn r;`;
+		body = [`${call};`, "return r;"];
 	}
 	const out = [`function ${bundleName}(${sig}) {`];
 	if (cleanup.length == 0) {
-		out.push(`	${ret}`);
+		for (const l of body) out.push(`	${l}`);
 	} else {
 		for (const l of lines) out.push(l);
 		if (encoded.length > 0) out.push(`	let ${encoded.join(", ")};`);
 		out.push("	try {");
 		for (const l of encodes) out.push(l);
-		out.push(`		${ret}`);
+		for (const l of afterCall(body, copyBacks)) out.push(`		${l}`);
 		out.push("	} finally {");
 		for (const c of cleanup) out.push(`		${c}`);
 		out.push("	}");
