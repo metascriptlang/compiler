@@ -384,6 +384,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		}
 		if (classStructType != null && classStructType.typeNames != null && classStructType.typeChildren != null) {
 			for (let i = 0; i < classStructType.typeNames.length; i += 1) {
+				if (storesNothing(classStructType, classStructType.typeChildren[i])) continue;
 				fieldNames.push(mangleFieldName(classStructType.typeNames[i]));
 				fieldTypes.push(getTypeDesc(g, classStructType.typeChildren[i]));
 			}
