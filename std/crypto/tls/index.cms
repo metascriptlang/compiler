@@ -113,13 +113,14 @@
 // the PSA drivers here call into. psa_util.c is no longer among them; this
 // module compiles it directly (see above).
 import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { Bytes } from "std/core/buffer/bytes";
 
 // C bindings
 extern function msTlsConnect(hostname: string, port: int32, caPath: string, timeoutMs: int32): int64;
 extern function msTlsTimedOut(): int32;
-extern function msTlsRead(ctx: int64, maxBytes: int32): string;
+extern function msTlsReadBytes(ctx: int64, maxBytes: int32): Buffer;
 extern function msTlsWrite(ctx: int64, data: string): int32;
+extern function msTlsWriteBytes(ctx: int64, data: Readonly<Span<uint8>>): int32;
 extern function msTlsClose(ctx: int64): void;
 extern function msTlsPeerCertSubject(ctx: int64): string;
 extern function msTlsLastError(): string;
@@ -135,7 +136,7 @@ export function tlsConnect(hostname: string, port: int32, caPath: string = "", t
 }
 
 export function tlsRead(ctx: int64, maxBytes: int32 = 4096): Buffer {
-	return rawBuffer(msTlsRead(ctx, maxBytes));
+	return msTlsReadBytes(ctx, maxBytes);
 }
 
 // After an empty tlsRead: "" is a clean close_notify, anything else is why the stream ended.
@@ -149,7 +150,8 @@ export function tlsTimedOut(): boolean {
 }
 
 export function tlsWrite(ctx: int64, data: Bytes): int32 {
-	return msTlsWrite(ctx, rawString(data));
+	if (typeof data == "string") return msTlsWrite(ctx, data);
+	return msTlsWriteBytes(ctx, data);
 }
 
 export function tlsClose(ctx: int64): void {

@@ -65,7 +65,8 @@ typedef struct msTlsCtx {
 	int fd;
 	mbedtls_ssl_context ssl;
 	mbedtls_ssl_config conf;
-	mbedtls_x509_crt cacert;
+	mbedtls_x509_crt ownCa; /* parsed for an explicit caPath only */
+	mbedtls_x509_crt *ca;   /* ownCa, or the process-wide default chain */
 } msTlsCtx;
 
 /* ===== I/O Callbacks for mbedTLS ===== */
@@ -198,6 +199,37 @@ static int loadCaChain(mbedtls_x509_crt *chain, const char *explicitPath) {
 #endif
 	tlsSetError("no CA certificates found%s", "; set SSL_CERT_FILE or SSL_CERT_DIR");
 	return 0;
+}
+
+/*
+ * The default chain is parsed once per process and shared read-only by every connection and thread:
+ * mbedtls_ssl_conf_ca_chain stores the pointer and verification only reads the chain, so no lock is
+ * needed after the parse. A failed parse is not cached, so a later connect reports its own cause.
+ */
+#ifdef _WIN32
+static SRWLOCK defaultCaLock = SRWLOCK_INIT;
+#define DEFAULT_CA_LOCK() AcquireSRWLockExclusive(&defaultCaLock)
+#define DEFAULT_CA_UNLOCK() ReleaseSRWLockExclusive(&defaultCaLock)
+#else
+#include <pthread.h>
+static pthread_mutex_t defaultCaLock = PTHREAD_MUTEX_INITIALIZER;
+#define DEFAULT_CA_LOCK() pthread_mutex_lock(&defaultCaLock)
+#define DEFAULT_CA_UNLOCK() pthread_mutex_unlock(&defaultCaLock)
+#endif
+static mbedtls_x509_crt defaultCa;
+static int defaultCaLoaded;
+
+static mbedtls_x509_crt *defaultCaChain(void) {
+	mbedtls_x509_crt *chain = NULL;
+	DEFAULT_CA_LOCK();
+	if (!defaultCaLoaded) {
+		mbedtls_x509_crt_init(&defaultCa);
+		if (loadCaChain(&defaultCa, NULL)) defaultCaLoaded = 1;
+		else mbedtls_x509_crt_free(&defaultCa);
+	}
+	if (defaultCaLoaded) chain = &defaultCa;
+	DEFAULT_CA_UNLOCK();
+	return chain;
 }
 
 msString msTlsLastError(void) {
@@ -336,7 +368,7 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 
 	mbedtls_ssl_init(&ctx->ssl);
 	mbedtls_ssl_config_init(&ctx->conf);
-	mbedtls_x509_crt_init(&ctx->cacert);
+	mbedtls_x509_crt_init(&ctx->ownCa);
 
 	char caBuf[512];
 	const char *explicitCa = NULL;
@@ -345,7 +377,13 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 		caBuf[caPath.len] = '\0';
 		explicitCa = caBuf;
 	}
-	if (!loadCaChain(&ctx->cacert, explicitCa)) goto fail;
+	if (explicitCa) {
+		if (!loadCaChain(&ctx->ownCa, explicitCa)) goto fail;
+		ctx->ca = &ctx->ownCa;
+	} else {
+		ctx->ca = defaultCaChain();
+		if (!ctx->ca) goto fail;
+	}
 
 	int fd = tcpConnect(hostBuf, port, timeoutMs);
 	if (fd < 0) {
@@ -364,7 +402,7 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 	}
 
 	mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-	mbedtls_ssl_conf_ca_chain(&ctx->conf, &ctx->cacert, NULL);
+	mbedtls_ssl_conf_ca_chain(&ctx->conf, ctx->ca, NULL);
 
 	/* ALPN: advertise http/1.1 — required by some CDNs (e.g. CloudFront) */
 	static const char *alpnProtocols[] = { "http/1.1", NULL };
@@ -414,53 +452,47 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 fail:
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
-	mbedtls_x509_crt_free(&ctx->cacert);
+	mbedtls_x509_crt_free(&ctx->ownCa);
 	if (ctx->fd >= 0) ms_close_socket(ctx->fd);
 	free(ctx);
 	return 0;
 }
 
+static _Thread_local unsigned char tlsReadScratch[16384]; /* one TLS record */
+
 /* An empty result is a clean close_notify when msTlsLastError() is empty; otherwise it names a timeout (msTlsTimedOut), a failure, or a close without close_notify. */
-msString msTlsRead(int64_t handle, int32_t maxBytes) {
+msUint8Array msTlsReadBytes(int64_t handle, int32_t maxBytes) {
 	tlsLastError[0] = '\0';
 	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
-	if (!ctx || maxBytes <= 0) return MS_EMPTY_STRING;
-
-	unsigned char *buf = (unsigned char*)msMemAlloc(maxBytes);
+	if (!ctx || maxBytes <= 0) return MS_EMPTY_UINT8_ARRAY;
+	if (maxBytes > (int32_t)sizeof(tlsReadScratch)) maxBytes = (int32_t)sizeof(tlsReadScratch);
 
 	int ret;
 	do {
-		ret = mbedtls_ssl_read(&ctx->ssl, buf, maxBytes);
+		ret = mbedtls_ssl_read(&ctx->ssl, tlsReadScratch, (size_t)maxBytes);
 	} while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE ||
 	         ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET);
 	if (ret <= 0) {
-		free(buf);
-		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return MS_EMPTY_STRING;
+		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return MS_EMPTY_UINT8_ARRAY;
 		if (tlsTimedOut) tlsSetError("TLS read timed out%s", "");
 		else if (ret == 0) tlsSetError("TLS connection closed without close_notify%s", "");
 		else snprintf(tlsLastError, sizeof(tlsLastError), "TLS read failed: -0x%04X", (unsigned)-ret);
-		return MS_EMPTY_STRING;
+		return MS_EMPTY_UINT8_ARRAY;
 	}
-
-	msString result = msStringNew((const char*)buf, (int64_t)ret);
-	free(buf);
-	return result;
+	return msBufferFrom(tlsReadScratch, (int64_t)ret);
 }
 
 int32_t msTlsTimedOut(void) {
 	return tlsTimedOut;
 }
 
-int32_t msTlsWrite(int64_t handle, msString data) {
+int32_t msTlsWriteBytes(int64_t handle, const uint8_t *buf, int64_t len64) {
 	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
-	if (!ctx) return -1;
-	if (data.len == 0 || !data.p) return 0;
-
-	const unsigned char *buf = (const unsigned char*)data.p->data;
+	if (!ctx || len64 > INT32_MAX) return -1;
 	int32_t total = 0;
-	int32_t len = (int32_t)data.len;
+	int32_t len = (int32_t)len64;
 	while (total < len) {
 		int ret = mbedtls_ssl_write(&ctx->ssl, buf + total, (size_t)(len - total));
 		if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
@@ -470,6 +502,11 @@ int32_t msTlsWrite(int64_t handle, msString data) {
 	return total;
 }
 
+int32_t msTlsWrite(int64_t handle, msString data) {
+	if (data.len == 0 || !data.p) return 0;
+	return msTlsWriteBytes(handle, (const uint8_t*)data.p->data, data.len);
+}
+
 void msTlsClose(int64_t handle) {
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx) return;
@@ -477,7 +514,7 @@ void msTlsClose(int64_t handle) {
 	mbedtls_ssl_close_notify(&ctx->ssl);
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
-	mbedtls_x509_crt_free(&ctx->cacert);
+	mbedtls_x509_crt_free(&ctx->ownCa);
 	ms_close_socket(ctx->fd);
 	free(ctx);
 }

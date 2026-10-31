@@ -10,6 +10,7 @@
 #define MS_TLS_H
 
 #include "runtime/core/string.h"
+#include "runtime/core/buffer.h"
 #include <stdint.h>
 
 /* Opaque TLS connection handle */
@@ -28,14 +29,15 @@ int32_t msTlsTimedOut(void);
 
 msString msTlsLastError(void);
 
-/* Read decrypted data from TLS connection.
- * Returns msString with data. Empty is end of stream, and an error when msTlsLastError() is then
+/* Read decrypted data from TLS connection, at most one TLS record (16384 bytes) per call.
+ * Empty is end of stream, and an error when msTlsLastError() is then
  * non-empty (timeout, failure, or a close without close_notify). */
-msString msTlsRead(int64_t ctx, int32_t maxBytes);
+msUint8Array msTlsReadBytes(int64_t ctx, int32_t maxBytes);
 
 /* Write data through TLS connection (encrypted by mbedTLS).
  * Returns bytes written (0 for empty data), -1 on error. */
 int32_t msTlsWrite(int64_t ctx, msString data);
+int32_t msTlsWriteBytes(int64_t ctx, const uint8_t *data, int64_t len);
 
 /* Close TLS connection and free all resources. */
 void msTlsClose(int64_t ctx);
