@@ -348,9 +348,7 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOperand(child, pre, ctx);
 	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess && !movePathAccesses.has(parent) ? arrayHandleRead(child) : null;
 	if (handle != null && (calls || readsAnyOf(child, writes))) {
-		const bound = bindOperand(handle, pre, ctx);
-		if (handle === child) return bound;
-		(child.data as HiddenDerefData).expr = bound;
+		(child.data as HiddenDerefData).expr = bindOperand(handle, pre, ctx);
 		return child;
 	}
 	if (isCallee) return child;

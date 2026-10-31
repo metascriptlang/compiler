@@ -85,8 +85,9 @@ export function readsBeforeHoist(e: Node): boolean {
 // An array is a counted handle: a temp keeps the object this read named, as JS does. The handle
 // sits under the deref the array operand reads through.
 export function arrayHandleRead(e: Node): Node | null {
-	const place = e.kind == NodeKind.HiddenDeref ? (e.data as HiddenDerefData).expr : e;
-	return e.nodeType != null && e.nodeType.kind == TypeKind.Array && isStorageRead(place) ? place : null;
+	if (e.kind != NodeKind.HiddenDeref || e.nodeType == null || e.nodeType.kind != TypeKind.Array) return null;
+	const handle = (e.data as HiddenDerefData).expr;
+	return isStorageRead(handle) ? handle : null;
 }
 
 function bindIfEarly(sp: Spiller, e: Node, pre: Node[]): Node {
