@@ -1,8 +1,8 @@
 // Buffer text codecs with the decoding rules of Node's Buffer: hex stops at the first pair that is
 // not two hex digits; base64 takes both alphabets, skips any other byte and stops at `=`.
 
-import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../encoding/output";
 import { hexDigitValue } from "../encoding";
+import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../encoding/output";
 
 const equalsSign: uint8 = 61;
 
@@ -26,18 +26,39 @@ export function base64Capacity(text: Readonly<Span<uint8>>): int64 {
 	return (n * 3) >> 2;
 }
 
+when (c) {
+	@inline
+	function hexInvalid(byte: uint8): int32 {
+		const b = byte as int32;
+		return (b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102) ? 0 : 1;
+	}
+
+	function decodeHexBlocks(text: Readonly<Ptr<uint8>>, out: Ptr<uint8>, count: int64): int64 {
+		const chunk: int64 = 16;
+		let k: int64 = 0;
+		while (k + chunk <= count) {
+			const end = k + chunk;
+			let bad: int32 = 0;
+			for (let j = k << 1; j < end << 1; j++) bad |= hexInvalid(text[j]);
+			if (bad != 0) break;
+			for (let j = k; j < end; j++) {
+				const hi = text[j << 1] as int32;
+				const lo = text[(j << 1) | 1] as int32;
+				out[j] = ((((hi & 15) + 9 * (hi >> 6)) << 4) | ((lo & 15) + 9 * (lo >> 6))) as uint8;
+			}
+			k = end;
+		}
+		return k;
+	}
+}
+
 /** Decodes hex `text` into `bytes[at..at + limit)`; returns the bytes written. */
 export function writeHex(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64): int64 {
 	const pairs = hexCapacity(text);
 	const count = limit < pairs ? limit : pairs;
-	const chunk: int64 = 64;
 	let k: int64 = 0;
-	while (k + chunk <= count) {
-		let bad: int32 = 0;
-		for (let j = k; j < k + chunk; j++) bad |= hexDigitValue(text[j * 2]) | hexDigitValue(text[j * 2 + 1]);
-		if (bad < 0) break;
-		for (let j = k; j < k + chunk; j++) bytes[at + j] = ((hexDigitValue(text[j * 2]) << 4) | hexDigitValue(text[j * 2 + 1])) as uint8;
-		k += chunk;
+	when (c) {
+		if (count >= 16) k = decodeHexBlocks(text as Readonly<Ptr<uint8>>, bytes + at, count);
 	}
 	while (k < count) {
 		const hi = hexDigitValue(text[k * 2]);
