@@ -48,7 +48,7 @@ function manifestOf(names: string[]): Manifest {
 		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
-	if (m.errors.length > 0) throw new Error("internal: " + m.errors.join("; "));
+	if (m.errors.length > 0) throw new Error("internal: " + m.errors.map((e) => e.message).join("; "));
 	return m;
 }
 

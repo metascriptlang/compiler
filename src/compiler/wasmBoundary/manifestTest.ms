@@ -2,7 +2,7 @@ import { ExtensionRegistry, buildExportInfo, ExportedSymInfo } from "../../check
 import { CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { BoundaryKind, BoundaryMode, manifestFor, moduleKeyOf } from "./manifest";
+import { BoundaryKind, BoundaryMode, BoundaryRefusal, manifestFor, moduleKeyOf } from "./manifest";
 
 const ENTRY = "/proj/app/main.ms";
 const MODULE = "/proj/app/calc/core.ms";
@@ -30,7 +30,7 @@ export function name(s: string): string { return s; }
 
 test "manifest: scalar, callback and string exports map to boundary kinds" {
 	const m = manifestFor(MODULE, ENTRY, exportsOf(CALC, ["add64", "evaluate", "half", "isEven", "ping", "name"]), ["add64", "evaluate", "half", "isEven", "ping", "name"]);
-	assert m.errors.length == 0, m.errors.join("; ");
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
 	assert m.functions.length == 6;
 	const add = m.functions[0];
 	assert add.exportSymbol == "msb_calc_score_add64";
@@ -57,21 +57,21 @@ export function cbString(cb: (n: int32) => string): int32 { return 0; }
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["takesArray", "takesBox", "maybe", "wide", "cbString"]), ["takesArray", "takesBox", "maybe", "wide", "cbString"]);
 	assert m.functions.length == 0;
-	assert m.errors.length == 5, m.errors.join("; ");
-	assert m.errors[0].includes("'takesArray'") && m.errors[0].includes("parameter 'xs'");
-	assert m.errors[1].includes("'takesBox'") && m.errors[1].includes("parameter 'b'") && m.errors[1].includes("'Box'");
-	assert m.errors[2].includes("'maybe'") && m.errors[2].includes("nullable");
-	assert m.errors[3].includes("'wide'") && m.errors[3].includes("the result");
-	assert m.errors[4].includes("'cbString'") && m.errors[4].includes("callback");
+	assert m.errors.length == 5, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'takesArray'") && m.errors[0].message.includes("parameter 'xs'");
+	assert m.errors[1].message.includes("'takesBox'") && m.errors[1].message.includes("parameter 'b'") && m.errors[1].message.includes("'Box'");
+	assert m.errors[2].message.includes("'maybe'") && m.errors[2].message.includes("nullable");
+	assert m.errors[3].message.includes("'wide'") && m.errors[3].message.includes("the result");
+	assert m.errors[4].message.includes("'cbString'") && m.errors[4].message.includes("callback");
 }
 
-function errorFor(errors: string[], fn: string): string {
+function errorFor(errors: BoundaryRefusal[], fn: string): string {
 	let found = "";
 	let count = 0;
 	for (const e of errors) {
-		if (e.includes(`'${fn}' in`)) { found = e; count += 1; }
+		if (e.message.includes(`'${fn}' in`)) { found = e.message; count += 1; }
 	}
-	if (count != 1) { throw new Error(`${fn}: expected one error, got ${count} in ${errors.join("; ")}`); }
+	if (count != 1) { throw new Error(`${fn}: expected one error, got ${count} in ${errors.map((e) => e.message).join("; ")}`); }
 	return found;
 }
 
@@ -101,7 +101,7 @@ export function fieldFn(o: Op): int32 { return 0; }
 	const names = ["paramEnum", "resultEnum", "fieldEnum", "literalEnum", "paramUnion", "resultUnion", "fieldUnion", "resultFn", "fieldFn"];
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
 	assert m.functions.length == 0;
-	assert m.errors.length == names.length, m.errors.join("; ");
+	assert m.errors.length == names.length, m.errors.map((e) => e.message).join("; ");
 	const enumLead = "and an enum has no boundary form yet: cross its integer instead, ";
 	const enumBack = ", and converting back with 'n as Color', which checks the range";
 	assert errorFor(m.errors, "paramEnum").includes("parameter 'c' has type") && errorFor(m.errors, "paramEnum").includes(enumLead + "passing 'x as int32'" + enumBack);
@@ -133,7 +133,7 @@ export function paramNullable(b: Box | null): int32 { return 0; }
 	const names = ["paramMap", "resultSet", "fieldMap", "paramArray", "resultArray", "fieldArray", "paramClass", "resultClass", "fieldClass", "paramNullable"];
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
 	assert m.functions.length == 0;
-	assert m.errors.length == names.length, m.errors.join("; ");
+	assert m.errors.length == names.length, m.errors.map((e) => e.message).join("; ");
 	const table = "and a Map or Set is a hash table that lives on one heap and ";
 	assert errorFor(m.errors, "paramMap").includes("parameter 'm' has type") && errorFor(m.errors, "paramMap").includes(table + "does not cross: pass its keys and values as separate Vec parameters of numbers and rebuild it on the other side (string keys have no Vec form yet)");
 	assert errorFor(m.errors, "resultSet").includes("the result has type") && errorFor(m.errors, "resultSet").includes(table + "does not cross: return a Vec of numbers and rebuild it on the other side, a Map's keys from one @wasm function and its values from another");
@@ -157,7 +157,7 @@ export function gives(): bigint { return 0n; }
 export function waits(p: Promise<int32>): int32 { return 0; }
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["takes", "gives", "waits"]), ["takes", "gives", "waits"]);
-	assert m.errors.length == 3, m.errors.join("; ");
+	assert m.errors.length == 3, m.errors.map((e) => e.message).join("; ");
 	assert errorFor(m.errors, "takes").includes("which has no JS/wasm boundary form: use bool");
 	assert errorFor(m.errors, "gives").includes("which has no JS/wasm boundary form: return void");
 	assert errorFor(m.errors, "waits").includes("parameter 'p' has type") && errorFor(m.errors, "waits").includes("which has no JS/wasm boundary form: use bool");
@@ -179,7 +179,7 @@ export function tag(l: Label): Label { return l; }
 export function sum(xs: Vec<float32>): Vec<int32> { const out: Vec<int32> = []; return out; }
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["tag", "sum"]), ["tag", "sum"]);
-	assert m.errors.length == 0, m.errors.join("; ");
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
 	const tag = m.functions[0];
 	assert tag.params[0].kind == BoundaryKind.Struct && tag.params[0].mode == BoundaryMode.Copied;
 	const paths: string[] = [];
@@ -203,10 +203,10 @@ export function words(ws: Vec<string>): int32 { return 0; }
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["own", "loose", "words"]), ["own", "loose", "words"]);
 	assert m.functions.length == 0;
-	assert m.errors.length == 3, m.errors.join("; ");
-	assert m.errors[0].includes("'own'") && m.errors[0].includes("lifecycle hook");
-	assert m.errors[1].includes("'loose'") && m.errors[1].includes("field 'n'");
-	assert m.errors[2].includes("'words'") && m.errors[2].includes("Vec");
+	assert m.errors.length == 3, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'own'") && m.errors[0].message.includes("lifecycle hook");
+	assert m.errors[1].message.includes("'loose'") && m.errors[1].message.includes("field 'n'");
+	assert m.errors[2].message.includes("'words'") && m.errors[2].message.includes("Vec");
 }
 
 test "manifest: a Span parameter is borrowed when read-only and shared when writable, and a Span result is refused" {
@@ -220,7 +220,7 @@ export function view(xs: Readonly<Span<int32>>): Readonly<Span<int32>> { return 
 	assert m.functions.length == 2;
 	assert m.functions[0].params[0].kind == BoundaryKind.Span && m.functions[0].params[0].mode == BoundaryMode.Borrowed && m.functions[0].params[0].element == BoundaryKind.F32;
 	assert m.functions[1].params[0].mode == BoundaryMode.Shared && m.functions[1].params[0].element == BoundaryKind.I32;
-	assert m.errors.length == 2, m.errors.join("; ");
-	assert m.errors[0].includes("'names'") && m.errors[0].includes("Span");
-	assert m.errors[1].includes("'view'") && m.errors[1].includes("the result") && m.errors[1].includes("return a Vec");
+	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'names'") && m.errors[0].message.includes("Span");
+	assert m.errors[1].message.includes("'view'") && m.errors[1].message.includes("the result") && m.errors[1].message.includes("return a Vec");
 }
