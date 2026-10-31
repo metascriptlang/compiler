@@ -12,6 +12,7 @@ import "./accessCheck";
 import "./float32";
 import "./intConv";
 import "./intArith";
+import "./intArithRun";
 import "./asConversion";
 import "./downConversion";
 import "./genericClassInstance";
