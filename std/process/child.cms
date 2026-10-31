@@ -23,12 +23,20 @@ import {
 import { incompleteTail } from "./utf8Tail";
 import { utf8Text } from "../core/string/bytes";
 import { rawString, rawBuffer } from "../core/buffer/bytes";
+import { childEnvironmentPairs } from "./environment";
 
 extern function msProcChildSpawn(
 	path: string,
 	args: string[],
 	cwd: string,
 	mergeStderr: int32,
+): int64;
+extern function msProcChildSpawnEnv(
+	path: string,
+	args: string[],
+	cwd: string,
+	mergeStderr: int32,
+	environment: string[],
 ): int64;
 extern function msProcChildIsUnsupported(spawnResult: int64): int32;
 extern function msProcChildPid(h: int64): int32;
@@ -76,6 +84,7 @@ export struct ByteChunk {
 export interface SpawnOptions {
 	cwd?: string;
 	mergeStderr?: boolean;
+	env?: Record<string, string>;
 }
 
 export class ChildProcess {
@@ -203,7 +212,19 @@ export function spawn(
 	opts: SpawnOptions = {},
 ): Result<ChildProcess, ProcessError> {
 	const merge = opts.mergeStderr ?? false;
-	const handle = msProcChildSpawn(path, args, opts.cwd ?? "", merge ? 1 : 0);
+	const variables = opts.env;
+	let handle: int64 = 0;
+	if (variables != null) {
+		const prepared = childEnvironmentPairs(
+			variables, msProcessPlatform() == "windows",
+		);
+		if (!prepared.ok) { return Result.err(startFailed(path, "EINVAL")); }
+		handle = msProcChildSpawnEnv(
+			path, args, opts.cwd ?? "", merge ? 1 : 0, prepared.value,
+		);
+	} else {
+		handle = msProcChildSpawn(path, args, opts.cwd ?? "", merge ? 1 : 0);
+	}
 	if (handle > 0) return Result.ok(new ChildProcess(handle, path));
 	if (msProcChildIsUnsupported(handle) != 0) return Result.err(startFailed(path, NO_SPAWN));
 	return Result.err(startFailed(path, errnoName(-handle as int32)));

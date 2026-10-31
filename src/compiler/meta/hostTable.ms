@@ -565,6 +565,10 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 @include("runtime/process.h");
 
 extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64;
+extern function msProcChildSpawnEnv(
+	path: string, args: string[], cwd: string, mergeStderr: int32,
+	environment: string[],
+): int64;
 extern function msProcChildIsUnsupported(spawnResult: int64): int32;
 extern function msProcChildPid(h: int64): int32;
 extern function msProcChildErrno(h: int64): int32;
@@ -598,13 +602,25 @@ export function closeHostChildren(): void {
 	_children.length = 0;
 }
 
-function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
-	const r = msProcChildSpawn(
-		unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]), unboxInt(args[3]) as int32,
-	);
-	if (r <= 0) return raiserInt(r);
-	_children.push(r);
+function _trackHostChild(handle: int64): RaiserValue {
+	if (handle <= 0) { return raiserInt(handle); }
+	_children.push(handle);
 	return raiserInt(_children.length as int64);
+}
+
+function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
+	return _trackHostChild(msProcChildSpawn(
+		unboxString(args[0]), _unboxStringArrayArg(args[1]),
+		unboxString(args[2]), unboxInt(args[3]) as int32,
+	));
+}
+
+function _bridgeMsProcChildSpawnEnv(args: RaiserValue[]): RaiserValue {
+	return _trackHostChild(msProcChildSpawnEnv(
+		unboxString(args[0]), _unboxStringArrayArg(args[1]),
+		unboxString(args[2]), unboxInt(args[3]) as int32,
+		_unboxStringArrayArg(args[4]),
+	));
 }
 
 function _bridgeMsProcChildIsUnsupported(args: RaiserValue[]): RaiserValue {
@@ -1680,6 +1696,10 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
 	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn, HostCapability.ChildProcess);
+	registerHostFn(
+		"msProcChildSpawnEnv", _bridgeMsProcChildSpawnEnv,
+		HostCapability.ChildProcess,
+	);
 	registerHostFn("msProcChildIsUnsupported", _bridgeMsProcChildIsUnsupported);
 	registerHostFn("msProcChildPid", _bridgeMsProcChildPid);
 	registerHostFn("msProcChildErrno", _bridgeMsProcChildErrno);
