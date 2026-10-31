@@ -5,7 +5,7 @@ import { lspFormatMessage, lspJsonString, lspPathToUri } from "./protocol";
 import { lspSplitFrames } from "./transport";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { getDynamicField, at, asInt32 } from "std/serialize/json/accessors";
+import { getDynamicField, at, asInt32, asString } from "std/serialize/json/accessors";
 import { jsonNull } from "std/serialize/json/builder";
 import { ensureDir, writeFile } from "std/fs";
 import { dirname } from "std/fs/path";
@@ -1587,6 +1587,46 @@ function referenceRows(r: LspReplay, key: string): string {
 	return rows.join("; ");
 }
 
+function outlineTracksSourceRenameAndUndo(): LspScenario {
+	const uri = "file:///lspwire/source-identity.ms";
+	const original = "export const Az = 1;\n";
+	return {
+		name: "outline observes a source rename and undo without stale declarations",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, original))]),
+			frames([request("10", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, "export const BY = 1;\n"))]),
+			frames([request("11", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 3, original))]),
+			frames([request("12", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+		],
+		check: (r: LspReplay) => {
+			const ids = [10, 11, 12];
+			const expected = ["Az", "BY", "Az"];
+			for (let i = 0; i < ids.length; i++) {
+				let found = false;
+				for (const message of r.messages) {
+					if (message.getDynamicField("id").asInt32() != ids[i]) continue;
+					found = true;
+					const result = message.getDynamicField("result");
+					if (result.kind != JsonKind.Array || result.items.length != 1) {
+						return `outline ${ids[i]} requires one declaration`;
+					}
+					const name = result.items[0].getDynamicField("name").asString();
+					if (name != expected[i]) return `outline ${ids[i]} expected ${expected[i]}, got ${name}`;
+				}
+				if (!found) return `missing outline ${ids[i]}`;
+			}
+			return "";
+		},
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 function referencesHonorDeclarationContext(): LspScenario {
 	const uri = "file:///lspwire/refs/flag.ms";
 	const text = "const value = 1;\nconst result = value;\n";
@@ -2217,6 +2257,7 @@ export function lspScenarios(): LspScenario[] {
 		enumMemberDefinitionIsTheMembersDeclaration(),
 		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
+		outlineTracksSourceRenameAndUndo(),
 		semanticTokensClassifyReadsAndDeclarations(),
 		rewiredImportsFollowEdits(),
 		closingAnOverlayRestoresDisk(),
