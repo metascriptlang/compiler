@@ -9,7 +9,7 @@ import {
 } from "./protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats, getFileId } from "../transam/index";
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
@@ -208,6 +208,7 @@ const CONTENT_MODIFIED: int32 = -32801;
 const PARSE_ERROR: int32 = -32700;
 const INVALID_REQUEST: int32 = -32600;
 const INTERNAL_ERROR: int32 = -32603;
+const SERVER_NOT_INITIALIZED: int32 = -32002;
 
 function answerError(io: LspTransport, id: string, code: int32, message: string): void {
 	if (id != "") io.write(lspFormatMessage(lspErrorResponse(id, code, message)));
@@ -309,6 +310,7 @@ export function lspServe(io: LspTransport): int32 {
 				if (response.length > 0) io.write(response);
 			} catch (e) {
 				lspLog("Handler error: " + e);
+				answerError(io, qm.id, INTERNAL_ERROR, "internal error: " + e);
 				resetCancel(state.db.cancelCtx);
 				state.yieldToInput = false;
 			}
@@ -362,6 +364,10 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 	const idStr = qm.id;
 	if (state.shutdownRequested) {
 		const refusal = lspErrorResponse(idStr, INVALID_REQUEST, "InvalidRequest: server is shutting down");
+		return idStr == "" ? "" : lspFormatMessage(refusal);
+	}
+	if (!state.initialized && method != "initialize") {
+		const refusal = lspErrorResponse(idStr, SERVER_NOT_INITIALIZED, "ServerNotInitialized: " + method + " before initialize");
 		return idStr == "" ? "" : lspFormatMessage(refusal);
 	}
 	const params = lspGetObjectField(qm.body, "params");
@@ -444,17 +450,44 @@ test "initialize sets flag" {
 }
 
 test "shutdown sets flag" {
-	const state = createServerState();
+	const state = initializedState();
 	const shutdownMsg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}";
 	processMessage(shutdownMsg, state);
 	assert state.shutdownRequested;
 }
 
-test "hover on unknown uri returns wire response" {
+const INITIALIZE_MESSAGE = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+
+function initializedState(): LspServerState {
 	const state = createServerState();
+	processMessage(INITIALIZE_MESSAGE, state);
+	return state;
+}
+
+test "hover on unknown uri returns wire response" {
+	const state = initializedState();
 	const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
 	const response = processMessage(hoverMsg, state);
 	assert response.length > 0;
+}
+
+test "a request before initialize answers ServerNotInitialized and a notification is dropped" {
+	const state = createServerState();
+	const refused = processMessage("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{" + HOVER_PARAMS + "}}", state);
+	assert refused.indexOf("\"id\":3,\"error\":{\"code\":-32002", 0) > 0, refused;
+	assert !state.initialized;
+	const opened = processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\",\"languageId\":\"metascript\",\"version\":1,\"text\":\"const x = 1;\"}}}", state);
+	assert opened == "";
+	assert getFileId(state.db.fileInput, "/test.ms") < 0;
+	const answered = processMessage(INITIALIZE_MESSAGE, state);
+	assert answered.indexOf("\"capabilities\"", 0) > 0;
+}
+
+test "an unknown request answers MethodNotFound with its id and an unknown notification stays silent" {
+	const state = initializedState();
+	const answered = processMessage("{\"jsonrpc\":\"2.0\",\"id\":\"q7\",\"method\":\"workspace/unheardOf\",\"params\":{}}", state);
+	assert answered.indexOf("\"id\":\"q7\",\"error\":{\"code\":-32601", 0) > 0, answered;
+	assert processMessage("{\"jsonrpc\":\"2.0\",\"method\":\"workspace/unheardOf\",\"params\":{}}", state) == "";
 }
 
 test "unknown notification returns empty" {
@@ -534,14 +567,14 @@ test "isSuperseded not by different file" {
 const HOVER_PARAMS = "\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}";
 
 test "a nested id in params does not replace the request id" {
-	const state = createServerState();
+	const state = initializedState();
 	const response = processMessage("{\"method\":\"textDocument/hover\",\"params\":{\"id\":7," + HOVER_PARAMS + "},\"id\":1}", state);
 	assert response.indexOf("\"id\":1,", 0) > 0;
 	assert response.indexOf("\"id\":7", 0) < 0;
 }
 
 test "a nested method in params does not replace the dispatched method" {
-	const state = createServerState();
+	const state = initializedState();
 	const response = processMessage("{\"params\":{\"method\":\"workspace/other\",\"id\":7," + HOVER_PARAMS + "},\"method\":\"textDocument/hover\",\"id\":1}", state);
 	assert response.indexOf("\"id\":1,", 0) > 0;
 	assert response.indexOf("\"id\":7", 0) < 0;
@@ -612,7 +645,7 @@ test "an opened file's msc.lock packages reach that project's resolver" {
 	const root = realpath(dir);
 	writeFile(`${root}/build.ms`, "const config = {};\nexport default config;\n");
 	writeFile(`${root}/msc.lock`, "{\"version\":1,\"packages\":{\"pkg@1.2.3\":{\"version\":\"1.2.3\"}}}");
-	const state = createServerState();
+	const state = initializedState();
 	const uri = lspJsonString(`file://${root}/main.ms`);
 	processMessage(`{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":${uri},"languageId":"metascript","version":1,"text":"export const v: int32 = 1;"}}}`, state);
 	const at = state.db.resolverConfig.aliasKeys.indexOf("pkg");
@@ -796,6 +829,8 @@ test "replay: hover inside an identifier answers the range of the whole identifi
 
 test "replay: completion after . on a generic instance and after ?. on an optional value" {
 	assert runMemoryScenario("completion after . on a generic instance and after ?. on an optional value") == "";
+}
+
 test "replay: member completion after non-ASCII text on the same line reads the UTF-16 column" {
 	assert runMemoryScenario("member completion after non-ASCII text on the same line reads the UTF-16 column") == "";
 }
@@ -806,6 +841,10 @@ test "replay: a cached identifier completion does not answer a member completion
 
 test "replay: an unknown request answers MethodNotFound and an unknown notification is dropped" {
 	assert runMemoryScenario("an unknown request answers MethodNotFound and an unknown notification is dropped") == "";
+}
+
+test "replay: a request before initialize answers ServerNotInitialized and does not end the session" {
+	assert runMemoryScenario("a request before initialize answers ServerNotInitialized and does not end the session") == "";
 }
 
 }

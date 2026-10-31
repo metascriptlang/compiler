@@ -1997,6 +1997,33 @@ function unknownMethodAnswersMethodNotFound(): LspScenario {
 	};
 }
 
+function requestsBeforeInitializeAreRefused(): LspScenario {
+	const uri = "file:///lspwire/beforeinit.ms";
+	return {
+		name: "a request before initialize answers ServerNotInitialized and does not end the session",
+		batching: "any",
+		drains: [
+			frames([
+				request("5", "textDocument/hover", positionParams(uri, 0, 6)),
+				request("6", "shutdown", "null"),
+			]),
+			initializeDrain(),
+			frames([request("7", "textDocument/hover", positionParams(uri, 0, 13))]),
+			frames([request("8", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("n:5 error.code", "-32002", answerField(r, "n:5", "error.code")),
+			sameText("n:6 error.code", "-32002", answerField(r, "n:6", "error.code")),
+			sameText("n:7 result: the early shutdown did not end the session", "null", answerField(r, "n:7", "result")),
+			sameText("n:8 result", "null", answerField(r, "n:8", "result")),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -2055,6 +2082,7 @@ export function lspScenarios(): LspScenario[] {
 		completionAfterWideText(),
 		completionCacheKeepsItsKind(),
 		unknownMethodAnswersMethodNotFound(),
+		requestsBeforeInitializeAreRefused(),
 	];
 }
 
