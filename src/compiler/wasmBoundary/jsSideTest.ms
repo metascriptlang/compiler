@@ -21,6 +21,8 @@ export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n
 export function pick(f: (a: boolean, b: uint32) => boolean): void { f(true, 1); }
 export function twice(s: string): string { return s + s; }
 export function both(a: string, n: int32, b: string): int32 { return a.length + n + b.length; }
+export function sumBy(n: int32, cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
+export function edit(cb: (xs: Span<boolean>, at: int32) => void): void {}
 `;
 
 function bindingsFor(names: string[]) {
@@ -74,7 +76,7 @@ test "js side: a string result is decoded with the length read right after the c
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
-	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], result: BoundaryKind.I32, signature: "i_si" };
+	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], result: BoundaryKind.I32, signature: "i_si" };
 	const m: Manifest = {
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", exportSymbol: "msb_calc_note",
@@ -85,6 +87,12 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	};
 	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name).modules[0].code;
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
+}
+
+test "js side: a callback Span parameter arrives as a copied view, a writable one is copied back after the call" {
+	const code = bindingsFor(["sumBy", "edit"]).modules[0].code;
+	assert code.includes("const id1 = __msb.push((x0, x1) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; const r = a1(s0); return r; });");
+	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; a0(s0, x2); __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); });");
 }
 
 test "js side: the prelude carries the string glue once and reads the heap fresh" {

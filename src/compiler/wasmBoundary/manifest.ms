@@ -22,6 +22,8 @@ export enum BoundaryMode {
 
 export interface BoundaryCallback {
 	params: BoundaryKind[];
+	elements: BoundaryKind[];
+	modes: BoundaryMode[];
 	result: BoundaryKind;
 	signature: string;
 }
@@ -78,6 +80,8 @@ export function signatureLetter(kind: BoundaryKind): string {
 			return "v";
 		case BoundaryKind.String:
 			return "s";
+		case BoundaryKind.Span:
+			return "p";
 		default:
 			throw new Error("internal: boundary kind " + kind.toString() + " has no callback signature letter");
 	}
@@ -145,14 +149,27 @@ function refuse(c: Collector, what: string, t: Type, why: string): void {
 function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | null {
 	let ok = true;
 	const params: BoundaryKind[] = [];
+	const elements: BoundaryKind[] = [];
+	const modes: BoundaryMode[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const pt = peeled(t.typeChildren[i]);
-		const k = isMaybeType(pt) ? null : pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
+		let k = isMaybeType(pt) ? null : pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
+		let element = BoundaryKind.Void;
+		if (pt.kind == TypeKind.Span && pt.typeReturn != null) {
+			const et = peeled(pt.typeReturn!);
+			const ek = isMaybeType(et) ? null : scalarKind(et);
+			if (ek != null) {
+				k = BoundaryKind.Span;
+				element = ek;
+			}
+		}
 		if (k == null) {
-			refuse(c, `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float and string parameters");
+			refuse(c, `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float, string and Span-of-number parameters");
 			ok = false;
 		} else {
 			params.push(k);
+			elements.push(element);
+			modes.push(k != BoundaryKind.Span ? BoundaryMode.Copied : isReadonlyView(pt) ? BoundaryMode.Borrowed : BoundaryMode.Shared);
 		}
 	}
 	let result = BoundaryKind.Void;
@@ -169,7 +186,7 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 	if (!ok) return null;
 	let letters = "";
 	for (const p of params) letters += signatureLetter(p);
-	return { params, result, signature: signatureLetter(result) + "_" + letters };
+	return { params, elements, modes, result, signature: signatureLetter(result) + "_" + letters };
 }
 
 export function leafLiteral(leaves: BoundaryLeaf[], values: string[], depth: int32): string {

@@ -17,6 +17,8 @@ export function isEven(x: uint8): boolean { return x % 2 == 0; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
 export function twice(s: string): string { return s + s; }
 export function report(cb: (s: string) => int32): int32 { return cb("x"); }
+export function sumBy(cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
+export function edit(cb: (xs: Span<int32>, at: int32) => void): void {}
 `;
 
 function entryFor(names: string[]) {
@@ -77,6 +79,16 @@ test "wasm entry: a callback string parameter passes ptr and len of a value aliv
 	assert s.includes("int32_t msb_cb_i_s(int32_t id, uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false;
 	assert e.exportedFunctions.join(",") == "_msb_calc_report,_malloc,_free,_MsMain";
+}
+
+test "wasm entry: a callback Span parameter passes ptr and len of the view, 0 for an empty one" {
+	const e = entryFor(["sumBy", "edit"]);
+	const s = e.source;
+	assert s.includes("msbm0_sumBy((a0: Readonly<Span<float32>>): float32 => msb_cb_f_p(cb, (a0.length == 0 ? 0 : a0 as Readonly<Ptr<float32>> as uint64 as uint32), a0.length as int32))");
+	assert s.includes("msbm0_edit((a0: Span<int32>, a1: int32): void => { msb_cb_v_pi(cb, (a0.length == 0 ? 0 : a0 as Ptr<int32> as uint64 as uint32), a0.length as int32, a1); })");
+	assert s.includes('extern function msb_cb_v_pi(id: int32, a0p: uint32, a0l: int32, a1: int32): void from "msb_cb_v_pi";');
+	assert e.exportedFunctions.join(",") == "_msb_calc_sumBy,_msb_calc_edit,_MsMain";
+	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 }
 
 test "wasm entry: a struct crosses as leaf parameters and returns through one result import" {
