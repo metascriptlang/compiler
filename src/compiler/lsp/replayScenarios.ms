@@ -1969,6 +1969,34 @@ function completionCacheKeepsItsKind(): LspScenario {
 	};
 }
 
+function unknownMethodAnswersMethodNotFound(): LspScenario {
+	const uri = "file:///lspwire/unknownmethod.ms";
+	return {
+		name: "an unknown request answers MethodNotFound and an unknown notification is dropped",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				request("7", "workspace/unheardOf", "{}"),
+				notification("workspace/unheardOf", "{}"),
+				request("\"s8\"", "$/unheardOf", "{}"),
+				request("9", "textDocument/hover", positionParams(uri, 0, 0)),
+			]),
+			frames([request("10", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("n:7 error.code", "-32601", answerField(r, "n:7", "error.code")),
+			sameText("s8 error.code", "-32601", answerField(r, "s:s8", "error.code")),
+			sameText("n:9 result", "null", answerField(r, "n:9", "result")),
+			sameCount("messages", 5, r.messages.length),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -2026,6 +2054,7 @@ export function lspScenarios(): LspScenario[] {
 		unicodeLinePositions(),
 		completionAfterWideText(),
 		completionCacheKeepsItsKind(),
+		unknownMethodAnswersMethodNotFound(),
 	];
 }
 

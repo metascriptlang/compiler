@@ -804,6 +804,10 @@ test "replay: a cached identifier completion does not answer a member completion
 	assert runMemoryScenario("a cached identifier completion does not answer a member completion on the same line, nor the reverse") == "";
 }
 
+test "replay: an unknown request answers MethodNotFound and an unknown notification is dropped" {
+	assert runMemoryScenario("an unknown request answers MethodNotFound and an unknown notification is dropped") == "";
+}
+
 }
 
 // ===== Exports a top-level macro statement splices =====

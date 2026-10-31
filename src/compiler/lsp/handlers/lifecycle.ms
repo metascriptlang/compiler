@@ -20,7 +20,7 @@ import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
-	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength, lspErrorResponse,
 } from "../protocol";
 import { lspFmtPublishDiagnostics, lspFmtDiagnostic } from "../format";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
@@ -293,6 +293,8 @@ export function handleDidSave(params: string, db: TransAmDb): string {
 
 // ===== Dispatch =====
 
+export const METHOD_NOT_FOUND: int32 = -32601;
+
 export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
 	return match (method) {
 		"initialize" => handleInitialize(id),
@@ -321,7 +323,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 			return "";
 		},
 		_ => {
-			return "";
+			return id == "" ? "" : lspErrorResponse(id, METHOD_NOT_FOUND, "MethodNotFound: " + method);
 		},
 	};
 }
@@ -388,10 +390,11 @@ test "shutdown" {
 	assert lspGetNumberField(r, "id") == 2;
 }
 
-test "unknown method with id" {
+test "unknown method with id answers MethodNotFound" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	assert r == "";
+	assert lspGetNumberField(r, "id") == 3;
+	assert lspGetNumberField(lspGetObjectField(r, "error"), "code") == -32601, r;
 }
 
 test "unknown notification" {
