@@ -106,9 +106,11 @@ static inline void msPromiseAllWatch(void* fut, void* env) {
 	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseAllCb, .env = env });
 }
 
-_Static_assert(offsetof(msFutureThenEnv, typeTag) == 48 && offsetof(msFutureThenEnv, run) == 56 && sizeof(msFutureThenEnv) == 64, "ThenEnv in combinator.cms");
-_Static_assert(offsetof(msFutureCatchEnv, typeTag) == 32 && offsetof(msFutureCatchEnv, ok) == 40 && sizeof(msFutureCatchEnv) == 48, "CatchEnv in combinator.cms");
-_Static_assert(offsetof(msFutureFinallyEnv, onSettled) == 16 && sizeof(msFutureFinallyEnv) == 32, "FinallyEnv in combinator.cms");
+#define MS_PTR sizeof(void*)
+_Static_assert(offsetof(msFutureThenEnv, typeTag) == 6 * MS_PTR && offsetof(msFutureThenEnv, run) == 7 * MS_PTR && sizeof(msFutureThenEnv) == 8 * MS_PTR, "ThenEnv in combinator.cms");
+_Static_assert(offsetof(msFutureCatchEnv, typeTag) == 4 * MS_PTR && offsetof(msFutureCatchEnv, ok) == 5 * MS_PTR && sizeof(msFutureCatchEnv) == 6 * MS_PTR, "CatchEnv in combinator.cms");
+_Static_assert(offsetof(msFutureFinallyEnv, onSettled) == 2 * MS_PTR && sizeof(msFutureFinallyEnv) == 4 * MS_PTR, "FinallyEnv in combinator.cms");
+#undef MS_PTR
 
 static inline void* msPromiseThenEnvNew(void) {
 	return msAllocTyped(sizeof(msFutureThenEnv), &msFutureThenEnvTypeInfo);
