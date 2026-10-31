@@ -4,7 +4,7 @@
 // @stdout: 3 104 33
 // @stdout: 4 -2
 const raw: uint8[] = [1, 0, 0, 0];
-console.log(raw.readUInt32LE(0));
+console.log((raw as Buffer).readUInt32LE(0));
 
 const grown = Buffer.fromArray([1]);
 grown.push(2);
