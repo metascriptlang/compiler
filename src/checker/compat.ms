@@ -935,20 +935,21 @@ export function returnReprRefusal(source: Type | null, target: Type | null, fnTe
 	if (held == null || slot == null) return "";
 	const reprOnly = fnSlotReprMismatch(held, slot);
 	if (isAssignable(held, slot) && !reprOnly) return "";
-	const wraps = slot.kind == TypeKind.Void
+	const copiesCString = held.kind == TypeKind.CString && slot.kind == TypeKind.String;
+	const wraps = slot.kind == TypeKind.Void || copiesCString
 		|| (isMaybeType(slot) && slot.typeReturn != null && isAssignable(held, slot.typeReturn))
 		|| (reprOnly && isAssignable(held, slot));
 	if (!wraps) return "";
 	const dropped = slot.kind == TypeKind.Void;
 	const why = " — a function returning '" + typeDisplayName(held) + "' cannot fill a slot returning '" + typeDisplayName(slot)
-		+ (dropped ? "': its result would have to be dropped. " : "': the result would need a conversion. ");
-	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : "Leave out the lambda's return type, or declare it as the union");
-	if (fnText == "") return why + "Pass a lambda that calls it";
+		+ (dropped ? "': its result would have to be dropped. " : copiesCString ? "': the C buffer has to be copied where the call returns. " : "': the result would need a conversion. ");
+	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : copiesCString ? "Write 'as string' on the lambda's result" : "Leave out the lambda's return type, or declare it as the union");
+	if (fnText == "") return why + (copiesCString ? "Pass a lambda that calls it and writes 'as string' on the result" : "Pass a lambda that calls it");
 	const names: string[] = [];
 	for (let i = 0; i < source.typeChildren.length; i += 1) names.push("a" + String(i));
 	const params = names.join(", ");
-	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + "))";
-	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
+	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + ")" + (copiesCString ? " as string" : "") + ")";
+	return why + lambda + (dropped || copiesCString ? "" : " or declare " + fnText + "'s return type as the union");
 }
 
 export function closureIntoCPointerReason(source: Type | null, target: Type | null): string {
