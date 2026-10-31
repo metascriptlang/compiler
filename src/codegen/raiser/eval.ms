@@ -6,7 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramDat
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath, isMetaNodeSym } from "../../compiler/meta/nodeSym";
@@ -32,7 +32,7 @@ import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/met
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { generateRaiser, appendProgramToImage, lowerForRaiser, underLiftedOps } from "./rgen";
+import { generateRaiser, appendProgramToImage, lowerForRaiser, underLiftedOps, unwrapToFuncDecl } from "./rgen";
 import { LiftedOpsState, freshLiftedOps } from "../../transform/lowering/destructorLifting";
 import { hasHostCallback, unservedCallReason } from "./expressions";
 import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -392,14 +392,24 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 registerMacroEngineCompiler(compileMacroIntoEngine);
 registerEngineStdSymbol((name: string): Symbol | null => stdSymbol(raiserPreludeCtx(), name));
 
+function routineShape(sym: Symbol): string {
+	const origin = sym.instantiatedFrom ?? sym;
+	const decl = origin.declNode != null ? unwrapToFuncDecl(origin.declNode) : null;
+	if (decl == null) return "";
+	const d = decl.data as FunctionDeclData;
+	return `${origin.symbolKind}|${getExtReceiverType(d.fnFlags)}|${getStaticExtTypeName(d.fnFlags)}|${d.params.length}|${extractGenericNames(d.fnFlags).length}`;
+}
+
 function raiserCounterpart(own: Symbol): Symbol {
 	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return own;
 	const dot = own.modulePath.lastIndexOf(".");
 	const raiserPath = own.modulePath.slice(0, dot) + ".rms";
 	const scope = raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
 	if (scope == null) return own;
+	const shape = routineShape(own);
+	if (shape == "") return own;
 	for (const held of scope) {
-		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0) return held;
+		if (held.name == own.name && isRoutineSym(held) && held.overloads.length == 0 && routineShape(held) == shape) return held;
 	}
 	return own;
 }
@@ -696,6 +706,43 @@ test "engine: an extern routine read as a value calls its host bridge when store
 		+ " console.log(`${f(-2.5)} ${apply(magnitude, -1.5)} ${fs[0](2.0, 10.0)}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "2.5 1.5 1024\n", vm.output;
+}
+
+function heldStdRoutine(path: string, name: string): Symbol {
+	const scopes = raiserPreludeCtx().preludeModuleScopes;
+	for (const key of scopes.keys()) {
+		if (!key.endsWith(path)) continue;
+		for (const s of scopes.get(key)!) {
+			if (s.name == name) return s;
+		}
+	}
+	unreachable;
+	return null as unknown as Symbol;
+}
+
+function buildRoutineBeside(held: Symbol, source: string): Symbol {
+	const parsed = parseSource(source);
+	if (!parsed.ok) { unreachable; }
+	const sym = makeSymbolState(held.name, SymbolKind.Function, null, false, SymbolState.Shaped);
+	sym.declNode = (parsed.value.data as ProgramData).programStmts[0];
+	sym.modulePath = held.modulePath.slice(0, held.modulePath.length - 4) + ".cms";
+	return sym;
+}
+
+test "engine: a build routine binds to the Raiser variant of its name only when both declare the same signature" {
+	const held = heldStdRoutine("std/core/string/bytes.rms", "utf8Text");
+	const same = buildRoutineBeside(held, "function utf8Text(raw: string, surrogates: boolean): string { return raw; }");
+	assert raiserCounterpart(same) == held, "the same signature does not bind its Raiser variant";
+	const others = [
+		"function utf8Text(raw: string): string { return raw; }",
+		"function utf8Text<T>(raw: T, surrogates: boolean): string { return \"\"; }",
+		"function utf8Text(this raw: string, surrogates: boolean): string { return raw; }",
+		"function utf8Text(this typeof Buffer, raw: string, surrogates: boolean): string { return raw; }",
+	];
+	for (const source of others) {
+		const own = buildRoutineBeside(held, source);
+		assert raiserCounterpart(own) == own, `bound to a Raiser variant of another signature: ${source}`;
+	}
 }
 
 test "engine: an extern routine with no host bridge read as a value is refused by its name" {
