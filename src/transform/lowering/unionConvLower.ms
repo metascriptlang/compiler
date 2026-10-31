@@ -490,6 +490,6 @@ function memberMissing(source: Type, target: Type, vi: int32, ctx: TransformCont
 	const names = createNode(NodeKind.ArrayLiteral, { elements: labels.map((l: string): Node => makeString(l, loc)) }, syntheticToken(loc));
 	names.nodeType = createArray(stringType());
 	const fail = makeCall(runtimeRef("msUnionRead", loc), [held, none, head, names], loc);
-	fail.nodeType = target;
+	fail.nodeType = unknownType();
 	return makeExprStmt(fail, loc);
 }
