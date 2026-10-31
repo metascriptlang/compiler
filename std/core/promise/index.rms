@@ -316,9 +316,9 @@ let timerNext: int64 = 1;
 function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void {
 	sleepAsync(ms).then((): void => {
 		if (!timersLive().has(id)) return;
-		if (!repeat) timersLive().delete(id);
-		fn();
 		if (repeat) timerTick(id, fn, ms, true);
+		else timersLive().delete(id);
+		fn();
 	});
 }
 
