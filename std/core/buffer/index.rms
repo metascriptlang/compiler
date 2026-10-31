@@ -6,3 +6,11 @@ export { toJSON, inspect } from "./protocols";
 export function toString(this buf: Buffer): string {
 	return buf.asString();
 }
+
+export function alloc(this typeof Buffer, size: number): Buffer {
+	return new Array<uint8>(size as int64) as Buffer;
+}
+
+export function allocUnsafe(this typeof Buffer, size: number): Buffer {
+	return new Array<uint8>(size as int64) as Buffer;
+}
