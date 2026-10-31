@@ -168,8 +168,8 @@ test "JS: an instance pattern extension called with parentheses emits its patter
 }
 
 test "JS: a std static pattern extern read through its class is refused" {
-	const js = compileToJSWithStd("function make(f: (n: number) => Buffer): number { return f(3).length; }\n"
-		+ "console.log(make(Buffer.alloc));");
+	const js = compileToJSWithStd("function make(f: (b: Buffer) => Buffer): number { return f(Buffer.alloc(3)).length; }\n"
+		+ "console.log(make(Buffer.copy));");
 	assert !js.ok;
-	assert js.error.contains("extern function 'alloc' is the pattern \"new Array(#).fill(0)\"");
+	assert js.error.contains("extern function 'copy' is the pattern \"#.slice()\"");
 }
