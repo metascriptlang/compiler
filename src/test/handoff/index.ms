@@ -82,6 +82,7 @@ import "./arrowInGenericLiteral";
 import "./literalAwaitsBinding";
 import "./functionValueMisuse";
 import "./fnFormalArgFit";
+import "./fnParamMode";
 import "./maybeRefPayloadKey";
 import "./sinkParam";
 import "./callMagic";
