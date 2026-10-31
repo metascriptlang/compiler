@@ -3,6 +3,8 @@
 // @stdout: void error: boom
 // @stdout: box 3 void
 // @stdout: box value 5
+// @stdout: traced
+// @stdout: through base 1 3
 
 function must<T>(result: Result<T, string>): T {
 	if (result.ok) { return result.value; }
@@ -29,3 +31,13 @@ const empty = emptyBox();
 unbox(empty);
 console.log("box " + String(empty.n) + " void");
 console.log("box value " + String(unbox(fullBox())));
+
+function tracedBox(): Box<void> {
+	console.log("traced");
+	return emptyBox();
+}
+const viaCall = emptyBox().v;
+const boxes: Box<void>[] = [emptyBox()];
+const viaIndex = boxes[0].v;
+const viaTraced = tracedBox().v;
+console.log("through base " + String(boxes.length) + " " + String(boxes[0].n));

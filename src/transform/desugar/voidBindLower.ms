@@ -10,7 +10,7 @@ import { nullType, createArray, createRef } from "../../checker/types";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkBlockExpanding } from "../walker";
 import { forEachChild, mapChildren } from "../../ast/visitor";
-import { makeNull, makeExprStmt, makeVarDecl, makeIdentResolved } from "../util";
+import { makeNull, makeExprStmt, makeVarDecl, makeIdentResolved, makeBinary } from "../util";
 
 export function lowerVoidBind(program: Node, ctx: TransformContext): Node {
 	eraseVoidFieldReads(program);
@@ -26,8 +26,8 @@ function isPlainPath(n: Node): boolean {
 	return n.kind == NodeKind.MemberExpr && isPlainPath((n.data as MemberExprData).object);
 }
 
-// A void-typed field has no C member, so reading one off a plain path yields the
-// null carrier. A field store keeps its target and only its object is walked.
+// A void-typed field has no C member, so reading one yields the null carrier.
+// A field store keeps its target and only its object is walked.
 function eraseVoidFieldReads(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.BinaryExpr) {
@@ -39,10 +39,13 @@ function eraseVoidFieldReads(node: Node): Node {
 		}
 	}
 	mapChildren(node, eraseVoidFieldReads);
-	if (isVoidTyped(node) && node.kind == NodeKind.MemberExpr && isPlainPath(node)) {
+	if (isVoidTyped(node) && node.kind == NodeKind.MemberExpr) {
 		const carrier = makeNull(node.location);
 		carrier.nodeType = node.nodeType;
-		return carrier;
+		if (isPlainPath(node)) return carrier;
+		const seq = makeBinary((node.data as MemberExprData).object, ",", carrier, node.location);
+		seq.nodeType = node.nodeType;
+		return seq;
 	}
 	return node;
 }
