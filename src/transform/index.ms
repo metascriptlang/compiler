@@ -89,6 +89,7 @@ import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerMethodDispatch } from "./lowering/methodDispatchLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { dropCtorSignatures } from "./lowering/ctorSignatureDrop";
 import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
@@ -145,7 +146,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
-	let result = eraseBrandTypes(program, ctx);
+	let result = dropCtorSignatures(program, ctx);
+	flowLap("pass.dropCtorSignatures");
+	result = eraseBrandTypes(result, ctx);
 	flowLap("pass.eraseBrandTypes");
 	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }

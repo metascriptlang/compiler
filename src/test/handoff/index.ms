@@ -134,6 +134,7 @@ import "./numericLattice";
 import "./paralockLicences";
 import "./spawnHandleEscape";
 import "./constructorOrigin";
+import "./constructorSignatureLowering";
 import "./instanceSymbolIdentity";
 import "./loweredSymbolIdentity";
 import "./pointerSlotRelation";
