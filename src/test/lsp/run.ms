@@ -65,6 +65,7 @@ import {
 	LspProbe,
 	LspPublication,
 	lspScenarios,
+	lspScenarioByName,
 	lspTranscript,
 	idKey,
 	hasKey,
@@ -1569,9 +1570,19 @@ function main(): int32 {
 	ensureDir(OUT);
 	ensureDir(NEUTRAL);
 	console.log(`lsp-replay: compiler under test = ${MSC}`);
+	let scenarios = lspScenarios();
+	const only = env.get("LSP_SCENARIO");
+	if (only != null && only != "") {
+		const selected = lspScenarioByName(only);
+		if (!selected.ok) {
+			console.log(selected.error);
+			return 1;
+		}
+		scenarios = [selected.value];
+	}
 	let passes = 0;
 	let fails = 0;
-	for (const scenario of lspScenarios()) {
+	for (const scenario of scenarios) {
 		const failure = runScenario(scenario).failure;
 		if (failure == "") {
 			passes++;
