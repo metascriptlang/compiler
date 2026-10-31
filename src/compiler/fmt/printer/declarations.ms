@@ -18,7 +18,7 @@ import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin,
 import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
@@ -269,9 +269,9 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			starts.push(accessors[accessorIdx].location.line);
 			accessorIdx = accessorIdx + 1;
 		}
-		let field = d.interfaceFields[i];
-		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
-		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field, d.interfaceFieldTypes[i]);
+		let field = i < fieldLocs.length ? writtenMemberName(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i], options.singleQuote) : d.interfaceFields[i];
+		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i]);
+		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i], d.interfaceFieldTypes[i]);
 		if (optional) field = field + "?";
 		const fieldTypeText = d.interfaceFieldTypes[i] != "" ? (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]) : "";
 		if (d.interfaceFieldTypes[i] != "") field = field + ": ";
@@ -499,7 +499,8 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (node.flags.has(NodeFlag.AutoAccessor)) parts.push(docText("accessor "));
 	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
 	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
-	parts.push(docText(optional ? d.propName + "?" : d.propName));
+	const written = writtenMemberName(options.source, node.location.line, node.location.column, d.propName, options.singleQuote);
+	parts.push(docText(optional ? written + "?" : written));
 	if (d.propType != "") {
 		parts.push(docText(": "));
 		parts.push(printTypeAnnotation(node.typeExpr, optional && !keptType ? unoptionalized(d.propType) : d.propType, options));

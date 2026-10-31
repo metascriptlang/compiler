@@ -334,17 +334,28 @@ export function unoptionalized(type: string): string {
 	return type;
 }
 
+function writtenNameEnd(source: string, start: int32, name: string): int32 {
+	const ch = source.byteAt(start);
+	return ch == "\"".code || ch == "'".code ? skipQuoted(source, start) : start + name.byteLength;
+}
+
+// A declared member name as written: a quoted name keeps its quotes unless it is a plain identifier.
+export function writtenMemberName(source: string, line: int32, column: int32, name: string, singleQuote: boolean): string {
+	const key = rawObjectKeyAt(source, line, column, singleQuote);
+	return key == "" ? name : key;
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
-	const pos = skipBlanks(source, start + name.byteLength);
+	const pos = skipBlanks(source, writtenNameEnd(source, start, name));
 	return pos < source.byteLength && source.byteAt(pos) == "?".code;
 }
 
 export function writtenTypeAfterOptional(source: string, line: int32, column: int32, name: string, type: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
-	let pos = skipBlanks(source, start + name.byteLength);
+	let pos = skipBlanks(source, writtenNameEnd(source, start, name));
 	if (pos >= source.byteLength || source.byteAt(pos) != "?".code) return false;
 	pos = skipBlanks(source, pos + 1);
 	if (pos >= source.byteLength || source.byteAt(pos) != ":".code) return false;

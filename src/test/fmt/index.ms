@@ -160,4 +160,5 @@ import "./cases/overrideModifier";
 import "./cases/emptyStatementBodies";
 import "./cases/destructuringAnnotation";
 import "./cases/quotedObjectBindings";
+import "./cases/quotedMemberNames";
 import "./cases/constructorOverloadSignatures";
