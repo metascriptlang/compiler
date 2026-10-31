@@ -1853,7 +1853,8 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			const runtimeParams: Type[] = [];
 			for (let i = 0; i < d.arguments.length; i = i + 1) {
 				const arg = d.arguments[i];
-				if (arg.nodeType != null && arg.nodeType.kind == TypeKind.Void) {
+				const slotType = declaredParams != null && i < declaredParams.length ? declaredParams[i] : arg.nodeType;
+				if (slotType != null && slotType.kind == TypeKind.Void) {
 					if (arg.kind != NodeKind.Identifier) compileExpr(s, arg);
 					continue;
 				}
