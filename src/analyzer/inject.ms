@@ -1232,8 +1232,8 @@ function emitSaveAssignDestroySimple(stmt: Node, saveExpr: Node, rcInfo: RcInfo,
 	return makeBlock([saveTmp, stmt, makeDestroyCall(tmpSym, rcInfo, loc)], loc);
 }
 
-function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): void {
-	if (!hasEffect(rhs)) return;
+function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): Node {
+	if (!hasEffect(rhs)) return rhs;
 	const asg = stmt.kind == NodeKind.ExprStmt ? (stmt.data as ExprStmtData).expr : null;
 	const t = dest.nodeType != null ? dest.nodeType
 		: dest.resolvedSym != null && dest.resolvedSym.symbolType != null ? dest.resolvedSym.symbolType
@@ -1243,9 +1243,11 @@ function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): v
 			message: "DRC internal error: a store whose source runs code is not a typed assignment statement, so the source cannot be evaluated before the destination's old value is read",
 			line: stmt.location.line, column: stmt.location.column, fatal: false,
 		});
-		return;
+		return rhs;
 	}
-	(asg.data as BinaryExprData).right = evalOnceTemp(rhs, t, "sinkSrc", dctx);
+	const src = evalOnceTemp(rhs, t, "sinkSrc", dctx);
+	(asg.data as BinaryExprData).right = src;
+	return src;
 }
 
 // genSink: ownership transfer — fresh/last-read values moved without copy.
@@ -1265,7 +1267,7 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		const aliased = deepAliases(dest, rhs);
 		if (aliased) clearPendingForVar(dctx, destSym);
 		if (rcInfo.sinkFn != null && !aliased) {
-			return makeSinkCall(destSym, rhs, rcInfo, loc);
+			return makeSinkCall(destSym, evalSourceFirst(stmt, dest, rhs, dctx), rcInfo, loc);
 		}
 		evalSourceFirst(stmt, dest, rhs, dctx);
 		return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
