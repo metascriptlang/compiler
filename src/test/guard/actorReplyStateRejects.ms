@@ -17,6 +17,8 @@
 // GUARD-CHECK-FAIL the reply of 'pick' may cross to the caller while the actor still reaches it — it replies with a value
 // GUARD-CHECK-FAIL the reply of 'alias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
 // GUARD-CHECK-FAIL the reply of 'kept' may cross to the caller while the actor still reaches it — 'n' is not the sole owner
+// GUARD-CHECK-FAIL the reply of 'wrapped' may cross to the caller while the actor still reaches it — it replies with 'this.top'
+// GUARD-CHECK-FAIL the reply of 'wrappedAlias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
 // GUARD-CHECK-FAIL actor method 'echo' is generic, so the reply of each instance cannot be checked before it crosses to the caller
 
 import { stop, ExitReason } from "std/actor";
@@ -34,6 +36,11 @@ actor Scene {
 	alias(): Node {
 		const r = this.top;
 		return r; // GUARD-REFUSED
+	}
+	wrapped(): Result<Node, string> { return Result.ok(this.top); } // GUARD-REFUSED
+	wrappedAlias(): Result<Node, string> {
+		const r = this.top;
+		return Result.ok(r); // GUARD-REFUSED
 	}
 	echo<T>(x: T): T { return x; } // GUARD-REFUSED
 	kept(): Node {
