@@ -1560,6 +1560,14 @@ export function sameNominal(a: Readonly<Type>, b: Readonly<Type>): boolean {
 	return sameNominalAux(a, b, createSameTypeClosure());
 }
 
+export function expectsEnumMember(expected: Type, enumType: Type, member: string): boolean {
+	if (expected.kind == TypeKind.Union) return expected.typeChildren.some((m: Type): boolean => expectsEnumMember(m, enumType, member));
+	return expected.kind == TypeKind.EnumLiteral
+		&& expected.typeReturn != null && sameNominal(expected.typeReturn, enumType)
+		&& expected.typeNames.length > 0
+		&& expected.typeNames[0] == member;
+}
+
 function sameNominalAux(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure): boolean {
 	if (a == b) return true;
 	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);

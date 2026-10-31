@@ -13,7 +13,7 @@ import { stdSymbol, markUsedIn, CheckerContext, ExportedSymInfo, Severity, addEr
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, typeRelation, TypeRelation, arityAdapts,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, expectsEnumMember, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
@@ -3474,7 +3474,8 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 	}
 	const flowType = isCapturableValue(sym) || d.name == "this" ? getFlowTypeOfReference(node, readType) : readType;
-	node.nodeType = capturedView ? propagateReadonlyView(flowType) : flowType;
+	const read = flowType != null && isEnumLiteral(flowType) && isEnumLiteral(readType) && !(expectedType != null && expectsEnumMember(expectedType, flowType.typeReturn!, flowType.typeNames[0])) ? flowType.typeReturn : flowType;
+	node.nodeType = capturedView ? propagateReadonlyView(read) : read;
 	return;
 }
 

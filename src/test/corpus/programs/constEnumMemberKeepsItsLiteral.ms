@@ -1,3 +1,4 @@
+// @stdout: 11 5 2 true
 // @stdout: true false
 // @stdout: let widened true
 // @stdout: copy widened true
@@ -46,6 +47,17 @@ function generic(): string {
 	return `${g == Kind.Block} ${h == Kind.Block}`;
 }
 
+function label(this kind: Kind): int32 { return (kind as int32) + 10; }
+
+function receiverAndOperators(): string {
+	const c = Kind.Other;
+	let arm = 0;
+	switch (c) { case Kind.Other: arm = 5; break; default: arm = 6; }
+	const viaMatch = match (c) { Kind.Block => 1, Kind.Other => 2, Kind.Third => 3 };
+	return `${c.label()} ${arm} ${viaMatch} ${c != Kind.Block}`;
+}
+
+console.log(receiverAndOperators());
 console.log(keep());
 console.log(letWidens());
 console.log(copyWidens());
