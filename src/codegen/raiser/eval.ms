@@ -1226,6 +1226,12 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 
 const RAISER_TIER_TASK = "@builtin(\"SleepTask\") extern function task(ms: number, f: () => void): void from \"msSleepTask\";";
 
+test "engine: a throw out of a timer task is unhandled and stops the program before a later timer" {
+	const vm = evalVM(RAISER_TIER_TASK + " class Boom { n: int64 = 1; } task(0, (): void => { throw new Boom(); }); task(20, (): void => { console.log(\"later\"); });");
+	assert vm.error.includes("unhandled exception"), vm.error;
+	assert vm.output == "", vm.output;
+}
+
 test "engine: a due timer runs between timer tasks that keep queueing each other" {
 	const vm = evalVM(RAISER_TIER_TASK
 		+ " let stop = false; let bounces = 0;"
