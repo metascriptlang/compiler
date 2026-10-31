@@ -2068,6 +2068,8 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				if (pd.propIsStatic) {
 					ctx.staticInitBoundary = ctx.table.current;
 					openStaticReceiverScope(ctx, classType.sym);
+				} else {
+					openInstanceReceiverScope(ctx, node, classType);
 				}
 				const hoistMark = ctx.pendingHoisted.length;
 				const inferring = pd.propType == "";
@@ -2081,7 +2083,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
 					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
 				}
-				if (pd.propIsStatic) closeScope(ctx.table);
+				closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
 				if (pd.propType == "") settleInferredField(node, pd, classType);
 			}
@@ -2151,6 +2153,13 @@ function checkMethodBody(ctx: CheckerContext, node: Node, sym: Symbol, classType
 function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): void {
 	openScope(ctx.table, ScopeKind.Block);
 	if (owner != null) ctx.table.current.symbols.set(getIdentId(ctx.table.identCache, "this"), owner!);
+}
+
+function openInstanceReceiverScope(ctx: CheckerContext, field: Node, classType: Type): void {
+	openScope(ctx.table, ScopeKind.Block);
+	const thisSym = makeSymbol("this", SymbolKind.Parameter, classType, false);
+	field.paramSyms = [thisSym];
+	defineSymbol(ctx.table, thisSym);
 }
 
 function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {

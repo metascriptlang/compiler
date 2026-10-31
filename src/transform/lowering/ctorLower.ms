@@ -14,6 +14,7 @@ import {
 	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData, BinaryExprData, MemberExprData,
 	createNodeAt, SymbolKind, Symbol, Type,
 } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext, newLoweredSym, mintingChecker } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
 import { createFunction, voidType, classParentOf, getProperty, isUnresolvedType } from "../../checker/types";
@@ -23,6 +24,11 @@ import { instantiateParentClass } from "../../checker/instantiate";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts, checkedCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
+
+function rebindReceiver(node: Node, from: Symbol, to: Symbol): void {
+	if (node.kind == NodeKind.Identifier && node.resolvedSym == from) node.resolvedSym = to;
+	forEachChild(node, (child: Node): void => { rebindReceiver(child, from, to); });
+}
 
 export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null): Node {
 	const pd = member.data as PropertyDeclData;
@@ -34,6 +40,7 @@ export function fieldInitAssignment(member: Node, receiverType: Type | null, thi
 	const receiver = thisSym != null
 		? makeTypedIdentResolved(thisSym, receiverType, member.location)
 		: makeTypedIdent("this", receiverType, member.location);
+	if (thisSym != null && member.paramSyms != null) rebindReceiver(pd.propInitializer, member.paramSyms[0], thisSym);
 	const target = makeMember(receiver, pd.propName, member.location);
 	if (target.nodeType == null && member.nodeType != null) {
 		target.nodeType = member.nodeType;
