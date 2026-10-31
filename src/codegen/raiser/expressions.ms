@@ -2980,7 +2980,7 @@ function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean
 }
 
 function hasStringType(node: Node): boolean {
-	return node.nodeType != null && literalBase(node.nodeType).kind == TypeKind.String;
+	return node.nodeType != null && literalBase(brandBase(node.nodeType) ?? node.nodeType).kind == TypeKind.String;
 }
 
 function compileStrIndexRead(s: RaiserCompState, node: Node, op: RaiserOpcode): int32 {
