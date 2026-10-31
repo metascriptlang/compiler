@@ -249,17 +249,19 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	const encodes: string[] = [];
 	const sigs: string[] = [];
 	const argList: string[] = [];
-	const encode = (name: string, expr: string, fn: string): void => {
+	let wasmOwns = false;
+	const encode = (name: string, expr: string, fn: string, adopted: boolean): void => {
+		if (adopted) wasmOwns = true;
 		encoded.push(name);
 		encodes.push(`		${name} = ${fn}(${expr});`);
-		cleanup.push(`if (${name}) __msbFree(${name}[0]);`);
+		cleanup.push(adopted ? `if (${name} && !sent) __msbMod._free(${name}[0]);` : `if (${name}) __msbFree(${name}[0]);`);
 		argList.push(`${name}[0], ${name}[1]`);
 	};
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
 		sigs.push(`a${i}`);
 		if (p.kind == BoundaryKind.String) {
-			encode(`e${i}`, `a${i}`, "__msbEnc");
+			encode(`e${i}`, `a${i}`, "__msbEncOwned", true);
 		} else if (p.kind == BoundaryKind.Callback) {
 			let resultAt: string | null = null;
 			if (options.checked) resultAt = `${quoted(f.name)}, ${quoted(`result of callback '${p.name}'`)}`;
@@ -269,15 +271,15 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 		} else if (p.kind == BoundaryKind.Struct) {
 			for (let j = 0; j < p.leaves.length; j += 1) {
 				const expr = `a${i}.${p.leaves[j].path.join(".")}`;
-				if (p.leaves[j].kind == BoundaryKind.String) encode(`e${i}_${j}`, expr, "__msbEnc");
+				if (p.leaves[j].kind == BoundaryKind.String) encode(`e${i}_${j}`, expr, "__msbEncOwned", true);
 				else argList.push(toWire(p.leaves[j].kind, expr));
 			}
 		} else if (p.kind == BoundaryKind.Vec) {
-			encode(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, "__msbCopyIn");
+			encode(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, "__msbCopyIn", false);
 		} else if (p.kind == BoundaryKind.Span) {
 			const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
 			if (p.mode == BoundaryMode.Shared) copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
-			encode(`e${i}`, view, "__msbCopyIn");
+			encode(`e${i}`, view, "__msbCopyIn", false);
 		} else {
 			argList.push(toWire(p.kind, `a${i}`));
 		}
@@ -305,11 +307,12 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	} else {
 		for (const l of lines) out.push(l);
 		if (encoded.length > 0) {
-			out.push(`	let ${encoded.join(", ")};`);
+			out.push(`	let ${encoded.join(", ")}${wasmOwns ? ", sent = false" : ""};`);
 			out.push("	const mark = __msbTop;");
 		}
 		out.push("	try {");
 		for (const l of encodes) out.push(l);
+		if (wasmOwns) out.push("		sent = true;");
 		for (const l of afterCall(body, copyBacks)) out.push(`		${l}`);
 		out.push("	} finally {");
 		if (encoded.length > 0) out.push("		__msbTop = mark;");
@@ -327,6 +330,11 @@ function quoted(s: string): string {
 const GLUE = [
 	"const __msbTe = new TextEncoder();",
 	"const __msbTd = new TextDecoder('utf-8', { ignoreBOM: true });",
+	"function __msbHeapAlloc(n) {",
+	"\tconst p = n > 4294967295 ? 0 : __msbMod._malloc(n);",
+	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
+	"\treturn p;",
+	"}",
 	"function __msbAlloc(n) {",
 	"\tconst room = __msbEnd - __msbTop;",
 	"\tif (n <= room) {",
@@ -337,9 +345,7 @@ const GLUE = [
 	"\t\t\treturn q;",
 	"\t\t}",
 	"\t}",
-	"\tconst p = n > 4294967295 ? 0 : __msbMod._malloc(n);",
-	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
-	"\treturn p;",
+	"\treturn __msbHeapAlloc(n);",
 	"}",
 	"function __msbFree(p) {",
 	"\tif (p < __msbBase || p >= __msbEnd) __msbMod._free(p);",
@@ -371,14 +377,23 @@ const GLUE = [
 	"\tfor (let i = 0; i < n; i++) r[i] = bool ? v[i] !== 0 : v[i];",
 	"\treturn r;",
 	"}",
-	"function __msbEnc(s) {",
+	"function __msbSeal(h, p, n) {",
+	"\th[p] = n; h[p + 1] = n >>> 8; h[p + 2] = n >>> 16; h[p + 3] = n >>> 24;",
+	"\th[p + 4] = 0; h[p + 5] = 0; h[p + 6] = 0; h[p + 7] = 0;",
+	"\th[p + 8 + n] = 0;",
+	"\treturn [p, n];",
+	"}",
+	"function __msbEncAt(s, own) {",
 	"\tconst n = s.length;",
+	"\tif (own && n === 0) return [0, 0];",
+	"\tconst hd = own ? 8 : 0;",
 	"\tlet i = 0;",
 	"\twhile (i < n && s.charCodeAt(i) < 128) i++;",
 	"\tif (i === n) {",
-	"\t\tconst p = __msbAlloc(n || 1);",
-	"\t\t__msbTe.encodeInto(s, __msbMod.HEAPU8.subarray(p, p + n));",
-	"\t\treturn [p, n];",
+	"\t\tconst p = __msbHeapAlloc(own ? n + 9 : n || 1);",
+	"\t\tconst h = __msbMod.HEAPU8;",
+	"\t\t__msbTe.encodeInto(s, h.subarray(p + hd, p + hd + n));",
+	"\t\treturn own ? __msbSeal(h, p, n) : [p, n];",
 	"\t}",
 	"\tlet cap = n * 3;",
 	"\tif (n > 4096) {",
@@ -391,9 +406,9 @@ const GLUE = [
 	"\t\t\telse cap += 3;",
 	"\t\t}",
 	"\t}",
-	"\tconst p = __msbAlloc(cap);",
+	"\tconst p = __msbHeapAlloc(own ? cap + 9 : cap);",
 	"\tconst h = __msbMod.HEAPU8;",
-	"\tlet o = p;",
+	"\tlet o = p + hd;",
 	"\tfor (i = 0; i < n; i++) {",
 	"\t\tlet c = s.charCodeAt(i);",
 	"\t\tif (c < 128) h[o++] = c;",
@@ -403,8 +418,14 @@ const GLUE = [
 	"\t\t\th[o++] = 240 | c >> 18; h[o++] = 128 | c >> 12 & 63; h[o++] = 128 | c >> 6 & 63; h[o++] = 128 | c & 63;",
 	"\t\t} else { h[o++] = 224 | c >> 12; h[o++] = 128 | c >> 6 & 63; h[o++] = 128 | c & 63; }",
 	"\t}",
-	"\tif (o - p > cap) throw new Error(\"internal: string encoder wrote \" + (o - p) + \" bytes into a block of \" + cap);",
-	"\treturn [p, o - p];",
+	"\tif (o - p - hd > cap) throw new Error(\"internal: string encoder wrote \" + (o - p - hd) + \" bytes into a block of \" + cap);",
+	"\treturn own ? __msbSeal(h, p, o - p - hd) : [p, o - p];",
+	"}",
+	"function __msbEnc(s) {",
+	"\treturn __msbEncAt(s, false);",
+	"}",
+	"function __msbEncOwned(s) {",
+	"\treturn __msbEncAt(s, true);",
 	"}",
 	"function __msbDecLoop(h, p, end) {",
 	"\tlet r = \"\";",

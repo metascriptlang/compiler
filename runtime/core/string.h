@@ -11,6 +11,7 @@
 #define MS_STRING_H
 
 #include "runtime/drc.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
@@ -149,6 +150,12 @@ static inline int64_t msStrContentSize(int64_t cap) {
 
 /* Allocate + copy from raw bytes */
 msString msStringNew(const char* data, int64_t len);
+
+_Static_assert(offsetof(msStrPayload, data) == sizeof(int64_t), "msStringAdoptMalloced: payload header is the int64 cap");
+static inline msString msStringAdoptMalloced(uint64_t block, int64_t len) {
+	if (len <= 0) return MS_EMPTY_STRING;
+	return (msString){ .len = len, .p = (msStrPayload*)(uintptr_t)block };
+}
 
 /* From null-terminated C string */
 msString msStringFromCStr(const char* cstr);
