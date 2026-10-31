@@ -2058,8 +2058,24 @@ const t = move h.f;              // ok: a field moves, and h.f is left empty
 take(move arr[0]);               // ok when `take` has a plain parameter: nothing is copied, arr[0] stays
 ```
 
-Measured on C (msc b899f456). The JS backend does not check moves yet. It accepts the refused lines
-above, keeps the element, and does not empty a moved field (`h.f` still holds its value).
+Measured on C (msc b899f456). The JS backend does not check element moves yet: it accepts the refused
+lines above and keeps the element.
+
+A field or element whose type has no default value (a class, an array `T[]`, a struct holding one) cannot
+be moved out at all, on every backend, because the move would leave it without a value. Read it without
+`move` (a class reference is shared, not copied), declare the slot nullable, or exchange it with `swap`:
+
+```typescript
+const t = move h.leaf;           // error when leaf: Leaf — cannot move 'h.leaf': type 'Leaf' has no default value
+const u = move h.maybe;          // ok when maybe: Leaf | null — h.maybe is left null
+swap(h.leaf, spare);             // ok: the two places trade values, each evaluated once
+```
+
+Where the move hands its value on (a binding, an assignment, a return, a throw, a sink or constructor
+argument, a literal), C and JS both leave the field empty; a number or plain-struct field keeps its value,
+and a plain argument only lends it. Measured with corpus `explicitMoveEmptiesFieldOnEveryBackend` on C
+and JS (tree of this change): `decl /0/null/4 | … | struct :0/7 | borrow s1/2/leaf/4`. The Raiser VM
+still leaves a moved field holding its value.
 
 A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
 field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside
