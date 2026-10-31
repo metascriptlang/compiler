@@ -138,6 +138,21 @@ function lowerHoldsArray(node: Node, ctx: TransformContext): Node | null {
 	const operand = lowerNode(args[0], ctx);
 	const t = operand.nodeType;
 	const loc = node.location;
+	const peeled = t != null ? peelTransparentInstance(t) : null;
+	const payload = peeled != null && isMaybeType(peeled) && peeled.typeReturn != null ? peelTransparentInstance(peeled.typeReturn) : peeled;
+	if (isUnknownType(payload)) {
+		if (cloneIfPure(operand) != null || isLiteral(operand)) return makeBool(false, loc);
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeBool(false, loc), loc)], booleanType());
+	}
+	if (peeled != null && isMaybeType(peeled) && peeled.typeReturn != null && shapeOf(peeled.typeReturn) == Shape.Union) {
+		const inner: Type = peeled.typeReturn;
+		const whole: Type = t!;
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => {
+			const absent = makeBinary(makeTypedIdentResolved(x, whole, loc), "===", makeNull(loc), loc);
+			const member = routineCall("msHoldsArray_", makeTypedIdentResolved(x, inner, loc), ctx, loc, (m: Symbol): Node[] => memberAnswers(peelTransparentInstance(inner), m, (k: Type): Node => makeBool(isArrayType(k), loc), ctx, loc), booleanType());
+			return [makeIf(absent, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc), makeReturn(member, loc)];
+		}, booleanType());
+	}
 	if (t == null || shapeOf(t) == Shape.Opaque) {
 		reportTransformError(ctx, `Array.isArray of a '${t != null ? typeDisplayName(t) : "unknown"}' value cannot tell an array from another value; narrow it to a concrete type or a union of them first`, loc);
 		return node;
