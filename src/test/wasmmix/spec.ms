@@ -5,7 +5,7 @@ export interface WasmmixSpec {
 	stdout: string[];
 	hasStdout: boolean;
 	foreignStdout: string[];
-	mixedError: string;
+	mixedErrors: string[];
 	slots: boolean;
 	unknown: string[];
 }
@@ -17,7 +17,7 @@ function directiveValue(line: string, key: string): string {
 }
 
 export function parseSpec(src: string): WasmmixSpec {
-	const spec: WasmmixSpec = { stdout: [], hasStdout: false, foreignStdout: [], mixedError: "", slots: false, unknown: [] };
+	const spec: WasmmixSpec = { stdout: [], hasStdout: false, foreignStdout: [], mixedErrors: [], slots: false, unknown: [] };
 	for (const line of src.split("\n")) {
 		const t = line.trim();
 		if (t != "" && t.indexOf("//") != 0) { break; }
@@ -27,7 +27,7 @@ export function parseSpec(src: string): WasmmixSpec {
 		} else if (t.indexOf("// @foreign-stdout:") == 0) {
 			spec.foreignStdout.push(directiveValue(t, "@foreign-stdout"));
 		} else if (t.indexOf("// @mixed-error:") == 0) {
-			spec.mixedError = directiveValue(t, "@mixed-error");
+			spec.mixedErrors.push(directiveValue(t, "@mixed-error"));
 		} else if (t == "// @slots") {
 			spec.slots = true;
 		} else if (t.indexOf("// @") == 0) {
@@ -54,6 +54,21 @@ export function describeDiff(expected: string, actual: string): string {
 	return "";
 }
 
+export function hasLineWith(text: string, want: string): boolean {
+	const fragments = want.split(" ~> ");
+	for (const line of normalizeOutput(text).split("\n")) {
+		let rest = line;
+		let all = true;
+		for (const fragment of fragments) {
+			const at = rest.indexOf(fragment);
+			if (at < 0) { all = false; break; }
+			rest = rest.slice(at + fragment.length, rest.length);
+		}
+		if (all) { return true; }
+	}
+	return false;
+}
+
 test "parseSpec collects every @stdout line in order" {
 	const s = parseSpec("// @stdout: 1\n// @stdout: two words\n\nimport x;\n// @stdout: after code");
 	assert s.hasStdout;
@@ -62,11 +77,23 @@ test "parseSpec collects every @stdout line in order" {
 	assert s.stdout[1] == "two words";
 }
 
-test "parseSpec reads @mixed-error and flags an unknown directive" {
-	const s = parseSpec("// @mixed-error: unsupported\n// @bogus\nx");
-	assert s.mixedError == "unsupported";
+test "parseSpec reads every @mixed-error in order and flags an unknown directive" {
+	const s = parseSpec("// @mixed-error: unsupported\n// @mixed-error: a ~> b\n// @bogus\nx");
+	assert s.mixedErrors.length == 2;
+	assert s.mixedErrors[0] == "unsupported";
+	assert s.mixedErrors[1] == "a ~> b";
 	assert s.unknown.length == 1;
 	assert !s.hasStdout;
+}
+
+test "hasLineWith needs every fragment, in order, on one line" {
+	const text = "x 'f' in m: the result has type T, and one\r\ny 'g' in m: parameter 'p' has type U, and two";
+	assert hasLineWith(text, "'f' in");
+	assert hasLineWith(text, "'f' in ~> the result has type ~> and one");
+	assert hasLineWith(text, "'g' in ~> parameter 'p' has type ~> and two");
+	assert !hasLineWith(text, "'f' in ~> parameter 'p' has type");
+	assert !hasLineWith(text, "'g' in ~> and one");
+	assert !hasLineWith(text, "and one ~> 'f' in");
 }
 
 test "describeDiff is empty on equal output and names the first differing line" {
