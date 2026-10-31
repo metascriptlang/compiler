@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -4230,6 +4230,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		pi += 1;
 	}
 	fnNode.paramSyms = paramSyms;
+	const modeTypes: Type[] = [];
+	for (const vt of paramValueTypes) modeTypes.push(vt);
+	wrapModifierTypes(fnFlags, modeTypes);
+	for (let si = 0; si < paramSyms.length; si += 1) {
+		if (modeTypes[si].kind == TypeKind.Sink && paramValueTypes[si].kind != TypeKind.Sink) setFlag(paramSyms[si], SymbolFlag.Sink);
+	}
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 		if (explicitReturnType != null) {
@@ -4291,6 +4297,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		types.push(pType);
 		ti += 1;
 	}
+	wrapModifierTypes(fnFlags, types);
 	// Explicit return type annotation takes precedence over inferred (semProcAux parity).
 	// This ensures Result<Node, string> gets concrete types, not GenericParam("T") from
 	// inference of Result.err() which can't determine T without context.

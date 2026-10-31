@@ -7,7 +7,7 @@ import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBal
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, liftParamModifiers } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
 
@@ -218,50 +218,7 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 		if (flags == "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
 	}
-	// Out/ref/readonly parameters: strip prefix, encode positions in flags
-	let outPositions = "";
-	let refPositions = "";
-	let rdonlyPositions = "";
-	let sinkPositions = "";
-	for (let oi = first; oi < params.length; oi += 1) {
-		const at = oi - first;
-		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
-			params[oi] = params[oi].slice(4, params[oi].length);
-			if (outPositions == "") { outPositions = `${at}`; }
-			else { outPositions = `${outPositions},${at}`; }
-		}
-		if (params[oi].length > 4 && params[oi].slice(0, 4) == "ref:") {
-			params[oi] = params[oi].slice(4, params[oi].length);
-			if (refPositions == "") { refPositions = `${at}`; }
-			else { refPositions = `${refPositions},${at}`; }
-		}
-		if (params[oi].length > 7 && params[oi].slice(0, 7) == "rdonly:") {
-			params[oi] = params[oi].slice(7, params[oi].length);
-			if (rdonlyPositions == "") { rdonlyPositions = `${at}`; }
-			else { rdonlyPositions = `${rdonlyPositions},${at}`; }
-		}
-		if (params[oi].length > 5 && params[oi].slice(0, 5) == "sink:") {
-			params[oi] = params[oi].slice(5, params[oi].length);
-			if (sinkPositions == "") { sinkPositions = `${at}`; }
-			else { sinkPositions = `${sinkPositions},${at}`; }
-		}
-	}
-	if (outPositions != "") {
-		if (flags == "") { flags = `out:${outPositions}`; }
-		else { flags = `${flags}|out:${outPositions}`; }
-	}
-	if (refPositions != "") {
-		if (flags == "") { flags = `ref:${refPositions}`; }
-		else { flags = `${flags}|ref:${refPositions}`; }
-	}
-	if (rdonlyPositions != "") {
-		if (flags == "") { flags = `rdonly:${rdonlyPositions}`; }
-		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
-	}
-	if (sinkPositions != "") {
-		if (flags == "") { flags = `sink:${sinkPositions}`; }
-		else { flags = `${flags}|sink:${sinkPositions}`; }
-	}
+	flags = liftParamModifiers(params, first, flags);
 	// Encode generic param names
 	if (genericNames != "") {
 		if (flags == "") { flags = `gen:${genericNames}`; }

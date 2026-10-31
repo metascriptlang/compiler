@@ -425,6 +425,27 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 
 // ===== Param List Extraction Helpers =====
 
+// Strips the out:/ref:/rdonly:/sink: prefixes parseParamList wrote, from `first` on, and
+// records each mode as `<mode>:<positions>` in the routine's flags.
+export function liftParamModifiers(params: string[], first: int32, flags: string): string {
+	const modes = ["out:", "ref:", "rdonly:", "sink:"];
+	const positions = ["", "", "", ""];
+	for (let i = first; i < params.length; i += 1) {
+		const at = i - first;
+		for (let m = 0; m < modes.length; m += 1) {
+			const len = modes[m].length;
+			if (params[i].length <= len || params[i].slice(0, len) != modes[m]) continue;
+			params[i] = params[i].slice(len, params[i].length);
+			positions[m] = positions[m] == "" ? `${at}` : `${positions[m]},${at}`;
+		}
+	}
+	for (let m = 0; m < modes.length; m += 1) {
+		if (positions[m] == "") continue;
+		flags = flags == "" ? `${modes[m]}${positions[m]}` : `${flags}|${modes[m]}${positions[m]}`;
+	}
+	return flags;
+}
+
 export function extractParamNames(raw: string[]): string[] {
 	const names: string[] = [];
 	for (let i = 0; i < raw.length; i += 2) { names.push(raw[i]); }

@@ -6,7 +6,7 @@ import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, 
 import { lex } from "../../lexer/lexer";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign, liftParamModifiers } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { ArrowShape, arrowShape, parseArrowFunction, tryParseArrowFunction, parseBareIdentArrow } from "./arrow";
@@ -252,6 +252,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	const feParamLocs = getLastParamLocations();
 	const fePatterns = getLastParamPatterns();
 	const funcExprParams = extractParamNames(raw);
+	feFlags = liftParamModifiers(funcExprParams, 0, feFlags);
 	const funcExprParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);

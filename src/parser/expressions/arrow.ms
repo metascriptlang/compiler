@@ -5,7 +5,7 @@ import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, matchingParenIndex, markState, rewindState } from "../cursor";
 import { angleCloserWidth } from "../generics";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike, liftParamModifiers } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./testUtil";
 
@@ -77,6 +77,8 @@ export function arrowShape(state: ParserState): ArrowShape {
 	if (p1.kind == TokenKind.LBrace || p1.kind == TokenKind.LBracket) {
 		return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No;
 	}
+
+	if (p1.kind == TokenKind.Ident && p1.value == "sink" && isIdentLike(peek(state, 2)) && peek(state, 3).kind == TokenKind.Colon) { return ArrowShape.Yes; }
 
 	// Must have identifier as first param
 	if (!isIdentLike(p1)) { return ArrowShape.No; }
@@ -155,6 +157,7 @@ function parseArrowCore(
 	const arrowParamLocs = getLastParamLocations();
 	const arrowPatterns = getLastParamPatterns();
 	const arrowParams = extractParamNames(raw);
+	flags = liftParamModifiers(arrowParams, 0, flags);
 	const arrowParamTypes = extractParamTypes(raw);
 	// Pad defaults to match arrowParams length (parser only pushes when default present)
 	const rawDefaults = getLastParsedDefaults();

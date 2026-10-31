@@ -182,7 +182,7 @@ function refuseActorParamModes(ctx: CheckerContext, actorName: string, md: Metho
 	liftParamModifiers(md.methodParams, "");
 }
 
-function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
+export function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
 	if (flags == "") return;
 	for (const fp of splitTopLevel(flags, "|")) {
 		const trimFp = fp.trim();
