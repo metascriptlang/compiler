@@ -2432,7 +2432,6 @@ function execStrandLoop(vm: RaiserVM): void {
 		strandSave(vm);
 		retireStrand(vm, vm.current);
 		if (vm.sched.futures.counts.dead.length > 0) vmDrainFutures(vm);
-		vmFireDueTimer(vm);
 		let next = moduleHandoffPick(vm);
 		if (next < 0) next = schedulePick(vm);
 		while (next < 0 && vm.sched.timers.items.length > 0 && !vm.halted) {
