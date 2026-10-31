@@ -19,6 +19,7 @@ import "./cases/binaryPrecedence";
 import "./cases/conditionalMember";
 import "./cases/unaryMember";
 import "./cases/arrowCallee";
+import "./cases/functionTypeReturnAndTupleArray";
 import "./cases/typeAssertionInner";
 import "./cases/unaryOperand";
 import "./cases/reExport";

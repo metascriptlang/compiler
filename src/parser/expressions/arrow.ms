@@ -412,4 +412,10 @@ test "false arm keeps return type" { assert armKinds("c ? 1 : (n): string => n")
 test "call in true arm takes a return type" { assert trueArmCallArgIsArrow("c ? f((n): string => n) : 1"); }
 test "true arm block body arrow ended by colon" { assert armKinds("a ? (x): string => { return x; } : null") == "arrow/other"; }
 
+test "return type a parenthesized function type" {
+	assert parseOk("(n: number): ((x: number) => number) => (x: number): number => x + n");
+	assert arrowReturnTypeOf("(n): (() => number) => () => n") != "";
+	assert parseOk("async (n: number): Promise<(x: number) => number> => (x: number): number => x");
+}
+
 test "rewound speculation gives back the token it split" { assert armKinds("t ? (y) : a < b >= c > d => d") == "other/other"; }
