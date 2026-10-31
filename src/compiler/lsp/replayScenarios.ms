@@ -1754,6 +1754,151 @@ function renameEditsEachCallOnce(): LspScenario {
 	};
 }
 
+function sortedUnique(items: string[]): string {
+	const kept: string[] = [];
+	for (const item of items) {
+		if (kept.indexOf(item) < 0) kept.push(item);
+	}
+	kept.sort();
+	return kept.join("; ");
+}
+
+function referenceFiles(r: LspReplay, key: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	const uris: string[] = [];
+	for (const location of result.items) uris.push(scalarText(location.getDynamicField("uri")));
+	return sortedUnique(uris);
+}
+
+function referenceRowsIn(r: LspReplay, key: string, uri: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	const rows: string[] = [];
+	for (const location of result.items) {
+		if (scalarText(location.getDynamicField("uri")) == uri) rows.push(spanOf(location));
+	}
+	return rows.join("; ");
+}
+
+function renameFiles(r: LspReplay, key: string): string {
+	const changes = answerResult(r, key).getDynamicField("changes");
+	return changes.kind == JsonKind.Object ? sortedUnique(changes.keys) : "no changes: " + render(changes);
+}
+
+const NAV_LIB = PROJECT_URI + "lib.ms";
+const NAV_ALIAS = PROJECT_URI + "alias.ms";
+const NAV_PLAIN = PROJECT_URI + "plain.ms";
+const NAV_BARREL = PROJECT_URI + "barrel.ms";
+const NAV_VIA = PROJECT_URI + "via.ms";
+const NAV_APP = PROJECT_URI + "app.ms";
+
+const NAV_BUILD = "const config = { entry: \"./app\" };\nexport default config;\n";
+const NAV_LIB_TEXT = "export function f(): int32 { return 1; }\n";
+const NAV_ALIAS_TEXT = "import { f as g } from \"./lib\";\nexport const t = g();\n";
+const NAV_PLAIN_TEXT = "import { f } from \"./lib\";\nexport const v = f();\nfunction shadow(): int32 {\n\tconst f = 2;\n\treturn f;\n}\n";
+const NAV_BARREL_TEXT = "export { f } from \"./lib\";\n";
+const NAV_VIA_TEXT = "import { f } from \"./barrel\";\nexport const w = f();\n";
+const NAV_OTHER_TEXT = "export function f(): int32 { return 2; }\n";
+const NAV_ORPHAN_TEXT = "import { f } from \"./lib\";\nexport const o = f();\n";
+const NAV_APP_TEXT = "import { t } from \"./alias\";\nimport { v } from \"./plain\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, v, w, other());\n";
+const NAV_APP_WITHOUT_PLAIN = "import { t } from \"./alias\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, w, other());\n";
+
+const NAV_ALIAS_ROWS = "0:9-0:10; 0:14-0:15; 1:17-1:18";
+const NAV_PLAIN_ROWS = "0:9-0:10; 1:17-1:18";
+
+function navProject(): LspProjectFile[] {
+	return [
+		{ path: "build.ms", text: NAV_BUILD },
+		{ path: "lib.ms", text: NAV_LIB_TEXT },
+		{ path: "alias.ms", text: NAV_ALIAS_TEXT },
+		{ path: "plain.ms", text: NAV_PLAIN_TEXT },
+		{ path: "barrel.ms", text: NAV_BARREL_TEXT },
+		{ path: "via.ms", text: NAV_VIA_TEXT },
+		{ path: "other.ms", text: NAV_OTHER_TEXT },
+		{ path: "orphan.ms", text: NAV_ORPHAN_TEXT },
+		{ path: "app.ms", text: NAV_APP_TEXT },
+	];
+}
+
+function navRequests(base: int32): string[] {
+	return frames([
+		request("" + base, "textDocument/references", referenceParams(NAV_LIB, 0, 16, true)),
+		request("" + (base + 1), "textDocument/references", referenceParams(NAV_LIB, 0, 16, false)),
+		request("" + (base + 2), "textDocument/rename", renameParams(NAV_LIB, 0, 16, "h")),
+	]);
+}
+
+function navAnswers(r: LspReplay, phase: string, base: int32, plainReached: boolean): string {
+	const kept: string[] = [NAV_LIB, NAV_ALIAS, NAV_BARREL, NAV_VIA];
+	if (plainReached) kept.push(NAV_PLAIN);
+	const withDecl = "n:" + base;
+	const withoutDecl = "n:" + (base + 1);
+	const renamed = "n:" + (base + 2);
+	const plainRows = plainReached ? NAV_PLAIN_ROWS : "";
+	const plainEdits = plainReached ? "0:9-0:10 h; 1:17-1:18 h" : "none";
+	return firstFailure([
+		sameText(phase + ": files with the declaration", sortedUnique(kept), referenceFiles(r, withDecl)),
+		sameText(phase + ": the declaration", "0:16-0:17", referenceRowsIn(r, withDecl, NAV_LIB)),
+		sameText(phase + ": the alias importer", NAV_ALIAS_ROWS, referenceRowsIn(r, withDecl, NAV_ALIAS)),
+		sameText(phase + ": the plain importer, its shadowing local left out", plainRows, referenceRowsIn(r, withDecl, NAV_PLAIN)),
+		sameText(phase + ": the declaration left out", "", referenceRowsIn(r, withoutDecl, NAV_LIB)),
+		sameText(phase + ": the alias importer without the declaration", NAV_ALIAS_ROWS, referenceRowsIn(r, withoutDecl, NAV_ALIAS)),
+		sameText(phase + ": the plain importer without the declaration", plainRows, referenceRowsIn(r, withoutDecl, NAV_PLAIN)),
+		sameText(phase + ": the re-exporting importer without the declaration", referenceRowsIn(r, withDecl, NAV_VIA), referenceRowsIn(r, withoutDecl, NAV_VIA)),
+		sameText(phase + ": files of rename", sortedUnique(kept), renameFiles(r, renamed)),
+		sameText(phase + ": rename at the declaration", "0:16-0:17 h", renameRows(r, renamed, NAV_LIB)),
+		sameText(phase + ": rename keeps the alias", "0:9-0:10 h", renameRows(r, renamed, NAV_ALIAS)),
+		sameText(phase + ": rename of the plain importer", plainEdits, renameRows(r, renamed, NAV_PLAIN)),
+	]);
+}
+
+function configuredEntryFixesTheNavigationUniverse(): LspScenario {
+	return {
+		name: "references and rename follow the configured entry's closure whichever importer is open",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			navRequests(10),
+			frames([notification("textDocument/didOpen", openParams(NAV_ALIAS, NAV_ALIAS_TEXT))]),
+			navRequests(20),
+		],
+		check: (r: LspReplay) => firstFailure([
+			navAnswers(r, "only the library open", 10, true),
+			navAnswers(r, "an importer open too", 20, true),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: navProject(),
+	};
+}
+
+function entryEditsMoveTheNavigationUniverse(): LspScenario {
+	return {
+		name: "an entry edit that drops an unopened importer drops it from references and rename, and undo restores it",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			navRequests(10),
+			frames([notification("textDocument/didOpen", openParams(NAV_APP, NAV_APP_TEXT))]),
+			frames([notification("textDocument/didChange", changeParams(NAV_APP, 2, NAV_APP_WITHOUT_PLAIN))]),
+			navRequests(20),
+			frames([notification("textDocument/didChange", changeParams(NAV_APP, 3, NAV_APP_TEXT))]),
+			navRequests(30),
+		],
+		check: (r: LspReplay) => firstFailure([
+			navAnswers(r, "before the edit", 10, true),
+			navAnswers(r, "with the importer disconnected", 20, false),
+			navAnswers(r, "after the undo", 30, true),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: navProject(),
+	};
+}
+
 const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
 
 function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
@@ -2254,6 +2399,8 @@ export function lspScenarios(): LspScenario[] {
 		referencesFollowTheImportedSymbol(),
 		referencesHonorDeclarationContext(),
 		renameEditsEachCallOnce(),
+		configuredEntryFixesTheNavigationUniverse(),
+		entryEditsMoveTheNavigationUniverse(),
 		enumMemberDefinitionIsTheMembersDeclaration(),
 		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),

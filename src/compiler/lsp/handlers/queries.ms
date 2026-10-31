@@ -338,7 +338,22 @@ function pushUniqueLocations(items: string[], uri: string, source: string, refs:
 	}
 }
 
-export function handleReferences(id: string, params: string, db: TransAmDb): string {
+function dependentPaths(db: TransAmDb, path: string): string[] {
+	const targetFileId = getFileId(db.fileInput, path);
+	const paths: string[] = [];
+	if (targetFileId < 0) return paths;
+	for (const depId of getTransitiveDependents(db.moduleDeps, targetFileId)) paths.push(getFilePath(db.fileInput, depId));
+	return paths;
+}
+
+function loadedPaths(db: TransAmDb): string[] {
+	const paths: string[] = [];
+	const fileCount = dbGetFileCount(db);
+	for (let fi: int32 = 0; fi < fileCount; fi++) paths.push(dbGetFilePathByIndex(db, fi));
+	return paths;
+}
+
+export function handleReferences(id: string, params: string, db: TransAmDb, candidates: string[] | null = null): string {
 	const flag = referenceIncludesDeclaration(params);
 	if (!flag.ok) return lspErrorResponse(id, -32602, flag.error);
 	const includeDeclaration = flag.value;
@@ -356,14 +371,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	// Search current file via symbol identity (no false positives from shadowing)
 	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym), includeDeclaration);
 
-	// Search transitive dependents only (files that could import this symbol)
-	const targetFileId = getFileId(db.fileInput, path);
-	let depIds: int32[] = [];
-	if (targetFileId >= 0) {
-		depIds = getTransitiveDependents(db.moduleDeps, targetFileId);
-	}
-	for (const depId of depIds) {
-		const otherPath = getFilePath(db.fileInput, depId);
+	for (const otherPath of candidates != null ? candidates : dependentPaths(db, path)) {
 		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
@@ -458,7 +466,7 @@ function renameImportAlias(db: TransAmDb, path: string, ctx: CheckerContext, sym
 	return buildTextEdits(refs, newName, source);
 }
 
-export function handleRename(id: string, params: string, db: TransAmDb): string {
+export function handleRename(id: string, params: string, db: TransAmDb, candidates: string[] | null = null): string {
 	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
@@ -485,10 +493,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		changes.push(lspJsonString(pos.uri) + ":" + curEdits);
 	}
 
-	// Other open files in workspace
-	const fileCount = dbGetFileCount(db);
-	for (let fi: int32 = 0; fi < fileCount; fi++) {
-		const otherPath = dbGetFilePathByIndex(db, fi);
+	for (const otherPath of candidates != null ? candidates : loadedPaths(db)) {
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
@@ -578,4 +583,27 @@ test "an import alias and its uses stay references when the exporter's declarati
 	assert referencesRows(db, dep, 0, 16, INCLUDE) == `${dep} 0:16, ${imports}`, referencesRows(db, dep, 0, 16, INCLUDE);
 	assert referencesRows(db, dep, 0, 16, EXCLUDE) == imports, referencesRows(db, dep, 0, 16, EXCLUDE);
 	assert referencesRows(db, user, 1, 17, EXCLUDE) == imports, referencesRows(db, user, 1, 17, EXCLUDE);
+}
+
+function candidateDb(): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/cand/lib.ms", "export function f(): int32 { return 1; }");
+	for (const name of ["kept", "dropped"]) {
+		dbSetFileText(db, `/cand/${name}.ms`, `import { f } from "./lib";\nexport const ${name} = f();`);
+		recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `/cand/${name}.ms`), getFileId(db.fileInput, "/cand/lib.ms"));
+	}
+	return db;
+}
+
+test "references and rename cover the candidates they are given instead of the dependents the db holds" {
+	const db = candidateDb();
+	const lib = "file:///cand/lib.ms";
+	const params = `{"textDocument":{"uri":"${lib}"},"position":{"line":0,"character":16},"context":{"includeDeclaration":true},"newName":"g"}`;
+	const held = handleReferences("1", params, db) + handleRename("2", params, db);
+	assert held.indexOf("kept.ms") >= 0 && held.indexOf("dropped.ms") >= 0, held;
+	const scoped = handleReferences("1", params, db, ["/cand/kept.ms"]) + handleRename("2", params, db, ["/cand/kept.ms"]);
+	assert scoped.indexOf("kept.ms") >= 0, scoped;
+	assert scoped.indexOf("dropped.ms") < 0, scoped;
+	const none = handleReferences("1", params, db, []) + handleRename("2", params, db, []);
+	assert none.indexOf("kept.ms") < 0 && none.indexOf("lib.ms") >= 0, none;
 }
