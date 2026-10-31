@@ -318,7 +318,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	} else if (useShared) {
 		for (const n of state.sharedEnvChainNames) rwChainNames.push(n);
 		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
-	} else {
+	} else if (preEnv == null || !preEnv.detached) {
 		const chain = envChainFrom(state.loopEnvs, carrierIdx, state.sharedEnvName, state.sharedEnvStructType, state.sharedEnvChainNames, state.sharedEnvChainTypes);
 		rwChainNames = chain.names;
 		rwChainTypes = chain.types;
@@ -372,9 +372,10 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		// shared env. Use `currentEnvAccessSym` to pick the right access form
 		// for the surrounding scope (named var in fn body, `_envP` in nested
 		// closure body).
+		const detached = preEnv != null && preEnv.detached;
 		const parentLoop = carrierIdx >= 0 ? state.loopEnvs[carrierIdx] : null;
-		const parentEnvVarSym = parentLoop != null ? parentLoop.envVarSym : currentEnvAccessSym(state);
-		const parentEnvStructType = parentLoop != null ? parentLoop.envStructType : (hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type));
+		const parentEnvVarSym = detached ? null : parentLoop != null ? parentLoop.envVarSym : currentEnvAccessSym(state);
+		const parentEnvStructType = detached ? (null as unknown as Type) : parentLoop != null ? parentLoop.envStructType : (hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type));
 		const initCaptures = preEnv != null ? preEnv.fields : captures;
 		const initIdents = preEnv != null ? preEnv.fieldIdents : state.capturedIdents;
 		const envPair = makeEnvVarAndClosurePair(state, envVarSym, liftedSym, envStructType, initCaptures, initIdents, parentEnvVarSym, parentEnvStructType, loc);
@@ -1022,12 +1023,13 @@ interface LoopPlan {
 	preSyms: SymSet | null;
 	preIdents: Node[];
 	preParent: Type | null;
+	detached: boolean;
 }
 
-function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol | null, ownCaptures: SymSet, ownCapturedIdents: Node[], ownLocals: SymSet, shared: SharedEnvSnapshot): LoopPlan {
-	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], preParent: null };
+function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol | null, ownCaptures: SymSet, ownCapturedIdents: Node[], ownLocals: SymSet, shared: SharedEnvSnapshot, detached: boolean): LoopPlan {
+	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], preParent: null, detached: false };
 	const enclosingLoops = shared.loopEnvs;
-	if (enclosingLoops.length == 0 && state.insideLoop == 0) return plan;
+	if (!detached && enclosingLoops.length == 0 && state.insideLoop == 0) return plan;
 	const directIdents: Node[] = [];
 	const direct = detectCaptures(body, cloneScopeStack(ss), directIdents, routine, null);
 	const fullSet = createSymSet();
@@ -1041,6 +1043,12 @@ function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symb
 			const oi = findCapturedIdent(os, ownCapturedIdents);
 			if (oi != null) { fullIdents.push(oi); }
 		}
+	}
+	if (detached) {
+		plan.preSyms = fullSet;
+		plan.preIdents = fullIdents;
+		plan.detached = true;
+		return plan;
 	}
 	let carrierIdx = innermostLoopHolding(enclosingLoops, fullSet);
 	for (const ri of directIdents) {
@@ -1132,7 +1140,7 @@ function promiseRun(state: LiftState, stmts: Node[], from: number): void {
 				for (const p of fn.paramSyms) symSetAdd(ownLocals, p);
 			}
 			collectOwnDeclSyms(pb.body, ownLocals);
-			const plan = planLoopEnv(state, pb.body, ss, sym, ownCaptures, detectionGetCapturedIdents(state.detection, fn), ownLocals, shared);
+			const plan = planLoopEnv(state, pb.body, ss, sym, ownCaptures, detectionGetCapturedIdents(state.detection, fn), ownLocals, shared, fn.flags.has(NodeFlag.SendableClosure));
 			const env = routineEnv(state, pb.body, ss, sym, ownCaptures, plan, shared);
 			if (!env.known) continue;
 			const info = routineInfoOf(state, sym);
@@ -1189,11 +1197,11 @@ function liftCapturingClosureBody(
 	// Decided before the body walk so `setupSharedEnv` and `liftClosure` agree on the
 	// env `_envP` carries; uses the outer fn name, so it runs before the rename below.
 	const enclosingLoops = savedShared.loopEnvs;
-	const plan = planLoopEnv(state, body, state.ss, routine, ownCaptures, ownCapturedIdents, ownLocals, savedShared);
+	const plan = planLoopEnv(state, body, state.ss, routine, ownCaptures, ownCapturedIdents, ownLocals, savedShared, node.flags.has(NodeFlag.SendableClosure));
 	const carrierIdx = plan.carrierIdx;
 	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
-	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.preParent);
-	let entryChain = envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
+	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.preParent, plan.detached);
+	let entryChain = plan.detached ? envChainFrom([], -1, "", null as unknown as Type, [], []) : envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
 	if (preEnv != null) {
 		const names: string[] = [preEnv.envName];
 		const types: Type[] = [preEnv.envStructType];

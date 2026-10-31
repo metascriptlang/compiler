@@ -7,7 +7,7 @@
 //
 
 import {
-	Node, NodeKind, ArrowFunctionData, FunctionExprData,
+	Node, NodeKind, NodeFlag, ArrowFunctionData, FunctionExprData,
 	VariableDeclData, BlockStmtData, ExprStmtData, ReturnStmtData,
 	IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData,
 	BinaryExprData, UnaryExprData, CallExprData, SwitchStmtData,
@@ -126,7 +126,9 @@ function collectRoutineCandidates(n: Node | null, depth: number, splitLoopLocals
 	if (n == null) return;
 	if (depth > 0 && n.kind == NodeKind.VariableDecl) {
 		const sym = routineBindingSym(n);
-		if (sym != null && (hasFlag(sym, SymbolFlag.StateMachine) || !refsAnySym((n.data as VariableDeclData).initializer, splitLoopLocals))) out.push(sym);
+		const init = (n.data as VariableDeclData).initializer;
+		const detachedEnv = init != null && init.flags.has(NodeFlag.SendableClosure);
+		if (sym != null && !detachedEnv && (hasFlag(sym, SymbolFlag.StateMachine) || !refsAnySym(init, splitLoopLocals))) out.push(sym);
 	}
 	const inner = isRoutineOrTestNode(n) ? depth + 1 : depth;
 	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, splitLoopLocals, out); });
