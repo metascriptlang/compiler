@@ -3519,7 +3519,7 @@ export function jsMemberKind(t: Readonly<Type>): string {
 	return typeofTagOf(t);
 }
 
-export function jsValueKind(t: Type): string {
+export function jsValueKind(t: Readonly<Type>): string {
 	const v = peelTransparentInstance(t);
 	if (v.kind == TypeKind.Int64 || v.kind == TypeKind.Uint64) return "bigint";
 	return jsMemberKind(t);
