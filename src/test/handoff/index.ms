@@ -236,3 +236,4 @@ import "./typeIdentityBySymbol";
 import "./decoratorMetadataChain";
 import "./decoratorReturnShape";
 import "./newBoundCallee";
+import "./assertMessage";
