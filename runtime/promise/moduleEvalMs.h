@@ -11,19 +11,27 @@
 #include "runtime/core/system.h"
 #include "runtime/promise/locked.h"
 
-#if UINTPTR_MAX == 0xffffffffffffffffu
 #define MS_PTR sizeof(void*)
-_Static_assert(offsetof(msModuleRecord, name) == 0 && offsetof(msModuleRecord, init) == 1 * MS_PTR && offsetof(msModuleRecord, deinit) == 2 * MS_PTR
+#define MS_UP(x) (((x) + MS_PTR - 1) / MS_PTR * MS_PTR)
+#define MS_STATUS (4 * MS_PTR + 4)
+#define MS_ERROR MS_UP(MS_STATUS + 16)
+#define MS_PARENTS MS_UP(MS_ERROR + MS_PTR + 12)
+#define MS_WAITERS MS_UP(MS_PARENTS + MS_PTR + 8)
+_Static_assert(offsetof(msModuleRecord, name) == 0 && offsetof(msModuleRecord, init) == MS_PTR && offsetof(msModuleRecord, deinit) == 2 * MS_PTR
 	&& offsetof(msModuleRecord, requested) == 3 * MS_PTR && offsetof(msModuleRecord, requestedCount) == 4 * MS_PTR
-	&& offsetof(msModuleRecord, status) == 4 * MS_PTR + 4 && offsetof(msModuleRecord, hasTLA) == 5 * MS_PTR
-	&& offsetof(msModuleRecord, dfsIndex) == 5 * MS_PTR + 4 && offsetof(msModuleRecord, dfsAncestorIndex) == 6 * MS_PTR
-	&& offsetof(msModuleRecord, error) == 7 * MS_PTR && offsetof(msModuleRecord, asyncEvaluation) == 8 * MS_PTR
-	&& offsetof(msModuleRecord, asyncOrdinal) == 8 * MS_PTR + 4 && offsetof(msModuleRecord, pendingAsyncDeps) == 9 * MS_PTR
-	&& offsetof(msModuleRecord, asyncParents) == 10 * MS_PTR && offsetof(msModuleRecord, asyncParentCount) == 11 * MS_PTR
-	&& offsetof(msModuleRecord, cycleRoot) == 11 * MS_PTR + 4 && offsetof(msModuleRecord, waiters) == 12 * MS_PTR
-	&& sizeof(msModuleRecord) == 13 * MS_PTR, "ModuleRecord in moduleEval.cms");
+	&& offsetof(msModuleRecord, status) == MS_STATUS && offsetof(msModuleRecord, hasTLA) == MS_STATUS + 4
+	&& offsetof(msModuleRecord, dfsIndex) == MS_STATUS + 8 && offsetof(msModuleRecord, dfsAncestorIndex) == MS_STATUS + 12
+	&& offsetof(msModuleRecord, error) == MS_ERROR && offsetof(msModuleRecord, asyncEvaluation) == MS_ERROR + MS_PTR
+	&& offsetof(msModuleRecord, asyncOrdinal) == MS_ERROR + MS_PTR + 4 && offsetof(msModuleRecord, pendingAsyncDeps) == MS_ERROR + MS_PTR + 8
+	&& offsetof(msModuleRecord, asyncParents) == MS_PARENTS && offsetof(msModuleRecord, asyncParentCount) == MS_PARENTS + MS_PTR
+	&& offsetof(msModuleRecord, cycleRoot) == MS_PARENTS + MS_PTR + 4 && offsetof(msModuleRecord, waiters) == MS_WAITERS
+	&& sizeof(msModuleRecord) == MS_WAITERS + MS_PTR, "ModuleRecord in moduleEval.cms");
 #undef MS_PTR
-#endif
+#undef MS_UP
+#undef MS_STATUS
+#undef MS_ERROR
+#undef MS_PARENTS
+#undef MS_WAITERS
 
 void msModuleAsyncSettled(void* env);
 void msModuleRunPending(void* env);
